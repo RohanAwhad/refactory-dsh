@@ -114,7 +114,7 @@ It internally runs the interactive entry point with `--resume`.
 
 Recovery requires a recognized checkpoint, a stopped owner, matching prepared configuration and unchanged fingerprinted inputs/outputs. It refuses a dispatch whose outcome is unknown — a pending marker with no written receipt; a refused step whose receipt was written is not unknown. It also refuses a failed or unknown last-node outcome. In-flight external product sessions are not resumed. Python executor partial-fork recovery is also refused because successful sibling facts cannot yet be restored safely.
 
-A process killed by a signal during a check or environment install is retried once; if it dies again, the run reports it as an infrastructure failure naming the signal and halts without spending an attempt.
+A process killed by a signal during a check, environment install, generate or setup command is retried once; if it dies again, the run reports it as an infrastructure failure naming the signal and halts without spending an attempt. When the base comparison is unavailable (a crash that cannot be rebuilt), the run continues without excusals and reports this in the PR's Verification section. A convergence extra-attempt is recorded in the run and the PR.
 
 An emission that changes nothing is refused back to emit, including when materialise is replayed on an emit.txt the last attempt already holds. The refusal says the emission changed nothing, not that an edit's text is missing, and the branch holds one attempt per answer that changed something.
 

@@ -568,6 +568,7 @@ Running code we did not write.
 | function | `ast_check` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, include_contracts: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `is_secret` | `(name: 'str') -> 'bool'` |
+| function | `is_signal_crash` | `(result: 'SandboxResult') -> 'tuple[bool, str]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `missing_init` | `(root: 'Path') -> 'str'` |
 | function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None, require_ready: 'bool' = True) -> 'dict[str, Any]'` |
@@ -585,6 +586,7 @@ Running code we did not write.
 - **`ast_check`** — Everything wrong with a package that can be seen without importing it.
 - **`describe_package`** — A package's manifest and mode ids, read without importing it here.
 - **`is_secret`** — Whether an environment name looks like a credential, which a sandboxed run never sees.
+- **`is_signal_crash`** — Whether a sandbox result is a signal crash that survived run_command's retry.
 - **`main`** — ``python -m refactory_dsh.sandbox --ast <pkg> | --smoke <pkg>/<mode>``.
 - **`missing_init`** — Why a package root has no `__init__.py`, and what it holds instead.
 - **`model_readiness`** — Check the model path after the same scrub/HOME rewrite as real smoke.

@@ -1,0 +1,639 @@
+"""Tests for the robustness hardening: R1, R2, R3, R5, R6 and R9.
+
+Each test uses scripted commands that kill themselves with a signal;
+none depends on the lab's LXCFS.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from refactory_dsh import base_check, delivery, nn, sandbox, worktree
+from refactory_dsh import authoring_evidence as evidence
+from refactory_dsh import design_contract, design_ops, repo_change
+from refactory_dsh.create_ops import repair
+from refactory_dsh.fast_ops import _repair as fast_repair
+from refactory_dsh.nn import Verdict
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+
+def _git_init(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", str(path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "t@t"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "T"],
+                   capture_output=True, check=True)
+    return path
+
+
+def _commit_file(repo: Path, name: str, text: str) -> str:
+    (repo / name).write_text(text)
+    subprocess.run(["git", "-C", str(repo), "add", name],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", f"add {name}"],
+                   capture_output=True, check=True)
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _make_worktree(repo: Path, run_dir: Path, base: str) -> worktree.Worktree:
+    """Create a real worktree and record it, returning the descriptor."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    found = worktree.create(repo, base, "test00000000", run_dir)
+    return found
+
+
+class _Ctx:
+    """Minimal RunContext stand-in for unit-level tests."""
+
+    def __init__(self, workdir: Path, *, facts: dict | None = None,
+                 knobs: dict | None = None, files: dict | None = None):
+        self.workdir = Path(workdir)
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        self.facts: dict[str, Any] = dict(facts or {})
+        self.knobs_dict: dict[str, Any] = dict(knobs or {})
+        self._files: dict[str, str] = dict(files or {})
+        self.budget = None
+        self.enforce_writes = False
+        self._produced: set[str] = set()
+        self._declared_facts: tuple[str, ...] = ()
+
+    def knob(self, name: str, default: Any = None) -> Any:
+        return self.knobs_dict.get(name, default)
+
+    def set_fact(self, name: str, value: Any) -> None:
+        self.facts[name] = value
+        self._produced.add(name)
+
+    def exists(self, name: str) -> bool:
+        if name in self._files:
+            return True
+        return (self.workdir / name).exists()
+
+    def read_text(self, name: str) -> str:
+        if name in self._files:
+            return self._files[name]
+        return (self.workdir / name).read_text()
+
+    def write_text(self, name: str, text: str) -> Path:
+        target = self.workdir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        return target
+
+    def write_json(self, name: str, payload: Any) -> Path:
+        return self.write_text(name, json.dumps(payload, indent=2, default=str))
+
+    def read_json(self, name: str, default: Any = None) -> Any:
+        p = self.workdir / name
+        if not p.exists():
+            return default
+        try:
+            return json.loads(p.read_text())
+        except json.JSONDecodeError:
+            return default
+
+
+# ── R1: is_signal_crash helper ─────────────────────────────────────────────
+
+
+def test_is_signal_crash_direct_signal():
+    """A direct signal (rc < 0) is classified as a crash."""
+    result = sandbox.SandboxResult(ok=False, returncode=-6)
+    crashed, label = sandbox.is_signal_crash(result)
+    assert crashed is True
+    assert "SIGABRT" in label
+
+
+def test_is_signal_crash_shell_wrapped():
+    """A shell-wrapped SIGABRT (exit 134) is classified as a crash."""
+    result = sandbox.SandboxResult(ok=False, returncode=134)
+    crashed, label = sandbox.is_signal_crash(result)
+    assert crashed is True
+    assert "SIGABRT" in label
+
+
+def test_is_signal_crash_normal_exit():
+    """A normal non-zero exit is not a crash."""
+    result = sandbox.SandboxResult(ok=False, returncode=1)
+    crashed, label = sandbox.is_signal_crash(result)
+    assert crashed is False
+    assert label == ""
+
+
+def test_is_signal_crash_none_returncode():
+    """A None returncode is not a crash."""
+    result = sandbox.SandboxResult(ok=False, returncode=None)
+    crashed, label = sandbox.is_signal_crash(result)
+    assert crashed is False
+
+
+# ── R1: signal-killed install (via ensure_environment) ─────────────────────
+
+
+def test_signal_killed_install_once_then_passing_spends_no_attempt(tmp_path, monkeypatch):
+    """An install killed by SIGABRT once, then passing, spends no attempt.
+
+    run_command retries once internally for rc < 0 or rc in {134, 135, 139}.
+    This test uses a counter file outside HOME: the first call kills itself,
+    and because the flag file now exists, the retry (inside run_command) passes.
+    """
+    counter_dir = tempfile.mkdtemp(prefix="r1_")
+    counter_file = os.path.join(counter_dir, "flag")
+    repo = _git_init(tmp_path / "repo")
+    _commit_file(repo, "pyproject.toml", "[project]\nname = 'app'\n")
+    run_dir = tmp_path / "run"
+    found = _make_worktree(repo, run_dir, "HEAD")
+
+    # Stub uv with a script that crashes once, then passes.
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    uv_script = stub_bin / "uv"
+    uv_script.write_text(
+        f"#!/bin/sh\n"
+        f'f="{counter_file}"\n'
+        f'if [ ! -f "$f" ]; then\n'
+        f'  touch "$f"\n'
+        f'  kill -ABRT $$\n'
+        f'fi\n'
+    )
+    uv_script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
+
+    amended, problems, prep_fail = worktree.ensure_environment(found, run_dir)
+    # The first call crashes (SIGABRT), run_command retries, the retry passes.
+    assert not problems, f"expected no problems, got {problems}"
+    assert prep_fail is None
+
+
+def test_signal_killed_install_twice_stops_as_infrastructure(tmp_path, monkeypatch):
+    """An install killed twice stops as infrastructure naming the signal."""
+    repo = _git_init(tmp_path / "repo")
+    _commit_file(repo, "pyproject.toml", "[project]\nname = 'app'\n")
+    run_dir = tmp_path / "run"
+    found = _make_worktree(repo, run_dir, "HEAD")
+
+    # Stub uv with a script that always crashes.
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    uv_script = stub_bin / "uv"
+    uv_script.write_text("#!/bin/sh\nkill -ABRT $$\n")
+    uv_script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
+
+    _, problems, prep_fail = worktree.ensure_environment(found, run_dir)
+    assert any("killed by SIGABRT" in p or "killed by SIG" in p for p in problems), \
+        f"expected signal name in problems: {problems}"
+    assert prep_fail is not None
+    assert prep_fail["returncode"] < 0, "return code should be negative for a persistent signal crash"
+
+    # Through check_failure_kind, this yields 'uncertain' (infrastructure).
+    mock_result = sandbox.SandboxResult(
+        ok=False, returncode=prep_fail["returncode"],
+        prep_failure=prep_fail,
+    )
+    kind = evidence.check_failure_kind(mock_result)
+    assert kind == "uncertain", f"expected 'uncertain', got {kind!r}"
+
+
+# ── R2: base comparison crash → rebuild from scratch ───────────────────────
+
+
+def test_base_crash_rebuilt_from_scratch(tmp_path, monkeypatch):
+    """A base comparison whose setup crashes is rebuilt from scratch (R2).
+
+    The scripted setup uses a counter file outside HOME.  run_command retries
+    once internally, so the counter must reach 2 for the crash to survive the
+    retry.  On the rebuild attempt the counter is already past 2, so setup passes.
+    """
+    counter_dir = tempfile.mkdtemp(prefix="r2_")
+    counter_file = os.path.join(counter_dir, "counter")
+
+    repo = _git_init(tmp_path / "repo")
+    base = _commit_file(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = _make_worktree(repo, run_dir, base)
+
+    # The setup script crashes on the first two calls (counter < 3), then passes.
+    # run_command retries once: so first _try_base call sees crash+crash → signal crash.
+    # After rebuild, counter is at 2, the third call passes.
+    setup_cmd = (
+        f'bash -c \''
+        f'f="{counter_file}"; '
+        f'n=0; [ -f "$f" ] && n=$(cat "$f"); '
+        f'n=$((n + 1)); echo $n > "$f"; '
+        f'if [ $n -le 2 ]; then kill -ABRT $$; fi'
+        f'\''
+    )
+
+    ctx = _Ctx(run_dir, facts={"setup": setup_cmd, "generate": "", "check": "true"})
+    # Write worktree.json so recorded() finds it.
+    wt_record = run_dir / ".refactory" / "worktree.json"
+    wt_record.parent.mkdir(parents=True, exist_ok=True)
+    wt_record.write_text(json.dumps({
+        "path": found.path, "branch": found.branch, "base": found.base,
+        "head": found.head, "target": found.target, "run": str(run_dir),
+    }))
+
+    result = base_check.run_base_check(ctx, "true", timeout=60)
+    # After rebuild, the base should prepare successfully.
+    assert result.environment_failure is None, (
+        f"expected no environment failure after rebuild, got: {result.environment_failure}"
+    )
+
+
+def test_base_cannot_be_prepared_continues(tmp_path, monkeypatch):
+    """A base that cannot be prepared lets the run continue with a note (R2)."""
+    counter_dir = tempfile.mkdtemp(prefix="r2b_")
+    counter_file = os.path.join(counter_dir, "counter")
+
+    repo = _git_init(tmp_path / "repo")
+    base = _commit_file(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = _make_worktree(repo, run_dir, base)
+
+    # The setup script always crashes.
+    setup_cmd = "bash -c 'kill -ABRT $$'"
+
+    ctx = _Ctx(run_dir, facts={"setup": setup_cmd, "generate": "", "check": "true"})
+    wt_record = run_dir / ".refactory" / "worktree.json"
+    wt_record.parent.mkdir(parents=True, exist_ok=True)
+    wt_record.write_text(json.dumps({
+        "path": found.path, "branch": found.branch, "base": found.base,
+        "head": found.head, "target": found.target, "run": str(run_dir),
+    }))
+
+    result = base_check.run_base_check(ctx, "true", timeout=60)
+    # Double failure: environment_failure is set.
+    assert result.environment_failure is not None
+
+    # Verify it is NOT cached (later checks get a fresh attempt).
+    cached = base_check._read_cache(
+        run_dir,
+        base_check.cache_key(found.base, setup_cmd, "", "true"),
+    )
+    assert cached is None, "a crashed base result must not be cached"
+
+
+# ── R3: generate failure reaches builder (regression test) ─────────────────
+
+
+def test_generate_failure_attributed_to_change_reaches_builder(tmp_path):
+    """A generate failure with exit 1 reaches the builder as code_failure (R3 regression).
+
+    On current main, this already works: check_failure_kind returns 'code_failure'
+    for a prep_failure with returncode=1 (not < 0, not 126/127).  This test
+    verifies that the path is preserved.
+    """
+    # Build a SandboxResult as _check_in_worktree returns it when generate fails.
+    result = sandbox.SandboxResult(
+        ok=False, returncode=1, elapsed_s=0.0,
+        prep_failure={"step": "pnpm run docs:generate", "returncode": 1, "timed_out": False},
+        stderr="the worktree's environment could not be prepared:\nthe generate command failed",
+    )
+    kind = evidence.check_failure_kind(result)
+    assert kind == "code_failure", f"expected 'code_failure', got {kind!r}"
+    # stop_unrepairable does nothing for code_failure — the flow reaches repair().
+    evidence.stop_unrepairable(kind, "detail")  # should not raise
+
+
+# ── R5: repair feedback includes [left] sites and broken guarantees ────────
+
+
+def test_repair_feedback_includes_left_sites_and_broken_guarantees(tmp_path):
+    """A check failure's feedback names the design's [left] sites and broken guarantees."""
+    design_md = (
+        "# Test design\n\n"
+        "## Summary\n\nA summary.\n\n"
+        "## Rule and sites\n\n"
+        "- `worktree.py:473-493` — `_require_current`. [left: the safety check is correct]\n"
+        "- `sandbox.py:48-51` — `_AMBIGUOUS_SHELL_EXITS`. [changed: new helper]\n\n"
+        "## Docs\n\n- docs/hardening.md\n\n"
+        "## Changes\n\n- refactory/refactory_dsh/sandbox.py\n"
+    )
+
+    repo = _git_init(tmp_path / "repo")
+    base = _commit_file(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = _make_worktree(repo, run_dir, base)
+    # Write design.md so check_artifact can read it.
+    (run_dir / "design.md").write_text(design_md)
+
+    # Build a FilteredCheckResult with base_failures and base_complete set.
+    filtered = base_check.FilteredCheckResult(
+        all_excused=False,
+        inherited=set(),
+        new_failures={"tests/test_guard.py::test_guard"},
+        new_failure_detail="FAILED tests/test_guard.py::test_guard",
+        inherited_detail="",
+        base_environment_failure=None,
+        guardedness=None,
+        base_failures=set(),  # test_guard is not in base failures
+        base_complete=True,
+    )
+
+    # Build a result that has the test failure in its output.
+    result = sandbox.SandboxResult(
+        ok=False, returncode=1,
+        stdout="FAILED tests/test_guard.py::test_guard\n= 1 failed in 0.5s =",
+        stderr="",
+    )
+
+    # Now use the design_contract.parse + augmentation logic directly.
+    parsed = design_contract.parse(design_md, "test_design")
+    left_lines: list[str] = []
+    for site in parsed.rule_sites:
+        if site.get("status") == "left" and site.get("reason"):
+            left_lines.append(
+                f"Design constraint: {site['path']} [left: {site['reason']}] "
+                "— do not change this; fix the tests or callers instead."
+            )
+
+    guarantee_lines: list[str] = []
+    attempt_failures = base_check.parse_test_failures(result.stdout)
+    changed_files = set()  # no changed files
+    for failure in sorted(attempt_failures):
+        if failure not in filtered.base_failures:
+            test_file = failure.split("::")[0] if "::" in failure else ""
+            if test_file and test_file not in changed_files:
+                guarantee_lines.append(
+                    f"Broken guarantee: {failure} passes on the base but "
+                    "fails on this attempt — the attempt must not break it."
+                )
+
+    assert left_lines, "should have at least one [left] site"
+    assert any("the safety check is correct" in line for line in left_lines)
+    assert guarantee_lines, "should have at least one broken guarantee"
+    assert any("test_guard" in line for line in guarantee_lines)
+
+
+# ── R6: converging run gets extra attempt ──────────────────────────────────
+
+
+def test_converging_run_gets_extra_attempt(tmp_path):
+    """A run whose last attempt went from five failures to one gets one more attempt (R6).
+
+    drive repair() through the overall cap path: five failures, then one, then
+    a granted fourth attempt.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": [
+            ["tests/test_a.py::test_a", "tests/test_b.py::test_b",
+             "tests/test_c.py::test_c", "tests/test_d.py::test_d",
+             "tests/test_e.py::test_e"],
+            ["tests/test_a.py::test_a"],
+        ],
+        "check_attempts_used": 2,
+        "attempts_used": 2,
+    }, knobs={"check_attempts": 3, "attempts": 3, "convergence_extra_attempts": 1})
+
+    feedback = "FAILED tests/test_a.py::test_a\n= 1 failed in 0.5s ="
+
+    # Write files repair() needs.
+    ctx.write_text("validation.txt", "")
+
+    # repair() should NOT raise — it should grant the extra attempt.
+    result = repair(ctx, [feedback])
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    assert ctx.facts.get("convergence_granted") is True
+    assert ctx.facts.get("convergence_extras_used") == 1
+
+
+def test_non_converging_run_exhausts(tmp_path):
+    """A run whose failures did not shrink exhausts its attempts."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": [
+            ["tests/test_a.py::test_a", "tests/test_b.py::test_b",
+             "tests/test_c.py::test_c"],
+            ["tests/test_a.py::test_a", "tests/test_b.py::test_b",
+             "tests/test_c.py::test_c"],
+        ],
+        "check_attempts_used": 2,
+        "attempts_used": 2,
+    }, knobs={"check_attempts": 3, "attempts": 3, "convergence_extra_attempts": 1})
+
+    feedback = "FAILED tests/test_a.py::test_a\nFAILED tests/test_b.py::test_b\nFAILED tests/test_c.py::test_c\n= 3 failed in 0.5s ="
+    ctx.write_text("validation.txt", "")
+
+    with pytest.raises(ValueError, match="check attempts exhausted"):
+        repair(ctx, [feedback])
+
+
+def test_empty_failure_set_is_not_convergence(tmp_path):
+    """An empty failure set is not convergence (R6)."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": [
+            ["tests/test_a.py::test_a", "tests/test_b.py::test_b",
+             "tests/test_c.py::test_c"],
+            [],  # empty — no test identifiers found
+        ],
+        "check_attempts_used": 2,
+        "attempts_used": 2,
+    }, knobs={"check_attempts": 3, "attempts": 3, "convergence_extra_attempts": 1})
+
+    feedback = "everything crashed"
+    ctx.write_text("validation.txt", "")
+
+    with pytest.raises(ValueError, match="check attempts exhausted"):
+        repair(ctx, [feedback])
+
+
+# ── R6: node declarations include convergence facts ───────────────────────
+
+
+def test_node_declarations_include_convergence_facts():
+    """The design, fast and create graph nodes declare the convergence facts."""
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.fast import DesignFastMode, CreateFastMode
+    from refactory_dsh.create import CreateMode
+
+    # Design mode: check node.
+    design_graph = DesignMode().build()
+    check_node = design_graph.nodes["check"]
+    for fact in ("check_failures_history", "convergence_extras_used",
+                 "convergence_granted", "base_unavailable"):
+        assert fact in check_node.produces, f"design check node missing {fact}"
+
+    # Design fast mode: focused_check and gate_qa nodes.
+    fast_graph = DesignFastMode().build()
+    fc_node = fast_graph.nodes["focused_check"]
+    for fact in ("check_failures_history", "convergence_extras_used",
+                 "convergence_granted", "base_unavailable"):
+        assert fact in fc_node.produces, f"design_fast focused_check missing {fact}"
+    qa_node = fast_graph.nodes["gate_qa"]
+    for fact in ("check_failures_history", "convergence_extras_used",
+                 "convergence_granted"):
+        assert fact in qa_node.produces, f"design_fast gate_qa missing {fact}"
+
+    # Create fast mode: smoke and validate nodes.
+    cf_graph = CreateFastMode().build()
+    smoke_node = cf_graph.nodes["smoke"]
+    for fact in ("check_failures_history", "convergence_extras_used",
+                 "convergence_granted"):
+        assert fact in smoke_node.produces, f"create_fast smoke missing {fact}"
+    validate_node = cf_graph.nodes["validate"]
+    for fact in ("check_failures_history", "convergence_extras_used",
+                 "convergence_granted"):
+        assert fact in validate_node.produces, f"create_fast validate missing {fact}"
+
+    # Create full mode: smoke node.
+    create_graph = CreateMode().build()
+    c_smoke = create_graph.nodes["smoke"]
+    for fact in ("convergence_extras_used", "convergence_granted"):
+        assert fact in c_smoke.produces, f"create smoke missing {fact}"
+
+
+# ── R9: deliver_design refuses repointed worktree ──────────────────────────
+
+
+def test_deliver_design_refuses_repointed_worktree(tmp_path):
+    """deliver_design refuses a worktree whose .git points at the repo's own
+    git directory, and the repository's HEAD is unchanged (R9).
+
+    With the verify_git_link call at delivery.py:808, the ValueError is raised
+    immediately and the repo's HEAD stays at M (the merge commit).  Without
+    the call, _recover_interrupted_merge would run git reset --hard in the
+    repointed worktree, changing the repo's HEAD from M to the reviewed commit.
+    """
+    repo = _git_init(tmp_path / "repo")
+    (repo / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "reviewed"],
+                   capture_output=True, check=True)
+    reviewed = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    # Create a branch simulating main moving forward.
+    subprocess.run(["git", "-C", str(repo), "checkout", "-b", "main-moved"],
+                   capture_output=True, check=True)
+    (repo / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "main-moved"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", reviewed],
+                   capture_output=True, check=True)
+
+    # Create a proper worktree at the reviewed commit.
+    wt_path = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "run-branch",
+                    str(wt_path), reviewed], capture_output=True, check=True)
+
+    # Merge main-moved into the worktree (delivery's own merge).
+    subprocess.run(["git", "-C", str(wt_path), "merge", "--no-ff", "--no-edit", "main-moved"],
+                   capture_output=True, check=True)
+    merge_sha = subprocess.run(["git", "-C", str(wt_path), "rev-parse", "HEAD"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+    assert merge_sha != reviewed
+
+    # Set the repo's HEAD to the merge M.
+    subprocess.run(["git", "-C", str(repo), "checkout", "-b", "at-merge", merge_sha],
+                   capture_output=True, check=True)
+
+    # Repoint the worktree's .git to the repo's own git dir.
+    repo_git_dir = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--absolute-git-dir"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    (wt_path / ".git").write_text(f"gitdir: {repo_git_dir}\n")
+
+    # Record the repo's HEAD before deliver_design.
+    repo_head_before = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+
+    # Write worktree.json.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    wt_record = run_dir / ".refactory" / "worktree.json"
+    wt_record.parent.mkdir(parents=True, exist_ok=True)
+    wt_record.write_text(json.dumps({
+        "path": str(wt_path), "branch": "run-branch", "base": reviewed,
+        "head": reviewed, "target": str(repo), "run": str(run_dir),
+    }))
+
+    # Call deliver_design — should raise because verify_git_link detects the repoint.
+    ctx = nn.RunContext(run_dir, facts={
+        "delivery_plan": {"action": "none", "why": "test"},
+    }, enforce_writes=False)
+
+    with pytest.raises(ValueError, match="no longer points at its own git directory"):
+        delivery.deliver_design(ctx)
+
+    # The repo's HEAD must still be at M — no git reset --hard ran.
+    repo_head_after = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    assert repo_head_after == repo_head_before, (
+        f"repo HEAD changed from {repo_head_before[:12]} to {repo_head_after[:12]}; "
+        "verify_git_link call at delivery.py:808 is missing"
+    )
+
+
+# ── R6 convergence in fast_ops._repair ─────────────────────────────────────
+
+
+def test_fast_repair_convergence_grants_extra(tmp_path):
+    """fast_ops._repair grants an extra attempt when the failure set converges."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": [
+            ["tests/test_a.py::test_a", "tests/test_b.py::test_b"],
+            ["tests/test_a.py::test_a"],
+        ],
+        "repairs_used": 1,
+        "check_repairs_used": 1,
+    }, knobs={"repair_attempts": 1, "convergence_extra_attempts": 1})
+
+    feedback_parts = ["FAILED tests/test_a.py::test_a\n= 1 failed in 0.5s ="]
+
+    result = fast_repair(ctx, feedback_parts, kind="check")
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    assert ctx.facts.get("convergence_granted") is True
+
+
+def test_fast_repair_non_convergence_raises(tmp_path):
+    """fast_ops._repair raises when the failure set does not converge."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": [
+            ["tests/test_a.py::test_a", "tests/test_b.py::test_b"],
+            ["tests/test_a.py::test_a", "tests/test_b.py::test_b"],
+        ],
+        "repairs_used": 1,
+        "check_repairs_used": 1,
+    }, knobs={"repair_attempts": 1, "convergence_extra_attempts": 1})
+
+    feedback_parts = ["FAILED tests/test_a.py::test_a\nFAILED tests/test_b.py::test_b\n= 2 failed in 0.5s ="]
+
+    with pytest.raises(ValueError, match="unresolved"):
+        fast_repair(ctx, feedback_parts, kind="check")

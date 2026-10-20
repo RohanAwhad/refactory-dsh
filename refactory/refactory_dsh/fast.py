@@ -86,7 +86,11 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         reads=("emit.txt",) + (() if artifact else ("authoring-evidence.json", "smoke.json")),
         writes=("focused-check.json", "focused-source.json", "authoring-evidence.json")
                + (repo_change.CHECK_WRITES if artifact else ()),
-        produces=("focused_check", "output_path", "review_files", "runtime_evidence")
+        produces=("focused_check", "output_path", "review_files", "runtime_evidence",
+                  "base_unavailable",
+                  "check_failures_history",
+                  "convergence_extras_used",
+                  "convergence_granted")
                  + (repo_change.CHECK_PRODUCES if artifact else ()),
         notes="run the explicitly requested bounded check; no implicit full evaluation",
     ))
@@ -108,7 +112,10 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
                                           "authoring-evidence.json", "intent-audit.json"),
         writes=("fast-report.json", "repair.txt"),
         produces=("repair_feedback", "repairs_used", "check_repairs_used",
-                  "review_repairs_used", "qa_passed"), max_iterations=4,
+                  "review_repairs_used", "qa_passed",
+                  "check_failures_history",
+                  "convergence_extras_used",
+                  "convergence_granted"), max_iterations=4,
         notes="repair only within the shared bound; unresolved findings are failure",
     ))
     graph.connect("focused_check", "focused_qa")
@@ -180,14 +187,20 @@ class CreateFastMode(CreateMode):
                           writes=("validation.txt", "repair.txt", "fast-report.json"),
                           knobs=("repair_attempts",), max_iterations=4,
                           produces=("validation", "repair_feedback", "repairs_used",
-                                    "check_repairs_used")))
+                                    "check_repairs_used",
+                                    "check_failures_history",
+                                    "convergence_extras_used",
+                                    "convergence_granted")))
         _qa_nodes(graph, artifact=False)
         graph.add(replace(full.nodes["register"], resource_role="work"))
         graph.add(replace(full.nodes["smoke"], evaluator="refactory_dsh.create_ops:gate_smoke",
                           knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "repair_attempts"),
                           writes=(*full.nodes["smoke"].writes, "repair.txt", "fast-report.json"),
                           produces=(*full.nodes["smoke"].produces, "repair_feedback", "repairs_used",
-                                    "check_repairs_used", "review_repairs_used"),
+                                    "check_repairs_used", "review_repairs_used",
+                                    "check_failures_history",
+                                    "convergence_extras_used",
+                                    "convergence_granted"),
                           resource_role="final_validation", max_iterations=4))
         graph.add(replace(full.nodes["report"], call=f"{OPS}:report_package",
                           resource_role="final_validation",

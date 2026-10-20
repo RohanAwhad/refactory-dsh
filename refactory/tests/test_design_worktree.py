@@ -1491,25 +1491,24 @@ def test_the_base_is_prepared_with_its_own_home_not_the_attempts(tmp_path):
     assert attempt_home.read_text().strip() != base_home.read_text().strip()
 
 
-def test_base_check_cannot_run_stops_unavailable(tmp_path):
-    """A base whose check cannot run stops the run as unavailable without spending an attempt."""
+def test_base_check_cannot_run_continues_with_note(tmp_path):
+    """A base whose check cannot run continues with a base_unavailable note (R2)."""
     repo = git_repo(tmp_path / "repo")
+    # Use two emissions so the run can attempt repair.
+    emit1 = render({"tool.py": "raise SystemExit(1)\n", "setup.sh": "#!/bin/sh\necho ok\n"})
+    emit2 = render({"tool.py": "raise SystemExit(1)\n", "note.txt": "r1\n"})
+    emit3 = render({"tool.py": "raise SystemExit(1)\n", "note.txt": "r2\n"})
     result = DesignMode().run(
         tmp_path / "run",
-        model=FakeModel(_answers(render({
-            "tool.py": "raise SystemExit(1)\n",
-            "setup.sh": "#!/bin/sh\necho ok\n",
-        }))),
+        model=FakeModel(_answers(emit1, emit2, emit3)),
         verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": "a tool",
               "check": "python tool.py", "target": str(repo),
               "setup": "sh setup.sh"},
     )
-    assert result.exit_ok is False
-    error = result.error or ""
-    assert ("unavailable" in error.lower() or "base" in error.lower()
-            or "setup" in error.lower())
-    assert not result.facts.get("attempts_used")
+    # The run should continue (not stop as unavailable) — it may still fail
+    # because the check itself fails, but it should reach repair.
+    assert result.facts.get("base_unavailable") or result.facts.get("attempts_used")
 
 
 def test_design_named_failure_not_excused(tmp_path):

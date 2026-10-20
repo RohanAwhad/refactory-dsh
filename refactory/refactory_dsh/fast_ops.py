@@ -138,6 +138,31 @@ def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
         ctx.set_fact("review_repairs_used", kind_used + 1)
 
     if used >= limit:
+        # R6: convergence check before raising — grant one extra attempt when
+        # the failure set is a non-empty strict subset of the previous one.
+        if kind == "check":
+            from refactory_dsh import base_check as _bc
+            history = list(ctx.facts.get("check_failures_history", []))
+            extras_used = int(ctx.facts.get("convergence_extras_used", 0))
+            extras_limit = int(ctx.knob("convergence_extra_attempts", 1))
+            if extras_used < extras_limit and len(history) >= 2:
+                current = set(history[-1])
+                previous = set(history[-2])
+                check_command = str(ctx.facts.get("check") or "").strip()
+                blocker = _bc.excusal_blocker(
+                    check_command, feedback, current
+                ) if current else "empty failure set"
+                all_prior = set().union(*(set(h) for h in history[:-1]))
+                if (current
+                        and current < previous
+                        and current <= all_prior
+                        and blocker is None):
+                    ctx.set_fact("convergence_extras_used", extras_used + 1)
+                    ctx.set_fact("convergence_granted", True)
+                    ctx.set_fact("repairs_used", used + 1)
+                    ctx.write_json("fast-report.json", _report(ctx, "repairing", findings))
+                    return Verdict("reloop", feedback)
+
         ctx.write_json("fast-report.json", _report(ctx, "unresolved", findings))
         label = "check" if kind == "check" else "review"
         raise ValueError(
@@ -243,10 +268,10 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                 guardedness=guardedness,
             )
             if filtered.base_environment_failure:
-                evidence.stop_unrepairable(
-                    "unavailable",
-                    f"the base check could not run: {filtered.base_environment_failure}",
-                )
+                # R2: continue without excusals instead of stopping.
+                note = (f"base comparison unavailable: {filtered.base_environment_failure}; "
+                        "the attempt's results stand without excusals")
+                ctx.set_fact("base_unavailable", note)
 
             # Diagnose unbuilt packages from the worktree's own manifests.
             wt_path = Path(found.path)
@@ -282,6 +307,46 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                 # the builder's feedback.
                 if unbuilt_msg:
                     payload["unbuilt_diagnosis"] = unbuilt_msg
+                # R5: augment feedback with [left] sites and broken guarantees.
+                from refactory_dsh import design_contract as _dc
+                _run_name = str(ctx.facts.get("name") or "")
+                _parsed = _dc.parse(
+                    ctx.read_text("design.md") if ctx.exists("design.md") else "", _run_name
+                )
+                _left_lines: list[str] = []
+                for _site in _parsed.rule_sites:
+                    if _site.get("status") == "left" and _site.get("reason"):
+                        _left_lines.append(
+                            f"Design constraint: {_site['path']} [left: {_site['reason']}] "
+                            "— do not change this; fix the tests or callers instead."
+                        )
+                _guarantee_lines: list[str] = []
+                if (filtered is not None
+                        and not filtered.base_environment_failure
+                        and filtered.base_complete
+                        and filtered.base_failures is not None):
+                    from refactory_dsh import base_check as _bc
+                    _attempt_output = "\n".join((result.stdout or "", result.stderr or "")).strip()
+                    _attempt_failures = _bc.parse_test_failures(_attempt_output)
+                    _changed_files = set(_bc._all_changed_files(Path(found.path), found.base))
+                    for _failure in sorted(_attempt_failures):
+                        if _failure not in filtered.base_failures:
+                            _tf = _failure.split("::")[0] if "::" in _failure else ""
+                            if _tf and _tf not in _changed_files:
+                                _guarantee_lines.append(
+                                    f"Broken guarantee: {_failure} passes on the base but "
+                                    "fails on this attempt — the attempt must not break it."
+                                )
+                if _left_lines or _guarantee_lines:
+                    detail = "\n".join(_left_lines + _guarantee_lines) + "\n\n" + detail
+
+                # R6: store failure history for convergence detection.
+                _attempt_out_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
+                _cur_failures = sorted(_bc.parse_test_failures(_attempt_out_r6)) if 'result' in dir() else []
+                _hist = list(ctx.facts.get("check_failures_history", []))
+                _hist.append(_cur_failures)
+                ctx.set_fact("check_failures_history", _hist)
+
                 ctx.write_json("focused-check.json", payload)
     if ctx.facts.get("package_path"):
         problems = evidence.current_problems(ctx)

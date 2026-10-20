@@ -1039,6 +1039,10 @@ def _regenerate_merge(ctx: Any, path: Path, generate: str, check_timeout_s: floa
     gen_result = _sbx.run_command(generate, workdir=path, timeout_s=check_timeout_s,
                                   env=_menv, home=_mhome, exact_env=True)
     if not gen_result.ok:
+        # R1: classify signal crashes in post-merge generate.
+        crashed_regen, sig_regen = _sbx.is_signal_crash(gen_result)
+        if crashed_regen:
+            return f"generate on the merged tree {sig_regen}"
         detail = (gen_result.stderr or gen_result.stdout or gen_result.problem() or "").strip()
         return f"generate failed on the merged tree: {detail[:500]}"
     _gen_changed = worktree.git(path, "diff", "--name-only").strip()
@@ -1173,6 +1177,11 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     gen_a = sandbox.run_command(generate, workdir=path, timeout_s=check_timeout_s,
                                 env=env, home=home, exact_env=True)
     if not gen_a.ok:
+        # R1: signal crash in generate stops the merge as infrastructure.
+        crashed_a, sig_a = sandbox.is_signal_crash(gen_a)
+        if crashed_a:
+            _abandon_merge(path, reviewed_commit)
+            return MergeResult(abandoned=f"generate (base side) {sig_a}")
         # Generate failed on the base side — classify all conflicting files as authored.
         _abandon_merge(path, reviewed_commit)
         return MergeResult(conflicts=conflicting)
@@ -1224,6 +1233,11 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     gen_b = sandbox.run_command(generate, workdir=path, timeout_s=check_timeout_s,
                                 env=env, home=home, exact_env=True)
     if not gen_b.ok:
+        # R1: signal crash in generate stops the merge as infrastructure.
+        crashed_b, sig_b = sandbox.is_signal_crash(gen_b)
+        if crashed_b:
+            _abandon_merge(path, reviewed_commit)
+            return MergeResult(abandoned=f"generate (run side) {sig_b}")
         # Generate failed on the run side — classify all conflicting files as authored.
         _abandon_merge(path, reviewed_commit)
         return MergeResult(conflicts=conflicting)
@@ -1313,19 +1327,33 @@ def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
     if reviewed_manifests != merge_manifests:
         from dataclasses import replace as _replace
         found_for_merge = _replace(found, head=merge_commit)
-        found_for_merge, env_problems, _ = worktree.ensure_environment(
+        found_for_merge, env_problems, inst_fail = worktree.ensure_environment(
             found_for_merge, ctx.workdir, budget, commit_lockfiles=False)
         if env_problems:
             problems.extend(env_problems)
+            # R1: signal crash in merged-tree install is infrastructure.
+            if inst_fail is not None and isinstance(inst_fail.get("returncode"), int):
+                irc = inst_fail["returncode"]
+                if irc < 0 or irc in sandbox._AMBIGUOUS_SHELL_EXITS:
+                    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+                    sig_detail = next((p for p in env_problems if "killed by" in p.lower()), "")
+                    return f"merged-tree install {sig_detail or 'killed by signal'}"
 
     env = worktree.check_environment(path, home)
 
     # Run generate+setup (amend=False: do not amend the merge commit).
-    _found_after, prep_problems, _ = repo_change.prepare_commands(
+    _found_after, prep_problems, prep_fail_merged = repo_change.prepare_commands(
         ctx, found, env, home, check_timeout_s, budget, amend=False)
     problems.extend(prep_problems)
 
     if problems:
+        # R1: signal crash in merged-tree generate/setup is infrastructure.
+        if prep_fail_merged is not None and isinstance(prep_fail_merged.get("returncode"), int):
+            prc = prep_fail_merged["returncode"]
+            if prc < 0 or prc in sandbox._AMBIGUOUS_SHELL_EXITS:
+                worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+                sig_detail = next((p for p in prep_problems if "killed by" in p.lower()), "")
+                return f"merged-tree preparation {sig_detail or 'killed by signal'}"
         worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
         return "the worktree's environment could not be prepared: " + "; ".join(problems)
 
@@ -1509,6 +1537,15 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         + "- **Merging:** the branch's commits are the run's attempts, "
         "each the base plus that attempt's files, committed by Refactory; the change is their sum."
     )
+    # R2: note when the base comparison was unavailable.
+    base_note = ctx.facts.get('base_unavailable')
+    if base_note:
+        verification += f"\n- **Base comparison:** {base_note}"
+    # R6: note when a convergence extra attempt was granted.
+    conv_note = ctx.facts.get('convergence_granted')
+    if conv_note:
+        verification += ("\n- **Convergence:** an extra attempt was granted "
+                         "because the run was converging.")
     verification += _process_notes_section(ctx)
     sections.append(verification)
     sections.append(f"## Original request\n\n{brief}")

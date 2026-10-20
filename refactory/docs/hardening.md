@@ -723,6 +723,54 @@ another name that declares the knob gets the envelope.
 
 ---
 
+## 10. Signal-crash classification at preparation call sites (dm-105)
+
+`run_command` already retries once on direct signals (rc < 0) and on shell-wrapped
+SIGABRT/SIGBUS/SIGSEGV (exit 134/135/139). A new helper `is_signal_crash(result)`
+classifies what survives that retry: it returns `(True, signal_label)` when the
+return code is a direct signal or a shell-wrapped signal in `_AMBIGUOUS_SHELL_EXITS`.
+
+Every preparation call site — install (`worktree.ensure_environment`), generate and
+setup (`repo_change.prepare_commands`), and delivery's post-merge generate and
+merged-tree check (`delivery._regenerate_merge`, `_merge_target`, `_check_merged`)
+— calls `is_signal_crash` after `run_command` returns with `not result.ok`. When
+the crash persists, the call site normalises the `prep_failure` dict's `returncode`
+to a negative signal number so `check_failure_kind` returns `'uncertain'`
+(infrastructure), and the run stops without spending a code attempt.
+
+## 11. Base comparison discard-and-rebuild on crash (dm-105)
+
+When any step of the base comparison — install, generate, setup or the check
+command itself — crashes (a signal that survives the retry), `run_base_check`
+discards `BASE_CHECK_HOME`, the base worktree and the cache file, and rebuilds
+from scratch. On double failure, the result is returned with `environment_failure`
+set but never cached, so later checks get a fresh attempt. The run continues
+without excusals, and the note appears in the check record and the PR's
+Verification section.
+
+Deterministic (non-crash) failures — a non-zero exit that repeats — are cached
+as before. The base is prepared at most twice per attempt, so the check node's
+time limit still holds.
+
+## 12. Convergence extra attempt (dm-109)
+
+When the last allowed attempt strictly reduced the set of failing tests and none
+of the remaining failures is new to any prior attempt, one extra attempt is
+granted (bounded by the `convergence_extra_attempts` knob, default 1, never
+unbounded). The convergence check requires: (a) a non-empty current failure set;
+(b) a strict subset of the previous attempt's failure set; (c) every current
+failure existed in at least one prior attempt; (d) the runner completed fully
+(excusal_blocker returns None). An empty failure set is not progress. The extra
+attempt is recorded in the run and the PR's Verification section.
+
+## 13. Repair feedback augmentation (dm-109)
+
+When a check fails, the builder's feedback includes: (a) the design's `[left: ...]`
+sites with their reasons, telling the builder not to change them but to fix the
+tests or callers instead; (b) broken guarantees — tests that fail on the attempt,
+are absent from the base's failure set, live in files the attempt did not change,
+and the base completed fully.
+
 Two things that were on this list have moved off it, which is the point of keeping it:
 
 - **mathlib is no longer untested.** It was installed and the mathlib problem ran, and

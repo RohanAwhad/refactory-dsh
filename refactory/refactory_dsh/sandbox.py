@@ -50,6 +50,34 @@ DEFAULT_FILE_MB = 16384
 #: whether the crash is the change's fault or infrastructure.
 _AMBIGUOUS_SHELL_EXITS = frozenset({134, 135, 139})
 
+
+def is_signal_crash(result: SandboxResult) -> tuple[bool, str]:
+    """Whether a sandbox result is a signal crash that survived run_command's retry.
+
+    Returns (True, signal_label) when the return code is a direct signal
+    (rc < 0) or a shell-wrapped SIGABRT/SIGBUS/SIGSEGV (exit 134/135/139).
+    run_command already retried once for both cases; a positive return code
+    in _AMBIGUOUS_SHELL_EXITS means the retry also crashed.
+    """
+    rc = result.returncode
+    if rc is None:
+        return False, ""
+    if rc < 0:
+        sig_num = -rc
+        try:
+            sig_name = signal.Signals(sig_num).name
+        except (ValueError, KeyError):
+            sig_name = f"signal {sig_num}"
+        return True, f"killed by {sig_name}"
+    if rc in _AMBIGUOUS_SHELL_EXITS:
+        sig_num = rc - 128
+        try:
+            sig_name = signal.Signals(sig_num).name
+        except (ValueError, KeyError):
+            sig_name = f"signal {sig_num}"
+        return True, f"killed by {sig_name}"
+    return False, ""
+
 #: Anything whose name looks like a credential is removed from the environment.
 #: A generated package has no reason to read a key, and every reason not to.
 _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")

@@ -1065,8 +1065,16 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None, *,
         if not result.ok:
             detail = "\n".join((result.problem(), result.stderr or "", result.stdout or "")).strip()
             problems.append(f"`{shown}` failed: {detail[-2000:]}")
+            # Classify signal crashes: normalise shell-wrapped signals to negative
+            # return codes so check_failure_kind returns 'uncertain' (infrastructure).
+            crashed, sig_label = sandbox.is_signal_crash(result)
+            if crashed and sig_label:
+                problems[-1] = f"`{shown}` {sig_label}: {detail[-2000:]}"
+            rc_for_fail = result.returncode
+            if crashed and result.returncode is not None and result.returncode > 0:
+                rc_for_fail = -(result.returncode - 128)
             if prep_fail is None:
-                prep_fail = {"step": shown, "returncode": result.returncode, "timed_out": result.timed_out}
+                prep_fail = {"step": shown, "returncode": rc_for_fail, "timed_out": result.timed_out}
         elif command[0] == "uv" and (path / ".venv").is_dir():
             (path / ".venv" / MARKER).write_text("created by refactory for this run's checks\n")
     left = _loose(path) - before

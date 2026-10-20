@@ -1244,9 +1244,33 @@ def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
         ctx.set_fact("check_attempts_used", kind_used)
         kind_limit = int(ctx.knob("check_attempts", ctx.knob("attempts", 3)))
         if kind_used >= kind_limit:
-            raise ValueError(
-                f"check attempts exhausted after {kind_used} check failure(s): {feedback}"
-            )
+            # R6: convergence check before raising — grant one extra attempt
+            # when the failure set is a non-empty strict subset of the
+            # previous one, with no new failures and the runner completed fully.
+            from refactory_dsh import base_check
+            history = list(ctx.facts.get("check_failures_history", []))
+            extras_used = int(ctx.facts.get("convergence_extras_used", 0))
+            extras_limit = int(ctx.knob("convergence_extra_attempts", 1))
+            granted = False
+            if extras_used < extras_limit and len(history) >= 2:
+                current = set(history[-1])
+                previous = set(history[-2])
+                check_command = str(ctx.facts.get("check") or "").strip()
+                blocker = base_check.excusal_blocker(
+                    check_command, feedback, current
+                ) if current else "empty failure set"
+                all_prior = set().union(*(set(h) for h in history[:-1]))
+                if (current
+                        and current < previous
+                        and current <= all_prior
+                        and blocker is None):
+                    ctx.set_fact("convergence_extras_used", extras_used + 1)
+                    ctx.set_fact("convergence_granted", True)
+                    granted = True
+            if not granted:
+                raise ValueError(
+                    f"check attempts exhausted after {kind_used} check failure(s): {feedback}"
+                )
     else:
         kind_used = int(ctx.facts.get("review_attempts_used", 0)) + 1
         ctx.set_fact("review_attempts_used", kind_used)
@@ -1257,7 +1281,9 @@ def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
             )
 
     overall_limit = int(ctx.knob("attempts", ctx.knob("check_attempts", 3)))
-    if used >= overall_limit:
+    # R6: apply the granted extra attempt to the overall cap too.
+    extras_granted = int(ctx.facts.get("convergence_extras_used", 0))
+    if used >= overall_limit + extras_granted:
         raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
     return Verdict("reloop", feedback)
 

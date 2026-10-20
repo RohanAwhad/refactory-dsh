@@ -425,6 +425,9 @@ def check_artifact(ctx: Any) -> str:
             ctx.write_json("test-guardedness.json", guardedness)
     evidence.record(ctx, outcome)
 
+    # Clear base_unavailable at the start of each check attempt (R2).
+    ctx.set_fact("base_unavailable", "")
+
     if result.ok:
         ctx.set_fact("validation", "(the check passed)")
         return "proceed"
@@ -446,10 +449,10 @@ def check_artifact(ctx: Any) -> str:
             guardedness=guardedness,
         )
         if filtered.base_environment_failure:
-            evidence.stop_unrepairable(
-                "unavailable",
-                f"the base check could not run: {filtered.base_environment_failure}",
-            )
+            # R2: continue without excusals instead of stopping.
+            note = (f"base comparison unavailable: {filtered.base_environment_failure}; "
+                    "the attempt's results stand without excusals")
+            ctx.set_fact("base_unavailable", note)
 
         # Diagnose unbuilt packages from the worktree's own manifests.
         wt_path = Path(found.path)
@@ -490,6 +493,47 @@ def check_artifact(ctx: Any) -> str:
         # Otherwise prepend the diagnosis so the builder sees it.
         if unbuilt_msg:
             detail = unbuilt_msg + "\n\n" + detail
+
+    # R5: augment feedback with [left: ...] design constraints and broken guarantees.
+    from refactory_dsh import design_contract
+    run_name = str(ctx.facts.get("name") or "")
+    parsed = design_contract.parse(
+        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
+    )
+    left_lines: list[str] = []
+    for site in parsed.rule_sites:
+        if site.get("status") == "left" and site.get("reason"):
+            left_lines.append(
+                f"Design constraint: {site['path']} [left: {site['reason']}] "
+                "— do not change this; fix the tests or callers instead."
+            )
+
+    guarantee_lines: list[str] = []
+    if (found is not None and filtered is not None
+            and not filtered.base_environment_failure
+            and filtered.base_complete
+            and filtered.base_failures is not None):
+        attempt_output = "\n".join((result.stdout or "", result.stderr or "")).strip()
+        attempt_failures = base_check.parse_test_failures(attempt_output)
+        changed_files = set(base_check._all_changed_files(Path(found.path), found.base))
+        for failure in sorted(attempt_failures):
+            if failure not in filtered.base_failures:
+                test_file = failure.split("::")[0] if "::" in failure else ""
+                if test_file and test_file not in changed_files:
+                    guarantee_lines.append(
+                        f"Broken guarantee: {failure} passes on the base but "
+                        "fails on this attempt — the attempt must not break it."
+                    )
+
+    if left_lines or guarantee_lines:
+        detail = "\n".join(left_lines + guarantee_lines) + "\n\n" + detail
+
+    # R6: store failure history for convergence detection.
+    attempt_output_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
+    current_failures = sorted(base_check.parse_test_failures(attempt_output_r6))
+    history = list(ctx.facts.get("check_failures_history", []))
+    history.append(current_failures)
+    ctx.set_fact("check_failures_history", history)
 
     return repair(ctx, [detail])
 
