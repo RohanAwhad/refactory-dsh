@@ -695,9 +695,8 @@ describe('applyControls integration', () => {
       },
     })
     await call(ctx, 'wf_next')
-    // Complete 'a'.
-    await call(ctx, 'wf_done', { node: 'a' })
-    // Read checkpoint and compute its revision.
+    // Node 'a' is auto-completed by the shell (dispatch_command exits with code 0).
+    // Read checkpoint and compute its revision (written after 'a' completed).
     const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
     const revision = createHash('sha256').update(cpBytes).digest('hex')
     // Queue a rerun control with text.
