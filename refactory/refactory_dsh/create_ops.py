@@ -1259,10 +1259,19 @@ def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
             if cap > kind_limit and kind_used < cap and len(history) >= 2:
                 current = set(history[-1])
                 previous = set(history[-2])
-                check_command = str(ctx.facts.get("check") or "").strip()
-                blocker = base_check.excusal_blocker(
-                    check_command, feedback, current
-                ) if current else "empty failure set"
+                # R6 correction 3: judge from the recorded check output,
+                # not the feedback text.  The check_blocker_history fact
+                # records the excusal_blocker result computed from the full
+                # check output at each attempt.
+                blocker_history = list(ctx.facts.get("check_blocker_history", []))
+                if blocker_history:
+                    blocker = blocker_history[-1]
+                else:
+                    # Fallback: compute from feedback (first attempt).
+                    check_command = str(ctx.facts.get("check") or "").strip()
+                    blocker = base_check.excusal_blocker(
+                        check_command, feedback, current
+                    ) if current else "empty failure set"
                 all_prior = set().union(*(set(h) for h in history[:-1]))
                 if (current
                         and current < previous

@@ -152,10 +152,15 @@ def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
             if cap > limit and kind_used < cap and len(history) >= 2:
                 current = set(history[-1])
                 previous = set(history[-2])
-                check_command = str(ctx.facts.get("check") or "").strip()
-                blocker = _bc.excusal_blocker(
-                    check_command, feedback, current
-                ) if current else "empty failure set"
+                # R6 correction 3: judge from the recorded check output.
+                blocker_history = list(ctx.facts.get("check_blocker_history", []))
+                if blocker_history:
+                    blocker = blocker_history[-1]
+                else:
+                    check_command = str(ctx.facts.get("check") or "").strip()
+                    blocker = _bc.excusal_blocker(
+                        check_command, feedback, current
+                    ) if current else "empty failure set"
                 all_prior = set().union(*(set(h) for h in history[:-1]))
                 if (current
                         and current < previous
@@ -359,14 +364,31 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                                     "fails on this attempt — the attempt must not break it."
                                 )
                 if _left_lines or _guarantee_lines:
-                    detail = "\n".join(_left_lines + _guarantee_lines) + "\n\n" + detail
+                    _notes_text = "\n".join(_left_lines + _guarantee_lines)
+                    payload["robustness_notes"] = _notes_text
 
-                # R6: store failure history for convergence detection.
+                # R6: store failure history and blocker for convergence detection.
                 _attempt_out_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
                 _cur_failures = sorted(base_check.parse_test_failures(_attempt_out_r6))
                 _hist = list(ctx.facts.get("check_failures_history", []))
                 _hist.append(_cur_failures)
                 ctx.set_fact("check_failures_history", _hist)
+
+                # R6 correction 3: record blocker from the full check output.
+                _check_cmd = str(ctx.facts.get("check") or "").strip()
+                _blocker = base_check.excusal_blocker(
+                    _check_cmd, _attempt_out_r6, set(_cur_failures)
+                ) if _cur_failures else "empty failure set"
+                _blk_hist = list(ctx.facts.get("check_blocker_history", []))
+                _blk_hist.append(_blocker)
+                ctx.set_fact("check_blocker_history", _blk_hist)
+
+                # Write base_unavailable note into check.txt (R2 correction 5).
+                _base_note = ctx.facts.get("base_unavailable")
+                if _base_note:
+                    _check_txt = ctx.read_text("check.txt") if ctx.exists("check.txt") else ""
+                    if _base_note not in _check_txt:
+                        ctx.write_text("check.txt", _check_txt.rstrip() + "\n\n" + _base_note + "\n")
 
                 ctx.write_json("focused-check.json", payload)
     if ctx.facts.get("package_path"):
@@ -423,6 +445,11 @@ def gate_qa(ctx: Any) -> str:
         findings.append(f"requested runtime check failed (exit {check.get('returncode')}): {check_output}")
     findings.extend(evidence.current_problems(ctx, ("focused_qa",)))
     findings.extend(evidence.audit_problems(ctx))
+    # Prepend robustness notes ([left] sites, broken guarantees) so the builder
+    # sees them first — they were stored in the payload by focused_check (R5).
+    robustness_notes = check.get("robustness_notes", "")
+    if robustness_notes:
+        findings.insert(0, robustness_notes)
     # Prepend unbuilt-package diagnosis so the builder sees it first.
     unbuilt_diag = check.get("unbuilt_diagnosis", "")
     if unbuilt_diag:

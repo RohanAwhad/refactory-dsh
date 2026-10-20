@@ -92,6 +92,11 @@ class CreateMode(Mode):
                 description="wall-clock seconds allowed for each full mode validation "
                             "pass, including its model calls; timeout fails creation",
             ),
+            "check_attempt_cap": Knob(
+                8, "int", lo=0,
+                description="hard cap on total check attempts including convergence grants; "
+                            "0 or a value at or below the regular attempts disables the extension",
+            ),
             "sample_knobs": Knob(
                 "", "str",
                 description="knob values a validation run should use, as a JSON array "
@@ -527,7 +532,7 @@ class CreateMode(Mode):
         graph.add(Node(
             "smoke", "gate", evaluator=f"{OPS}:gate_smoke", role="validation",
             resource_role="final_validation", max_iterations=12,
-            knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "attempts"),
+            knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "attempts", "check_attempt_cap"),
             writes=("smoke.json", "revision.json", "authoring-evidence.json", "validation.txt"),
             produces=("smoke_score", "smoke_ok", "smoke_model", "smoke_reason",
                       "before_score", "after_score", "regressed", "revision_note",

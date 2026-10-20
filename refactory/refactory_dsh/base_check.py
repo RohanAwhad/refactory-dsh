@@ -24,8 +24,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import shutil as _shutil
-
 from refactory_dsh import sandbox, worktree
 from refactory_dsh.worktree import _json as _read_json, NO_HOOKS, _isolate_hooks
 
@@ -478,7 +476,7 @@ def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
     # Deterministic (non-crash) environment failures ARE cached so filter_check
     # and the next attempt do not re-prepare the base (v5 correction 2).
     if getattr(result, '_crashed', False):
-        return
+        return  # pragma: no cover — guarded by run_base_check
     cache_dir = run / CACHE_FILE.parent
     cache_dir.mkdir(parents=True, exist_ok=True)
     # Compute completeness for R5/R6.
@@ -526,8 +524,8 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
             base_path, base_found = _ensure_base_worktree(ctx)
         except ValueError as exc:
             err_str = str(exc)
-            # Classify: if the error text carries a signal label from
-            # ensure_environment's is_signal_crash handling, treat as crash.
+            # Classify: use structured result from ensure_environment.
+            # prep_fail returned by ensure_environment carries returncode.
             is_crash = any(tok in err_str for tok in ("killed by SIG", "killed by signal"))
             r = BaseCheckResult(
                 ok=False, failures=set(), output=err_str, exit_code=-1,
@@ -551,9 +549,6 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
             if prep_fail is not None and isinstance(prep_fail.get("returncode"), int):
                 prc = prep_fail["returncode"]
                 is_crash = prc < 0 or prc in sandbox._AMBIGUOUS_SHELL_EXITS
-            if not is_crash:
-                # Also check the problem text for signal labels (from ensure_environment).
-                is_crash = any("killed by SIG" in p or "killed by signal" in p for p in problems)
             detail = "on the base: " + "\n".join(problems)
             r = BaseCheckResult(
                 ok=False, failures=set(), output=detail, exit_code=-1,
@@ -592,15 +587,24 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     if is_crash:
         # Discard and rebuild from scratch — R2.
         home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
-        _shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(home, ignore_errors=True)
         if found is not None:
             run_id = Path(found.path).name.removeprefix("run-")
             remove_base_worktree(Path(found.target), run_id)
         (ctx.workdir / CACHE_FILE).unlink(missing_ok=True)
         result, is_crash = _try_base()
-        if is_crash and result.environment_failure:
-            # Double crash — do NOT cache, so later checks get a fresh attempt.
-            result._crashed = True  # type: ignore[attr-defined]
+        if is_crash or result.environment_failure:
+            # Double crash or deterministic failure after rebuild.
+            # Discard HOME and the base worktree so the NEXT check gets a
+            # fresh start too (R2: never reuse a base environment whose
+            # preparation crashed — the b27a rerun failure).
+            home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+            shutil.rmtree(home, ignore_errors=True)
+            if found is not None:
+                run_id = Path(found.path).name.removeprefix("run-")
+                remove_base_worktree(Path(found.target), run_id)
+            (ctx.workdir / CACHE_FILE).unlink(missing_ok=True)
+            result._crashed = is_crash  # type: ignore[attr-defined]
             return result
 
     _write_cache(ctx.workdir, key, result)

@@ -723,7 +723,7 @@ another name that declares the knob gets the envelope.
 
 ---
 
-## 10. Signal-crash classification at preparation call sites (dm-105)
+### Signal-crash classification at preparation call sites (dm-105)
 
 `run_command` already retries once on direct signals (rc < 0) and on shell-wrapped
 SIGABRT/SIGBUS/SIGSEGV (exit 134/135/139). A new helper `is_signal_crash(result)`
@@ -736,49 +736,68 @@ merged-tree check (`delivery._regenerate_merge`, `_merge_target`, `_check_merged
 — calls `is_signal_crash` after `run_command` returns with `not result.ok`. When
 the crash persists, the call site normalises the `prep_failure` dict's `returncode`
 to a negative signal number so `check_failure_kind` returns `'uncertain'`
-(infrastructure), and the run stops without spending a code attempt.
+(infrastructure), and the run stops without spending a code attempt. A shell-wrapped
+command whose child aborts and that exits 134 (as `./install.sh` did) is classified
+the same way: `run_command` retries once, and on the second crash `is_signal_crash`
+detects exit 134 in `_AMBIGUOUS_SHELL_EXITS`.
 
 In delivery, a signal crash in `_check_merged` or in `_merge_target`'s generate
 stops the run as infrastructure (raises ValueError) rather than continuing to push
-the reviewed commit. This prevents a crash from being silently swallowed with a
-`_kept` outcome.
+the reviewed commit. Crash detection uses the structured `infrastructure` flag on
+`MergeResult` and the second element of `_check_merged`'s return tuple, not text
+scanning for "killed by SIG".
 
-## 11. Base comparison discard-and-rebuild on crash (dm-105)
+### Base comparison discard-and-rebuild on crash (dm-105)
 
 When any step of the base comparison — install, generate, setup or the check
 command itself — crashes (a signal that survives the retry), `run_base_check`
 discards `BASE_CHECK_HOME`, the base worktree and the cache file, and rebuilds
-from scratch. On double failure, the result is returned with `environment_failure`
-set but never cached, so later checks get a fresh attempt. The run continues
-without excusals, and the note appears in the check record and the PR's
-Verification section.
+from scratch. On double failure, the base environment is discarded again (HOME,
+worktree, cache) so the next check gets a fresh start, and the result is returned
+with `environment_failure` set but never cached. The run continues without
+excusals, and the "continued without excusals" note appears in `check.txt`, the
+evidence, and the PR's Verification section.
+
+A setup that leaves a marker in HOME before crashing makes the next check's
+setup exit 1 on reuse. This is exactly the b27a rerun failure. Discarding HOME
+after a double crash prevents it.
 
 Deterministic (non-crash) failures — a non-zero exit that repeats — are cached
 as before. The base is prepared at most twice per attempt, so the check node's
 time limit still holds.
 
-## 12. Rolling convergence (dm-109)
+### Rolling convergence (dm-109)
 
 After the regular check attempts are spent, another check attempt is granted each
 time the attempt's parsed failure set is non-empty, a strict subset of the previous
 attempt's set, contains no failure that was not in an earlier attempt, and the
-runner completed fully (excusal_blocker returns None).  The extension stops the
-first time the set does not strictly shrink.  Hard cap: at most 8 check attempts
-in total (counting the regular ones), controlled by the `check_attempt_cap` knob
-(default 8).  Setting it to 0 or to a value at or below the regular check
-attempts disables the extension.  An empty failure set is not progress.  The
-overall `attempts` cap does not refuse an attempt this rule granted: granted
-attempts are counted separately via `convergence_extras_used`.  The count of
-granted attempts and the failure count at each attempt are recorded in the run
-and the PR's Verification section.
+runner completed fully (excusal_blocker returns None on the recorded check output,
+not the feedback text).  The extension stops the first time the set does not
+strictly shrink.  Hard cap: at most 8 check attempts in total (counting the regular
+ones), controlled by the `check_attempt_cap` knob (default 8, declared on design,
+design_fast, create, edit and their fast variants).  Setting it to 0 or to a value
+at or below the regular check attempts disables the extension.  An empty failure set
+is not progress.  The overall `attempts` cap does not refuse an attempt this rule
+granted: granted attempts are counted separately via `convergence_extras_used`.
+The count of granted attempts and the failure count at each granted attempt are
+recorded in the run and the PR's Verification section.
 
-## 13. Repair feedback augmentation (dm-109)
+Runner completion is judged from the `check_blocker_history` fact, which records
+the excusal_blocker result computed from the full check output at each attempt.
+This avoids false refusals when the feedback text (gate_qa's stderr/stdout)
+contains warning lines that excusal_blocker would misinterpret.
+
+### Repair feedback augmentation (dm-109)
 
 When a check fails, the builder's feedback includes: (a) the design's `[left: ...]`
 sites with their reasons, telling the builder not to change them but to fix the
 tests or callers instead; (b) broken guarantees — tests that fail on the attempt,
 are absent from the base's failure set, live in files the attempt did not change,
 and the base completed fully.
+
+In fast modes, the [left] sites and broken guarantees are stored in the
+`focused-check.json` payload's `robustness_notes` field by `focused_check`, and
+prepended to the builder's feedback by `gate_qa`.
 
 Two things that were on this list have moved off it, which is the point of keeping it:
 

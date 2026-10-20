@@ -535,12 +535,29 @@ def check_artifact(ctx: Any) -> str:
     if left_lines or guarantee_lines:
         detail = "\n".join(left_lines + guarantee_lines) + "\n\n" + detail
 
-    # R6: store failure history for convergence detection.
+    # R6: store failure history and blocker result for convergence detection.
     attempt_output_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
     current_failures = sorted(base_check.parse_test_failures(attempt_output_r6))
     history = list(ctx.facts.get("check_failures_history", []))
     history.append(current_failures)
     ctx.set_fact("check_failures_history", history)
+
+    # R6 correction 3: record the blocker result from the full check output,
+    # not the feedback text.  Convergence in repair() reads this.
+    check_command = str(ctx.facts.get("check") or "").strip()
+    blocker_result = base_check.excusal_blocker(
+        check_command, attempt_output_r6, set(current_failures)
+    ) if current_failures else "empty failure set"
+    blocker_history = list(ctx.facts.get("check_blocker_history", []))
+    blocker_history.append(blocker_result)
+    ctx.set_fact("check_blocker_history", blocker_history)
+
+    # Write base_unavailable note into check.txt as well (R2 correction 5).
+    base_note = ctx.facts.get("base_unavailable")
+    if base_note:
+        check_txt = ctx.read_text("check.txt") if ctx.exists("check.txt") else ""
+        if base_note not in check_txt:
+            ctx.write_text("check.txt", check_txt.rstrip() + "\n\n" + base_note + "\n")
 
     return repair(ctx, [detail])
 
