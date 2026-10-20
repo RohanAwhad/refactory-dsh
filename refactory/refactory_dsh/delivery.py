@@ -888,7 +888,6 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                         advanced = _replace(found, head=actual, base=parent_lines[1])
                         worktree._write_json(Path(ctx.workdir) / worktree.RECORD, _asdict(advanced))
                         ctx.set_fact("commit", actual)
-                        found = advanced  # update local for _delivered
                     else:
                         worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
                 except ValueError:

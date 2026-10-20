@@ -621,15 +621,18 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     # An emission that changes nothing -- every file and edit already in the last
     # attempt -- is refused before committing, so the run loops back to emit
     # rather than through the check and reviews on identical code.
-    try:
-        git(path, "diff", "--cached", "--quiet")
-    except ValueError:
-        pass  # a non-zero exit from git diff --cached --quiet -- the normal path when something is staged
-    else:
-        pending.unlink(missing_ok=True)
-        raise AttemptRefused(
-            "the emission changed nothing: every file and edit in it is already in the last attempt"
-        )
+    # During a merge-in-progress, a commit is ALWAYS needed to create the merge
+    # commit (making main an ancestor of HEAD), even when content matches HEAD.
+    if not merge_in_progress:
+        try:
+            git(path, "diff", "--cached", "--quiet")
+        except ValueError:
+            pass  # a non-zero exit from git diff --cached --quiet -- the normal path when something is staged
+        else:
+            pending.unlink(missing_ok=True)
+            raise AttemptRefused(
+                "the emission changed nothing: every file and edit in it is already in the last attempt"
+            )
     try:
         git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
             "-m", message, env={**os.environ, **COMMITTER})

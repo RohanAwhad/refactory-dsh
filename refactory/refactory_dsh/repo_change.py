@@ -681,6 +681,12 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
         }
         missing_unmerged = sorted(unmerged_paths - emission_paths)
         if missing_unmerged:
+            # Abort the merge so the worktree is never left mid-merge.
+            try:
+                worktree.git(path, "merge", "--abort")
+            except ValueError:
+                pass
+            (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
             raise AttemptRefused(
                 f"merge in progress but the emission does not resolve all conflicted files; "
                 f"missing: {', '.join(missing_unmerged)}. Every conflicted file must appear "
@@ -717,13 +723,31 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
         if _CONFLICT_MARKER.search(content):
             marker_files.append(str(relative))
     if marker_files:
+        # Abort any merge so the worktree is never left mid-merge.
+        if merge_in_progress:
+            try:
+                worktree.git(path, "merge", "--abort")
+            except ValueError:
+                pass
+            (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
         raise AttemptRefused(
             f"the emission leaves git conflict markers in: {', '.join(marker_files)}; "
             "resolve the conflicts and remove the <<<<<<< / >>>>>>> lines"
         )
     # No drift warning: the run's base is pinned, so a moving checkout changes nothing it sees.
     attempt = len(worktree.git(path, "rev-list", f"{found.base}..HEAD").split()) + 1
-    advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)
+    try:
+        advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)
+    except BaseException:
+        # On any commit failure during a merge, abort so the worktree is clean.
+        if merge_in_progress:
+            try:
+                worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+                worktree.git(path, "merge", "--abort")
+            except ValueError:
+                pass
+            (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
+        raise
     worktree._write_json(Path(ctx.workdir) / EMISSION, {"digest": digest, "attempt_on": found.head,
                                                          "applied_to": rev})
     _warn_if_shared_changed(advanced, "since the last check")
