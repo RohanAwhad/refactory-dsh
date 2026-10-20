@@ -403,7 +403,7 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
     _git(target, "checkout", "--", "app.py")
 
     redone = DesignMode.resume(workdir, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
-                                                              *REVIEW_ANSWERS]))
+                                                              *REVIEW_ANSWERS, "VERDICT: PASS"]))
     assert redone.error is None
     assert (workdir / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
     assert (target / repo_change.ARTIFACTS / NAME / "tool.py").read_text() == "print('redone')\n"
