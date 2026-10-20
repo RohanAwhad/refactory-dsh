@@ -124,5 +124,11 @@ if [ -n "$PLAN" ]; then
 fi
 
 cd "$DSH_ROOT"
+# Rebuild stale TS packages before launching the GUI.  This runs BEFORE
+# REFACTORY_GUI_MODE is set so require_build() takes the rebuild path
+# instead of raising "restart the GUI".  The CLI path rebuilds via
+# interactive.py:255; this is the GUI launcher's equivalent pre-boot step
+# (brief requirement 9).
+"$PYTHON" -c 'from refactory_dsh.paths import require_build; require_build()'
 export REFACTORY_GUI_MODE=1
 exec "${DSH[@]}" --profile "$PROFILE" "${FORWARDED[@]}"
