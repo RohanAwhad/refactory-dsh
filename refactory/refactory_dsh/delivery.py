@@ -1526,7 +1526,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             return False
         rows = audit_data.get('requirements', [])
         return isinstance(rows, list) and all(
-            isinstance(r, dict) and r.get('verdict') != 'BLOCKING' for r in rows
+            isinstance(r, dict) and r.get('status') != 'BLOCKING' for r in rows
         )
 
     if ev_data is not None and check_passed and _audit_passed():

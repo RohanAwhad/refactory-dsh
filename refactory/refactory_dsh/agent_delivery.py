@@ -288,6 +288,7 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     all_changes = fail_changes + warn_changes
     receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
     receipt['prompt_hash'] = record.get('prompt_hash')
+    receipt['prompt_path'] = str(ROOT / record['id'] / 'prompt.txt')
     if sent_prompt_hash is not None:
         receipt['sent_prompt_hash'] = sent_prompt_hash
     receipt.update(finished=_now(), status='failed' if missing or fail_changes else 'delivered',
@@ -381,19 +382,20 @@ def main() -> int:
             from refactory_dsh.nn.executor import RunContext, render
             prompt = request['prompt']
             context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
-            # Detect unresolved template keys from the template itself, not by
-            # scanning substituted values.  A brief containing {{templates}} must
-            # not be refused when it is substituted into the prompt (#347, C2).
+            rendered = render(prompt, context)
+            # Detect unresolved template keys from the template itself (not
+            # substituted values).  Record as a warning, not a refusal: the
+            # steering ledger folds the brief verbatim into every template,
+            # so a brief containing {{word}} must not block begin (#347, C2).
             values = {**context.knobs, **context.facts}
             template_keys = _re.findall(r'\{\{\s*([A-Za-z_]\w*)\s*\}\}', prompt)
             unresolved = [k for k in template_keys if k.strip() not in values]
-            if unresolved:
-                raise ValueError(f'unrendered template keys in prompt: {unresolved}')
-            rendered = render(prompt, context)
             result = begin(workdir, request['node'], rendered, request['writes'], reuse=True,
                            reads=request.get('reads'))
             # The bridge reads the prompt; the target snapshot is this module's own state.
             result = {key: value for key, value in result.items() if key != 'target'}
+            if unresolved:
+                result['unresolved_keys'] = unresolved
         elif request['action'] == 'finish':
             sent_prompt_hash = request.get('sent_prompt_hash')
             result = finish(workdir, request['node'],

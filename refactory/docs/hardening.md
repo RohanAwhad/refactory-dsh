@@ -760,25 +760,29 @@ When the CEO ran a graph's agent step through its own subagent, the prompt could
 with unrendered `{{templates}}`, and retries were rewritten: in #317 the CEO told
 reviewers to conclude "PASS, no BLOCKING" and handed overwatch a pre-filled audit. The
 receipt did not show what was sent. The fix: `agent_delivery.main()` renders templates
-before `begin()` (matching `worker_node.py`), detects unresolved template keys from the
-template itself (not by scanning substituted values, so a brief containing `{{word}}`
-passes through), and a spine `tools/pre-execute` listener records each prompt the CEO
-sends through `subagent`, `subagent_fork`, and `send_message`, keyed by session and
-node. Prompts are cleared on delivery completion and redispatch so an earlier faithful
-prompt cannot satisfy a rewritten retry. For review and audit nodes, `wf_done` refuses
-completion unless a recorded prompt contains the pending delivery's prompt.txt. The
-spine fails closed: when the reviewer list cannot be fetched, all nodes are treated as
-reviewers; when the in-memory prompt cache is empty after a restart, it re-reads
-`prompt.txt` from the pending delivery via a bridge action. The receipt records
-`prompt_hash` and `sent_prompt_hash` before writing `receipt.json`.
+before `begin()` (matching `worker_node.py`). Unresolved template keys from the template
+itself (not substituted values) are recorded as a warning in the bridge result and in the
+receipt, not refused — the steering ledger folds the brief verbatim into every template,
+so a brief containing `{{word}}` must not block begin. A spine `tools/pre-execute`
+listener records each prompt the CEO sends through `subagent`, `subagent_fork`, and
+`send_message`, keyed by session and node. Prompts are cleared on delivery completion
+and on fresh dispatch (not on reuse, so parallel reviewers keep their recorded prompts).
+For review and audit nodes, `wf_done` checks the latest recorded prompt for the node's
+current delivery and refuses when it does not contain the pending delivery's prompt.txt;
+when the latest prompt targets another parallel node, it looks for the latest matching
+prompt instead. The spine fails closed: when the reviewer list cannot be fetched, all
+nodes are treated as reviewers; when the in-memory prompt cache is empty after a restart,
+it re-reads `prompt.txt` from the pending delivery via a bridge action. The receipt
+records `prompt_hash`, `prompt_path` and `sent_prompt_hash`.
 
 **Held by.** `test_agent_delivery.py`: `test_main_bridge_renders_templates_before_begin`,
-`test_main_bridge_refuses_unrendered_templates`,
+`test_main_bridge_warns_unrendered_templates`,
 `test_main_bridge_accepts_templates_inside_substituted_values`,
 `test_receipt_records_prompt_hash`,
-`test_reviewers_action_returns_reviewers_list`. `prompt-recording.spec.ts`: five tests
-for wf_done validation of reviewer nodes including rewritten-retry refusal and
-reviewer-list-fetch fail-closed behavior.
+`test_reviewers_action_returns_reviewers_list`. `prompt-recording.spec.ts`: seven tests
+for wf_done validation of reviewer nodes including rewritten-retry refusal, in-delivery
+rewrite refusal, parallel reviewer acceptance, and reviewer-list-fetch fail-closed
+behavior.
 
 ## 13. Sacred Rules 8 and 9
 
@@ -797,12 +801,13 @@ discipline rules (Sacred Rules 8/9)'` asserts the section contains the key phras
 When a check could not run, the CEO recommended "Skip check gate and continue
 (Recommended)". The fix: `delivery.py`'s `_body()` derives the Check line from the
 authoring evidence's `validation.status` field (set to `'pass'` only when the check
-passes at `design_ops.py:428-429`). When the evidence is absent or `validation.status`
-is not `'pass'` and a check command exists, the PR Verification says "did not run"
-instead of "passed". The Reviews line is derived from evidence and audit content rather
-than mere file existence. The run report (`design_ops.py`) derives `"checked"` from
-the same evidence. The CEO instructions explicitly forbid recommending skipping a
-check gate.
+passes at `design_ops.py:428-429`). When validation is absent or `status` is not
+`'pass'` and a check command exists, the PR says "did not run" instead of "passed".
+The Reviews line uses `status` (not `verdict`) from audit requirement rows. The
+`require_completion` gate allows through when validation is absent (the check was never
+attempted or was explicitly skipped by the person), so a skipped check can reach the
+PR. The run report (`design_ops.py`) derives `"checked"` from the same evidence. The
+CEO instructions explicitly forbid recommending skipping a check gate.
 
 **Held by.** `test_delivery.py`: `test_pr_verification_says_check_did_not_run_when_validation_fact_is_absent`
 and `test_pr_verification_says_check_passed_when_validation_fact_is_set`.

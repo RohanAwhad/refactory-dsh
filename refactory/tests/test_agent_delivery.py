@@ -401,8 +401,8 @@ def test_main_bridge_renders_templates_before_begin(tmp_path, monkeypatch):
     assert '{{artifact_name}}' not in record['prompt']
 
 
-def test_main_bridge_refuses_unrendered_templates(tmp_path, monkeypatch):
-    """The bridge refuses a prompt whose own template key has no knob or fact."""
+def test_main_bridge_warns_unrendered_templates(tmp_path, monkeypatch):
+    """An unknown template key in the mode's own template yields a warning, not a refusal."""
     import io
     (tmp_path / 'facts.json').write_text(json.dumps({}))
     Ledger.seed(tmp_path, 'test')
@@ -410,10 +410,15 @@ def test_main_bridge_refuses_unrendered_templates(tmp_path, monkeypatch):
         'action': 'begin', 'node': 'emit',
         'prompt': 'Build {{unknown_key}}.', 'writes': ['out.txt'], 'reads': [],
     })
+    captured = io.StringIO()
     monkeypatch.setattr('sys.stdin', io.StringIO(payload))
+    monkeypatch.setattr('sys.stdout', captured)
     monkeypatch.chdir(tmp_path)
     code = agent_delivery.main()
-    assert code == 1
+    assert code == 0
+    data = json.loads(captured.getvalue())
+    assert 'unresolved_keys' in data
+    assert 'unknown_key' in data['unresolved_keys']
 
 
 def test_main_bridge_accepts_templates_inside_substituted_values(tmp_path, monkeypatch):

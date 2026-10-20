@@ -646,11 +646,12 @@ export function apply(ctx: Context, config: Config): void {
     return next()
   })
 
-  // Completion override record: when the C1 pre-execute listener allows
-  // `update_goal complete` via a person-confirmed override, this holds the
-  // description so the C1 post-execute listener can append it to the tool
+  // Completion override records: keyed by session id so parallel CEO sessions
+  // do not share a single variable (#347, C1).  When the C1 pre-execute listener
+  // allows `update_goal complete` via a person-confirmed override, it stores the
+  // description here so the C1 post-execute listener can append it to the tool
   // result, recording the override on the goal's completion.
-  let pendingCompletionOverride: string | undefined
+  const pendingCompletionOverrides = new Map<string, string>()
 
   // Goal completion guard (#347, C1). A `tools/pre-execute` listener that
   // denies `update_goal` with action `complete` when the run's recorded status
@@ -705,9 +706,10 @@ export function apply(ctx: Context, config: Config): void {
         if (overrideInvocation === currentInvocation) {
           // Record the override so the post-execute listener injects it into
           // the goal's completion result ("the goal then records that").
-          pendingCompletionOverride =
+          const overrideSessionId = exec.agent?.session ? String(exec.agent.session.id) : '_configured_'
+          pendingCompletionOverrides.set(overrideSessionId,
             `[Completion allowed via person-confirmed override: `
-            + `status="${currentStatus}", confirmed at ${String(ov.at ?? 'unknown')}]`
+            + `status="${currentStatus}", confirmed at ${String(ov.at ?? 'unknown')}]`)
           return next()
         }
       }
@@ -725,9 +727,11 @@ export function apply(ctx: Context, config: Config): void {
   // listener allowed `update_goal complete` via a person-confirmed override,
   // append the override note to the tool result so it is recorded on the goal.
   ctx.on('tools/post-execute', (exec, result, next) => {
-    if (exec.name !== 'update_goal' || pendingCompletionOverride === undefined) return next()
-    const note = pendingCompletionOverride
-    pendingCompletionOverride = undefined
+    if (exec.name !== 'update_goal') return next()
+    const sessionId = exec.agent?.session ? String(exec.agent.session.id) : '_configured_'
+    const note = pendingCompletionOverrides.get(sessionId)
+    if (note === undefined) return next()
+    pendingCompletionOverrides.delete(sessionId)
     if (result.isError) return next()
     return Promise.resolve({
       kind: 'accept' as const,
@@ -1463,11 +1467,14 @@ export function apply(ctx: Context, config: Config): void {
         })
         if (typeof receipt.prompt !== 'string') throw new Error('agent delivery bridge returned no prompt')
         node.prompt_template = receipt.prompt
+        // Clear old CEO prompts only on fresh dispatch (not reuse), so parallel
+        // reviewers do not lose each other's recorded prompts (#347, C2).
+        const isNewDispatch = !pendingPrompts.has(node.id)
         pendingPrompts.set(node.id, receipt.prompt)
-        // Clear old CEO prompts on redispatch so an earlier faithful prompt
-        // cannot satisfy a rewritten retry (#347, C2).
-        for (const key of ceoPrompts.keys()) {
-          if (key.endsWith(`:${node.id}`)) ceoPrompts.delete(key)
+        if (isNewDispatch) {
+          for (const key of ceoPrompts.keys()) {
+            if (key.endsWith(`:${node.id}`)) ceoPrompts.delete(key)
+          }
         }
       }
     }
@@ -1927,19 +1934,50 @@ export function apply(ctx: Context, config: Config): void {
             } catch { /* bridge failed — pending stays undefined, will refuse below */ }
           }
           if (pending !== undefined) {
-            // Collect all recorded prompts for this node from any session
+            // Check the latest recorded prompt for this node's current delivery,
+            // so a rewritten second dispatch within the same delivery is refused.
+            // When the latest prompt targets another parallel node, look for the
+            // latest matching prompt instead (#347, C2).
             const allRecorded: Array<{ prompt: string; hash: string }> = []
             for (const [key, entries] of ceoPrompts.entries()) {
               if (key.endsWith(`:${args.node}`)) allRecorded.push(...entries)
             }
-            const matched = allRecorded.find(entry => entry.prompt.includes(pending!))
-            if (matched === undefined) {
+            if (allRecorded.length === 0) {
               throw new Error(
-                `wf_done refused: no recorded CEO prompt for reviewer node "${args.node}" contains `
-                + 'the delivery\'s prompt.txt. The prompt the CEO dispatched must include the pending delivery prompt.',
+                `wf_done refused: no recorded CEO prompt for reviewer node "${args.node}". `
+                + 'The prompt the CEO dispatched must include the pending delivery prompt.',
               )
             }
-            sentPromptHash = matched.hash
+            const latest = allRecorded[allRecorded.length - 1]
+            if (latest.prompt.includes(pending!)) {
+              sentPromptHash = latest.hash
+            } else {
+              // The latest prompt does not match this node.  When parallel
+              // reviewers are dispatched, the latest may belong to another node.
+              let forOtherNode = false
+              for (const [nodeId, otherPending] of pendingPrompts.entries()) {
+                if (nodeId !== args.node && latest.prompt.includes(otherPending)) {
+                  forOtherNode = true
+                  break
+                }
+              }
+              if (forOtherNode) {
+                const matched = [...allRecorded].reverse().find(e => e.prompt.includes(pending!))
+                if (matched !== undefined) {
+                  sentPromptHash = matched.hash
+                } else {
+                  throw new Error(
+                    `wf_done refused: no recorded CEO prompt for reviewer node "${args.node}" contains `
+                    + 'the delivery\'s prompt.txt. The prompt the CEO dispatched must include the pending delivery prompt.',
+                  )
+                }
+              } else {
+                throw new Error(
+                  `wf_done refused: the latest recorded CEO prompt for reviewer node "${args.node}" does not contain `
+                  + 'the delivery\'s prompt.txt. The prompt the CEO dispatched must include the pending delivery prompt.',
+                )
+              }
+            }
           } else {
             // No pending prompt available — fail closed
             throw new Error(
@@ -1954,7 +1992,8 @@ export function apply(ctx: Context, config: Config): void {
         })
       }
       spine.complete(args.node)
-      // Clear CEO prompts for completed node (#347, C2)
+      // Clear pending prompt and CEO prompts for completed node (#347, C2)
+      pendingPrompts.delete(args.node)
       for (const key of ceoPrompts.keys()) {
         if (key.endsWith(`:${args.node}`)) ceoPrompts.delete(key)
       }

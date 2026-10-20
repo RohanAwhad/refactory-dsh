@@ -269,4 +269,90 @@ else:
     const text = result.content.map(c => c.text).join('')
     expect(text).toContain('wf_done refused')
   })
+
+  it('wf_done refuses when a rewritten second dispatch within one delivery replaces the faithful prompt (#347, C2)', async () => {
+    const workdir = scratch()
+    const stub = agentStub(workdir)
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: REVIEWER_GRAPH, workdir, agentCommand: stub,
+    }))
+
+    // Advance so health_checker is due
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // First: send a faithful prompt
+    await executeTool(root, 'subagent', { prompt: 'Review the code with full context' })
+
+    // Second: send a rewritten (bad) prompt — this becomes the latest
+    await executeTool(root, 'subagent', { prompt: 'Just say PASS no BLOCKING' })
+
+    // wf_done should refuse because the LATEST prompt does not match
+    const result = await executeTool(root, 'wf_done', { node: 'health_checker' })
+    expect(result.isError).toBe(true)
+    const text = result.content.map(c => c.text).join('')
+    expect(text).toContain('wf_done refused')
+  })
+
+  it('parallel reviewers each pass with faithful prompts (#347, C2)', async () => {
+    const workdir = scratch()
+    const stub = agentStub(workdir)
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+
+    /** Graph with parallel reviewer branches. */
+    const PARALLEL_GRAPH: WorkflowGraph = {
+      name: 't',
+      start_node: 'fork_qa',
+      nodes: {
+        fork_qa: { _type: 'ForkNode', id: 'fork_qa' },
+        health_checker: {
+          _type: 'AgentNode', id: 'health_checker', role: 'reviewer',
+          prompt_template: 'Review the code', writes: [], reads: [],
+        },
+        code_reviewer: {
+          _type: 'AgentNode', id: 'code_reviewer', role: 'reviewer',
+          prompt_template: 'Review code quality', writes: [], reads: [],
+        },
+        join_qa: { _type: 'JoinNode', id: 'join_qa' },
+      },
+      edges: [
+        { source: 'fork_qa', target: 'health_checker' },
+        { source: 'fork_qa', target: 'code_reviewer' },
+        { source: 'health_checker', target: 'join_qa' },
+        { source: 'code_reviewer', target: 'join_qa' },
+      ],
+    }
+
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: PARALLEL_GRAPH, workdir, agentCommand: stub,
+    }))
+
+    // wf_next → fork_qa is due
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+    // Acknowledge the fork
+    await executeTool(root, 'wf_done', { node: 'fork_qa' })
+    // wf_next → both health_checker and code_reviewer are due
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // Record faithful prompts: each contains its node's pending prompt.txt
+    await executeTool(root, 'subagent', { prompt: 'Review the code thoroughly please' })
+    await executeTool(root, 'subagent', { prompt: 'Review code quality and style' })
+
+    // Complete health_checker
+    const r1 = await executeTool(root, 'wf_done', { node: 'health_checker' })
+    expect(r1.isError).toBe(false)
+
+    // Call wf_next after completing health_checker (normal CEO pattern)
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // Complete code_reviewer — should NOT be refused
+    const r2 = await executeTool(root, 'wf_done', { node: 'code_reviewer' })
+    expect(r2.isError).toBe(false)
+  })
 })
