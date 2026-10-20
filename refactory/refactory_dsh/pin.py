@@ -327,13 +327,17 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
                     f"that conflict with the pin; the conflicting output: {result.stderr[:500]}"
                 )
 
-        # Resolve the worktree's own git dir so that any ``git config``
-        # calls from lifecycle scripts (lefthook, husky) write to the
-        # worktree-local config, not the driver's shared ``.git/config``.
-        wt_git_dir = subprocess.run(
-            ["git", "-C", str(pin_checkout), "rev-parse", "--absolute-git-dir"],
-            capture_output=True, text=True, check=True, timeout=30,
-        ).stdout.strip()
+        # Create a trap git directory to redirect any ``git config`` writes
+        # from lifecycle scripts (lefthook, husky).  This standalone git dir
+        # has no ``commondir`` file, so git will NOT follow through to the
+        # driver's shared config.  LEFTHOOK=0 and HUSKY=0 prevent the real
+        # hook managers from running; the trap catches anything else.
+        _trap_git = pin_root / ".git-trap"
+        _trap_git.mkdir(exist_ok=True)
+        (_trap_git / "HEAD").write_text("ref: refs/heads/main\n")
+        (_trap_git / "config").touch()
+        (_trap_git / "objects").mkdir(exist_ok=True)
+        (_trap_git / "refs").mkdir(exist_ok=True)
 
         # Prepare the pin: uv sync, pnpm install, pnpm build.
         # Errors propagate — the outer except BaseException cleans up.
@@ -342,7 +346,7 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
             **os.environ,
             "LEFTHOOK": "0",
             "HUSKY": "0",
-            "GIT_DIR": wt_git_dir,
+            "GIT_DIR": str(_trap_git),
             "GIT_WORK_TREE": str(pin_checkout),
         }
         subprocess.run(
@@ -357,6 +361,9 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
             ["pnpm", "run", "build"], cwd=str(pin_checkout), env=env,
             check=True, capture_output=True, text=True, timeout=600,
         )
+
+        # Clean up the trap directory.
+        shutil.rmtree(_trap_git, ignore_errors=True)
 
         # Provision the profile in the person's DSH home.
         profile_name = _profile_name_for(commit12, dirty_diff)
