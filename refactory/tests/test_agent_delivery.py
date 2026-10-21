@@ -208,6 +208,61 @@ def test_planning_steps_are_output_only_in_design_but_not_in_a_plain_locate(tmp_
             f'{step} must NOT be output-only in a plain locate'
 
 
+def test_execution_contract_rebases_paths_for_worktree_runs(tmp_path):
+    """Test 6: the execution contract names the worktree and rebases paths when the target is the driver."""
+    from refactory_dsh import target_guard, worktree
+
+    target = tmp_path / "target"
+    wt = tmp_path / "worktree"
+    run = tmp_path / "run"
+    target.mkdir(parents=True)
+    wt.mkdir(parents=True)
+    run.mkdir(parents=True)
+
+    # Write a worktree record.
+    (run / ".refactory").mkdir(parents=True, exist_ok=True)
+    import json as _json
+    (run / ".refactory" / "worktree.json").write_text(_json.dumps({
+        "path": str(wt), "target": str(target),
+        "branch": "refactory/run-test", "base": "abc123",
+        "head": "abc123", "run": str(run),
+    }))
+
+    # Record a target guard baseline.
+    target_guard.record(run, target, output_only=("emit",), also=(wt,))
+
+    # Build the contract with refactory_source inside the target.
+    import importlib
+    real_source = str(Path(agent_delivery.__file__).resolve().parent)
+    # Only test when the real source IS inside the target; simulate this by
+    # creating a fake source path under target.
+    fake_source = target / "refactory" / "refactory_dsh"
+    fake_source.mkdir(parents=True, exist_ok=True)
+    (fake_source / "__init__.py").write_text("")
+
+    original_file = agent_delivery.__file__
+    try:
+        agent_delivery.__file__ = str(fake_source / "agent_delivery.py")
+        context = {'python_bin': str(Path(sys.executable).parent),
+                    'runtime_root': str(target)}
+        record = agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"],
+                                       model_context=context)
+        execution = record["execution"]
+        # refactory_source rebased onto worktree.
+        assert str(wt) in execution["refactory_source"]
+        # runtime_root rebased onto worktree.
+        assert str(wt) in execution["runtime_root"]
+        # Contract text mentions worktree and warns about python.
+        prompt = record["prompt"]
+        assert f"worktree at {wt}" in prompt
+        assert f"Never change the target at {target}" in prompt
+        assert "nested dispatch only" in prompt
+        # The python warning names the real import root (inside the target).
+        assert str(fake_source) in prompt
+    finally:
+        agent_delivery.__file__ = original_file
+
+
 def test_python_and_native_worker_dispatch_share_execution_contract(tmp_path, monkeypatch):
     from refactory_dsh.worker_node import execute
 

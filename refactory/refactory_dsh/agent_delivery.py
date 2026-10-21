@@ -153,14 +153,30 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
     # Absolute path to refactory's own Python, for nested dispatch (worker_node,
     # sandboxed validation). This is NOT the target's interpreter.
     python = str(Path(context['python_bin']) / 'python') if context.get('python_bin') else sys.executable
+    # Capture the real import root before any rebase (dm-159 correction 4.2).
+    real_refactory_source = str(Path(__file__).resolve().parent)
     execution = {
         'node': node, 'workdir': str(workdir),
         'inputs': [str((workdir / name).resolve()) for name in reads],
         'outputs': [str(_path(workdir, name)) for name in writes],
-        'python': python, 'refactory_source': str(Path(__file__).resolve().parent),
+        'python': python, 'refactory_source': real_refactory_source,
     }
     if context.get('runtime_root'):
         execution['runtime_root'] = str(context['runtime_root'])
+
+    # Rebase paths when the target IS the driver checkout (dm-159).
+    ws = get_worktree_state()
+    wt_found = ws.recorded(workdir) if ws else None
+    if wt_found is not None:
+        target_root = Path(wt_found.target)
+        worktree_path = Path(wt_found.path)
+        src = Path(execution['refactory_source'])
+        if src.is_relative_to(target_root):
+            execution['refactory_source'] = str(worktree_path / src.relative_to(target_root))
+        if 'runtime_root' in execution:
+            rt = Path(execution['runtime_root'])
+            if rt.is_relative_to(target_root):
+                execution['runtime_root'] = str(worktree_path / rt.relative_to(target_root))
     di = get_delivery_identity()
     if di is None and node in REVIEWERS and (workdir / EVIDENCE).exists():
         raise RuntimeError(
@@ -196,6 +212,36 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
             ' This step\'s previous outputs were moved to the paths listed in set_aside.'
             ' Read them there when the task revises earlier work, and write each output afresh at its declared path.'
         )
+    # Worktree-aware contract instructions (dm-159).
+    if wt_found is not None:
+        tg_baseline = target_guard._read(workdir)
+        is_output_only = tg_baseline is not None and node in tg_baseline.get('output_only', ())
+        instructions += (
+            f' Read the repository in the worktree at {wt_found.path},'
+            f' and give paths relative to it.'
+            f' Write only the paths in `outputs` below, in the run directory.'
+            f' Never change the target at {wt_found.target}.'
+        )
+        if is_output_only:
+            instructions += ' Do not change the worktree.'
+        # In-worktree wrapper (invocations.WRAPPER).
+        from refactory_dsh.invocations import WRAPPER
+        wrapper_path = Path(workdir) / WRAPPER
+        if wrapper_path.exists():
+            instructions += (
+                f' Run repository commands only through {wrapper_path}.'
+            )
+        # Python interpreter warning — name the real import root (dm-159 correction 4.2).
+        instructions += (
+            ' The python above is for nested dispatch only.'
+            f' It imports refactory from {real_refactory_source},'
+            ' so a refactory tool run with it writes there from any directory,'
+            ' and such a write is refused when that is the target.'
+        )
+        if is_output_only:
+            instructions += (
+                " Do not run generators; the run's generate and check steps do."
+            )
     block = f'{CONTRACT_START}\n{instructions}\n{json.dumps(execution, indent=2)}\n{CONTRACT_END}'
     return f'{block}\n\n{prompt}', execution
 
@@ -352,12 +398,17 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
         return previous
     before = previous['before'] if previous is not None else {name: _fingerprint(workdir, name) for name in writes}
     # Taken here because every route dispatches through this bracket (walker, worker
-    # bridge, CEO subagent), so a change an output-only node makes to the target is
-    # attributed to that node alone, not to whatever ran since prepare (#319).
+    # bridge, CEO subagent), so a change any agent node of a worktree run makes to
+    # the target is attributed to that node alone, not to whatever ran since
+    # prepare (#319, dm-159).
     target = previous.get('target') if previous is not None else target_guard.watch(workdir, node)
     identifier = previous['id'] if previous is not None else uuid.uuid4().hex
     directory = workdir / ROOT / identifier
     directory.mkdir(parents=True, exist_ok=True)
+    # Save pre-node target bytes for lossless restore (dm-159).
+    if target is not None and target.get('changes'):
+        baseline_dir = directory / 'target-baseline'
+        target_guard.save_baseline(Path(target['root']), target['changes'], baseline_dir)
     contexts = list(previous.get('contexts', [])) if previous is not None else []
     context = {'at': _now(), 'entries': entries, 'execution': execution,
                'prompt': str(ROOT / identifier / f'context-{len(contexts)}.prompt.txt'),
@@ -427,6 +478,23 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     set_aside = (_set_aside(workdir, record,
                             [name for name in writes if name in fresh])
                  if fail_changes else None)
+    # Restore the target losslessly on refusal (dm-159).
+    restored_info = None
+    wt_path = None
+    if fail_changes and record.get('target') is not None:
+        target_before = record['target']
+        if target_before.get('also'):
+            wt_path = next(iter(target_before['also']), None)
+        else:
+            ws_ref = get_worktree_state()
+            wt_found_ref = ws_ref.recorded(workdir) if ws_ref else None
+            if wt_found_ref is not None:
+                wt_path = wt_found_ref.path
+        delivery_dir = workdir / ROOT / record['id']
+        baseline_dir = delivery_dir / 'target-baseline'
+        restored_info = target_guard.restore_target(
+            Path(target_before['root']), target_before,
+            baseline_dir, workdir)
     all_changes = fail_changes + warn_changes
     receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
     receipt['prompt_hash'] = record.get('prompt_hash')
@@ -456,9 +524,13 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     # Refused even when the declared output arrived: the output may be a summary of
     # edits that never pass through the step that writes the artifact.
     if fail_changes:
+        tg_bl = target_guard._read(workdir)
+        is_oo = tg_bl is not None and record['node'] in tg_bl.get('output_only', ())
         raise ValueError(target_guard.refusal(
             record['node'], record['target']['root'],
-            fail_changes, writes, set_aside=set_aside))
+            fail_changes, writes, set_aside=set_aside,
+            worktree_path=wt_path, restored=restored_info,
+            is_output_only=is_oo))
     if missing:
         raise ValueError(
             f'agent {record["node"]!r} did not deliver required outputs: '
@@ -471,9 +543,9 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
         wt_msg = (f"the git configuration or hooks the run's worktree shares "
                   f"with {wt_found.target} changed during {node}; check them "
                   f"before your next commit there")
-        if record.get('target') is not None:
-            # This step was output-only (target_guard.watch returned a snapshot
-            # for it), so a shared-state change fails the step.
+        if 'also' in (record.get('target') or {}):
+            # Output-only node (full snapshot with also/warn_also tracking):
+            # a shared-state change fails the step.
             raise ValueError(f"agent {node!r} changed shared git state: {wt_msg}")
         else:
             target_guard.warn(wt_msg)

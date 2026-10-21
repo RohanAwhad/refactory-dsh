@@ -6,9 +6,9 @@ new project it created, or -- for a run without a worktree -- the project it run
 I1), and a worker with full write access can edit files directly instead of answering
 through its declared output (#319). A run with its own worktree (`worktree.py`, #351)
 never works in the target, so this module is its backstop rather than its isolation:
-the baseline is recorded at `prepare`, later steps warn when the target differs from
-it, and an output-only agent node fails when the target -- or the run's own worktree --
-changed while it ran.
+the baseline is recorded at `prepare`, and every agent node of a worktree run fails
+when it changes the target while it ran (dm-159). An output-only agent also fails
+when the run's own worktree changed.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh.invocations import TARGET_RECORD as RECORD  # was: RECORD = Path(…)
+from refactory_dsh.paths import refactory_home
 
 #: Names a walk of a target that is not a git checkout skips, as directories or files:
 #: installs, caches and editor state that running anything rewrites, which say nothing
@@ -33,7 +34,7 @@ UNWATCHED = frozenset({".git", ".factory", ".venv", "venv", "node_modules", "__p
                        ".DS_Store", ".coverage"})
 
 #: The most uncommitted paths a target may have and still be watched. Every one is
-#: hashed before and after each output-only node, so a run launched from a home
+#: hashed before and after any agent node, so a run launched from a home
 #: directory or an unignored data tree is reported as unwatched rather than walked.
 LIMIT = 20_000
 
@@ -273,14 +274,58 @@ def _also_state(path: str, workdir: Path) -> dict[str, Any]:
 
 
 def watch(workdir: Path, node: str) -> dict[str, Any] | None:
-    """The target's state before an output-only node runs; None when it is not watched."""
+    """The target's state before an agent node runs; None when it is not watched.
+
+    For output-only agents in worktree runs, returns the full snapshot (target +
+    also + warn_also).  For non-output-only agents in worktree runs, returns a
+    target-only snapshot so ``strayed()`` can refuse target changes while leaving
+    their worktree changes allowed.  For non-worktree runs, only output-only
+    agents are watched (unchanged from before dm-159).
+    """
     baseline = _read(workdir)
-    if baseline is None or node not in baseline.get("output_only", ()):
+    if baseline is None:
         return None
+    if node not in baseline.get("output_only", ()):
+        if not baseline.get("also"):
+            return None
+        # Worktree run: target-only guard (no also/warn_also tracking).
+        found = state(Path(baseline["root"]), exclude=(Path(workdir),))
+        found["watched_at"] = datetime.now(timezone.utc).isoformat()
+        return found
     found = state(Path(baseline["root"]), exclude=(Path(workdir),))
     found["also"] = {path: _also_state(path, workdir) for path in baseline.get("also", [])}
     found["warn_also"] = {path: _also_state(path, workdir) for path in baseline.get("warn_also", [])}
+    found["watched_at"] = datetime.now(timezone.utc).isoformat()
     return found
+
+
+def _discount_strays(before: dict[str, Any], now: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *now* with paths discounted by a concurrent refusal's stray record.
+
+    A path is treated as unchanged when its pre-node digest matches a stray recorded
+    at or after ``before['watched_at']``.  This prevents a parallel node from being
+    refused for files another node's refusal already set aside (dm-159, correction 4.1).
+    """
+    watched_at = before.get("watched_at", "")
+    if not watched_at or now.get("changes") is None or before.get("changes") is None:
+        return now
+    root = Path(before["root"])
+    strays = _read_stray_record(root)
+    if not strays:
+        return now
+    adjusted = dict(now)
+    adjusted["changes"] = dict(now["changes"])
+    for path in list(adjusted["changes"]):
+        stray_entry = strays.get(path)
+        if stray_entry is None:
+            continue
+        stray_at = stray_entry.get("at", "")
+        if stray_at < watched_at:
+            continue
+        pre_digest = before["changes"].get(path, "-")
+        if pre_digest == stray_entry.get("pre_digest"):
+            adjusted["changes"][path] = pre_digest  # treat as unchanged
+    return adjusted
 
 
 def strayed(workdir: Path, before: dict[str, Any] | None) -> tuple[list[str], list[str]]:
@@ -291,18 +336,23 @@ def strayed(workdir: Path, before: dict[str, Any] | None) -> tuple[list[str], li
     Returns ``(fail, warn)``.
 
     ``fail`` lists changes in ``also`` directories (the run's worktree): writing
-    there bypasses materialise.  When there are no ``also`` entries -- a run without
-    a worktree -- every target-root change goes here instead, preserving today's
-    behaviour where the target is the only protection.
+    there bypasses materialise.  When ``also`` is set (a worktree exists), target-root
+    changes also go to fail (dm-159).  When the snapshot has no ``also`` key (a
+    non-output-only agent's target-only snapshot), target changes go to fail.  When
+    there are no ``also`` entries and no worktree -- a run without a worktree --
+    every target-root change goes to fail, preserving today's behaviour where the
+    target is the only protection.
 
-    ``warn`` lists changes in the target root (when ``also`` is non-empty) and in
-    ``warn_also`` directories (the launcher checkout): those are not where the run
-    works, so a change there cannot be its result, but the person is told their
-    files moved.
+    ``warn`` lists only ``warn_also`` changes for worktree runs (launcher checkout):
+    those are not where the run works, so a change there cannot be its result, but
+    the person is told their files moved.
     """
     if before is None:
         return ([], [])
-    target_changes = _compare(before, state(Path(before["root"]), exclude=(Path(workdir),)), commits=False)
+    now = state(Path(before["root"]), exclude=(Path(workdir),))
+    # Discount paths that another node's refusal already set aside.
+    now = _discount_strays(before, now)
+    target_changes = _compare(before, now, commits=False)
     also_changes: list[str] = []
     for path, earlier in (before.get("also") or {}).items():
         also_changes.extend(f"in {path}, {difference}"
@@ -312,13 +362,16 @@ def strayed(workdir: Path, before: dict[str, Any] | None) -> tuple[list[str], li
         warn_also_changes.extend(f"in {path}, {difference}"
                                  for difference in _compare(earlier, _also_state(path, workdir)))
     if also_changes or before.get("also"):
-        return (also_changes, target_changes + warn_also_changes)
+        return (also_changes + target_changes, warn_also_changes)
     return (target_changes, warn_also_changes)
 
 
 def refusal(node: str, root: str, changed: list[str], writes: list[str], *,
-            set_aside: str | None = None) -> str:
-    """Why an output-only node is refused, and what the person should do about it.
+            set_aside: str | None = None,
+            worktree_path: str | None = None,
+            restored: dict | None = None,
+            is_output_only: bool = False) -> str:
+    """Why an agent node is refused, and what the person should do about it.
 
     The target can change while a node runs for reasons that are not the node's (another
     session in the same checkout), and nothing here can tell which, so the message says
@@ -328,9 +381,213 @@ def refusal(node: str, root: str, changed: list[str], writes: list[str], *,
     outputs = ", ".join(writes) or "none"
     moved = (f" This attempt's output was moved to {set_aside}, so the redo writes its own."
              if set_aside else "")
+    if restored is not None:
+        restore_parts: list[str] = []
+        if restored.get("head_moved"):
+            restore_parts.append("HEAD moved during the node; commits are not rewritten.")
+        if restored["restored"]:
+            restore_parts.append(
+                f"The target was restored to its state before the agent ran: "
+                f"{len(restored['restored'])} path(s) restored. "
+                f"The agent's copies are in {restored['set_aside']}.")
+        if restored["errors"]:
+            restore_parts.append(f"Could not restore: {'; '.join(restored['errors'])}.")
+        restore_text = " ".join(restore_parts) if restore_parts else ""
+    else:
+        restore_text = "Nothing in the target was reverted."
+    where_text = ""
+    if is_output_only:
+        where_text = (" For an output-only node, its changes reach the worktree only"
+                      " through the node's outputs.")
+    elif worktree_path is not None:
+        where_text = f" Write to the worktree at {worktree_path} instead."
+    action_text = ""
+    if restored is None:
+        action_text = (f" If the agent made the change, revert it and redo {node}; if "
+                       f"another session or person did, redo {node} once they are done.")
     return (f"the target {root} changed while agent {node!r} ran, outside its declared "
             f"outputs ({outputs}): {'; '.join(changed)}. Its whole answer belongs in its "
             "declared output, which a later step turns into the artifact, so a direct change "
-            "skips that step, the check and the reviews (#319). Nothing in the target was "
-            f"reverted.{moved} If the agent made the change, revert it and redo {node}; if "
-            f"another session or person did, redo {node} once they are done.")
+            f"skips that step, the check and the reviews (#319). "
+            f"{restore_text}{moved}{where_text}{action_text}")
+
+
+# ── lossless target restoration (dm-159) ─────────────────────────────────────
+
+MAX_BASELINE_SIZE = 16 * 1024 * 1024  # 16 MB
+
+
+def save_baseline(root: Path, changes: dict[str, str], baseline_dir: Path) -> list[str]:
+    """Save pre-node bytes of uncommitted/untracked target paths for lossless restore.
+
+    Returns a list of paths that could not be saved (directories, oversized, errors).
+    """
+    import shutil
+
+    not_saved: list[str] = []
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    for rel_path in sorted(changes):
+        src = root / rel_path
+        try:
+            if src.is_dir() and not src.is_symlink():
+                not_saved.append(f"{rel_path} (directory)")
+                continue
+            if src.is_symlink():
+                dest = baseline_dir / (rel_path + ".symlink.json")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(json.dumps({"target": os.readlink(src)}))
+                continue
+            if not src.exists():
+                continue
+            stat = src.stat()
+            if stat.st_size > MAX_BASELINE_SIZE:
+                not_saved.append(f"{rel_path} (>{MAX_BASELINE_SIZE // (1024*1024)} MB)")
+                continue
+            dest = baseline_dir / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        except OSError as error:
+            not_saved.append(f"{rel_path} ({error})")
+    return not_saved
+
+
+def _target_slot(root: Path) -> str:
+    """A stable hash-based directory name for a target root."""
+    return hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+
+
+def _stray_record_path(root: Path) -> Path:
+    return refactory_home() / "target-guard" / _target_slot(root)
+
+
+def _read_stray_record(root: Path) -> dict[str, Any]:
+    path = _stray_record_path(root) / "strays.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def restore_target(root: Path, before: dict[str, Any],
+                   baseline_dir: Path, workdir: Path) -> dict[str, Any]:
+    """Restore the target to its pre-node state on refusal.
+
+    Moves current target files to ``target-set-aside/``, writes pre-node bytes back.
+    Uses a per-target stray record under ``fcntl`` lock to prevent parallel agents
+    from undoing each other's restores (dm-159).
+
+    Returns ``{'restored': [paths], 'set_aside': str, 'errors': [msgs], 'head_moved': bool}``.
+    """
+    import fcntl
+    import shutil
+
+    set_aside_dir = baseline_dir.parent / "target-set-aside"
+    result: dict[str, Any] = {"restored": [], "set_aside": str(set_aside_dir),
+                               "errors": [], "head_moved": False}
+
+    if before.get("changes") is None:
+        result["errors"].append("too many paths to compare")
+        return result
+
+    after = state(root, exclude=(Path(workdir),))
+    if after.get("changes") is None:
+        result["errors"].append("too many paths to compare")
+        return result
+
+    changed = _differ(before.get("changes", {}), after.get("changes", {}))
+    result["head_moved"] = after.get("head") != before.get("head")
+
+    if not changed:
+        return result
+
+    # Acquire stray record lock
+    stray_dir = _stray_record_path(root)
+    stray_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = stray_dir / "lock"
+    lock_fd = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        strays = _read_stray_record(root)
+        watched_at = before.get("watched_at", "")
+
+        # Filter out paths already set aside by another node's refusal
+        effective = []
+        for path in changed:
+            stray_entry = strays.get(path)
+            if stray_entry is not None:
+                stray_at = stray_entry.get("at", "")
+                if stray_at >= watched_at:
+                    pre_digest = before.get("changes", {}).get(path, "-")
+                    if pre_digest == stray_entry.get("pre_digest"):
+                        continue
+            effective.append(path)
+
+        for path in effective:
+            try:
+                full = root / path
+                # (a) Set aside the current file
+                if full.exists() or full.is_symlink():
+                    if full.is_dir() and not full.is_symlink():
+                        result["errors"].append(f"{path} (directory, not restorable)")
+                        continue
+                    dest = set_aside_dir / path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    full.rename(dest)
+
+                # Record the stray
+                pre_digest = before.get("changes", {}).get(path, "-")
+                strays[path] = {
+                    "digest": after.get("changes", {}).get(path, "-"),
+                    "pre_digest": pre_digest,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+
+                # (b) Restore pre-node content
+                symlink_marker = baseline_dir / (path + ".symlink.json")
+                baseline_copy = baseline_dir / path
+
+                if symlink_marker.exists():
+                    target_link = json.loads(symlink_marker.read_text()).get("target", "")
+                    full.parent.mkdir(parents=True, exist_ok=True)
+                    os.symlink(target_link, full)
+                    result["restored"].append(path)
+                elif baseline_copy.exists():
+                    full.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(baseline_copy, full)
+                    result["restored"].append(path)
+                elif before.get("git") and path not in before.get("changes", {}):
+                    # Clean tracked file: restore from git
+                    prefix = ""
+                    top_str = (_git(root, "rev-parse", "--show-toplevel") or str(root)).strip()
+                    top = Path(top_str).resolve()
+                    if root.resolve() != top:
+                        prefix = str(root.resolve().relative_to(top)) + "/"
+                    content = _git(root, "show", f"HEAD:{prefix}{path}")
+                    if content is not None:
+                        full.parent.mkdir(parents=True, exist_ok=True)
+                        full.write_text(content)
+                        # Restore mode from git ls-tree
+                        ls = _git(root, "ls-tree", "HEAD", f"{prefix}{path}")
+                        if ls and ls.startswith("100755"):
+                            full.chmod(0o755)
+                        elif ls and ls.startswith("100644"):
+                            full.chmod(0o644)
+                        result["restored"].append(path)
+                    else:
+                        result["errors"].append(f"{path} (git show failed)")
+                elif pre_digest == "-":
+                    # Path did not exist before the node; set-aside is the restore.
+                    result["restored"].append(path)
+                else:
+                    result["errors"].append(f"{path} (no baseline copy)")
+            except OSError as error:
+                result["errors"].append(f"{path} ({error})")
+
+        # Write updated stray record
+        stray_file = stray_dir / "strays.json"
+        stray_file.write_text(json.dumps(strays, indent=2) + "\n")
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+    return result

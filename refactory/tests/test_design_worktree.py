@@ -971,11 +971,11 @@ def test_an_emit_during_which_the_launcher_checkout_moves_warns_but_succeeds(
 
 
 def test_a_worktree_run_does_not_warn_that_the_persons_checkout_moved(repo, tmp_path, capsys):
-    """Its base is pinned, so the person working in their checkout meanwhile changes nothing it sees.
+    """A person's edit during a planning step is now refused and the target is restored (dm-159).
 
-    A person's edit during a planning step (an output-only step that watches
-    only the worktree for failure) gives the "files outside its worktree
-    changed" run warning and the run succeeds.
+    research_director is output-only (in PLANNING_STEPS), so strayed() moves
+    target_changes from warn to fail.  The refusal restores the target and the
+    set-aside copy of app.py exists.
     """
     class Moving(FakeModel):
         def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
@@ -984,11 +984,14 @@ def test_a_worktree_run_does_not_warn_that_the_persons_checkout_moved(repo, tmp_
             return super().complete(prompt, system=system, workdir=workdir)
 
     result = _design(tmp_path / "run", Moving(_answers(render({"tool.py": "print(1)\n"}))), target=str(repo))
-    assert result.exit_ok, result.error
-    warned = capsys.readouterr().err
-    assert "changed since this run recorded it" not in warned
-    assert "app.py" in warned
-    assert "files outside its worktree changed" in warned
+    assert result.exit_ok is False
+    assert "changed while agent" in (result.error or "")
+    # The target is restored — app.py has its committed content.
+    assert (repo / "app.py").read_text() == "print('app')\n"
+    # The set-aside copy exists under agent-delivery.
+    from refactory_dsh import agent_delivery
+    found_set_aside = list((tmp_path / "run" / agent_delivery.ROOT).rglob("target-set-aside/app.py"))
+    assert found_set_aside, "the set-aside copy of app.py must exist"
 
 
 def test_the_agents_are_told_the_worktree_and_the_reviewers_the_diff_and_the_wrapper(repo, tmp_path):
@@ -1005,6 +1008,314 @@ def test_the_agents_are_told_the_worktree_and_the_reviewers_the_diff_and_the_wra
     for prompt in reviews:
         assert f"git -C {found.path} diff {found.base[:12]}" in prompt
         assert str(tmp_path / "run" / worktree.WRAPPER) in prompt
+
+
+# ── target guard tests (dm-159) ────────────────────────────────────────────
+
+
+def test_target_write_with_uncommitted_edit_and_untracked_file_is_refused_and_restored(tmp_path):
+    """Test 1: person's uncommitted edit + untracked file; agent overwrites; target restored."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+    import subprocess
+
+    repo = git_repo(tmp_path / "target")
+    # Person edits app.py (uncommitted) and creates notes.txt (untracked).
+    (repo / "app.py").write_text("print('mine, not committed')\n")
+    (repo / "notes.txt").write_text("untracked\n")
+    before_content = {}
+    for f in ("app.py", "notes.txt"):
+        before_content[f] = (repo / f).read_bytes()
+
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0001guard", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    # Agent overwrites app.py and deletes notes.txt in the target.
+    (repo / "app.py").write_text("print('agent wrote here')\n")
+    (repo / "notes.txt").unlink()
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+
+    import pytest
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "emit")
+
+    # Target is byte-identical to before.
+    for f, expected in before_content.items():
+        assert (repo / f).read_bytes() == expected, f"{f} not restored"
+
+    # Receipt says failed.
+    receipt = agent_delivery.receipts_in(run)["emit"]
+    assert receipt["status"] == "failed"
+
+
+def test_person_editing_during_node_target_restored(tmp_path):
+    """Test 2: person edits during node; both agent's and person's concurrent edits restored."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0002conc", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    before_bytes = (repo / "app.py").read_bytes()
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    # Person edits app.py while the node runs.
+    (repo / "app.py").write_text("print('person concurrent edit')\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+
+    import pytest
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "emit")
+
+    # Target is byte-identical to its state before the node.
+    assert (repo / "app.py").read_bytes() == before_bytes
+
+
+def test_verifier_writing_to_target_is_refused(tmp_path):
+    """Test 3: non-output-only agent (verifier) writing to target is refused."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0003veri", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    before_bytes = (repo / "app.py").read_bytes()
+    agent_delivery.begin(run, "verifier", "Verify.", ["verification.json"])
+    # Verifier writes stray into target.
+    (repo / "stray.py").write_text("print('stray')\n")
+    (run / "verification.json").write_text("{}\n")
+
+    import pytest
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "verifier")
+
+    # Target is restored: app.py unchanged, stray.py gone.
+    assert (repo / "app.py").read_bytes() == before_bytes
+    assert not (repo / "stray.py").exists()
+
+
+def test_self_targeting_worktree_output_only_node_not_refused(tmp_path):
+    """Test 4: no false refusal for a self-targeting worktree with output-only writing its outputs."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    found = worktree.create(repo, "HEAD", "tg0004safe", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+    receipt = agent_delivery.finish(run, "emit")
+    assert receipt["status"] == "delivered"
+
+
+def test_parallel_agents_stray_absent_from_target(tmp_path):
+    """Test 8: parallel agents — stray.py absent from target, qa_director not refused."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0008para", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    # code_reviewer writes stray.py into the target.
+    agent_delivery.begin(run, "code_reviewer", "Review.", ["reviews/code.md"])
+    (repo / "stray.py").write_text("print('stray')\n")
+    (run / "reviews").mkdir(parents=True, exist_ok=True)
+    (run / "reviews" / "code.md").write_text("VERDICT: pass\n")
+    import pytest
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "code_reviewer")
+
+    # stray.py is now set aside and absent from the target.
+    assert not (repo / "stray.py").exists()
+
+    # qa_director starts — its snapshot includes stray.py's absence as the current state.
+    agent_delivery.begin(run, "qa_director", "QA.", ["reviews/qa.md"])
+    (run / "reviews" / "qa.md").write_text("VERDICT: pass\n")
+    # qa_director makes no target changes; the only diff is stray.py, which is
+    # discounted because it was recorded as a stray at or after watched_at.
+    receipt = agent_delivery.finish(run, "qa_director")
+    assert receipt["status"] == "delivered"
+    assert not (repo / "stray.py").exists()
+
+
+def test_stale_stray_does_not_stop_restore(tmp_path):
+    """s17: a stray recorded before this node's watch never stops this node's change from being restored."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+    import time
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0017stal", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    # First agent writes stray.py, is refused.
+    agent_delivery.begin(run, "code_reviewer", "Review.", ["reviews/code.md"])
+    (repo / "stray.py").write_text("print('first stray')\n")
+    (run / "reviews").mkdir(parents=True, exist_ok=True)
+    (run / "reviews" / "code.md").write_text("VERDICT: pass\n")
+    import pytest
+    with pytest.raises(ValueError):
+        agent_delivery.finish(run, "code_reviewer")
+    assert not (repo / "stray.py").exists()
+
+    # A later agent overwrites the same path — the stale stray record must NOT stop the restore.
+    time.sleep(0.01)  # ensure watched_at is later
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    (repo / "stray.py").write_text("print('later overwrite')\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "emit")
+    # stray.py was restored (set aside) — not left in the target.
+    assert not (repo / "stray.py").exists()
+
+
+def test_executable_mode_restored(tmp_path):
+    """Test 10: executable file mode (+x) restored after refusal."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+    import os
+    import subprocess
+
+    repo = git_repo(tmp_path / "target")
+    (repo / "run.sh").write_text("#!/bin/sh\necho hello\n")
+    os.chmod(repo / "run.sh", 0o755)
+    subprocess.run(["git", "-C", str(repo), "add", "run.sh"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "add script"], check=True, capture_output=True)
+
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0010exec", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    # Agent edits the script and changes its mode.
+    (repo / "run.sh").write_text("#!/bin/sh\necho hacked\n")
+    os.chmod(repo / "run.sh", 0o644)
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+
+    import pytest
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "emit")
+
+    # File mode is restored.
+    assert os.stat(repo / "run.sh").st_mode & 0o755 == 0o755
+    assert (repo / "run.sh").read_text() == "#!/bin/sh\necho hello\n"
+    # git status should be clean.
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    assert status == ""
+
+
+def test_begin_handles_untracked_directory(tmp_path):
+    """Test 11: begin() handles an untracked directory without IsADirectoryError."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    # Create an untracked directory (e.g. a nested checkout).
+    (repo / "nested").mkdir()
+    (repo / "nested" / "file.txt").write_text("data\n")
+
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0011dir0", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    # begin() must not raise IsADirectoryError.
+    record = agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    assert record is not None
+
+
+def test_head_moved_refusal_text(tmp_path):
+    """s5: when HEAD moved during the node, the refusal says so."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+    import subprocess
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0005head", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    # Move HEAD in the target.
+    (repo / "new.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(repo), "add", "new.py"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "move head"], check=True, capture_output=True)
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+
+    import pytest
+    with pytest.raises(ValueError, match="changed while agent") as exc_info:
+        agent_delivery.finish(run, "emit")
+    assert "HEAD moved" in str(exc_info.value)
+    assert "commits are not rewritten" in str(exc_info.value)
+
+
+def test_worktree_only_stray_no_could_not_be_restored(tmp_path, capsys):
+    """s6c: a worktree-only stray (target untouched) does not say 'could not be restored'."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0006cwt0", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    # Only change the worktree, not the target.
+    wt = Path(found.path)
+    (wt / "extra.py").write_text("print('worktree only')\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+
+    import pytest
+    with pytest.raises(ValueError) as exc_info:
+        agent_delivery.finish(run, "emit")
+    # The refusal should NOT say "could not be restored" when target is clean.
+    assert "could not be restored" not in str(exc_info.value).lower()
+
+
+def test_snapshot_resaved_on_reused_dispatch(tmp_path):
+    """The baseline is re-saved when a reused dispatch re-watches the target."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0012reus", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    # First dispatch with reuse.
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"], reuse=True)
+    (repo / "app.py").write_text("print('dirty')\n")
+    (run / "emit.txt").write_text("Done.\n")
+    import pytest
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "emit")
+
+    # Retry with reuse — the baseline must be re-saved.
+    (repo / "app.py").write_text("print('person fixed it')\n")
+    agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"], reuse=True)
+    # Now agent writes into the target again.
+    (repo / "app.py").write_text("print('agent again')\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "emit")
+    # The person's fixed content is restored, not the original committed content.
+    assert (repo / "app.py").read_text() == "print('person fixed it')\n"
+
+
+def test_contract_scope_text_survives_prompt_edit(tmp_path):
+    """Test 7: the contract scope text is present even when the prompt drops 'Write nothing but emit.txt'."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0007scope", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    # Dispatch with a prompt that has no "Write nothing but emit.txt" but keeps placeholders.
+    record = agent_delivery.begin(run, "emit", "Just build the tool. {{emit_scope}}", ["emit.txt"])
+    prompt = record["prompt"]
+    assert "Write only the paths in `outputs` below" in prompt
+    assert f"Never change the target at {found.target}" in prompt
 
 
 # ── what keeps working as before ───────────────────────────────────────────

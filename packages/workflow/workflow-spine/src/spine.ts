@@ -1436,6 +1436,32 @@ export class Spine {
     }
     if (text.trim() === '') throw new Error('prompt amendment text is required')
     const existing = promptText(body)
+    // Guard: a set-prompt that drops {{...}} placeholders is refused (dm-159).
+    if (mode === 'set') {
+      // Strip the steering block so a brief containing {{...}} does not trigger
+      // false refusals (agent_delivery ~541-549 does the same).
+      const STEERING_START = '<!-- refactory steering context -->'
+      const STEERING_END = '<!-- end refactory steering context -->'
+      let scanText = existing
+      const stStart = scanText.indexOf(STEERING_START)
+      const stEnd = stStart >= 0 ? scanText.indexOf(STEERING_END, stStart) : -1
+      if (stStart >= 0 && stEnd >= stStart) {
+        scanText = scanText.slice(0, stStart) + scanText.slice(stEnd + STEERING_END.length)
+      }
+      const keys: string[] = []
+      const re = /\{\{\s*([A-Za-z_]\w*)\s*\}\}/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(scanText)) !== null) keys.push(m[1] as string)
+      if (keys.length > 0) {
+        const missing = keys.filter(k => !new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`).test(text))
+        if (missing.length > 0) {
+          throw new Error(
+            `set-prompt refused: the replacement drops ${missing.map(k => `{{${k}}}`).join(', ')}. `
+            + `Use append-prompt to add your correction while keeping the template's placeholders.`
+          )
+        }
+      }
+    }
     body[field] = mode === 'append' && existing !== '' ? `${existing}\n\n${text}` : text
     this.promptEdits.add(node)
     this.log.push(`prompt ${node} ${mode}`)

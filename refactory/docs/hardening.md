@@ -1519,3 +1519,76 @@ resolve the pin and pass `skip_driver_paths=` the driver checkout to
 fingerprints (the run's graphs, project packages) are still validated and
 raise the "prepared configuration … changed" refusal as on main.  The
 re-exec'd owner child validates against the pin's files after re-exec.
+
+---
+
+## 28. Target write protection for worktree runs (dm-159)
+
+### The incident
+
+On 2026-10-21, a worktree run's builder wrote 14 tracked files and added 6 new
+files directly into the target checkout instead of its worktree. Every process
+started on the driver checkout during that window imported the edited code. Three
+defenses failed together:
+
+1. **A prompt edit dropped the scope rules.** The CEO called `wf_edit set-prompt`
+   on emit, replacing the whole template and dropping `{{emit_scope}}` (the paths,
+   the `===FILE:`/`===EDIT:` format, and "Write nothing but emit.txt").
+2. **The execution contract pointed at the target.** `_execution_contract` names
+   `refactory_source` and `runtime_root` from `Path(__file__)`. For a run whose
+   target is its own driver checkout, those paths lie inside the target, and the
+   agent wrote there.
+3. **The guard only warned.** `target_guard.strayed()` routed target-root changes
+   to the warning list when `also` (the worktree) was set. `finish()` wrote a run
+   warning and the receipt said "delivered".
+
+### Why a target write is refused
+
+An agent's changes must go through materialise: `emit.txt` → `materialise` →
+committed on the run's branch → the check → the reviews → `deliver`. A direct
+write to the target bypasses every step after emit.
+
+### The three fixes
+
+1. **`strayed()` refuses target changes for worktree runs, and every agent is
+   guarded.** When `also` is set (a worktree exists), target-root changes go to
+   the fail list. Non-output-only agents get a target-only guard. The target is
+   actively restored to its pre-agent state on refusal, using bytes saved at
+   `watch()` time.
+2. **`_execution_contract` rebases paths onto the worktree.** When
+   `refactory_source` or `runtime_root` lies inside the run's target, it is
+   rebased onto the worktree. The contract text tells the agent to write there,
+   names the target as off-limits, warns that the python interpreter is for nested
+   dispatch only, and names the in-worktree wrapper for repository commands.
+3. **`amendPrompt` refuses a `set-prompt` that drops placeholders.** When the
+   current template contains `{{...}}` patterns and the replacement text drops
+   any, the edit is refused with an error naming the missing placeholders and
+   suggesting `append-prompt`.
+
+### Scope
+
+The refusal applies to every agent node of a worktree run, not only output-only
+nodes. Reviewers, the verifier, overwatch, design_review, apply_corrections and
+expanded researchers are all guarded.
+
+Concurrent runs on one target refuse each other's in-flight nodes when either
+strays. A write that finishes after the node's `finish()` is reported only as a
+later warning.
+
+In a self-targeting run, a pull or commit in the driver checkout during an
+output-only node now refuses that node. The driver checkout must stay still
+while runs are in flight.
+
+The driver or pin checkout is not watched when it is not the target. That is
+tracker dm-164, a follow-up, not this run.
+
+### Behaviour changes
+
+| Change | Applies to |
+|---|---|
+| `strayed()` target-root changes → fail (Python, `target_guard.py`) | Both runtimes (walker and spine-driven DSH) |
+| Guard all worktree-run agents (Python, `target_guard.py`) | Both runtimes |
+| Target restoration on refusal (Python, `target_guard.py`) | Both runtimes |
+| `_execution_contract` path rebase + worktree instructions (Python, `agent_delivery.py`) | Both runtimes |
+| `amendPrompt` placeholder guard (TypeScript, `spine.ts`) | Spine runtime only (the walker has no `wf_edit`) |
+| CEO instructions and `${toolPrefix}_edit` description update (TypeScript, `index.ts`) | Spine runtime only |

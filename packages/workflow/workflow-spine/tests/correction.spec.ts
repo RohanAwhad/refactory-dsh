@@ -184,6 +184,72 @@ describe('amendPrompt', () => {
       .toThrow('prompt amendment text is required')
   })
 
+  it('refuses a set-prompt that drops a placeholder', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder',
+             prompt_template: 'Build {{name}}.\n{{emit_scope}}\nDo the work.',
+             reads: [], writes: [] },
+      },
+      edges: [],
+    }
+    const spine = new Spine(graph)
+    expect(() => spine.amendPrompt('a', 'just fix it', 'set'))
+      .toThrow(/set-prompt refused.*emit_scope.*append-prompt/)
+  })
+
+  it('allows a set-prompt that keeps all placeholders', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder',
+             prompt_template: 'Build {{name}}.\n{{emit_scope}}\nDo the work.',
+             reads: [], writes: [] },
+      },
+      edges: [],
+    }
+    const spine = new Spine(graph)
+    spine.amendPrompt('a', 'Build {{name}} better.\n{{emit_scope}}\nDo it right.', 'set')
+    expect(spine.view('a').prompt_template).toBe('Build {{name}} better.\n{{emit_scope}}\nDo it right.')
+  })
+
+  it('allows append-prompt on a template with placeholders', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder',
+             prompt_template: 'Build {{name}}.\n{{emit_scope}}\nDo the work.',
+             reads: [], writes: [] },
+      },
+      edges: [],
+    }
+    const spine = new Spine(graph)
+    spine.amendPrompt('a', 'also handle errors', 'append')
+    expect(spine.view('a').prompt_template).toContain('{{name}}')
+    expect(spine.view('a').prompt_template).toContain('{{emit_scope}}')
+    expect(spine.view('a').prompt_template).toContain('also handle errors')
+  })
+
+  it('does not guard a template whose only placeholders are in the steering block', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder',
+             prompt_template: '<!-- refactory steering context -->\n{{brief}}\n<!-- end refactory steering context -->\nDo the work.',
+             reads: [], writes: [] },
+      },
+      edges: [],
+    }
+    const spine = new Spine(graph)
+    spine.amendPrompt('a', 'fix it', 'set')
+    expect(spine.view('a').prompt_template).toBe('fix it')
+  })
+
   it('amends the prompt of an AgentNode that has a dispatch command', () => {
     const graph: WorkflowGraph = {
       name: 't',
