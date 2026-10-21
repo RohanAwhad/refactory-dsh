@@ -189,7 +189,12 @@ def test_design_emit_writes_the_blocks_its_scope_describes_into_emit_txt():
 
 
 def _design_answers(emit: list[str]) -> list[str]:
-    """Every answer design-v2's agents need, in the order the graph asks."""
+    """Every answer design-v2's agents need, in the order the graph asks.
+
+    pick_corrections is a gate (no model answer needed).  When there are no
+    corrections, pick_corrections returns "skip" and apply_corrections does
+    not run — no model answer consumed.
+    """
     return [
         # The research answer is the plan array its gate checks, for the same reason
         # create's fixture is: a prose answer is the failure the gate catches.
@@ -208,13 +213,14 @@ def _design_answers(emit: list[str]) -> list[str]:
 def test_the_design_graph_is_a_different_shape_from_a_package_one():
     graph = DesignMode().graph()
     assert sorted(graph.nodes) == [
-        "check", "check_design_claims", "code_reviewer", "deliver", "design_doc", "design_review",
+        "apply_corrections", "check", "check_design_claims", "code_reviewer", "deliver",
+        "delivery_gate", "design_doc", "design_review", "done",
         "emit", "fork_qa", "gate_design_review", "gate_overwatch",
         "gate_pitfalls", "gate_qa", "gate_research", "gate_strategy",
         "gate_verification",
         "health_checker", "join_qa",
-        "materialise", "overwatch", "pitfalls_researcher", "prepare",
-        "qa_director", "record_findings",
+        "materialise", "overwatch", "pick_corrections", "pitfalls_researcher",
+        "prepare", "qa_director", "record_findings",
         "report", "research_director", "strategy_director", "synthesize_qa",
         "synthesize_strategy", "verifier",
     ], "the graph is design-v2's phases, not v1's"

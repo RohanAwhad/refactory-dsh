@@ -634,7 +634,12 @@ run state and control (`events`, `invocations`, `graph_control`, etc.),
 
 **Product** contains the CLI (`cli`, `console`), modes (`design`, `create`,
 `edit`, `fast`), delivery infrastructure (`repo_change`, `worktree`, `delivery`),
-and supporting modules (`brief_guard`, `target_guard`, etc.).
+and supporting modules (`brief_guard`, etc.).
+
+`target_guard` was reclassified as **core**: its only non-stdlib import is
+`invocations.py` (core), and its functions (`watch`, `strayed`, `warn`,
+`refusal`) are used by `agent_delivery` (core) and `repo_change`
+(product → core, allowed).
 
 **Dependency direction:** product → core only. A core module must never import a
 product module.
@@ -672,6 +677,22 @@ registration (core-only install), the overlay is `None` and the block is
 skipped. A product registration is available only in processes whose
 installed distribution declares the entry point.
 
+### Entry-point groups
+
+Three groups register product behaviour that core discovers at call time:
+
+| Group | pyproject.toml key | Discoverer | Degradation | Stale-install guard |
+|---|---|---|---|---|
+| `refactory.environment_overlay` | `worktree = "…worktree:_worktree_environment_overlay"` | `model.get_environment_overlay()` | `None` → skip overlay | Yes — `RuntimeError` when worktree record exists |
+| `refactory.worktree_state` | `worktree = "…worktree:_worktree_state_bridge"` | `agent_delivery.get_worktree_state()` | `None` → recorded returns None, skip shared_changed | Yes — `RuntimeError` when worktree record exists at workdir |
+| `refactory.delivery_identity` | `authoring = "…authoring_evidence:delivery_identity"` | `agent_delivery.get_delivery_identity()` | `None` + not reviewer or no EVIDENCE → skip enrichment | Conditional — `RuntimeError` when node in REVIEWERS AND EVIDENCE file exists |
+
+Each discoverer follows the same pattern: a module-level sentinel, at-most-one
+`entry_points()` lookup, cache, and `None`. The stale-install guard fails
+loudly when the entry point is missing but the run's state requires it.
+
+### Process traces
+
 Every process that calls `model._environment()` gets the overlay through the
 same entry-point discovery:
 
@@ -680,9 +701,22 @@ same entry-point discovery:
 | Worker | `worker_node.execute` → `model` | .venv/bin/python |
 | Interactive owner | `interactive.py` → `model` | .venv/bin/python |
 | Console | `console` → `model` | .venv/bin/python |
-| Supervisor child | spawns `-m refactory_dsh.interactive` → `model` | sys.executable |
+| Supervisor child | spawns `-m refactory_dsh.interactive` (the interactive owner) → `model` | sys.executable |
 | FnNode ops | `python -m refactory_dsh.run` (startup.ts) → `model` | PATH python |
 | Evaluator model judge | `evaluators.py` → sandbox → `model` | sys.executable (PYTHONPATH=refactory/) |
+
+Every process that calls `agent_delivery.begin`/`finish` uses the worktree-state
+and delivery-identity entry points:
+
+| Process | Path to agent_delivery | Entry points used |
+|---|---|---|
+| Worker (`worker_node.execute`) | `worker_node` → `agent_delivery.begin`/`finish` | environment_overlay (via model), worktree_state, delivery_identity |
+| Walker (`python -m refactory_dsh.design`) | in-process → `agent_delivery.begin`/`finish` | same |
+| DSH bridge (`main()` via stdin) | `worker_bridge.mjs` → `agent_delivery.main()` | delivery_identity (for `_execution_contract`), worktree_state (for `finish`) |
+| Console | `console.py` → `graph_control.request` | (reaches `recovery` for `CONSOLE_FILE`; `graph_control` for `DELIVER_ENTRY_POINTS` — both now core constants) |
+| Graph-control commands | `graph_control.request('redeliver')` | (uses `DELIVER_ENTRY_POINTS` from `invocations`) |
+| Interactive owner | `interactive.py` → `model` | environment_overlay |
+| Supervisor's child | spawns `-m refactory_dsh.interactive`; reaches agent_delivery only through worker_node and the bridge | same as worker |
 
 Sandbox children run `sys.executable` with `PYTHONPATH=refactory/` and keep
 `REFACTORY_WORKDIR`. They find the entry point through the venv's dist-info or
@@ -694,6 +728,12 @@ so the more-than-one guard does not misfire.
 
     RuntimeError: the worktree record exists but no environment overlay is
     installed; re-run `uv sync` or `./install.sh`
+
+The same applies to the two new entry-point groups (`refactory.worktree_state`
+and `refactory.delivery_identity`). A stale install that is missing any of these
+produces a `RuntimeError` naming `uv sync` when the run's state requires the
+entry point (e.g. a worktree record exists, or the node is a reviewer with an
+evidence file).
 
 The run's setup syncs only the worktree's own venv (`worktree.py`, first check
 via `repo_change.py`). It does not re-install when only `refactory/pyproject.toml`

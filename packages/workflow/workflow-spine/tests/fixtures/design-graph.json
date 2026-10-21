@@ -2,16 +2,16 @@
   "name": "design",
   "start_node": "prepare",
   "nodes": {
+    "apply_corrections": {
+      "id": "apply_corrections",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
     "check": {
       "id": "check",
       "evaluator_type": "fn",
       "max_iterations": 8,
-      "_type": "GateNode"
-    },
-    "check_design_claims": {
-      "id": "check_design_claims",
-      "evaluator_type": "fn",
-      "max_iterations": 4,
       "_type": "GateNode"
     },
     "code_reviewer": {
@@ -24,6 +24,12 @@
       "id": "deliver",
       "_type": "FnNode"
     },
+    "delivery_gate": {
+      "id": "delivery_gate",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
     "design_doc": {
       "id": "design_doc",
       "role": "ceo",
@@ -35,6 +41,10 @@
       "role": "ceo",
       "max_iterations": 1,
       "_type": "AgentNode"
+    },
+    "done": {
+      "id": "done",
+      "_type": "FnNode"
     },
     "emit": {
       "id": "emit",
@@ -118,6 +128,12 @@
       "max_iterations": 1,
       "_type": "AgentNode"
     },
+    "pick_corrections": {
+      "id": "pick_corrections",
+      "evaluator_type": "fn",
+      "max_iterations": 2,
+      "_type": "GateNode"
+    },
     "pitfalls_researcher": {
       "id": "pitfalls_researcher",
       "role": "ceo",
@@ -173,6 +189,11 @@
   },
   "edges": [
     {
+      "source": "apply_corrections",
+      "target": "emit",
+      "condition": null
+    },
+    {
       "source": "check",
       "target": "emit",
       "condition": "reloop"
@@ -183,18 +204,23 @@
       "condition": "proceed"
     },
     {
-      "source": "check_design_claims",
-      "target": "design_doc",
-      "condition": "reloop"
+      "source": "deliver",
+      "target": "delivery_gate",
+      "condition": null
     },
     {
-      "source": "check_design_claims",
-      "target": "design_review",
+      "source": "delivery_gate",
+      "target": "done",
       "condition": "proceed"
     },
     {
+      "source": "delivery_gate",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
       "source": "design_doc",
-      "target": "check_design_claims",
+      "target": "design_review",
       "condition": null
     },
     {
@@ -269,7 +295,7 @@
     },
     {
       "source": "gate_strategy",
-      "target": "emit",
+      "target": "pick_corrections",
       "condition": "proceed"
     },
     {
@@ -301,6 +327,16 @@
       "source": "overwatch",
       "target": "gate_overwatch",
       "condition": null
+    },
+    {
+      "source": "pick_corrections",
+      "target": "apply_corrections",
+      "condition": "proceed"
+    },
+    {
+      "source": "pick_corrections",
+      "target": "emit",
+      "condition": "skip"
     },
     {
       "source": "pitfalls_researcher",

@@ -82,11 +82,16 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
     graph.add(Node(
         "focused_check", "op", call=f"{OPS}:focused_check", role="validation" if artifact else "ceo",
         resource_role="final_validation",
-        knobs=("check", "check_timeout_s"),
+        knobs=("check", "check_timeout_s", "check_attempt_cap"),
         reads=("emit.txt",) + (() if artifact else ("authoring-evidence.json", "smoke.json")),
         writes=("focused-check.json", "focused-source.json", "authoring-evidence.json")
                + (("check.txt", *repo_change.CHECK_WRITES) if artifact else ()),
-        produces=("focused_check", "output_path", "review_files", "runtime_evidence")
+        produces=("focused_check", "output_path", "review_files", "runtime_evidence",
+                  "base_unavailable",
+                  "check_failures_history",
+                  "check_blocker_history",
+                  "convergence_extras_used",
+                  "convergence_granted")
                  + (repo_change.CHECK_PRODUCES if artifact else ()),
         notes="run the explicitly requested bounded check; no implicit full evaluation",
     ))
@@ -104,11 +109,15 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
     graph.add(Node(
         "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
         resource_role="final_validation",
-        knobs=("repair_attempts",), reads=("focused-qa.json", "focused-check.json", "focused-source.json",
+        knobs=("repair_attempts", "check_attempt_cap"), reads=("focused-qa.json", "focused-check.json", "focused-source.json",
                                           "authoring-evidence.json", "intent-audit.json"),
         writes=("fast-report.json", "repair.txt"),
         produces=("repair_feedback", "repairs_used", "check_repairs_used",
-                  "review_repairs_used", "qa_passed"), max_iterations=4,
+                  "review_repairs_used", "qa_passed",
+                  "check_failures_history",
+                  "check_blocker_history",
+                  "convergence_extras_used",
+                  "convergence_granted"), max_iterations=12,
         notes="repair only within the shared bound; unresolved findings are failure",
     ))
     graph.connect("focused_check", "focused_qa")
@@ -130,6 +139,7 @@ class CreateFastMode(CreateMode):
             "repair_attempts": Knob(1, "int", lo=0, hi=3, description="total repairs across admission, runtime validation and focused QA"),
             "check": Knob("", "str", description="explicit focused check command in the emitted package; empty means not requested"),
             "check_timeout_s": Knob(60, "int", lo=1, hi=600, description="seconds allowed for the explicit focused check"),
+            "check_attempt_cap": Knob(8, "int", lo=0, description="hard cap on total check attempts including convergence grants; 0 or a value at or below repair_attempts disables the extension"),
         })
         return knobs
 
@@ -180,14 +190,22 @@ class CreateFastMode(CreateMode):
                           writes=("validation.txt", "repair.txt", "fast-report.json"),
                           knobs=("repair_attempts",), max_iterations=4,
                           produces=("validation", "repair_feedback", "repairs_used",
-                                    "check_repairs_used")))
+                                    "check_repairs_used",
+                                    "check_failures_history",
+                                    "check_blocker_history",
+                                    "convergence_extras_used",
+                                    "convergence_granted")))
         _qa_nodes(graph, artifact=False)
         graph.add(replace(full.nodes["register"], resource_role="work"))
         graph.add(replace(full.nodes["smoke"], evaluator="refactory_dsh.create_ops:gate_smoke",
-                          knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "repair_attempts"),
+                          knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "repair_attempts", "check_attempt_cap"),
                           writes=(*full.nodes["smoke"].writes, "repair.txt", "fast-report.json"),
                           produces=(*full.nodes["smoke"].produces, "repair_feedback", "repairs_used",
-                                    "check_repairs_used", "review_repairs_used"),
+                                    "check_repairs_used", "review_repairs_used",
+                                    "check_failures_history",
+                                    "check_blocker_history",
+                                    "convergence_extras_used",
+                                    "convergence_granted"),
                           resource_role="final_validation", max_iterations=4))
         graph.add(replace(full.nodes["report"], call=f"{OPS}:report_package",
                           resource_role="final_validation",
@@ -236,6 +254,9 @@ class DesignFastMode(DesignMode):
             knobs.pop(name)
         knobs["repair_attempts"] = Knob(1, "int", lo=0, hi=3, description=(
             "total repairs, for an emission materialise could not apply, a failed check or focused QA"))
+        knobs["check_attempt_cap"] = Knob(8, "int", lo=0, description=(
+            "hard cap on total check attempts including convergence grants; "
+            "0 or a value at or below repair_attempts disables the extension"))
         knobs["source_project"] = Knob("", "str", description=(
             "an existing directory copied into the artifact directory before the change is applied, "
             "instead of a worktree; it takes no target, base or setup"))
