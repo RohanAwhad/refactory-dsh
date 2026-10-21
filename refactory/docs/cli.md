@@ -136,7 +136,7 @@ installed copy.
 | `--batch-size <n>` | candidates proposed per epoch | 4 |
 | `--optimizer <name>` | how candidates are proposed: `random`, `hill_climb`, `evolutionary`, `archive`, `islands`, `map_elites`, `autoresearch` | `autoresearch` |
 | `--strategy <name>` | which outer loop drives the search: `default`, `best_of_n`, `reflective`, `reflective_sampler`, `tree_search`, `staged_curriculum`, `staged_v1`, `adaptive_meta`, `autoscientists`, `research_then_optimize` | the harness's own (`default`) |
-| `--evaluator walker\|dsh` | which runtime scores a candidate: fast in-process, or the one that ships | `walker` |
+| `--evaluator walker\|dsh` | which runtime scores a candidate: fast in-process (with op retry and per-op timeout enabled), or the one that ships | `walker` |
 | `--preset <name>` | which edits are allowed: `broad`, `structure`, `conservative`, `knob_only` | `broad` |
 | `--allowed-ops <name>` | narrow the chosen preset to listed edit operations; repeat for multiple names | the preset |
 | `--frozen <name>` | additional knob protected from edits; repeat for multiple names | mode-declared frozen knobs |

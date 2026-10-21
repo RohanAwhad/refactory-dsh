@@ -437,6 +437,7 @@ Lower a mode state to refactory's IR, so DSH can run it.
 | kind | name | signature |
 |---|---|---|
 | class | `LoweringError` | `` |
+| function | `command_timeout_s` | `(node: 'Any', state: 'dict[str, Any]') -> 'int \| None'` |
 | function | `knob_environment` | `(state: 'dict[str, Any]', *, extra: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `knob_specs` | `(state: 'dict[str, Any]') -> 'dict[str, Knob]'` |
 | function | `node_declarations` | `(state: 'dict[str, Any]') -> 'dict[str, dict[str, Any]]'` |
@@ -448,6 +449,7 @@ Lower a mode state to refactory's IR, so DSH can run it.
 | function | `write_mode_graph` | `(state: 'dict[str, Any]', out_dir: 'Path', *, name: 'str', description: 'str' = '', transform: 'Any' = None) -> 'tuple[Path, Workflow]'` |
 
 - **`LoweringError`** — A state cannot be expressed in the IR, and saying why is more useful than a traceback.
+- **`command_timeout_s`** — The per-node command_timeout_s for ops and fn gates, or None.
 - **`knob_environment`** — The environment a node command runs under: the knobs, and whatever else.
 - **`node_declarations`** — Every node's kind and declared reads, writes and facts, keyed by node id.
 - **`node_manifest`** — What a node command is told about itself, mirroring `DSH_WORKFLOW_NODE`.

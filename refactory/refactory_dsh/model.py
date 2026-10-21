@@ -310,7 +310,7 @@ class DshModelClient:
             "budget_ledger": str(self._budget.path) if self._budget is not None else "",
         }
 
-    def _environment(self) -> dict[str, str]:
+    def _environment(self, *, target_workdir: "Path | None" = None) -> dict[str, str]:
         # Never resolve a credential here or copy it into the environment. The DSH
         # credentials service reads its managed store in the selected home.
         result = {**os.environ, "DSH_HOME": str(self._dsh_home),
@@ -329,7 +329,7 @@ class DshModelClient:
         # with refactory's venv from startup.ts or _node_environment) with the
         # target's check_environment PATH.  Without a worktree (research,
         # strategy), the inherited PATH passes through.
-        _workdir = os.environ.get('REFACTORY_WORKDIR', '')
+        _workdir = str(target_workdir) if target_workdir is not None else os.environ.get('REFACTORY_WORKDIR', '')
         if _workdir:
             _overlay = get_environment_overlay()
             if _overlay is not None:
@@ -405,6 +405,7 @@ class DshModelClient:
     ) -> str:
         from refactory_dsh import workers
         scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
+        original_workdir = workdir
         run_dir = Path(workdir).expanduser().resolve() if workdir is not None else scratch
         run_dir.mkdir(parents=True, exist_ok=True)
         client = copy.copy(self)
@@ -413,7 +414,7 @@ class DshModelClient:
             client._budget.require_usage_capability(self._worker_backend == "dsh")
         client._worker_receipt = workers.begin(run_dir, self.route(), node=self._node_id, role=self._role)
         try:
-            result = client._complete(prompt, system=system, workdir=run_dir)
+            result = client._complete(prompt, system=system, workdir=run_dir, target_workdir=original_workdir)
             client._checkpoint(final=True)
         except BaseException as error:
             state = "failed"
@@ -432,7 +433,8 @@ class DshModelClient:
         return result
 
     def _complete(
-        self, prompt: str, *, system: str = "", workdir: Path | None = None
+        self, prompt: str, *, system: str = "", workdir: Path | None = None,
+        target_workdir: "Path | None" = None,
     ) -> str:
         """Return the model's answer to ``prompt``.
 
@@ -502,7 +504,7 @@ class DshModelClient:
             self._raise_if_cancelled()
             self._checkpoint()
             try:
-                proc = self._run_completion(cmd, run_dir, stop_at, budget_s, task=task)
+                proc = self._run_completion(cmd, run_dir, stop_at, budget_s, task=task, target_workdir=target_workdir)
             except subprocess.TimeoutExpired as exc:
                 # A tool-using completion may already have changed its workdir.
                 # A deadline is not a transport failure: replaying the prompt can
@@ -544,7 +546,7 @@ class DshModelClient:
 
     def _run_completion(
         self, cmd: list[str], run_dir: Path, stop_at: float | None = None, budget_s: int | None = None,
-        task: str | None = None,
+        task: str | None = None, target_workdir: "Path | None" = None,
     ) -> subprocess.CompletedProcess[str]:
         """Keep the CLI alive long enough to dispose its managed tool processes.
 
@@ -571,7 +573,7 @@ class DshModelClient:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                     stdin=task_file if task_file is not None else None,
-                    cwd=str(run_dir), env=self._environment(),
+                    cwd=str(run_dir), env=self._environment(target_workdir=target_workdir),
                     # A terminal Ctrl-C reaches the Python caller only. Forward one
                     # shutdown request: DSH escalates a second signal to immediate exit.
                     start_new_session=os.name == "posix",

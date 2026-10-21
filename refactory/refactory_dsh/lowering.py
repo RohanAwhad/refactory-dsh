@@ -171,17 +171,8 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             "resource_role": node.resource_phase,
         }
         if node.kind == "op":
-            command_timeout_s = None
-            if _is_smoke_node(node):
-                # The operation owns up to three bounded passes plus sandbox
-                # discovery/launch overhead; the enclosing shell must outlast it.
-                command_timeout_s = 3 * _smoke_budget(state) + 600
-            elif _is_check_node(node):
-                command_timeout_s = _check_envelope_s(state)
-            elif _is_deliver_node(node):
-                command_timeout_s = _delivery_envelope_s(state)
             nodes[node_id] = FnNode(
-                command_timeout_s=command_timeout_s,
+                command_timeout_s=command_timeout_s(node, state),
                 **common,
                 # Both fields, and both for a reason. `callable_name` is
                 # the language's own way of naming what an `FnNode` runs
@@ -212,12 +203,9 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 gate["gate_prompt"] = node.notes
             if node.gate_kind == "fn":
                 gate["evaluator_command"] = f"{RUNNER} {node.evaluator}"
-                if _is_smoke_node(node):
-                    # Revised execution, optional original comparison, and discovery.
-                    # Moving smoke into a gate must retain its bounded shell envelope.
-                    gate["command_timeout_s"] = 2 * _smoke_budget(state) + 600
-                elif _is_check_node(node):
-                    gate["command_timeout_s"] = _check_envelope_s(state)
+                _gate_timeout = command_timeout_s(node, state)
+                if _gate_timeout is not None:
+                    gate["command_timeout_s"] = _gate_timeout
             nodes[node_id] = GateNode(**common, **gate)
         elif node.kind == "fork":
             # The branches are reached through `targets`, not edges: one out-edge
@@ -374,6 +362,27 @@ def _delivery_envelope_s(state: dict[str, Any]) -> int:
     from refactory_dsh.invocations import INSTALL_TIMEOUT_S
 
     return _check_envelope_s(state) + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S
+
+
+def command_timeout_s(node: Any, state: dict[str, Any]) -> int | None:
+    """The per-node command_timeout_s for ops and fn gates, or None.
+
+    Extracted from the inline classification in ``to_workflow()`` so both lowering
+    and the walker executor share one formula.
+    """
+    if node.kind == "op":
+        if _is_smoke_node(node):
+            return 3 * _smoke_budget(state) + 600
+        if _is_check_node(node):
+            return _check_envelope_s(state)
+        if _is_deliver_node(node):
+            return _delivery_envelope_s(state)
+    elif node.kind == "gate" and getattr(node, "gate_kind", "fn") == "fn":
+        if _is_smoke_node(node):
+            return 2 * _smoke_budget(state) + 600
+        if _is_check_node(node):
+            return _check_envelope_s(state)
+    return None
 
 
 def _ir_knobs(knobs: dict[str, Any]) -> dict[str, str | float]:

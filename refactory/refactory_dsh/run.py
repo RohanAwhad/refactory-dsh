@@ -17,6 +17,7 @@ printed to stdout would be read as part of its reason.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -160,6 +161,36 @@ def install_workspace_packages() -> None:
     registry.install_workspace(project_for_nodes())
 
 
+def build_op_context(
+    directory: Path,
+    node_id: str,
+    *,
+    knobs: dict[str, Any] | None = None,
+    facts: dict[str, Any] | None = None,
+    task: dict[str, Any] | None = None,
+    model: Any = None,
+) -> RunContext:
+    """Build the context an op or fn-gate callable receives.
+
+    Both ``run_node()`` (DSH spine) and the walker's child process call this,
+    ensuring they build the same context.
+    """
+    declared = declarations(directory, node_id)
+    ctx = RunContext(
+        directory,
+        knobs=knobs or _knobs(),
+        facts=facts or _read_facts(directory),
+        task=task or {"node": node_id},
+        memory=_memory_store(directory),
+        model=model,
+    )
+    ctx.node_id = node_id
+    ctx._declared = tuple(declared["writes"])  # noqa: SLF001
+    ctx._declared_reads = tuple(declared["reads"])  # noqa: SLF001
+    ctx._declared_facts = tuple(declared["produces"])  # noqa: SLF001
+    return ctx
+
+
 def run_node(
     target: str, *, workdir: Path | None = None, node_id: str | None = None
 ) -> Any:
@@ -179,31 +210,41 @@ def run_node(
             f"no node id: set {NODE_ENV} or pass one, because the declarations this "
             "runner enforces are keyed by node id"
         )
-    declared = declarations(directory, node_id)
-    ctx = RunContext(
-        directory,
-        knobs=_knobs(),
-        facts=_read_facts(directory),
+    ctx = build_op_context(
+        directory, node_id,
         task={"node": node_id, "type": manifest.get("type", "")},
-        # The store an op receives, built from the mode's own declarations. Without
-        # this a mode that keeps a cross-run prior works in the walker and quietly
-        # keeps nothing here, which is a difference between the two runtimes that
-        # nothing would report.
-        memory=_memory_store(directory),
     )
-    ctx.node_id = node_id
-    ctx._declared = tuple(declared["writes"])  # noqa: SLF001 - the runner owns the context
-    ctx._declared_reads = tuple(declared["reads"])  # noqa: SLF001
-    ctx._declared_facts = tuple(declared["produces"])  # noqa: SLF001
-    try:
-        produced = resolve(target)(ctx)
-    except Exception:
-        # Write facts even on failure so attempts_used persists on disk and
-        # agrees with the count in the failure message.
+    node_type = manifest.get("type", "")
+    is_retryable = node_type not in ("gate", "GateNode")
+    facts_snapshot = copy.deepcopy(ctx.facts) if is_retryable else None
+
+    def _write_facts() -> None:
         path = directory / FACTS
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(ctx.facts, indent=2, default=str))
-        raise
+
+    try:
+        produced = resolve(target)(ctx)
+    except Exception:
+        if facts_snapshot is None:
+            _write_facts()
+            raise
+        from refactory_dsh.budgets import BudgetExhausted
+
+        # BudgetExhausted: write facts and re-raise without retry.
+        # (re-check the exception type since we're in a broad except)
+        import sys as _sys
+        exc_info = _sys.exc_info()
+        if isinstance(exc_info[1], BudgetExhausted):
+            _write_facts()
+            raise
+        # Restore facts and retry once.
+        ctx.facts = facts_snapshot
+        try:
+            produced = resolve(target)(ctx)
+        except Exception:
+            _write_facts()
+            raise
     if isinstance(produced, dict):
         for key, value in produced.items():
             ctx.set_fact(key, value)

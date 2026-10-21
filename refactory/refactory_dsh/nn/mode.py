@@ -248,7 +248,7 @@ class Mode:
     @classmethod
     def resume(
         cls, workdir: Path, *, model: Any = None, max_steps: int = 2000,
-        resource_limits: Any = None,
+        resource_limits: Any = None, enable_recovery: bool = False,
     ) -> "RunResult":
         """Continue a run where it failed, from the record it left in its directory.
 
@@ -334,6 +334,7 @@ class Mode:
                 mode.graph(), Path(workdir), knobs=mode.values(), model=model,
                 facts=dict(record.get("facts") or {}), task=dict(record.get("task") or {}),
                 start=node, max_steps=max_steps, resource_limits=resource_limits,
+                enable_recovery=enable_recovery,
             )
         finally:
             if owns_budget and budget is not None:

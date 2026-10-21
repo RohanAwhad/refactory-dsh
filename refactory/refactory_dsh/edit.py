@@ -104,6 +104,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     run = mode.run(
         run_workdir,
         model=client,
+        enable_recovery=True,
         task={
             "name": config.name,
             "brief": config.brief,
@@ -198,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
 
             run = (EditFastMode if args.fast else EditMode).resume(
                 Path(args.resume), model=client, resource_limits=arguments(args),
+                enable_recovery=True,
             )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)

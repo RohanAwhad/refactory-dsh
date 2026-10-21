@@ -727,6 +727,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
         },
         max_steps=config.max_steps,
         verdicts=dict(config.verdicts),
+        enable_recovery=True,
         resource_limits=config.resource_limits,
     )
     if not run.exit_ok:
@@ -849,6 +850,7 @@ def main(argv: list[str] | None = None) -> int:
 
             run = (CreateFastMode if args.fast else CreateMode).resume(
                 Path(args.resume), model=client, max_steps=200, resource_limits=arguments(args),
+                enable_recovery=True,
             )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)

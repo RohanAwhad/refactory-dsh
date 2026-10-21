@@ -812,6 +812,7 @@ def main(argv: list[str] | None = None) -> int:
 
             run = (DesignFastMode if args.fast else DesignMode).resume(
                 Path(args.resume), model=client, resource_limits=arguments(args),
+                enable_recovery=True,
             )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
@@ -869,6 +870,7 @@ def main(argv: list[str] | None = None) -> int:
               "refine": args.refine},
         verdicts=verdicts,
         resource_limits=arguments(args),
+        enable_recovery=True,
     )
     if not result.exit_ok:
         print(json.dumps({"error": result.error}), file=sys.stderr)
