@@ -6834,7 +6834,8 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
         "allow_regression",
         "sample_knobs",
         "smoke_timeout_s",
-        "attempts"
+        "attempts",
+        "check_attempt_cap"
       ],
       "notes": "run the new mode once, and compare a revision with the mode it revises; a mode that cannot score is not finished",
       "role": "validation"
@@ -6918,6 +6919,18 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
         null
       ],
       "value": "",
+      "values": []
+    },
+    "check_attempt_cap": {
+      "default": 8,
+      "description": "hard cap on total check attempts including convergence grants; 0 or a value at or below the regular attempts disables the extension",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        0,
+        null
+      ],
+      "value": 8,
       "values": []
     },
     "data_node": {
@@ -7073,7 +7086,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-    "reviewed_schema": "e46b06c075fd498119207352327459795efea4734de6ee6831f81cde06631702"
+    "reviewed_schema": "d608c8da29ae1ccbb61ea7607baa7bf0704393f705f97df98c6d172f5e86e58c"
   }
 }
 ```
@@ -7188,7 +7201,8 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
       "kind": "op",
       "knobs": [
         "check",
-        "check_timeout_s"
+        "check_timeout_s",
+        "check_attempt_cap"
       ],
       "notes": "run the explicitly requested bounded check; no implicit full evaluation",
       "role": "ceo"
@@ -7207,7 +7221,8 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
       "id": "gate_qa",
       "kind": "gate",
       "knobs": [
-        "repair_attempts"
+        "repair_attempts",
+        "check_attempt_cap"
       ],
       "notes": "repair only within the shared bound; unresolved findings are failure",
       "role": "ceo"
@@ -7262,7 +7277,8 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
         "allow_regression",
         "sample_knobs",
         "smoke_timeout_s",
-        "repair_attempts"
+        "repair_attempts",
+        "check_attempt_cap"
       ],
       "notes": "run the new mode once, and compare a revision with the mode it revises; a mode that cannot score is not finished",
       "role": "validation"
@@ -7330,6 +7346,18 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
         null
       ],
       "value": "",
+      "values": []
+    },
+    "check_attempt_cap": {
+      "default": 8,
+      "description": "hard cap on total check attempts including convergence grants; 0 or a value at or below repair_attempts disables the extension",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        0,
+        null
+      ],
+      "value": 8,
       "values": []
     },
     "check_timeout_s": {
@@ -7473,7 +7501,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small reusable package with a strategist, coder and focused QA. Canonical smoke precedes focused QA; structural, runtime and review failures share repair_attempts. Supply a brief, name and task/single-shot inputs.",
-    "reviewed_schema": "139325608facacb16306c1b8fc199b04e6bd977034dc89e3334542f16126e4da"
+    "reviewed_schema": "ce7035565ccddc4d6810fa435397806f50bbb953aeadcaeed70e17ba7653a71c"
   }
 }
 ```
@@ -7487,11 +7515,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
   "description": "design, emit and check a software artifact from a brief",
   "edges": [
     {
-      "condition": null,
-      "source": "apply_corrections",
-      "target": "emit"
-    },
-    {
       "condition": "reloop",
       "source": "check",
       "target": "emit"
@@ -7500,21 +7523,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": "proceed",
       "source": "check",
       "target": "verifier"
-    },
-    {
-      "condition": null,
-      "source": "deliver",
-      "target": "delivery_gate"
-    },
-    {
-      "condition": "proceed",
-      "source": "delivery_gate",
-      "target": "done"
-    },
-    {
-      "condition": "reloop",
-      "source": "delivery_gate",
-      "target": "emit"
     },
     {
       "condition": null,
@@ -7594,7 +7602,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "gate_strategy",
-      "target": "pick_corrections"
+      "target": "emit"
     },
     {
       "condition": "reloop",
@@ -7625,16 +7633,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "overwatch",
       "target": "gate_overwatch"
-    },
-    {
-      "condition": "proceed",
-      "source": "pick_corrections",
-      "target": "apply_corrections"
-    },
-    {
-      "condition": "skip",
-      "source": "pick_corrections",
-      "target": "emit"
     },
     {
       "condition": null,
@@ -7688,10 +7686,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "user": false
     },
     {
-      "id": "delivery_gate",
-      "user": false
-    },
-    {
       "id": "gate_design_review",
       "user": false
     },
@@ -7718,23 +7712,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "id": "gate_verification",
       "user": false
-    },
-    {
-      "id": "pick_corrections",
-      "user": false
     }
   ],
   "guidance": "",
   "id": "default_pack/design",
   "nodes": [
-    {
-      "call": "",
-      "id": "apply_corrections",
-      "kind": "agent",
-      "knobs": [],
-      "notes": "revise design.md with gate-strategy corrections before the builder runs",
-      "role": "ceo"
-    },
     {
       "call": "refactory_dsh.design_ops:check_artifact",
       "gate_kind": "fn",
@@ -7742,7 +7724,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "gate",
       "knobs": [
         "check_attempts",
-        "check_timeout_s"
+        "check_timeout_s",
+        "check_attempt_cap"
       ],
       "notes": "run the brief's check, in a sandbox",
       "role": "validation"
@@ -7766,17 +7749,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.delivery:evaluate_delivery_conflicts",
-      "gate_kind": "fn",
-      "id": "delivery_gate",
-      "kind": "gate",
-      "knobs": [
-        "check_attempts"
-      ],
-      "notes": "on authored-file conflict reloop to emit; otherwise proceed to done",
-      "role": "ceo"
-    },
-    {
       "call": "",
       "id": "design_doc",
       "kind": "agent",
@@ -7790,14 +7762,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "review the design for open alternatives and unconfirmed claims",
-      "role": "ceo"
-    },
-    {
-      "call": "refactory_dsh.design_ops:noop",
-      "id": "done",
-      "kind": "op",
-      "knobs": [],
-      "notes": "terminal node after delivery succeeds",
       "role": "ceo"
     },
     {
@@ -7921,15 +7885,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "audit the evidence behind the reviews",
-      "role": "ceo"
-    },
-    {
-      "call": "refactory_dsh.design_ops:pick_gate_corrections",
-      "gate_kind": "fn",
-      "id": "pick_corrections",
-      "kind": "gate",
-      "knobs": [],
-      "notes": "deterministically extract gate_strategy corrections from the ledger; skip the agent when there are none",
       "role": "ceo"
     },
     {
@@ -8063,6 +8018,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         null
       ],
       "value": "",
+      "values": []
+    },
+    "check_attempt_cap": {
+      "default": 8,
+      "description": "hard cap on total check attempts including convergence grants; 0 or a value at or below check_attempts disables the extension",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        0,
+        null
+      ],
+      "value": 8,
       "values": []
     },
     "check_attempts": {
@@ -8312,7 +8279,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "51606a6c2495924fe462de88a3282195627c707ca405f99bac82426cdd415eb5"
+    "reviewed_schema": "d6c3c3da42bd0de24d07608c4e807a8de1c42accf5cfd28bbcac1618dd2352bb"
   }
 }
 ```
@@ -8422,7 +8389,8 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "kind": "op",
       "knobs": [
         "check",
-        "check_timeout_s"
+        "check_timeout_s",
+        "check_attempt_cap"
       ],
       "notes": "run the explicitly requested bounded check; no implicit full evaluation",
       "role": "validation"
@@ -8452,7 +8420,8 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "id": "gate_qa",
       "kind": "gate",
       "knobs": [
-        "repair_attempts"
+        "repair_attempts",
+        "check_attempt_cap"
       ],
       "notes": "repair only within the shared bound; unresolved findings are failure",
       "role": "ceo"
@@ -8463,7 +8432,8 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "id": "gate_verification",
       "kind": "gate",
       "knobs": [
-        "repair_attempts"
+        "repair_attempts",
+        "check_attempt_cap"
       ],
       "notes": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
       "role": "ceo"
@@ -8555,6 +8525,18 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
         null
       ],
       "value": "",
+      "values": []
+    },
+    "check_attempt_cap": {
+      "default": 8,
+      "description": "hard cap on total check attempts including convergence grants; 0 or a value at or below repair_attempts disables the extension",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        0,
+        null
+      ],
+      "value": 8,
       "values": []
     },
     "check_timeout_s": {
@@ -8695,7 +8677,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "5bb8323aff0a13d1f9885997d44a3eea215e6d93aa94b6b8f44d9903acfc6985"
+    "reviewed_schema": "eab48d871a8c7d9bdff259e77503824538b01ff1e36989949124e9d57469ecb8"
   }
 }
 ```
@@ -9070,7 +9052,8 @@ Revise an existing mode package and validate the revision before separate QA and
         "allow_regression",
         "sample_knobs",
         "smoke_timeout_s",
-        "attempts"
+        "attempts",
+        "check_attempt_cap"
       ],
       "notes": "run the new mode once, and compare a revision with the mode it revises; a mode that cannot score is not finished",
       "role": "validation"
@@ -9154,6 +9137,18 @@ Revise an existing mode package and validate the revision before separate QA and
         null
       ],
       "value": "",
+      "values": []
+    },
+    "check_attempt_cap": {
+      "default": 8,
+      "description": "hard cap on total check attempts including convergence grants; 0 or a value at or below the regular attempts disables the extension",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        0,
+        null
+      ],
+      "value": 8,
       "values": []
     },
     "data_node": {
@@ -9309,7 +9304,7 @@ Revise an existing mode package and validate the revision before separate QA and
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-    "reviewed_schema": "9da78dbad0326302ae1a8e21dd8e9f75989bcca75075fdf3a0baba324d59dec3"
+    "reviewed_schema": "cd7ee27db0e0466a076ef6d97f56c79d506399bf3c4f10a7339cb652ec4941c6"
   }
 }
 ```
@@ -9419,7 +9414,8 @@ Revise a small mode package with a coder and focused QA after canonical validati
       "kind": "op",
       "knobs": [
         "check",
-        "check_timeout_s"
+        "check_timeout_s",
+        "check_attempt_cap"
       ],
       "notes": "run the explicitly requested bounded check; no implicit full evaluation",
       "role": "ceo"
@@ -9438,7 +9434,8 @@ Revise a small mode package with a coder and focused QA after canonical validati
       "id": "gate_qa",
       "kind": "gate",
       "knobs": [
-        "repair_attempts"
+        "repair_attempts",
+        "check_attempt_cap"
       ],
       "notes": "repair only within the shared bound; unresolved findings are failure",
       "role": "ceo"
@@ -9493,7 +9490,8 @@ Revise a small mode package with a coder and focused QA after canonical validati
         "allow_regression",
         "sample_knobs",
         "smoke_timeout_s",
-        "repair_attempts"
+        "repair_attempts",
+        "check_attempt_cap"
       ],
       "notes": "run the new mode once, and compare a revision with the mode it revises; a mode that cannot score is not finished",
       "role": "validation"
@@ -9553,6 +9551,18 @@ Revise a small mode package with a coder and focused QA after canonical validati
         null
       ],
       "value": "",
+      "values": []
+    },
+    "check_attempt_cap": {
+      "default": 8,
+      "description": "hard cap on total check attempts including convergence grants; 0 or a value at or below repair_attempts disables the extension",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        0,
+        null
+      ],
+      "value": 8,
       "values": []
     },
     "check_timeout_s": {
@@ -9696,7 +9706,7 @@ Revise a small mode package with a coder and focused QA after canonical validati
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise a small mode package with a coder and focused QA after canonical validation. Supply revision_of, name and brief. allow_regression=true skips original execution/comparison but still requires revised validation and intent evidence.",
-    "reviewed_schema": "54fbba3bc9fcfcf5107a7af1bd855c1f232de0bdcc487f0d6c4801e5e00f272a"
+    "reviewed_schema": "acc7216ae2c123f0618249e5adfdb09778c49610d0441e75ca06783f6602272d"
   }
 }
 ```

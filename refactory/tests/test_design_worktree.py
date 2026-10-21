@@ -1500,7 +1500,14 @@ def test_the_base_is_prepared_with_its_own_home_not_the_attempts(tmp_path):
 
 
 def test_base_check_cannot_run_stops_unavailable(tmp_path):
-    """A base whose check cannot run stops the run as unavailable without spending an attempt."""
+    """A deterministic base-preparation failure stops the run as unavailable.
+
+    The setup command ``sh setup.sh`` references a file that only exists in
+    the attempt's emission — on the base commit setup.sh is absent, so the
+    base preparation fails with a deterministic exit code (not a signal crash).
+    Per v5 correction 2, deterministic failures stop as unavailable; only
+    signal crashes continue without excusals (tested in test_robustness.py).
+    """
     repo = git_repo(tmp_path / "repo")
     result = DesignMode().run(
         tmp_path / "run",

@@ -927,9 +927,16 @@ def prepare_commands(ctx: Any, found: worktree.Worktree, env: dict[str, str], ho
         prepared = sandbox.run_command(generate, workdir=Path(found.path), timeout_s=timeout,
                                        budget=budget, env=env, home=home, exact_env=True)
         if not prepared.ok:
-            problems.append(f"the generate command `{generate}` failed: "
-                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
-            prep_fail = {"step": generate, "returncode": prepared.returncode, "timed_out": prepared.timed_out}
+            detail_gen = "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip()
+            crashed_gen, sig_label_gen = sandbox.is_signal_crash(prepared)
+            if crashed_gen and sig_label_gen:
+                problems.append(f"the generate command `{generate}` {sig_label_gen}: {detail_gen}")
+            else:
+                problems.append(f"the generate command `{generate}` failed: {detail_gen}")
+            gen_rc = prepared.returncode
+            if crashed_gen and gen_rc is not None and gen_rc > 0:
+                gen_rc = -(gen_rc - 128)
+            prep_fail = {"step": generate, "returncode": gen_rc, "timed_out": prepared.timed_out}
         elif amend:
             edits = worktree.tracked_edits(found)
             if edits:
@@ -939,9 +946,16 @@ def prepare_commands(ctx: Any, found: worktree.Worktree, env: dict[str, str], ho
         prepared = sandbox.run_command(setup, workdir=Path(found.path), timeout_s=timeout,
                                        budget=budget, env=env, home=home, exact_env=True)
         if not prepared.ok:
-            problems.append(f"the setup command `{setup}` failed: "
-                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
-            prep_fail = {"step": setup, "returncode": prepared.returncode, "timed_out": prepared.timed_out}
+            detail_setup = "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip()
+            crashed_setup, sig_label_setup = sandbox.is_signal_crash(prepared)
+            if crashed_setup and sig_label_setup:
+                problems.append(f"the setup command `{setup}` {sig_label_setup}: {detail_setup}")
+            else:
+                problems.append(f"the setup command `{setup}` failed: {detail_setup}")
+            setup_rc = prepared.returncode
+            if crashed_setup and setup_rc is not None and setup_rc > 0:
+                setup_rc = -(setup_rc - 128)
+            prep_fail = {"step": setup, "returncode": setup_rc, "timed_out": prepared.timed_out}
     return found, problems, prep_fail
 
 

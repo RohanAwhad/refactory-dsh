@@ -535,6 +535,9 @@ def check_artifact(ctx: Any) -> str:
             ctx.write_json("test-guardedness.json", guardedness)
     evidence.record(ctx, outcome)
 
+    # Clear base_unavailable at the start of each check attempt (R2).
+    ctx.set_fact("base_unavailable", "")
+
     if result.ok:
         # ── enforce test guardedness (R3, #384 item 1) ──
         unexempted = enforce_guardedness(ctx)
@@ -567,10 +570,17 @@ def check_artifact(ctx: Any) -> str:
             guardedness=guardedness,
         )
         if filtered.base_environment_failure:
-            evidence.stop_unrepairable(
-                "unavailable",
-                f"the base check could not run: {filtered.base_environment_failure}",
-            )
+            if filtered.base_crashed:
+                # R2: a crash — continue without excusals, with the note.
+                note = (f"base comparison unavailable: {filtered.base_environment_failure}; "
+                        "the attempt's results stand without excusals")
+                ctx.set_fact("base_unavailable", note)
+            else:
+                # A deterministic failure — stop as today's base_environment_failure.
+                evidence.stop_unrepairable(
+                    'unavailable',
+                    f"the base check could not run: {filtered.base_environment_failure}",
+                )
 
         # Diagnose unbuilt packages from the worktree's own manifests.
         wt_path = Path(found.path)
@@ -622,6 +632,64 @@ def check_artifact(ctx: Any) -> str:
         # Otherwise prepend the diagnosis so the builder sees it.
         if unbuilt_msg:
             detail = unbuilt_msg + "\n\n" + detail
+
+    # R5: augment feedback with [left: ...] design constraints and broken guarantees.
+    from refactory_dsh import design_contract
+    run_name = str(ctx.facts.get("name") or "")
+    parsed = design_contract.parse(
+        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
+    )
+    left_lines: list[str] = []
+    for site in parsed.rule_sites:
+        if site.get("status") == "left" and site.get("reason"):
+            left_lines.append(
+                f"Design constraint: {site['path']} [left: {site['reason']}] "
+                "— do not change this; fix the tests or callers instead."
+            )
+
+    guarantee_lines: list[str] = []
+    if (found is not None and filtered is not None
+            and not filtered.base_environment_failure
+            and filtered.base_complete
+            and filtered.base_failures is not None):
+        attempt_output = "\n".join((result.stdout or "", result.stderr or "")).strip()
+        attempt_failures = base_check.parse_test_failures(attempt_output)
+        changed_files = set(base_check._all_changed_files(Path(found.path), found.base))
+        for failure in sorted(attempt_failures):
+            if failure not in filtered.base_failures:
+                test_file = base_check._test_file(failure)
+                if test_file and test_file not in changed_files:
+                    guarantee_lines.append(
+                        f"Broken guarantee: {failure} passes on the base but "
+                        "fails on this attempt — the attempt must not break it."
+                    )
+
+    if left_lines or guarantee_lines:
+        detail = "\n".join(left_lines + guarantee_lines) + "\n\n" + detail
+
+    # R6: store failure history and blocker result for convergence detection.
+    attempt_output_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
+    current_failures = sorted(base_check.parse_test_failures(attempt_output_r6))
+    history = list(ctx.facts.get("check_failures_history", []))
+    history.append(current_failures)
+    ctx.set_fact("check_failures_history", history)
+
+    # R6 correction 3: record the blocker result from the full check output,
+    # not the feedback text.  Convergence in repair() reads this.
+    check_command = str(ctx.facts.get("check") or "").strip()
+    blocker_result = base_check.excusal_blocker(
+        check_command, attempt_output_r6, set(current_failures)
+    ) if current_failures else "empty failure set"
+    blocker_history = list(ctx.facts.get("check_blocker_history", []))
+    blocker_history.append(blocker_result)
+    ctx.set_fact("check_blocker_history", blocker_history)
+
+    # Write base_unavailable note into check.txt as well (R2 correction 5).
+    base_note = ctx.facts.get("base_unavailable")
+    if base_note:
+        check_txt = ctx.read_text("check.txt") if ctx.exists("check.txt") else ""
+        if base_note not in check_txt:
+            ctx.write_text("check.txt", check_txt.rstrip() + "\n\n" + base_note + "\n")
 
     return repair(ctx, [detail])
 

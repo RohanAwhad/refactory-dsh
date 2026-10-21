@@ -923,6 +923,82 @@ and `test_run_report_checked_false_when_check_did_not_run`.
 
 ---
 
+### Signal-crash classification at preparation call sites (dm-105)
+
+`run_command` already retries once on direct signals (rc < 0) and on shell-wrapped
+SIGABRT/SIGBUS/SIGSEGV (exit 134/135/139). A new helper `is_signal_crash(result)`
+classifies what survives that retry: it returns `(True, signal_label)` when the
+return code is a direct signal or a shell-wrapped signal in `_AMBIGUOUS_SHELL_EXITS`.
+
+Every preparation call site — install (`worktree.ensure_environment`), generate and
+setup (`repo_change.prepare_commands`), and delivery's post-merge generate and
+merged-tree check (`delivery._regenerate_merge`, `_merge_target`, `_check_merged`)
+— calls `is_signal_crash` after `run_command` returns with `not result.ok`. When
+the crash persists, the call site normalises the `prep_failure` dict's `returncode`
+to a negative signal number so `check_failure_kind` returns `'uncertain'`
+(infrastructure), and the run stops without spending a code attempt. A shell-wrapped
+command whose child aborts and that exits 134 (as `./install.sh` did) is classified
+the same way: `run_command` retries once, and on the second crash `is_signal_crash`
+detects exit 134 in `_AMBIGUOUS_SHELL_EXITS`.
+
+In delivery, a signal crash in `_check_merged` or in `_merge_target`'s generate
+stops the run as infrastructure (raises ValueError) rather than continuing to push
+the reviewed commit. Crash detection uses the structured `infrastructure` flag on
+`MergeResult` and the second element of `_check_merged`'s return tuple, not text
+scanning for "killed by SIG".
+
+### Base comparison discard-and-rebuild on crash (dm-105)
+
+When any step of the base comparison — install, generate, setup or the check
+command itself — crashes (a signal that survives the retry), `run_base_check`
+discards `BASE_CHECK_HOME`, the base worktree and the cache file, and rebuilds
+from scratch. On double failure, the base environment is discarded again (HOME,
+worktree, cache) so the next check gets a fresh start, and the result is returned
+with `environment_failure` set but never cached. The run continues without
+excusals, and the "continued without excusals" note appears in `check.txt`, the
+evidence, and the PR's Verification section.
+
+A setup that leaves a marker in HOME before crashing makes the next check's
+setup exit 1 on reuse. This is exactly the b27a rerun failure. Discarding HOME
+after a double crash prevents it.
+
+Deterministic (non-crash) failures — a non-zero exit that repeats — are cached
+as before. The base is prepared at most twice per attempt, so the check node's
+time limit still holds.
+
+### Rolling convergence (dm-109)
+
+After the regular check attempts are spent, another check attempt is granted each
+time the attempt's parsed failure set is non-empty, a strict subset of the previous
+attempt's set, contains no failure that was not in an earlier attempt, and the
+runner completed fully (excusal_blocker returns None on the recorded check output,
+not the feedback text).  The extension stops the first time the set does not
+strictly shrink.  Hard cap: at most 8 check attempts in total (counting the regular
+ones), controlled by the `check_attempt_cap` knob (default 8, declared on design,
+design_fast, create, edit and their fast variants).  Setting it to 0 or to a value
+at or below the regular check attempts disables the extension.  An empty failure set
+is not progress.  The overall `attempts` cap does not refuse an attempt this rule
+granted: granted attempts are counted separately via `convergence_extras_used`.
+The count of granted attempts and the failure count at each granted attempt are
+recorded in the run and the PR's Verification section.
+
+Runner completion is judged from the `check_blocker_history` fact, which records
+the excusal_blocker result computed from the full check output at each attempt.
+This avoids false refusals when the feedback text (gate_qa's stderr/stdout)
+contains warning lines that excusal_blocker would misinterpret.
+
+### Repair feedback augmentation (dm-109)
+
+When a check fails, the builder's feedback includes: (a) the design's `[left: ...]`
+sites with their reasons, telling the builder not to change them but to fix the
+tests or callers instead; (b) broken guarantees — tests that fail on the attempt,
+are absent from the base's failure set, live in files the attempt did not change,
+and the base completed fully.
+
+In fast modes, the [left] sites and broken guarantees are stored in the
+`focused-check.json` payload's `robustness_notes` field by `focused_check`, and
+prepended to the builder's feedback by `gate_qa`.
+
 ## 15. Independent verification step (dm-84, #400)
 
 Every reviewer in a design run reads design.md, so gaps the design missed
@@ -1053,6 +1129,60 @@ refuse when a new package appears (not only when an existing one changed).
 **Test.** `test_staging_isolation.py:test_two_parallel_creates_both_build_second_register_refuses`,
 `test_reloop_register_does_not_refuse_itself`,
 `test_edit_whose_source_changed_refuses_at_register`.
+
+---
+
+## 24. One note is one ledger entry — heading escape (dm-132)
+
+**The invariant.** One note is always one entry. The recorded source travels with the
+text: a CEO note stays a CEO note, and a user-relayed note stays user-relayed. No
+ledger writer can produce more than one entry from one note.
+
+**The attack vector.** A note body containing `## [...] verdict` or `## [...] correction`
+at the start of a line is parsed as a separate entry by `parse_entries`, because the
+parser starts a new entry at any line beginning with `## [`. A CEO note with a forged
+verdict block becomes a separate verdict entry that `take_verdict` returns through the
+upfront shortcut. A forged correction block becomes a user-relayed requirement.
+
+**The escape scheme.** Lossless backslash byte-stuffing via `splitlines(keepends=True)`.
+On write, every body line whose content (after stripping the trailing line ending) starts
+with zero-or-more backslashes followed by `## [` gains one leading backslash. On read,
+`parse_entries` removes exactly one leading backslash from lines matching `\+## [`.
+
+- `## [X]` → stored `\## [X]` → read removes one `\` → `## [X]`.
+- `\## [X]` → stored `\\## [X]` → read removes one `\` → `\## [X]`.
+- `\\## [X]` → stored `\\\## [X]` → read removes one `\` → `\\## [X]`.
+
+**The separator set.** `str.splitlines()` splits on: `\n`, `\r`, `\r\n`, `\x0b`, `\x0c`,
+`\x1c`, `\x1d`, `\x1e`, `\x85`, `\u2028`, `\u2029`. The writer and reader both use
+`splitlines(keepends=True)`, so they cannot disagree on where a line starts.
+
+**The three write sites.** `Ledger.seed()`, `Ledger.note()`, `Ledger._decision_entry()`.
+All three call `_escape_body()` on the text before writing.
+
+**The single read site.** `parse_entries()` applies `_unescape_line()` to each body line
+before appending. This is the single unescape point for all consumers (14+ call sites
+including `entries()`, `take_verdict()`, `verdicts()`, `render_entries()`,
+`requirements()`, `identity()`, and `agent_delivery.begin()`).
+
+**Verdict single-line check.** `verdict()` rejects a gate or value that spans multiple
+lines under any line separator (not just `\n`), using `len(x.splitlines()) != 1`.
+
+**Both runtimes.** The ledger is shared by the DSH runtime and the walker runtime. Both
+read through `parse_entries` and both write through the three `Ledger` methods, so the
+fix applies to both runtimes.
+
+**The legacy `\## [` edge case.** A pre-existing line starting with `\## [` in an old
+ledger will lose one backslash on read. This is theoretical — no plausible legacy content
+starts with `\## [`.
+
+**Test.** `test_steering.py`: `test_forged_verdict_in_ceo_note_does_not_produce_verdict`
+(parametrized over 6 separators), `test_forged_correction_in_ceo_note_not_a_requirement`
+(parametrized over 6 separators), `test_seed_with_forged_heading_stays_one_entry`,
+`test_decision_entry_body_escaped`, `test_literal_backslash_heading_round_trips`,
+`test_verdict_rejects_multiline_gate_or_value`,
+`test_existing_ledger_parses_unchanged`, `test_legacy_backslash_heading_edge_case`,
+`test_escape_does_not_affect_other_markdown_headings`.
 
 ---
 
