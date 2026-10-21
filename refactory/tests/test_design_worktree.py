@@ -78,7 +78,12 @@ def repo(tmp_path) -> Path:
 
 
 def _answers(*emits: str) -> list[str]:
-    """Every answer a design run needs, in the order its graph asks."""
+    """Every answer a design run needs, in the order its graph asks.
+
+    pick_corrections is a gate (no model answer needed).  When there are no
+    corrections, pick_corrections returns "skip" and apply_corrections does
+    not run.
+    """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
             *REVIEW_ANSWERS]
@@ -1495,7 +1500,14 @@ def test_the_base_is_prepared_with_its_own_home_not_the_attempts(tmp_path):
 
 
 def test_base_check_cannot_run_stops_unavailable(tmp_path):
-    """A base whose check cannot run stops the run as unavailable without spending an attempt."""
+    """A deterministic base-preparation failure stops the run as unavailable.
+
+    The setup command ``sh setup.sh`` references a file that only exists in
+    the attempt's emission — on the base commit setup.sh is absent, so the
+    base preparation fails with a deterministic exit code (not a signal crash).
+    Per v5 correction 2, deterministic failures stop as unavailable; only
+    signal crashes continue without excusals (tested in test_robustness.py).
+    """
     repo = git_repo(tmp_path / "repo")
     result = DesignMode().run(
         tmp_path / "run",
@@ -1522,6 +1534,8 @@ def test_design_named_failure_not_excused(tmp_path):
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
     fixed = render({"test_oblique.py": "def test_oblique():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
 
+    naming_appendix = "\n\n## Tests to fix\n- test_oblique.py::test_oblique\n"
+
     class DesignNamingModel(FakeModel):
         """Intercepts the design_doc prompt to write a design.md that names the test."""
         def complete(self, prompt, *, system="", workdir=None):
@@ -1532,14 +1546,13 @@ def test_design_named_failure_not_excused(tmp_path):
                     existing = design_path.read_text()
                 else:
                     existing = answer
-                design_path.write_text(
-                    existing + "\n\n## Tests to fix\n- test_oblique.py::test_oblique\n"
-                )
+                design_path.write_text(existing + naming_appendix)
             return answer
 
     result = DesignMode().run(
         tmp_path / "run",
-        model=DesignNamingModel(_answers(not_fixed, fixed)),
+        model=DesignNamingModel(_answers(not_fixed, fixed,
+                                         )),
         verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": "the validation test for contract X fails",
               "check": "python -m pytest -q", "target": str(repo)},

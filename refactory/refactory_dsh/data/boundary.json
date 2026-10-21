@@ -9,6 +9,7 @@
     "refactory_dsh.dsh_runtime",
     "refactory_dsh.evaluators",
     "refactory_dsh.events",
+    "refactory_dsh.git_hooks",
     "refactory_dsh.finished_control",
     "refactory_dsh.graph_control",
     "refactory_dsh.harness_check",
@@ -42,6 +43,7 @@
     "refactory_dsh.owned_process",
     "refactory_dsh.package_rewrite",
     "refactory_dsh.paths",
+    "refactory_dsh.pin",
     "refactory_dsh.profiles",
     "refactory_dsh.recovery",
     "refactory_dsh.registry",
@@ -53,6 +55,7 @@
     "refactory_dsh.steering",
     "refactory_dsh.strategies",
     "refactory_dsh.supervisor",
+    "refactory_dsh.target_guard",
     "refactory_dsh.task",
     "refactory_dsh.toolchain",
     "refactory_dsh.tools",
@@ -84,7 +87,6 @@
     "refactory_dsh.readable",
     "refactory_dsh.replay_harness",
     "refactory_dsh.repo_change",
-    "refactory_dsh.target_guard",
     "refactory_dsh.tools.check_recipes",
     "refactory_dsh.tools.export_design_graph",
     "refactory_dsh.tools.gen_api_reference",
@@ -95,25 +97,14 @@
     "refactory_dsh.verification",
     "refactory_dsh.worktree"
   ],
-  "allowed_leaks": {
-    "refactory_dsh.recovery": [
-      {"imports": "refactory_dsh.console", "reason": "function-local import of CONSOLE_FILE; PRs #428/#429 changing file", "until": "prep PR 2"}
-    ],
-    "refactory_dsh.agent_delivery": [
-      {"imports": "refactory_dsh.authoring_evidence", "reason": "function-local import of REVIEWERS and delivery_identity; PRs #428/#429 changing file", "until": "prep PR 2"},
-      {"imports": "refactory_dsh.target_guard", "reason": "top-level import; PRs #428/#429 changing file", "until": "prep PR 2"},
-      {"imports": "refactory_dsh.worktree", "reason": "top-level import; PRs #428/#429 changing file", "until": "prep PR 2"}
-    ],
-    "refactory_dsh.graph_control": [
-      {"imports": "refactory_dsh.delivery", "reason": "function-local import of DELIVER_ENTRY_POINTS; PRs #428/#429 changing file", "until": "prep PR 2"}
-    ]
-  },
+  "allowed_leaks": {},
   "references": [
     {"source": "refactory/refactory_dsh/lowering.py", "target": "refactory_dsh.create_ops", "kind": "string-ref", "reason": "task call name resolved by registry at runtime", "until": "the split — these strings become cross-repo task identifiers"},
     {"source": "refactory/refactory_dsh/lowering.py", "target": "refactory_dsh.fast_ops", "kind": "string-ref", "reason": "task call name resolved by registry at runtime", "until": "the split"},
     {"source": "refactory/refactory_dsh/supervisor.py", "target": "refactory_dsh.interactive", "kind": "subprocess", "reason": "spawns product module as a subprocess", "until": "the split — supervisor will need a configurable module name or the product launcher wraps it"},
     {"source": "packages/bundle/graph/cordis.patch.yml", "target": "refactory_dsh.console", "kind": "yaml-ref", "reason": "core bundle launches product console for steering via steerArgs", "until": "the split — the core bundle's patch must reference the product console by a stable entry point"},
     {"source": "packages/workflow/workflow-spine/src/index.ts", "target": "refactory_dsh.console", "kind": "string-ref", "reason": "error message mentioning console open command — documentation only", "until": "the split"},
+    {"source": "refactory/refactory_dsh/invocations.py", "target": "refactory_dsh.delivery", "kind": "string-ref", "reason": "DELIVER_ENTRY_POINTS names the product callable as a string", "until": "the split — the string becomes a cross-repo entry point identifier"},
     {"source": "refactory/refactory_dsh/registry.py", "target": "refactory_packages", "kind": "discovery", "reason": "imports every refactory_packages.<name> including product default_pack and fix_pack; refuses namespace package, so packs cannot live in two repos as they stand", "until": "the split — registry must support namespace packages or packs move to a shared plugin system"}
   ],
   "refactory_packages": {

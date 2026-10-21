@@ -36,6 +36,89 @@ PLANNING_STEPS = ('research_director', 'pitfalls_researcher', 'strategy_director
 materialise_artifact = repo_change.materialise
 
 
+def noop(ctx: Any) -> dict[str, Any]:
+    """Terminal node: does nothing, returns an empty dict."""
+    return {}
+
+
+def pick_gate_corrections(ctx: Any) -> str:
+    """Gate evaluator: extract gate_strategy corrections from the intent ledger.
+
+    Returns ``"proceed"`` when corrections exist (route to apply_corrections),
+    or ``"skip"`` when there are none (route directly to emit, skipping the
+    agent entirely).
+
+    Reads the ledger only when it exists; a missing ledger means "no corrections".
+    Only constraint entries (not process-scoped) immediately following a
+    gate_strategy proceed verdict are gate corrections.  Process notes and
+    other gates' notes are excluded here, not by the agent prompt.
+    """
+    from refactory_dsh.steering import LEDGER
+
+    ledger_path = Path(ctx.workdir) / LEDGER
+    if not ledger_path.exists():
+        ctx.set_fact("gate_corrections", "")
+        ctx.set_fact("design_corrections_applied", "no corrections (no ledger)")
+        return "skip"
+
+    text = ledger_path.read_text()
+    corrections: list[str] = []
+
+    # Parse the ledger entries: look for verdict entries for gate_strategy
+    # with verdict=proceed, then the immediately following constraint entry.
+    # Split into sections by ## headers
+    sections = _re.split(r'^## ', text, flags=_re.MULTILINE)
+    entries: list[dict[str, str]] = []
+    for section in sections[1:]:  # skip the title
+        lines = section.strip().splitlines()
+        if not lines:
+            continue
+        header = lines[0]
+        body = "\n".join(lines[1:]).strip()
+        entries.append({"header": header, "body": body})
+
+    saw_proceed = False
+    for entry in entries:
+        header = entry["header"]
+        body = entry["body"]
+        # Check for verdict entries: "[timestamp] verdict" or "[timestamp] verdict-use"
+        if "verdict" in header.lower() and "verdict-use" not in header.lower():
+            # Parse the body for gate and verdict
+            gate_match = _re.search(r'^gate:\s*(.+)$', body, _re.MULTILINE)
+            verdict_match = _re.search(r'^verdict:\s*(.+)$', body, _re.MULTILINE)
+            if gate_match and verdict_match:
+                gate = gate_match.group(1).strip()
+                verdict = verdict_match.group(1).strip()
+                saw_proceed = (gate == "gate_strategy" and verdict == "proceed")
+                continue
+        # Check for constraint entries immediately after a gate_strategy proceed
+        if saw_proceed:
+            # Check if this is a constraint (not process-scoped)
+            is_constraint = "constraint" in header.lower() and "(process)" not in header.lower()
+            # Also check it's not a correction from another gate
+            is_correction = "correction" in header.lower()
+            if is_constraint or is_correction:
+                corrections.append(body)
+            saw_proceed = False
+        else:
+            saw_proceed = False
+
+    if not corrections:
+        ctx.set_fact("gate_corrections", "")
+        ctx.set_fact("design_corrections_applied", "no corrections found in ledger")
+        return "skip"
+
+    joined = "\n\n".join(f"- {c}" for c in corrections)
+    ctx.set_fact("gate_corrections", joined)
+
+    # Back up design.md before corrections are applied (gate 5c).
+    design_path = Path(ctx.workdir) / "design.md"
+    if design_path.exists():
+        (Path(ctx.workdir) / "design.md.pre_corrections").write_text(design_path.read_text())
+
+    return "proceed"
+
+
 def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None = None) -> dict[str, Any]:
     """Read the brief, and what the brief says counts as done.
 
@@ -456,6 +539,9 @@ def check_artifact(ctx: Any) -> str:
             ctx.write_json("test-guardedness.json", guardedness)
     evidence.record(ctx, outcome)
 
+    # Clear base_unavailable at the start of each check attempt (R2).
+    ctx.set_fact("base_unavailable", "")
+
     if result.ok:
         # ── enforce test guardedness (R3, #384 item 1) ──
         unexempted = enforce_guardedness(ctx)
@@ -488,10 +574,17 @@ def check_artifact(ctx: Any) -> str:
             guardedness=guardedness,
         )
         if filtered.base_environment_failure:
-            evidence.stop_unrepairable(
-                "unavailable",
-                f"the base check could not run: {filtered.base_environment_failure}",
-            )
+            if filtered.base_crashed:
+                # R2: a crash — continue without excusals, with the note.
+                note = (f"base comparison unavailable: {filtered.base_environment_failure}; "
+                        "the attempt's results stand without excusals")
+                ctx.set_fact("base_unavailable", note)
+            else:
+                # A deterministic failure — stop as today's base_environment_failure.
+                evidence.stop_unrepairable(
+                    'unavailable',
+                    f"the base check could not run: {filtered.base_environment_failure}",
+                )
 
         # Diagnose unbuilt packages from the worktree's own manifests.
         wt_path = Path(found.path)
@@ -543,6 +636,64 @@ def check_artifact(ctx: Any) -> str:
         # Otherwise prepend the diagnosis so the builder sees it.
         if unbuilt_msg:
             detail = unbuilt_msg + "\n\n" + detail
+
+    # R5: augment feedback with [left: ...] design constraints and broken guarantees.
+    from refactory_dsh import design_contract
+    run_name = str(ctx.facts.get("name") or "")
+    parsed = design_contract.parse(
+        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
+    )
+    left_lines: list[str] = []
+    for site in parsed.rule_sites:
+        if site.get("status") == "left" and site.get("reason"):
+            left_lines.append(
+                f"Design constraint: {site['path']} [left: {site['reason']}] "
+                "— do not change this; fix the tests or callers instead."
+            )
+
+    guarantee_lines: list[str] = []
+    if (found is not None and filtered is not None
+            and not filtered.base_environment_failure
+            and filtered.base_complete
+            and filtered.base_failures is not None):
+        attempt_output = "\n".join((result.stdout or "", result.stderr or "")).strip()
+        attempt_failures = base_check.parse_test_failures(attempt_output)
+        changed_files = set(base_check._all_changed_files(Path(found.path), found.base))
+        for failure in sorted(attempt_failures):
+            if failure not in filtered.base_failures:
+                test_file = base_check._test_file(failure)
+                if test_file and test_file not in changed_files:
+                    guarantee_lines.append(
+                        f"Broken guarantee: {failure} passes on the base but "
+                        "fails on this attempt — the attempt must not break it."
+                    )
+
+    if left_lines or guarantee_lines:
+        detail = "\n".join(left_lines + guarantee_lines) + "\n\n" + detail
+
+    # R6: store failure history and blocker result for convergence detection.
+    attempt_output_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
+    current_failures = sorted(base_check.parse_test_failures(attempt_output_r6))
+    history = list(ctx.facts.get("check_failures_history", []))
+    history.append(current_failures)
+    ctx.set_fact("check_failures_history", history)
+
+    # R6 correction 3: record the blocker result from the full check output,
+    # not the feedback text.  Convergence in repair() reads this.
+    check_command = str(ctx.facts.get("check") or "").strip()
+    blocker_result = base_check.excusal_blocker(
+        check_command, attempt_output_r6, set(current_failures)
+    ) if current_failures else "empty failure set"
+    blocker_history = list(ctx.facts.get("check_blocker_history", []))
+    blocker_history.append(blocker_result)
+    ctx.set_fact("check_blocker_history", blocker_history)
+
+    # Write base_unavailable note into check.txt as well (R2 correction 5).
+    base_note = ctx.facts.get("base_unavailable")
+    if base_note:
+        check_txt = ctx.read_text("check.txt") if ctx.exists("check.txt") else ""
+        if base_note not in check_txt:
+            ctx.write_text("check.txt", check_txt.rstrip() + "\n\n" + base_note + "\n")
 
     return repair(ctx, [detail])
 

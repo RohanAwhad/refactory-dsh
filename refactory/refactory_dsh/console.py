@@ -39,8 +39,7 @@ from refactory_dsh.nn import PackageError
 from refactory_dsh.paths import project_root
 from refactory_dsh.steering import SteeringError
 
-#: What the console records about a run it started.
-CONSOLE_FILE = "console.json"
+from refactory_dsh.invocations import CONSOLE_FILE  # canonical in invocations
 
 #: Default place runs live, and the catalogue a GUI lists.
 RUNS_ROOT = Path(".factory/loop")
@@ -254,11 +253,26 @@ def _run_id(mode: str) -> str:
 #: because the console is the Python owner the Web composition reaches, and the
 #: graph bundle names the same module in its own `dataCommand`; each uses an
 #: absolute interpreter path so they do not depend on PATH.
-from refactory_dsh.paths import venv_bin as _venv_bin
-_REFACTORY_PYTHON = str(_venv_bin() / 'python')
-DATA_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.items"
-AGENT_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.agent_delivery"
-GATE_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.steering"
+def _refactory_python() -> str:
+    """The Python interpreter for node commands, resolved at call time.
+
+    After a re-exec under a pin, ``venv_bin()`` returns the pin's ``.venv/bin``,
+    so the commands point to the pin's Python.
+    """
+    from refactory_dsh.paths import venv_bin
+    return str(venv_bin() / 'python')
+
+
+def _data_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.items"
+
+
+def _agent_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.agent_delivery"
+
+
+def _gate_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.steering"
 
 
 def _node_environment(
@@ -350,6 +364,16 @@ def _open_mode(
     from refactory_dsh.lowering import DECLARATIONS, SUFFIX
 
     root = Path(workdir).expanduser().resolve()
+    from refactory_dsh.paths import require_build
+    try:
+        require_build(gui_mode=bool(os.environ.get("REFACTORY_GUI_MODE")))
+    except RuntimeError as exc:
+        # A stale build under the GUI must not refuse the open — warn and
+        # continue.  Main had no check here; the PR adds one, and refusing
+        # every open (including the case where a rebuild was skipped because
+        # a run was live) breaks the GUI workflow.
+        import logging as _clog
+        _clog.getLogger(__name__).warning("%s", exc)
     try:
         name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent,
                                            **({"model_context": model_context} if model_context else {}),
@@ -369,9 +393,9 @@ def _open_mode(
         "graph": str((graphs / f"{name}{SUFFIX}").resolve()),
         "declarations": str((root / DECLARATIONS).resolve()),
         "commandEnv": command_env,
-        "dataCommand": DATA_COMMAND,
-        "agentCommand": AGENT_COMMAND,
-        "gateCommand": GATE_COMMAND,
+        "dataCommand": _data_command(),
+        "agentCommand": _agent_command(),
+        "gateCommand": _gate_command(),
     }
 
 

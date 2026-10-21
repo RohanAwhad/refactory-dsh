@@ -201,22 +201,116 @@ def venv_bin() -> Path:
 SPINE_LIB = Path("packages") / "workflow" / "workflow-spine" / "lib" / "index.js"
 
 
-def require_build(root: Path | None = None) -> None:
-    """Refuse immediately when the spine build is missing.
+def require_build(root: Path | None = None, *, check_only: bool = False, gui_mode: bool = False) -> None:
+    """Refuse immediately when the spine build is missing, and rebuild stale builds.
 
     Running from source (SOURCE_CLI_ENTRY exists) skips the check: tsx
     compiles on the fly. Otherwise, the built bundle at SPINE_LIB must
-    exist. Raises RuntimeError naming ``pnpm run build`` as the fix.
+    exist. After the existence check, the workspace stamp is compared.
+    When stale and ``gui_mode`` is true, ``RuntimeError`` is raised asking
+    the person to restart.  When stale otherwise, ``pnpm run build`` is run
+    under a lock and only when no live run uses the checkout.
+
+    ``gui_mode`` should be passed as ``True`` only by the process that IS the
+    GUI (the console).  Owners, supervisors and other children inherit
+    ``REFACTORY_GUI_MODE`` from the environment but should NOT be refused a
+    rebuild -- they pass the default ``gui_mode=False``.
     """
     selected = Path(root) if root is not None else dsh_root()
     if (selected / SOURCE_CLI_ENTRY).exists():
         return  # running from source; tsx handles it
-    if (selected / SPINE_LIB).exists():
-        return
-    raise RuntimeError(
-        "the workflow-spine build is missing; run `pnpm run build` "
-        "from the checkout root"
-    )
+    if not (selected / SPINE_LIB).exists():
+        raise RuntimeError(
+            "the workflow-spine build is missing; run `pnpm run build` "
+            "from the checkout root"
+        )
+    # ── workspace stamp check ──
+    stamp_file = selected / "packages" / "workflow" / "workflow-spine" / "lib" / ".workspace-stamp"
+    if stamp_file.exists():
+        from refactory_dsh.pin import workspace_stamp as _ws
+        saved_stamp = stamp_file.read_text().strip()
+        current_stamp = _ws(selected)
+        if current_stamp is not None and saved_stamp != current_stamp:
+            if gui_mode:
+                raise RuntimeError(
+                    "the build is stale; restart the GUI to pick up changes — "
+                    "run `pnpm run build` and relaunch"
+                )
+            if check_only:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "the build is stale; run `pnpm run build` to rebuild"
+                )
+                return
+            # Acquire the build lock BEFORE the live-run check to prevent a
+            # TOCTOU race where a run starts between the check and the build.
+            import fcntl
+            import logging
+            build_lock = refactory_home() / "build.lock"
+            build_lock.parent.mkdir(parents=True, exist_ok=True)
+            lock_fd = os.open(str(build_lock), os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                # Re-check stamps after acquiring the lock.
+                saved_stamp2 = stamp_file.read_text().strip()
+                current_stamp2 = _ws(selected)
+                if current_stamp2 is not None and saved_stamp2 != current_stamp2:
+                    # When a live run uses this checkout, warn but do not rebuild.
+                    try:
+                        _refuse_if_live_runs(selected)
+                    except RuntimeError as exc:
+                        logging.getLogger(__name__).warning(str(exc))
+                        return
+                    logging.getLogger(__name__).info("workspace build is stale; rebuilding")
+                    try:
+                        subprocess.run(["pnpm", "run", "build"], cwd=str(selected), check=True)
+                    except subprocess.CalledProcessError:
+                        logging.getLogger(__name__).warning(
+                            "rebuild failed; the build is stale — run `pnpm run build` manually"
+                        )
+            finally:
+                os.close(lock_fd)
+
+
+def _refuse_if_live_runs(checkout: Path) -> None:
+    """Raise if any live run uses this checkout as its driver (pinned or not).
+
+    A run is live when its invocation lock is currently held, checked via
+    :func:`run_ownership.held`.
+    """
+    from refactory_dsh.run_ownership import held as _run_held
+    try:
+        from refactory_dsh.pin import list_pins
+        for pin_data in list_pins():
+            if pin_data.get("driver_checkout") == str(checkout):
+                for run_path_str in pin_data.get("runs", []):
+                    rp = Path(run_path_str)
+                    if rp.exists():
+                        try:
+                            if _run_held(rp):
+                                raise RuntimeError(
+                                    f"the build is stale but a live run ({run_path_str}) uses "
+                                    f"this checkout; run `pnpm run build` manually after the run finishes"
+                                )
+                        except RuntimeError:
+                            raise
+                        except Exception:
+                            pass
+    except (ImportError, RuntimeError) as exc:
+        if isinstance(exc, RuntimeError):
+            raise
+    # Check unpinned runs registered directly on this driver checkout.
+    try:
+        from refactory_dsh.pin import driver_live_runs
+        live = driver_live_runs(checkout)
+        if live:
+            raise RuntimeError(
+                f"the build is stale but a live run ({live[0]}) uses "
+                f"this checkout; run `pnpm run build` manually after the run finishes"
+            )
+    except (ImportError, RuntimeError) as exc:
+        if isinstance(exc, RuntimeError):
+            raise
 
 
 def _source_manifest(root: Path) -> dict[str, str]:

@@ -63,6 +63,11 @@ class DesignMode(Mode):
                 180, "int", lo=10, hi=1800,
                 description="how long the brief's check may run",
             ),
+            "check_attempt_cap": Knob(
+                8, "int", lo=0,
+                description="hard cap on total check attempts including convergence grants; "
+                            "0 or a value at or below check_attempts disables the extension",
+            ),
             "design_review_attempts": Knob(
                 2, "int", lo=1, hi=4,
                 description="how many times the design review may reloop before proceeding "
@@ -414,8 +419,13 @@ class DesignMode(Mode):
             writes=("check.txt", "validation.txt", "authoring-evidence.json", *repo_change.CHECK_WRITES),
             produces=("validation", "check_attempts_used", "review_attempts_used",
                       "attempts_used", "runtime_evidence",
+                      "base_unavailable",
+                      "check_failures_history",
+                      "check_blocker_history",
+                      "convergence_extras_used",
+                      "convergence_granted",
                       *repo_change.CHECK_PRODUCES),
-            knobs=("check_attempts", "check_timeout_s"),
+            knobs=("check_attempts", "check_timeout_s", "check_attempt_cap"),
             max_iterations=8,
             notes="run the brief's check, in a sandbox",
         ))
@@ -591,13 +601,51 @@ class DesignMode(Mode):
         # After the report, so only a run whose reviews passed and whose sign-offs held
         # reaches anything outside it (#350).
         graph.add(Node(
+            "pick_corrections", "gate", evaluator=f"{OPS}:pick_gate_corrections",
+            produces=("gate_corrections", "design_corrections_applied"),
+            max_iterations=2,
+            notes="deterministically extract gate_strategy corrections from the ledger; "
+                  "skip the agent when there are none",
+        ))
+        graph.add(Node(
+            "apply_corrections", "agent",
+            prompt_template=(
+                "Read `design.md` from the run directory.\n\n"
+                "The following gate corrections were given when the design was approved:\n\n"
+                "{{gate_corrections}}\n\n"
+                "Update `design.md`: revise the ## Summary, the "
+                "heading (H1), and the description text in each site entry in ## Rule and sites to "
+                "reflect the corrections. "
+                "Do not change the ## Docs section, the ## Changes section, the "
+                "## Anti-patterns to avoid section, or the document's overall structure. Write the "
+                "updated `design.md`. Return a short message listing what was changed."
+            ),
+            reads=("design.md",),
+            writes=("design.md",),
+            produces=("design_corrections_applied",),
+            notes="revise design.md with gate-strategy corrections before the builder runs",
+        ))
+        graph.add(Node(
             "deliver", "op", call="refactory_dsh.delivery:deliver_design",
             resource_role="final_validation",
             knobs=("check_timeout_s",),
             reads=("design.json", "delivery.md"),
             writes=("delivery.json", "pull-request.md", "design.json"),
-            produces=("delivery_result", "pull_request"),
+            produces=("delivery_result", "pull_request", "delivery_conflict_files",
+                      "delivery_conflict_detail", "delivery_target_tip", "commit"),
             notes="push the run's branch and open its pull request, as the approval gate said",
+        ))
+        graph.add(Node(
+            "delivery_gate", "gate",
+            evaluator="refactory_dsh.delivery:evaluate_delivery_conflicts",
+            max_iterations=8,
+            knobs=("check_attempts",),
+            produces=("validation", "delivery_conflict_reloops"),
+            notes="on authored-file conflict reloop to emit; otherwise proceed to done",
+        ))
+        graph.add(Node(
+            "done", "op", call="refactory_dsh.design_ops:noop",
+            notes="terminal node after delivery succeeds",
         ))
 
         graph.connect("prepare", "research_director")
@@ -615,7 +663,10 @@ class DesignMode(Mode):
         graph.connect("gate_design_review", "design_doc", condition="reloop")
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
-        graph.connect("gate_strategy", "emit", condition="proceed")
+        graph.connect("gate_strategy", "pick_corrections", condition="proceed")
+        graph.connect("pick_corrections", "apply_corrections", condition="proceed")
+        graph.connect("pick_corrections", "emit", condition="skip")
+        graph.connect("apply_corrections", "emit")
         graph.connect("emit", "materialise")
         graph.connect("materialise", "check")
         graph.connect("check", "emit", condition="reloop")
@@ -630,6 +681,9 @@ class DesignMode(Mode):
         graph.connect("gate_overwatch", "overwatch", condition="audit")
         graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("report", "deliver")
+        graph.connect("deliver", "delivery_gate")
+        graph.connect("delivery_gate", "emit", condition="reloop")
+        graph.connect("delivery_gate", "done", condition="proceed")
         from refactory_dsh.verification import wire_verification
         wire_verification(graph)
         from refactory_dsh.authoring_evidence import wire_reviews
