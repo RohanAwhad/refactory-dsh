@@ -197,13 +197,22 @@ def finding_coverage(
 
     for f in findings:
         fid = f['id']
-        # Find lines in section containing this full id (by full-id equality)
+        # Find lines in section containing this full id.
         found_lines: list[str] = []
-        for line in section.splitlines():
-            for parsed_id, _, _ in parse_fnd_id(line):
-                if parsed_id == fid:
+        if FND_ID_RE.search(fid):
+            # FND-style id: match by full-id equality via parse_fnd_id
+            for line in section.splitlines():
+                for parsed_id, _, _ in parse_fnd_id(line):
+                    if parsed_id == fid:
+                        found_lines.append(line)
+                        break
+        else:
+            # Path-as-id (e.g. 'strategy/bar.md'): match by exact string
+            # containment in section lines, so the design can address or
+            # set aside files that carried no FND definitions.
+            for line in section.splitlines():
+                if fid in line:
                     found_lines.append(line)
-                    break
 
         if not found_lines:
             missing.append(fid)
