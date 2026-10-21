@@ -725,7 +725,7 @@ asserts it exceeds 600 s with `check_timeout_s=1800`;
 `test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
 another name that declares the knob gets the envelope.
 
-## 14. Delivery conflict resolution loop (dm-102)
+## 24. Delivery conflict resolution loop (dm-102)
 
 When delivery merges the target branch and an authored file conflicts, the run
 loops back to the builder automatically instead of pushing behind main.
