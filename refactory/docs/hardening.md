@@ -725,6 +725,87 @@ asserts it exceeds 600 s with `check_timeout_s=1800`;
 `test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
 another name that declares the knob gets the envelope.
 
+## 24. Delivery conflict resolution loop (dm-102)
+
+When delivery merges the target branch and an authored file conflicts, the run
+loops back to the builder automatically instead of pushing behind main.
+
+**The loop.** `deliver → delivery_gate → emit → materialise`. When
+`delivery_conflict_files` is non-empty, the `delivery_gate` evaluator records
+the conflict (main's tip, the conflicted paths, and the conflict detail) in
+`pending-merge.json`, sets `validation` with the conflict description, and
+returns `reloop`. The worktree stays clean while the builder works.
+Materialise reads `pending-merge.json`, runs `git merge --no-commit
+<target_tip>`, resolves generated-file conflicts to theirs (main's side),
+applies the emission, and either commits the merge or aborts it — all in one
+deterministic step. Materialise refuses an emission that leaves conflict
+markers. When MERGE_HEAD is present, `git commit` creates a merge commit.
+The check, base comparison and reviews run on the merged result before
+delivery tries again.
+
+**The merge exists only inside materialise.** The delivery gate does not
+start a merge. It records what materialise needs, then the builder works on
+a clean worktree. Materialise's `_commit_emission` is the single place
+where `git merge --no-commit` runs, and its except/finally blocks abort it
+on any failure. A stop at any point — a crash at emit, a refused or empty
+emission, budget exhaustion, or a person's stop — leaves the worktree clean.
+
+**Safety invariants.**
+
+- *Nothing pushes without main.* `_deliver` raises `NotDelivered` on conflict,
+  check_failed or abandoned; `push_head` is never set to `found.head` as a
+  fallback. ls-remote failure on an existing repository raises instead of
+  falling through.
+- *Conflict-marker refusal.* `_commit_emission` scans each emitted file for
+  `<<<<<<<` / `>>>>>>>` (excluding `<<<<<<< SEARCH` / `>>>>>>> REPLACE`) and
+  raises `AttemptRefused` before committing.
+- *Every conflicted path in the emission.* During a merge, `_commit_emission`
+  refuses before writing unless every `--diff-filter=U` path appears in the
+  emission as ===FILE: or ===EDIT:.
+- *Worktree never left mid-merge.* The merge runs only inside
+  `_commit_emission`. On any failure (edit application, marker check, missing
+  path, commit failure), the except block aborts the merge and deletes
+  `pending-merge.json`. `_abort_pending_merge` at the top of the delivery_gate
+  evaluator cleans up any stale merge from a crashed materialise. After a
+  crash between the merge commit and the record write, `require_current`
+  adopts the existing merge commit.
+- *Loop bound.* `delivery_gate` counts reloops against `check_attempts`
+  (default 3). At the limit, it raises an error naming the conflicting files
+  without starting a merge. `graph-control redeliver` accepts a run stopped
+  there.
+- *Delivery advance (dm-116).* When delivery pushes a merge commit, the
+  finally block advances the worktree record (head = merge, base = main's
+  tip) so a later push fast-forwards.
+
+**Tests.**
+
+- `test_two_runs_conflict_reloop`: two runs editing the same function; the
+  second's delivery reloops and the pushed head is a merge commit containing
+  main; the merge's second parent is main's tip.
+- `test_merge_failure_leaves_worktree_clean`: materialise crashes during a
+  merge; no MERGE_HEAD remains.
+- `test_emission_with_conflict_markers_refused`: a file with markers is
+  refused; a normal SEARCH/REPLACE block succeeds.
+- `test_emission_missing_conflicted_path_aborts_merge`: an emission omitting
+  a conflicted path aborts the merge and leaves the worktree clean.
+- `test_materialise_base_moves_to_main_tip`: removing the base-move logic
+  fails this test.
+- `test_base_changed_authored_file_conflict`: delivery does not push on
+  authored-file conflict; conflict facts are set.
+- `test_merged_result_fails_check`: delivery does not push on failed merged
+  check; the worktree is not marked succeeded.
+- `test_edit_resolves_conflict_keeping_mains_lines`: an ===EDIT: block
+  resolves a merge conflict by keeping main's lines.
+- `test_ls_remote_failure_stops_existing_repo`: ls-remote failure on an
+  existing repository stops delivery instead of pushing without main.
+- `test_delivery_advances_worktree_after_merge_push`: after delivery pushes a
+  merge commit, the worktree record advances so a later push fast-forwards.
+- `test_apply_corrections_no_ledger_leaves_design_unchanged`: with no ledger,
+  the agent does not run and design.md is unchanged.
+- `test_unresolved_conflict_stops_after_budget`: a builder that never resolves
+  stops after check_attempts, with a clean worktree (no MERGE_HEAD, no
+  unmerged entries).
+
 ## 17. Goal completion requires a finished run (#347, C1)
 
 Goals were marked complete from runs that had failed before review. `spine.next()`
