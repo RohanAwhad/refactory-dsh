@@ -107,12 +107,22 @@ def test_all_modules_classified():
 # Test 2: static import scan — no core module imports product
 # ---------------------------------------------------------------------------
 def _resolve_module(name: str | None, level: int, package: str) -> str | None:
-    """Resolve an import's module name, handling relative imports."""
+    """Resolve an import's module name, handling relative imports.
+
+    *package* is the importing module's own package: for ``__init__.py``
+    modules, that is the module name itself; for plain modules, it is the
+    parent (``mod.rsplit('.', 1)[0]``).  A ``level == 1`` import (``from .``)
+    stays in *package*; ``level >= 2`` strips ``level - 1`` components.
+    """
     if level > 0:
         parts = package.split(".")
-        if level > len(parts):
-            return None
-        base = ".".join(parts[:-level]) if level < len(parts) else ""
+        strip = level - 1
+        if strip > 0:
+            if strip >= len(parts):
+                return None
+            base = ".".join(parts[:-strip])
+        else:
+            base = ".".join(parts)
         if name:
             return f"{base}.{name}" if base else name
         return base or None
@@ -153,9 +163,14 @@ def test_no_core_imports_product_static():
     boundary = _load_boundary()
     core_modules = set(boundary["core"])
     product_modules = set(boundary["product"])
+    # Include product packs in the product set
+    for pack_name, side in boundary["refactory_packages"].items():
+        if side == "product":
+            product_modules.add(f"refactory_packages.{pack_name}")
     allowed = boundary["allowed_leaks"]
 
     violations: list[str] = []
+    visited: set[str] = set()
 
     # Scan refactory_dsh modules
     for py_path in sorted(_DSH.rglob("*.py")):
@@ -165,8 +180,9 @@ def test_no_core_imports_product_static():
         if mod_name not in core_modules:
             continue
 
+        visited.add(mod_name)
         source = py_path.read_text()
-        package = mod_name.rsplit(".", 1)[0] if "." in mod_name else mod_name
+        package = mod_name if py_path.name == "__init__.py" else (mod_name.rsplit(".", 1)[0] if "." in mod_name else mod_name)
         imports = _extract_imports(source, package)
 
         allowed_for_mod = {
@@ -197,21 +213,59 @@ def test_no_core_imports_product_static():
         pack_dir = _PACKAGES / pack_name
         if not pack_dir.is_dir():
             continue
+        visited.add(f"refactory_packages.{pack_name}")
         for py_path in sorted(pack_dir.rglob("*.py")):
             if "__pycache__" in py_path.parts:
                 continue
             source = py_path.read_text()
             mod_name = _module_name(py_path, _PACKAGES.parent)
-            package = mod_name.rsplit(".", 1)[0] if "." in mod_name else mod_name
+            package = mod_name if py_path.name == "__init__.py" else (mod_name.rsplit(".", 1)[0] if "." in mod_name else mod_name)
             imports = _extract_imports(source, package)
             for imp_name, imp_names in imports:
                 if _is_product(imp_name, product_modules):
                     violations.append(f"{mod_name} (core pack) -> {imp_name}")
+                for sub in imp_names:
+                    full = f"{imp_name}.{sub}"
+                    if _is_product(full, product_modules):
+                        violations.append(f"{mod_name} (core pack) -> {full}")
+
+    # Assert that we visited every classified core module (prevents vacuous pass)
+    expected_core = set(boundary["core"])
+    for pn, ps in pack_class.items():
+        if ps == "core":
+            expected_core.add(f"refactory_packages.{pn}")
+    missed = expected_core - visited
+    assert not missed, (
+        "static scan did not visit these classified core modules "
+        "(files missing or skipped):\n" + "\n".join(f"  {m}" for m in sorted(missed))
+    )
 
     assert not violations, (
         "core modules import product modules outside the allow-list:\n"
         + "\n".join(f"  {v}" for v in sorted(set(violations)))
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 2b: _resolve_module unit test
+# ---------------------------------------------------------------------------
+def test_resolve_module():
+    """_resolve_module handles plain modules and __init__ relative imports correctly."""
+    # level=1 from . import X — stays in current package
+    assert _resolve_module("graph", 1, "refactory_dsh.nn") == "refactory_dsh.nn.graph"
+    assert _resolve_module("validate", 1, "refactory_dsh.nn") == "refactory_dsh.nn.validate"
+    # level=1 from . (no name) — returns the package itself
+    assert _resolve_module(None, 1, "refactory_dsh.nn") == "refactory_dsh.nn"
+    # level=2 from .. import Y — goes up one level
+    assert _resolve_module("invocations", 2, "refactory_dsh.nn") == "refactory_dsh.invocations"
+    # level=2 from .. (no name) — returns parent
+    assert _resolve_module(None, 2, "refactory_dsh.nn") == "refactory_dsh"
+    # level=3 from ... import Z
+    assert _resolve_module("something", 3, "a.b.c") == "a.something"
+    # Absolute import (level=0)
+    assert _resolve_module("os.path", 0, "anything") == "os.path"
+    # level too high
+    assert _resolve_module("x", 4, "a.b") is None
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +275,10 @@ def test_no_core_imports_product_runtime():
     boundary = _load_boundary()
     core_modules = boundary["core"]
     product_modules = set(boundary["product"])
+    # Include product packs in the product set
+    for pack_name, side in boundary["refactory_packages"].items():
+        if side == "product":
+            product_modules.add(f"refactory_packages.{pack_name}")
     allowed = boundary["allowed_leaks"]
 
     # Compute allowed transitive product modules per core module
@@ -232,6 +290,7 @@ def test_no_core_imports_product_runtime():
         return result
 
     violations: list[str] = []
+    probe_failures: list[str] = []
 
     for mod in core_modules:
         script = (
@@ -251,6 +310,7 @@ def test_no_core_imports_product_runtime():
             env={**__import__("os").environ, "PYTHONPATH": str(_ROOT)},
         )
         if result.returncode != 0:
+            probe_failures.append(f"{mod} probe failed (rc={result.returncode}): {result.stderr[:200]}")
             continue
         leaked = [m for m in result.stdout.strip().split(",") if m]
         expected = allowed_product(mod)
@@ -277,7 +337,12 @@ def test_no_core_imports_product_runtime():
                     cwd=str(_ROOT),
                     env={**__import__("os").environ, "PYTHONPATH": str(_ROOT)},
                 )
-                if r2.returncode == 0:
+                if r2.returncode != 0:
+                    probe_failures.append(
+                        f"{allowed_mod} (transitive of {mod}) probe failed "
+                        f"(rc={r2.returncode}): {r2.stderr[:200]}"
+                    )
+                elif r2.returncode == 0:
                     for m in r2.stdout.strip().split(","):
                         if m:
                             expected.add(m)
@@ -309,10 +374,16 @@ def test_no_core_imports_product_runtime():
             env={**__import__("os").environ, "PYTHONPATH": str(_ROOT)},
         )
         if result.returncode != 0:
+            probe_failures.append(f"{mod} (core pack) probe failed (rc={result.returncode}): {result.stderr[:200]}")
             continue
         leaked = [m for m in result.stdout.strip().split(",") if m]
         for m in leaked:
             violations.append(f"{mod} (core pack) loaded {m} at import time")
+
+    assert not probe_failures, (
+        "import probes failed (subprocess errors):\n"
+        + "\n".join(f"  {f}" for f in probe_failures)
+    )
 
     assert not violations, (
         "core modules load product modules at import time:\n"
@@ -321,7 +392,7 @@ def test_no_core_imports_product_runtime():
 
 
 # ---------------------------------------------------------------------------
-# Test 4: allowed leaks still exist (staleness check)
+# Test 4: allowed leaks still exist (staleness check) and reason guard
 # ---------------------------------------------------------------------------
 def test_allowed_leaks_still_exist():
     boundary = _load_boundary()
@@ -345,7 +416,7 @@ def test_allowed_leaks_still_exist():
             continue
 
         source = source_path.read_text()
-        package = core_mod.rsplit(".", 1)[0] if "." in core_mod else core_mod
+        package = core_mod if source_path.name == "__init__.py" else (core_mod.rsplit(".", 1)[0] if "." in core_mod else core_mod)
         imports = _extract_imports(source, package)
         imported_names = set()
         for imp_name, imp_names in imports:
@@ -360,9 +431,12 @@ def test_allowed_leaks_still_exist():
                 for imp in imported_names
             ):
                 stale.append(f"{core_mod} -> {target}: leak no longer exists")
+            # Requirement 4: reason must mention "split"
+            if "split" not in entry.get("reason", "").lower():
+                stale.append(f'{core_mod} -> {target}: reason does not mention the split')
 
     assert not stale, (
-        "stale allow-list entries (leak was fixed but entry remains):\n"
+        "stale or invalid allow-list entries:\n"
         + "\n".join(f"  {s}" for s in stale)
     )
 
@@ -370,6 +444,31 @@ def test_allowed_leaks_still_exist():
 # ---------------------------------------------------------------------------
 # Test 5: non-import references exist and are complete
 # ---------------------------------------------------------------------------
+def _ts_core_package_dirs(boundary: dict[str, Any]) -> list[Path]:
+    """Resolve each declared TypeScript core package name to its directory.
+
+    Asserts every declared core package name resolves to exactly one directory.
+    """
+    core_names = set(boundary["typescript_core_packages"])
+    found: dict[str, list[Path]] = {name: [] for name in core_names}
+    for pkg_json in sorted((_REPO / "packages").rglob("package.json")):
+        if "node_modules" in pkg_json.parts:
+            continue
+        try:
+            data = json.loads(pkg_json.read_text())
+            name = data.get("name", "")
+        except (json.JSONDecodeError, OSError):
+            continue
+        if name in core_names:
+            found[name].append(pkg_json.parent)
+    errors: list[str] = []
+    for name, dirs in found.items():
+        if len(dirs) != 1:
+            errors.append(f"{name}: found {len(dirs)} directories")
+    assert not errors, f"TypeScript core package resolution failures: {errors}"
+    return [dirs[0] for dirs in found.values()]
+
+
 def test_references_exist_and_complete():
     boundary = _load_boundary()
     core_modules = set(boundary["core"])
@@ -443,10 +542,7 @@ def test_references_exist_and_complete():
                     missing.append(f"{rel_path} references {pm}")
 
     # Scan core TS source files for product module/package references
-    ts_core_dirs = [
-        _REPO / "packages" / "workflow" / "workflow-spine" / "src",
-        _REPO / "packages" / "bundle" / "graph" / "src",
-    ]
+    ts_core_dirs = [d / "src" for d in _ts_core_package_dirs(boundary)]
     for ts_dir in ts_core_dirs:
         if not ts_dir.is_dir():
             continue
@@ -476,10 +572,7 @@ def test_typescript_boundary():
     violations: list[str] = []
 
     # Check core TS package.json files
-    core_pkg_dirs = [
-        _REPO / "packages" / "workflow" / "workflow-spine",
-        _REPO / "packages" / "bundle" / "graph",
-    ]
+    core_pkg_dirs = _ts_core_package_dirs(boundary)
     for pkg_dir in core_pkg_dirs:
         pkg_json = pkg_dir / "package.json"
         if not pkg_json.exists():
@@ -492,10 +585,7 @@ def test_typescript_boundary():
                     violations.append(f"{pkg_dir.name}/package.json {dep_field} -> {dep_name}")
 
     # Check core TS source files for product package imports
-    ts_core_dirs = [
-        _REPO / "packages" / "workflow" / "workflow-spine" / "src",
-        _REPO / "packages" / "bundle" / "graph" / "src",
-    ]
+    ts_core_dirs = [d / "src" for d in core_pkg_dirs]
     for ts_dir in ts_core_dirs:
         if not ts_dir.is_dir():
             continue
