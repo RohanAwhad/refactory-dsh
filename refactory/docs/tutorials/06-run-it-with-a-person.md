@@ -41,10 +41,7 @@ uv run refactory package smoke review_pack/review
 ```
 
 ```
-{"error": "approve: ExecutionError: gate 'approve' is answered by 'user' and this run
-has no verdict for it. A headless run cannot answer a gate meant for a person or for
-an agent; pass one in RunContext.verdicts (an interactive run collects a fresh
-answer) or make the gate `fn`."}
+{"error": "gate 'approve' is waiting for a person"}
 ```
 
 That stop is the point: an invented verdict is indistinguishable in the artifacts
