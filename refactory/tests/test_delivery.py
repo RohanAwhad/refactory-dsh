@@ -3411,6 +3411,9 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     ]
 
     model = FakeModel(answers)
+    # The constraint is about the design, so the audit cites the corrected
+    # design's heading rather than a code site.
+    model._siteless_clause = {"kind": "design", "heading": "Summary"}
     result = DesignMode().run(
         run, model=model,
         verdicts={"gate_strategy": "proceed"},
