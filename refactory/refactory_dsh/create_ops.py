@@ -2251,17 +2251,18 @@ def gate_qa(ctx: Any) -> str:
                 reason += "\n" + note_text
     # ── per-changed-function entry validation (design mode only) ──
     deliverable_kind_value = str(ctx.facts.get("deliverable_kind", ""))
+    advisory = ""
     if not reason and deliverable_kind_value == "repository_change":
-        from refactory_dsh.authoring_evidence import check_review_questions
+        from refactory_dsh.authoring_evidence import (
+            advisory_repo_questions, check_review_questions, repo_question_rerun_due)
+        from refactory_dsh.changed_functions import review_functions
         import json as _json
 
         changed_fns: list[str] = []
         if ctx.exists("changed-functions.json"):
             try:
-                cf_data = _json.loads(ctx.read_text("changed-functions.json"))
-                changed_fns = [entry["function"] for entry in cf_data
-                               if isinstance(entry, dict) and "function" in entry]
-            except (ValueError, KeyError):
+                changed_fns = review_functions(_json.loads(ctx.read_text("changed-functions.json")))
+            except ValueError:
                 pass
 
         if changed_fns:
@@ -2280,31 +2281,20 @@ def gate_qa(ctx: Any) -> str:
                 rq_problems.extend(
                     check_review_questions(review_text_content, changed_fns, reviewer_name))
             if rq_problems:
-                # Check re-run budget
-                reruns_used = int(ctx.facts.get("review_reruns_used", 0)) + 1
-                ctx.set_fact("review_reruns_used", reruns_used)
-                if reruns_used <= 2:
-                    rq_report = "\n".join(rq_problems)
+                rq_report = "\n".join(rq_problems)
+                if repo_question_rerun_due(ctx, "review_reruns_used"):
                     ctx.write_text("reviews/qa-gate.txt", rq_report + "\n")
                     ctx.set_fact("qa_gate", rq_report)
                     return Verdict("review_reloop", rq_report)
-                else:
-                    # At the limit, raise naming the node and function
-                    rq_report = "\n".join(rq_problems)
-                    raise ValueError(
-                        f"repository-question re-runs exhausted after {reruns_used} attempt(s): {rq_report}"
-                    )
+                advisory = advisory_repo_questions(rq_problems)
 
     if reason:
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
         ctx.set_fact("qa_gate", reason)
         return repair(ctx, [reason], kind='review') if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
-    if scope_notes:
-        ctx.write_text("reviews/qa-gate.txt",
-                       "proceed: no blocking finding\n" + "\n".join(scope_notes) + "\n")
-    else:
-        ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
-    ctx.set_fact("qa_gate", "(the reviews found nothing blocking)")
+    notes = "".join(f"{note}\n" for note in (*scope_notes, advisory) if note)
+    ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n" + notes)
+    ctx.set_fact("qa_gate", "(the reviews found nothing blocking)" + (f"\n{advisory}" if advisory else ""))
     ctx.write_text("validation.txt", "(reviews passed)\n")
     ctx.set_fact("validation", "(reviews passed)")
     return "proceed"
