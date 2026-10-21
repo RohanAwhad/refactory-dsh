@@ -7497,9 +7497,19 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "verifier"
     },
     {
+      "condition": "reloop",
+      "source": "check_design_claims",
+      "target": "design_doc"
+    },
+    {
+      "condition": "proceed",
+      "source": "check_design_claims",
+      "target": "design_review"
+    },
+    {
       "condition": null,
       "source": "design_doc",
-      "target": "design_review"
+      "target": "check_design_claims"
     },
     {
       "condition": null,
@@ -7658,6 +7668,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "user": false
     },
     {
+      "id": "check_design_claims",
+      "user": false
+    },
+    {
       "id": "gate_design_review",
       "user": false
     },
@@ -7700,6 +7714,17 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       ],
       "notes": "run the brief's check, in a sandbox",
       "role": "validation"
+    },
+    {
+      "call": "refactory_dsh.design_claims:check_design_claims",
+      "gate_kind": "fn",
+      "id": "check_design_claims",
+      "kind": "gate",
+      "knobs": [
+        "claims_check_attempts"
+      ],
+      "notes": "deterministic check: cited paths exist, quoted lines match, named identifiers are present; reloop to design_doc on mismatch",
+      "role": "ceo"
     },
     {
       "call": "",
@@ -7812,7 +7837,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "gate_strategy",
       "kind": "gate",
       "knobs": [],
-      "notes": "Approve the design before the artifact is written? It is in design.md in the run directory. Then, {{delivery}}; delivery.md there says more. Answer proceed to build and deliver it that way, or reloop to have the plan redone.\n\n## Unresolved design review findings\n{{design_review_findings}}",
+      "notes": "{{design_review_status}}\n\nApprove the design before the artifact is written? It is in design.md in the run directory. Then, {{delivery}}; delivery.md there says more. Answer proceed to build and deliver it that way, or reloop to have the plan redone.\n\n## Unresolved design review findings\n{{design_review_findings}}",
       "role": "ceo"
     },
     {
@@ -8013,6 +8038,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         1800
       ],
       "value": 180,
+      "values": []
+    },
+    "claims_check_attempts": {
+      "default": 2,
+      "description": "how many times the claims checker may reloop before passing mismatches to the review",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        4
+      ],
+      "value": 2,
       "values": []
     },
     "design_review_attempts": {
@@ -8238,7 +8275,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "3ba60b86e417b0463a1c8fb390964085856f1e2eeebb689f91e59fc1038acffe"
+    "reviewed_schema": "cee5a91ed5f0003a96954c8d56c7a10cbdf67a154c617a9944949197eab8a05e"
   }
 }
 ```

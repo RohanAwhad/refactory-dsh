@@ -8,6 +8,12 @@
       "max_iterations": 8,
       "_type": "GateNode"
     },
+    "check_design_claims": {
+      "id": "check_design_claims",
+      "evaluator_type": "fn",
+      "max_iterations": 4,
+      "_type": "GateNode"
+    },
     "code_reviewer": {
       "id": "code_reviewer",
       "role": "ceo",
@@ -177,8 +183,18 @@
       "condition": "proceed"
     },
     {
-      "source": "design_doc",
+      "source": "check_design_claims",
+      "target": "design_doc",
+      "condition": "reloop"
+    },
+    {
+      "source": "check_design_claims",
       "target": "design_review",
+      "condition": "proceed"
+    },
+    {
+      "source": "design_doc",
+      "target": "check_design_claims",
       "condition": null
     },
     {
