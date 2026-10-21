@@ -84,6 +84,45 @@ def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
+def _escape_body(text: str) -> str:
+    """Escape entry-boundary markers so one write is always one entry.
+
+    Splits on ``splitlines(keepends=True)`` — the same split ``parse_entries``
+    uses — so the writer and parser agree on every line boundary Python
+    recognises.  A line whose content (after stripping the line ending) starts
+    with zero-or-more backslashes followed by ``## [`` gains one leading
+    backslash (byte-stuffing).
+    """
+    if not text:
+        return text
+    parts = text.splitlines(True)
+    out: list[str] = []
+    for part in parts:
+        content = part
+        # Strip exactly the terminator splitlines(keepends=True) left.
+        for ending in ("\r\n", "\r", "\n", "\x0b", "\x0c", "\x1c", "\x1d",
+                       "\x1e", "\x85", "\u2028", "\u2029"):
+            if content.endswith(ending):
+                content = content[: -len(ending)]
+                break
+        if content.lstrip("\\").startswith("## ["):
+            out.append("\\" + part)
+        else:
+            out.append(part)
+    return "".join(out)
+
+
+def _unescape_line(line: str) -> str:
+    """Remove one level of byte-stuffing from a body line.
+
+    Called inside ``parse_entries`` on each body line before appending, so all
+    consumers see the original text.
+    """
+    if line.startswith("\\") and line.lstrip("\\").startswith("## ["):
+        return line[1:]
+    return line
+
+
 class Ledger:
     """The run's record of what was asked for, and everything said since.
 
@@ -126,7 +165,7 @@ class Ledger:
                 "to thereafter, so seeding it again would put a second origin in it"
             )
         ledger.root.mkdir(parents=True, exist_ok=True)
-        ledger.path.write_text(f"# User Intent Ledger\n\n## [{_now()}] Initial Idea\n{text}\n")
+        ledger.path.write_text(f"# User Intent Ledger\n\n## [{_now()}] Initial Idea\n{_escape_body(text)}\n")
         return ledger
 
     def note(self, kind: str, text: str, *, scope: str = "product",
@@ -156,7 +195,7 @@ class Ledger:
         scope_suffix = " (process)" if scope == "process" else ""
         source_suffix = " (ceo)" if source == "ceo" else ""
         with self.path.open("a") as handle:
-            handle.write(f"\n## [{entry['at']}] {kind}{scope_suffix}{source_suffix}\n{body}\n")
+            handle.write(f"\n## [{entry['at']}] {kind}{scope_suffix}{source_suffix}\n{_escape_body(body)}\n")
         return entry
 
     def verdict(
@@ -170,7 +209,7 @@ class Ledger:
         is standing authorization, as explicitly supplied by ``ceo --approve``.
         """
         gate, value = (gate or "").strip(), (value or "").strip()
-        if not gate or not value or "\n" in gate or "\n" in value:
+        if not gate or not value or len(gate.splitlines()) != 1 or len(value.splitlines()) != 1:
             raise SteeringError("a verdict needs a single-line gate and nonempty value")
         if approval and answered:
             raise SteeringError("an interactive answer is not standing approval")
@@ -197,7 +236,7 @@ class Ledger:
         self.root.mkdir(parents=True, exist_ok=True)
         body = "".join(f"{key}: {value}\n" for key, value in entry.items() if key not in ("at", "kind"))
         with self.path.open("a") as handle:
-            handle.write(f"\n## [{entry['at']}] {entry['kind']}\n{body}")
+            handle.write(f"\n## [{entry['at']}] {entry['kind']}\n{_escape_body(body)}")
 
     @staticmethod
     def _fields(entry: dict[str, Any]) -> dict[str, str]:
@@ -339,7 +378,7 @@ def parse_entries(text: str) -> list[dict[str, Any]]:
             current = {"at": stamp, "kind": kind, "text": "", "scope": scope, "source": source}
             body = []
         elif current is not None:
-            body.append(line)
+            body.append(_unescape_line(line))
     if current is not None:
         current["text"] = "\n".join(body).strip()
         found.append(current)

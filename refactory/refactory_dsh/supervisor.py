@@ -148,7 +148,22 @@ def _build_owner_argv(root: Path) -> tuple[list[str], str]:
     config = json.loads((root / '.refactory/run-config.json').read_text())
     mode = config['mode']
     project = config.get('project', '.')
-    argv = [sys.executable, '-m', 'refactory_dsh.interactive', mode,
+    # ── pin: use the pin's interpreter when the driver has drifted ──
+    python_exe = sys.executable
+    driver = config.get('driver')
+    if driver is not None:
+        if driver.get('pin_checkout'):
+            from refactory_dsh.pin import pin_python
+            pin_py = pin_python(Path(driver['pin_checkout']))
+            if pin_py.exists():
+                python_exe = str(pin_py)
+        else:
+            from refactory_dsh import pin as _pin
+            _drift = _pin.detect_drift(config)
+            if _drift is not None:
+                _pin_checkout = _pin.resolve_pin(driver, run_dir=root)
+                python_exe = str(_pin.pin_python(_pin_checkout))
+    argv = [python_exe, '-m', 'refactory_dsh.interactive', mode,
             '--workdir', str(root), '--headless', '--resume']
     return argv, project
 
@@ -294,9 +309,23 @@ def supervise(root: Path, *, max_respawns: int | None = None,
             if pending is not None:
                 # A person's explicit request — reset counter and start a new child
                 respawn_count = 0
+                # Detect drift BEFORE prepare() so a moved driver creates a pin
+                # instead of prepare() refusing with "configuration changed".
+                # Pass the driver checkout so prepare() skips only driver
+                # fingerprints; non-driver changes still refuse.
+                _skip_drv_sv: str | None = None
+                try:
+                    _sv_config = json.loads((root / '.refactory/run-config.json').read_text())
+                    from refactory_dsh import pin as _sv_pin
+                    if _sv_pin.detect_drift(_sv_config) is not None:
+                        _sv_pin.resolve_pin(_sv_config['driver'], run_dir=root)
+                        _skip_drv_sv = _sv_config.get('driver', {}).get('checkout')
+                except Exception:
+                    pass
                 try:
                     recovery.prepare(root, name,
-                                     acknowledge_failed=bool(pending.get('acknowledge_failed')))
+                                     acknowledge_failed=bool(pending.get('acknowledge_failed')),
+                                     skip_driver_paths=_skip_drv_sv)
                 except ValueError as exc:
                     reason = str(exc)
                     pid_for_record = child.pid if child is not None else os.getpid()
@@ -341,9 +370,21 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                                      reason=reason)
                 return last_exit_code if inline else None
 
+            # Detect drift before prepare() so a moved driver does not refuse.
+            # Pass the driver checkout so prepare() skips only driver
+            # fingerprints; non-driver changes still refuse.
+            _skip_drv_sv2: str | None = None
+            try:
+                _sv_config2 = json.loads((root / '.refactory/run-config.json').read_text())
+                from refactory_dsh import pin as _sv_pin2
+                if _sv_pin2.detect_drift(_sv_config2) is not None:
+                    _sv_pin2.resolve_pin(_sv_config2['driver'], run_dir=root)
+                    _skip_drv_sv2 = _sv_config2.get('driver', {}).get('checkout')
+            except Exception:
+                pass
             # Try recovery.prepare() to distinguish transient vs deterministic
             try:
-                recovery.prepare(root, name)
+                recovery.prepare(root, name, skip_driver_paths=_skip_drv_sv2)
             except ValueError as exc:
                 # Deterministic refusal — do not retry
                 reason = str(exc)

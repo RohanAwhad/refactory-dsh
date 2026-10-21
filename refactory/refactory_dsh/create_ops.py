@@ -1613,9 +1613,51 @@ def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
         ctx.set_fact("check_attempts_used", kind_used)
         kind_limit = int(ctx.knob("check_attempts", ctx.knob("attempts", 3)))
         if kind_used >= kind_limit:
-            raise ValueError(
-                f"check attempts exhausted after {kind_used} check failure(s): {feedback}"
-            )
+            # R6: rolling convergence — grant another check attempt each time
+            # the failure set is a non-empty strict subset of the previous
+            # one, with no new failures and the runner completed fully.
+            # Repeats at every attempt past the regular limit, up to
+            # check_attempt_cap total check attempts.  Replaces the old
+            # one-shot convergence_extra_attempts knob.
+            from refactory_dsh import base_check
+            history = list(ctx.facts.get("check_failures_history", []))
+            extras_used = int(ctx.facts.get("convergence_extras_used", 0))
+            cap = int(ctx.knob("check_attempt_cap", 8))
+            # 0 or a value at or below the regular attempts disables extension.
+            granted = False
+            if cap > kind_limit and kind_used < cap and len(history) >= 2:
+                current = set(history[-1])
+                previous = set(history[-2])
+                # R6 correction 3: judge from the recorded check output,
+                # not the feedback text.  The check_blocker_history fact
+                # records the excusal_blocker result computed from the full
+                # check output at each attempt.
+                blocker_history = list(ctx.facts.get("check_blocker_history", []))
+                if blocker_history:
+                    blocker = blocker_history[-1]
+                else:
+                    # Fallback: compute from feedback (first attempt).
+                    check_command = str(ctx.facts.get("check") or "").strip()
+                    blocker = base_check.excusal_blocker(
+                        check_command, feedback, current
+                    ) if current else "empty failure set"
+                all_prior = set().union(*(set(h) for h in history[:-1]))
+                if (current
+                        and current < previous
+                        and current <= all_prior
+                        and blocker is None):
+                    ctx.set_fact("convergence_extras_used", extras_used + 1)
+                    ctx.set_fact("convergence_granted", True)
+                    granted = True
+            if not granted:
+                if cap > kind_limit and kind_used >= cap:
+                    raise ValueError(
+                        f"check attempt cap ({cap}) reached after {kind_used} "
+                        f"check attempt(s): {feedback}"
+                    )
+                raise ValueError(
+                    f"check attempts exhausted after {kind_used} check failure(s): {feedback}"
+                )
     else:
         kind_used = int(ctx.facts.get("review_attempts_used", 0)) + 1
         ctx.set_fact("review_attempts_used", kind_used)
@@ -1626,7 +1668,9 @@ def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
             )
 
     overall_limit = int(ctx.knob("attempts", ctx.knob("check_attempts", 3)))
-    if used >= overall_limit:
+    # R6: apply the granted extra attempt to the overall cap too.
+    extras_granted = int(ctx.facts.get("convergence_extras_used", 0))
+    if used >= overall_limit + extras_granted:
         raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
     return Verdict("reloop", feedback)
 

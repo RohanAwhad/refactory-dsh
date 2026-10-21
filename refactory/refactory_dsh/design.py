@@ -63,6 +63,11 @@ class DesignMode(Mode):
                 180, "int", lo=10, hi=1800,
                 description="how long the brief's check may run",
             ),
+            "check_attempt_cap": Knob(
+                8, "int", lo=0,
+                description="hard cap on total check attempts including convergence grants; "
+                            "0 or a value at or below check_attempts disables the extension",
+            ),
             "design_review_attempts": Knob(
                 2, "int", lo=1, hi=4,
                 description="how many times the design review may reloop before proceeding "
@@ -72,6 +77,11 @@ class DesignMode(Mode):
                 2, "int", lo=1, hi=5,
                 description="how many times the pitfalls step may be retried when its "
                             "output is invalid",
+            ),
+            "claims_check_attempts": Knob(
+                2, "int", lo=1, hi=4,
+                description="how many times the claims checker may reloop before "
+                            "passing mismatches to the review",
             ),
             # As in create: the walker passes these in the run's task, and a run on
             # DSH carries them as knobs.
@@ -94,7 +104,8 @@ class DesignMode(Mode):
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
                       *repo_change.produces(), "delivery", "delivery_plan",
-                      "has_pitfalls_step", "pitfalls", "pitfalls_review"),
+                      "has_pitfalls_step", "pitfalls", "pitfalls_review",
+                      "claims_check_feedback", "claims_check_attempts_used", "design_review_status"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -267,6 +278,13 @@ class DesignMode(Mode):
                 "When claiming what the brief says, quote the brief's words verbatim. "
                 "The document holds only the final result — no 'Wait—', 'Actually', "
                 "'Let me reconsider' or other working-out.\n\n"
+                "For claims about existing code, use the subject-at-citation-quote form: "
+                "`name()` at `path/to/file.py:42`: `def name(self):`. The subject "
+                "(the backtick span before `at`) names the function, attribute or class "
+                "the claim is about; the quote (the backtick span after `:`) is the line "
+                "content at that position. This form is mechanically checked before the "
+                "design review runs. Bare citations without a quoted line (for files "
+                "being added, or site markers) are fine as-is.\n\n"
                 + design_contract.prompt_contract()
                 + "\n\n"
                 "9. `## Anti-patterns to avoid` (when the research produced pitfalls) — "
@@ -275,12 +293,25 @@ class DesignMode(Mode):
                 "section (§ heading name) that handles it, or set it aside with "
                 "`[set-aside: <reason>]`. A high-risk pitfall that is missing or set "
                 "aside without a reason fails the contract.\n"
+                "\n\n## Claims check feedback\n{{claims_check_feedback}}"
             ),
             reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt",
                    "pitfalls.json"),
             writes=("design.md",),
             produces=("design",),
             notes="write the design document the code is written from",
+        ))
+        graph.add(Node(
+            "check_design_claims", "gate",
+            evaluator="refactory_dsh.design_claims:check_design_claims",
+            reads=("design.md",),
+            writes=("reviews/design-review-feedback.txt",),
+            produces=("claims_check_attempts_used", "claims_check_feedback",
+                      "design_review_feedback"),
+            knobs=("claims_check_attempts",),
+            max_iterations=4,
+            notes="deterministic check: cited paths exist, quoted lines match, "
+                  "named identifiers are present; reloop to design_doc on mismatch",
         ))
         # design-v2 puts the person's approval on the design document, after the plan
         # exists and before any code does.
@@ -348,7 +379,8 @@ class DesignMode(Mode):
                    "pitfalls.json"),
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
-                      "design_review_findings", "pitfall_coverage"),
+                      "design_review_findings", "pitfall_coverage",
+                      "design_review_status"),
             knobs=("design_review_attempts",),
             max_iterations=4,
             notes="proceed on PASS with no findings; reloop to design_doc otherwise; "
@@ -362,6 +394,7 @@ class DesignMode(Mode):
             # (the spine's question card, the panel, the CEO's view), so the card itself
             # names the repository a run would create, and who can see it.
             notes=(
+                "{{design_review_status}}\n\n"
                 "Approve the design before the artifact is written? It is in design.md "
                 "in the run directory. Then, {{delivery}}; delivery.md there says more. "
                 "Answer proceed to build and deliver it that way, or reloop to have the "
@@ -398,8 +431,13 @@ class DesignMode(Mode):
             writes=("check.txt", "validation.txt", "authoring-evidence.json", *repo_change.CHECK_WRITES),
             produces=("validation", "check_attempts_used", "review_attempts_used",
                       "attempts_used", "runtime_evidence",
+                      "base_unavailable",
+                      "check_failures_history",
+                      "check_blocker_history",
+                      "convergence_extras_used",
+                      "convergence_granted",
                       *repo_change.CHECK_PRODUCES),
-            knobs=("check_attempts", "check_timeout_s"),
+            knobs=("check_attempts", "check_timeout_s", "check_attempt_cap"),
             max_iterations=8,
             notes="run the brief's check, in a sandbox",
         ))
@@ -575,13 +613,51 @@ class DesignMode(Mode):
         # After the report, so only a run whose reviews passed and whose sign-offs held
         # reaches anything outside it (#350).
         graph.add(Node(
+            "pick_corrections", "gate", evaluator=f"{OPS}:pick_gate_corrections",
+            produces=("gate_corrections", "design_corrections_applied"),
+            max_iterations=2,
+            notes="deterministically extract gate_strategy corrections from the ledger; "
+                  "skip the agent when there are none",
+        ))
+        graph.add(Node(
+            "apply_corrections", "agent",
+            prompt_template=(
+                "Read `design.md` from the run directory.\n\n"
+                "The following gate corrections were given when the design was approved:\n\n"
+                "{{gate_corrections}}\n\n"
+                "Update `design.md`: revise the ## Summary, the "
+                "heading (H1), and the description text in each site entry in ## Rule and sites to "
+                "reflect the corrections. "
+                "Do not change the ## Docs section, the ## Changes section, the "
+                "## Anti-patterns to avoid section, or the document's overall structure. Write the "
+                "updated `design.md`. Return a short message listing what was changed."
+            ),
+            reads=("design.md",),
+            writes=("design.md",),
+            produces=("design_corrections_applied",),
+            notes="revise design.md with gate-strategy corrections before the builder runs",
+        ))
+        graph.add(Node(
             "deliver", "op", call="refactory_dsh.delivery:deliver_design",
             resource_role="final_validation",
             knobs=("check_timeout_s",),
             reads=("design.json", "delivery.md"),
             writes=("delivery.json", "pull-request.md", "design.json"),
-            produces=("delivery_result", "pull_request"),
+            produces=("delivery_result", "pull_request", "delivery_conflict_files",
+                      "delivery_conflict_detail", "delivery_target_tip", "commit"),
             notes="push the run's branch and open its pull request, as the approval gate said",
+        ))
+        graph.add(Node(
+            "delivery_gate", "gate",
+            evaluator="refactory_dsh.delivery:evaluate_delivery_conflicts",
+            max_iterations=8,
+            knobs=("check_attempts",),
+            produces=("validation", "delivery_conflict_reloops"),
+            notes="on authored-file conflict reloop to emit; otherwise proceed to done",
+        ))
+        graph.add(Node(
+            "done", "op", call="refactory_dsh.design_ops:noop",
+            notes="terminal node after delivery succeeds",
         ))
 
         graph.connect("prepare", "research_director")
@@ -594,12 +670,17 @@ class DesignMode(Mode):
         graph.connect("gate_pitfalls", "strategy_director", condition="proceed")
         graph.connect("strategy_director", "synthesize_strategy")
         graph.connect("synthesize_strategy", "design_doc")
-        graph.connect("design_doc", "design_review")
+        graph.connect("design_doc", "check_design_claims")
+        graph.connect("check_design_claims", "design_review", condition="proceed")
+        graph.connect("check_design_claims", "design_doc", condition="reloop")
         graph.connect("design_review", "gate_design_review")
         graph.connect("gate_design_review", "design_doc", condition="reloop")
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
-        graph.connect("gate_strategy", "emit", condition="proceed")
+        graph.connect("gate_strategy", "pick_corrections", condition="proceed")
+        graph.connect("pick_corrections", "apply_corrections", condition="proceed")
+        graph.connect("pick_corrections", "emit", condition="skip")
+        graph.connect("apply_corrections", "emit")
         graph.connect("emit", "materialise")
         graph.connect("materialise", "check")
         graph.connect("check", "emit", condition="reloop")
@@ -614,6 +695,9 @@ class DesignMode(Mode):
         graph.connect("gate_overwatch", "overwatch", condition="audit")
         graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("report", "deliver")
+        graph.connect("deliver", "delivery_gate")
+        graph.connect("delivery_gate", "emit", condition="reloop")
+        graph.connect("delivery_gate", "done", condition="proceed")
         from refactory_dsh.verification import wire_verification
         wire_verification(graph)
         from refactory_dsh.authoring_evidence import wire_reviews
@@ -706,6 +790,17 @@ def main(argv: list[str] | None = None) -> int:
             "facts": {key: value for key, value in run.facts.items() if key in
                       ("name", "files", "artifact", "check", "validation")},
         }, indent=2, default=str))
+        if not run.exit_ok:
+            try:
+                resume_mode = DesignFastMode() if args.fast else DesignMode()
+                node = resume_mode.graph().nodes.get(str(run.error or "").split(":", 1)[0])
+                if node is not None and node.kind == "gate" and node.gate_kind == "user":
+                    from refactory_dsh.design_ops import design_review_status
+                    drs = design_review_status(run.facts or {})
+                    if drs:
+                        print(drs, file=sys.stderr)
+            except Exception:
+                pass
         return 0 if run.exit_ok else 2
 
     from refactory_dsh.fast import DesignFastMode
@@ -746,6 +841,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not result.exit_ok:
         print(json.dumps({"error": result.error}), file=sys.stderr)
+        # dm-127: show design review status when stopped at a user gate.
+        try:
+            node = mode.graph().nodes.get(str(result.error or "").split(":", 1)[0])
+            if node is not None and node.kind == "gate" and node.gate_kind == "user":
+                from refactory_dsh.design_ops import design_review_status
+                drs = design_review_status(result.facts or {})
+                if drs:
+                    print(drs, file=sys.stderr)
+        except Exception:
+            pass
         return 2
     print(json.dumps({
         "artifact": str(result.facts.get("artifact")),
