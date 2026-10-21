@@ -96,7 +96,9 @@ ENDED = ("failed", "done")
 #: Given to every git command that changes a run's worktree. The target's hooks are the
 #: person's, and `--no-verify` stops only pre-commit and commit-msg: a post-checkout or
 #: post-commit hook would still run on the run's behalf.
-NO_HOOKS = ("-c", "core.hooksPath=/dev/null")
+#: Canonical definition in ``git_hooks`` (core); re-imported here so
+#: ``worktree.NO_HOOKS`` keeps working for product callers.
+from refactory_dsh.git_hooks import NO_HOOKS  # noqa: F401 — re-export
 
 #: Suppress git hook managers (lefthook, husky) so installs and commands in the
 #: worktree do not rewrite the shared repository's hooks (#347). Canonical
@@ -237,84 +239,11 @@ def is_run_worktree(path: Path) -> bool:
     return path.resolve().is_relative_to(root().resolve()) and (path / ".git").is_file()
 
 
-def _config_value(config_file: Path, key: str, *, boolean: bool = False) -> str | None:
-    """Read a single git-config key from a config file.
-
-    Returns the stripped value when the key is set (exit 0), ``None`` when the key is
-    unset (exit 1), and raises ``ValueError`` on any other failure — matching ``git()``'s
-    error contract.
-    """
-    cmd = ["git", "config", "--file", str(config_file)]
-    if boolean:
-        cmd.append("--type=bool")
-    cmd += ["--get", key]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise ValueError(f"git config --get {key} could not run: {error}") from error
-    if result.returncode == 0:
-        return result.stdout.strip()
-    if result.returncode == 1:
-        return None
-    raise ValueError(f"git config --get {key} failed: {result.stderr.strip()}")
-
-
-def _isolate_hooks(target: Path, worktree_path: Path) -> bool:
-    """Give the worktree its own hooks path so a hook manager writes there, not to the shared hooks.
-
-    Enables ``extensions.worktreeConfig`` on the target (the only change to the shared
-    config) and sets a per-worktree ``core.hooksPath`` pointing to an isolated directory
-    inside the worktree's own git dir.  Returns True when isolation was enabled, False
-    when skipped because the target's common config sets ``core.bare=true`` or
-    ``core.worktree``, which conflict with ``extensions.worktreeConfig``.
-    """
-    from refactory_dsh import target_guard
-
-    common = Path(git(target, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    config_file = common / "config"
-
-    # ── check for blocking config in the common config file ─────────────
-    bare = _config_value(config_file, "core.bare", boolean=True)
-    if bare == "true":
-        target_guard.warn(
-            "hook isolation skipped: target config sets core.bare=true, "
-            "which conflicts with extensions.worktreeConfig")
-        return False
-
-    worktree_val = _config_value(config_file, "core.worktree")
-    if worktree_val is not None:
-        target_guard.warn(
-            "hook isolation skipped: target config sets core.worktree, "
-            "which conflicts with extensions.worktreeConfig")
-        return False
-
-    # ── enable extensions.worktreeConfig (read-before-write, lock retry) ──
-    ext_val = _config_value(config_file, "extensions.worktreeConfig")
-    need_write = ext_val is None or ext_val.lower() != "true"
-
-    if need_write:
-        for attempt in range(4):
-            try:
-                git(target, "config", "extensions.worktreeConfig", "true")
-                break
-            except ValueError as exc:
-                if "config.lock" not in str(exc) and "could not lock config file" not in str(exc):
-                    raise
-                # Another process may have set it while we waited.
-                retry_val = _config_value(config_file, "extensions.worktreeConfig")
-                if retry_val is not None and retry_val.lower() == "true":
-                    break
-                if attempt < 3:
-                    time.sleep(0.1)
-                else:
-                    raise
-
-    # ── per-worktree hooks path ─────────────────────────────────────────
-    wt_git_dir = Path(git(worktree_path, "rev-parse", "--absolute-git-dir").strip())
-    hooks_dir = wt_git_dir / "hooks.isolated"
-    hooks_dir.mkdir(exist_ok=True)
-    git(worktree_path, "config", "--worktree", "core.hooksPath", str(hooks_dir))
-    return True
+# Canonical definitions live in ``git_hooks`` (core).  Re-imported here
+# so ``worktree._config_value`` and ``worktree._isolate_hooks`` keep
+# working for product callers (base_check, delivery, tests).
+from refactory_dsh.git_hooks import _config_value  # noqa: F401 — re-export
+from refactory_dsh.git_hooks import _isolate_hooks  # noqa: F401 — re-export
 
 
 def create(target: Path, rev: str, run_id: str, run: Path) -> Worktree:
@@ -758,12 +687,21 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
         if head != found.head and git(path, "rev-parse", "HEAD^").strip() == found.head:
             git(path, *NO_HOOKS, "reset", "-q", "--hard", found.head)
     _require_current(found)
-    restored = _restore(found, frozenset(died.get("files", [])))
-    if restored:
-        from refactory_dsh import target_guard
+    # When a merge is in progress (MERGE_HEAD present), skip _restore: the staged
+    # merge state (cleanly-merged files, unmerged entries, MERGE_HEAD) is intentional
+    # and must not be reset.
+    try:
+        git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        merge_in_progress = True
+    except ValueError:
+        merge_in_progress = False
+    if not merge_in_progress:
+        restored = _restore(found, frozenset(died.get("files", [])))
+        if restored:
+            from refactory_dsh import target_guard
 
-        target_guard.warn(f"tracked files in the run's worktree {path} had changed since its last attempt and "
-                          f"were put back before this one: {target_guard._named(restored)}")
+            target_guard.warn(f"tracked files in the run's worktree {path} had changed since its last attempt and "
+                              f"were put back before this one: {target_guard._named(restored)}")
     for relative in files:
         if (path / relative).is_dir() and not (path / relative).is_symlink():
             raise AttemptRefused(f"{relative} is a directory of the last attempt, not a file; write the files "
@@ -784,18 +722,47 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     # An emission that changes nothing -- every file and edit already in the last
     # attempt -- is refused before committing, so the run loops back to emit
     # rather than through the check and reviews on identical code.
+    # During a merge-in-progress, a commit is ALWAYS needed to create the merge
+    # commit (making main an ancestor of HEAD), even when content matches HEAD.
+    if not merge_in_progress:
+        try:
+            git(path, "diff", "--cached", "--quiet")
+        except ValueError:
+            pass  # a non-zero exit from git diff --cached --quiet -- the normal path when something is staged
+        else:
+            pending.unlink(missing_ok=True)
+            raise AttemptRefused(
+                "the emission changed nothing: every file and edit in it is already in the last attempt"
+            )
     try:
-        git(path, "diff", "--cached", "--quiet")
+        git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
+            "-m", message, env={**os.environ, **COMMITTER})
+    except ValueError as exc:
+        # When committing with unmerged paths, git refuses.  This can happen if
+        # not every conflicted file was resolved by the emission.
+        if "unmerged" in str(exc).lower() or "not possible" in str(exc).lower():
+            raise AttemptRefused(
+                f"the commit failed because unmerged paths remain; every conflicted file "
+                f"must appear in the emission and be fully resolved: {exc}"
+            ) from exc
+        raise
+    new_head = git(path, "rev-parse", "HEAD").strip()
+    # When the commit was a merge (MERGE_HEAD was present before commit), update the
+    # base to main's tip (the second parent) so base_check and the diff cover only
+    # this run's own change, not everything main gained.
+    try:
+        parents_output = git(path, "rev-parse", f"{new_head}^1", f"{new_head}^2")
+        parent_lines = [p.strip() for p in parents_output.strip().splitlines() if p.strip()]
+        if len(parent_lines) >= 2:
+            # This is a merge commit.  Update base to the second parent (main's tip).
+            advanced = replace(found, head=new_head, base=parent_lines[1])
+        else:
+            advanced = replace(found, head=new_head)
     except ValueError:
-        pass  # a non-zero exit from git diff --cached --quiet -- the normal path when something is staged
-    else:
-        pending.unlink(missing_ok=True)
-        raise AttemptRefused(
-            "the emission changed nothing: every file and edit in it is already in the last attempt"
-        )
-    git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
-        "-m", message, env={**os.environ, **COMMITTER})
-    advanced = replace(found, head=git(path, "rev-parse", "HEAD").strip())
+        advanced = replace(found, head=new_head)
+    # Clean up pending-merge record after a successful merge commit.
+    pending_merge = Path(run) / ".refactory" / "pending-merge.json"
+    pending_merge.unlink(missing_ok=True)
     _write_json(Path(run) / RECORD, asdict(advanced))
     pending.unlink(missing_ok=True)
     return advanced
@@ -806,6 +773,37 @@ def require_current(run: Path) -> Worktree:
     found = recorded(run)
     if found is None:
         raise ValueError("this run has no worktree")
+    # Recover from a crash between a merge commit and the pending-merge record
+    # write: if pending-merge.json exists and MERGE_HEAD is gone, check whether
+    # HEAD is already a merge commit whose second parent matches the recorded tip.
+    pending_merge = Path(run) / ".refactory" / "pending-merge.json"
+    if pending_merge.exists():
+        pending = _json(pending_merge)
+        recorded_tip = str(pending.get("target_tip") or "")
+        path = Path(found.path)
+        if path.is_dir():
+            has_merge_head = False
+            try:
+                git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+                has_merge_head = True
+            except ValueError:
+                pass
+            if not has_merge_head and recorded_tip:
+                # Check if HEAD is already a merge commit with the recorded tip
+                # as its second parent — adopt it rather than refusing.
+                try:
+                    head = git(path, "rev-parse", "HEAD").strip()
+                    if head != found.head:
+                        parents_output = git(path, "rev-parse", f"{head}^1", f"{head}^2")
+                        parent_lines = [p.strip() for p in parents_output.strip().splitlines() if p.strip()]
+                        if len(parent_lines) >= 2 and parent_lines[1] == recorded_tip:
+                            # Adopt the existing merge commit.
+                            advanced = replace(found, head=head, base=parent_lines[1])
+                            _write_json(Path(run) / RECORD, asdict(advanced))
+                            pending_merge.unlink(missing_ok=True)
+                            found = advanced
+                except ValueError:
+                    pass
     _require_current(found)
     return found
 
@@ -1237,8 +1235,16 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None, *,
         if not result.ok:
             detail = "\n".join((result.problem(), result.stderr or "", result.stdout or "")).strip()
             problems.append(f"`{shown}` failed: {detail[-2000:]}")
+            # Classify signal crashes: normalise shell-wrapped signals to negative
+            # return codes so check_failure_kind returns 'uncertain' (infrastructure).
+            crashed, sig_label = sandbox.is_signal_crash(result)
+            if crashed and sig_label:
+                problems[-1] = f"`{shown}` {sig_label}: {detail[-2000:]}"
+            rc_for_fail = result.returncode
+            if crashed and result.returncode is not None and result.returncode > 0:
+                rc_for_fail = -(result.returncode - 128)
             if prep_fail is None:
-                prep_fail = {"step": shown, "returncode": result.returncode, "timed_out": result.timed_out}
+                prep_fail = {"step": shown, "returncode": rc_for_fail, "timed_out": result.timed_out}
         elif command[0] == "uv" and (path / ".venv").is_dir():
             (path / ".venv" / MARKER).write_text("created by refactory for this run's checks\n")
     left = _loose(path) - before

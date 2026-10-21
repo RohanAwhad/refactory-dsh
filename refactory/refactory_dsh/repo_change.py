@@ -152,8 +152,9 @@ def materialise_node(**fields: Any) -> Node:
     """The op that applies ``emit.txt`` as the run's next attempt (`materialise`)."""
     return Node(**{
         "id": "materialise", "kind": "op", "call": f"{OPS}:materialise",
-        "reads": (EMIT_FILE,), "writes": ("changes.diff",),
-        "produces": ("artifact", "files", "commit", "change", "emission_refused"),
+        "reads": (EMIT_FILE,), "writes": ("changes.diff", "changed-functions.json"),
+        "produces": ("artifact", "files", "commit", "change", "emission_refused",
+                     "changed_functions"),
         "notes": "commit the emitted files on the run's branch, or write the artifact directory",
         **fields,
     })
@@ -686,28 +687,166 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
         # text, and the files it deletes, are gone from the last attempt itself.
         rev = str(last["applied_to"])
         deletes = tuple(name for name in deletes if worktree.committed_text(found, name) is not None)
+    # ── Start a pending merge if materialise needs to commit one ──
+    # When the delivery gate recorded a pending merge (pending-merge.json) and
+    # MERGE_HEAD is not present, start the merge now.  The merge exists only
+    # inside this function: on ANY failure, the except/finally blocks abort it.
+    pending_merge_path = Path(ctx.workdir) / ".refactory" / "pending-merge.json"
+    pending_merge_data = None
+    if pending_merge_path.exists():
+        try:
+            pending_merge_data = json.loads(pending_merge_path.read_text())
+        except (OSError, ValueError):
+            pass
+    merge_in_progress = False
+    try:
+        worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        merge_in_progress = True
+    except ValueError:
+        pass
+    if not merge_in_progress and pending_merge_data:
+        target_tip = str(pending_merge_data.get("target_tip", ""))
+        pm_conflict_files = pending_merge_data.get("conflict_files", [])
+        if target_tip:
+            merge_env = {**os.environ, **worktree.COMMITTER}
+            try:
+                worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                             "merge", "--no-commit", "--no-verify", target_tip,
+                             env=merge_env)
+            except ValueError:
+                pass  # expected — conflicts
+            # Check if merge is actually in progress now.
+            try:
+                worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+                merge_in_progress = True
+            except ValueError:
+                pass  # clean fast-forward — no MERGE_HEAD
+            # Resolve generated-file conflicts to theirs (main's side).
+            if merge_in_progress:
+                try:
+                    _pm_conflict_output = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
+                except ValueError:
+                    _pm_conflict_output = ""
+                _pm_unmerged = [f for f in _pm_conflict_output.strip().splitlines() if f.strip()]
+                _pm_authored_set = set(pm_conflict_files)
+                for _pm_cfile in _pm_unmerged:
+                    if _pm_cfile not in _pm_authored_set:
+                        try:
+                            worktree.git(path, *worktree.NO_HOOKS, "checkout", "--theirs", "--", _pm_cfile)
+                            worktree.git(path, *worktree.NO_HOOKS, "add", "--", _pm_cfile)
+                        except ValueError:
+                            pass
+    # During a merge-in-progress, edits must apply to the worktree text for
+    # EVERY path, not only unmerged ones.  A cleanly-merged file contains main's
+    # changes in the worktree but not in the committed text; reading from the
+    # commit would silently revert main's change.
+    unmerged_paths: set[str] = set()
+    if merge_in_progress:
+        try:
+            unmerged_output = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
+            unmerged_paths = {f.strip() for f in unmerged_output.splitlines() if f.strip()}
+        except ValueError:
+            pass
+        # Before writing anything, ensure every unmerged path appears in the emission
+        # (as either ===FILE: or ===EDIT:).  A partial emission would stage stray files
+        # and leave unmerged entries to be committed with markers.
+        emission_paths = {
+            (relative.as_posix() if hasattr(relative, 'as_posix') else str(relative))
+            for relative in (*files.keys(), *changed.keys())
+        }
+        missing_unmerged = sorted(unmerged_paths - emission_paths)
+        if missing_unmerged:
+            # Abort the merge so the worktree is never left mid-merge.
+            try:
+                worktree.git(path, "merge", "--abort")
+            except ValueError:
+                pass
+            (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
+            raise AttemptRefused(
+                f"merge in progress but the emission does not resolve all conflicted files; "
+                f"missing: {', '.join(missing_unmerged)}. Every conflicted file must appear "
+                f"in the emission as ===FILE: or ===EDIT:."
+            )
+
     repeated = []
-    for relative, pairs in changed.items():
-        current = worktree.committed_text(found, relative, rev)
-        if current is None:
-            raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
-                                 "write it whole with ===FILE:")
-        files[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
-        if skipped:
-            repeated.append(str(relative))
+    try:
+        for relative, pairs in changed.items():
+            rel_str = relative.as_posix() if hasattr(relative, 'as_posix') else str(relative)
+            if merge_in_progress:
+                # During a merge, always read from the worktree (which has main's
+                # changes for cleanly-merged files, and conflict markers for unmerged
+                # files).
+                fpath = path / relative
+                if not fpath.exists():
+                    raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
+                                         "write it whole with ===FILE:")
+                current = fpath.read_text()
+            else:
+                current = worktree.committed_text(found, relative, rev)
+                if current is None:
+                    raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
+                                         "write it whole with ===FILE:")
+            files[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
+            if skipped:
+                repeated.append(str(relative))
+    except BaseException:
+        # Abort any merge so the worktree is never left mid-merge on failure.
+        if merge_in_progress:
+            try:
+                worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+                worktree.git(path, "merge", "--abort")
+            except ValueError:
+                pass
+            (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
+        raise
     if repeated:
         target_guard.warn(f"emit re-sent edits the last attempt already holds, so they were skipped rather than "
                           f"applied twice: {target_guard._named(repeated)}")
+    # ── Conflict-marker detection: refuse emissions that leave markers ──
+    _CONFLICT_MARKER = re.compile(r'^<{7}(?! SEARCH).*$|^>{7}(?! REPLACE).*$', re.MULTILINE)
+    marker_files = []
+    for relative, content in files.items():
+        if _CONFLICT_MARKER.search(content):
+            marker_files.append(str(relative))
+    if marker_files:
+        # Abort any merge so the worktree is never left mid-merge.
+        if merge_in_progress:
+            try:
+                worktree.git(path, "merge", "--abort")
+            except ValueError:
+                pass
+            (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
+        raise AttemptRefused(
+            f"the emission leaves git conflict markers in: {', '.join(marker_files)}; "
+            "resolve the conflicts and remove the <<<<<<< / >>>>>>> lines"
+        )
     # No drift warning: the run's base is pinned, so a moving checkout changes nothing it sees.
     attempt = len(worktree.git(path, "rev-list", f"{found.base}..HEAD").split()) + 1
-    advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)
+    try:
+        advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)
+    except BaseException:
+        # On any commit failure during a merge, abort so the worktree is clean.
+        if merge_in_progress:
+            try:
+                worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+                worktree.git(path, "merge", "--abort")
+            except ValueError:
+                pass
+            (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
+        raise
+    # Clean up pending-merge record after a successful merge commit.
+    pending_merge_path.unlink(missing_ok=True)
     worktree._write_json(Path(ctx.workdir) / EMISSION, {"digest": digest, "attempt_on": found.head,
                                                          "applied_to": rev})
     _warn_if_shared_changed(advanced, "since the last check")
-    ctx.write_text("changes.diff", worktree.diff(advanced))
+    diff_text = worktree.diff(advanced)
+    ctx.write_text("changes.diff", diff_text)
+    from refactory_dsh.changed_functions import compute_and_write as _cf_write
+    cf_formatted = _cf_write(diff_text, Path(advanced.path), ctx.workdir, advanced.base)
     wrapper = Path(ctx.workdir).resolve() / worktree.WRAPPER
     return {"artifact": advanced.path, "files": _branch_files(advanced),
             "commit": advanced.head,
+            "changed_functions": cf_formatted,
             "change": (
                 f"The artifact is a git worktree of {advanced.target} on branch {advanced.branch}. "
                 f"The change under review is `git -C {advanced.path} diff {advanced.base[:12]}`, also "
@@ -726,6 +865,7 @@ def _materialise_directory(ctx: Any, source: Path | None, files: tuple[str, ...]
     """Write the emitted files into the artifact directory, replacing an earlier attempt's.
 
     Given ``source``, its ``files`` are copied in first; the artifact may not replace it.
+    Always writes ``changed-functions.json`` (empty list when no diff exists).
     """
     checked, _, _ = _emitted(ctx.read_text(EMIT_FILE), edits=False)
     root = _artifact_root(str(ctx.facts["name"]))
@@ -765,7 +905,11 @@ def _materialise_directory(ctx: Any, source: Path | None, files: tuple[str, ...]
     finally:
         if not preserve_backup and not (previous.exists() and not root.exists()):
             shutil.rmtree(temporary)
-    return {"artifact": str(root), "files": sorted(set(files) | {str(path) for path in checked})}
+    # Write changed-functions.json as [] for directory-mode (no worktree, no diff).
+    import json as _json
+    (ctx.workdir / "changed-functions.json").write_text(_json.dumps([]) + "\n")
+    return {"artifact": str(root), "files": sorted(set(files) | {str(path) for path in checked}),
+            "changed_functions": "(none)"}
 
 
 # ── how it is checked, and reported ───────────────────────────────────────────
@@ -793,9 +937,16 @@ def prepare_commands(ctx: Any, found: worktree.Worktree, env: dict[str, str], ho
         prepared = sandbox.run_command(generate, workdir=Path(found.path), timeout_s=timeout,
                                        budget=budget, env=env, home=home, exact_env=True)
         if not prepared.ok:
-            problems.append(f"the generate command `{generate}` failed: "
-                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
-            prep_fail = {"step": generate, "returncode": prepared.returncode, "timed_out": prepared.timed_out}
+            detail_gen = "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip()
+            crashed_gen, sig_label_gen = sandbox.is_signal_crash(prepared)
+            if crashed_gen and sig_label_gen:
+                problems.append(f"the generate command `{generate}` {sig_label_gen}: {detail_gen}")
+            else:
+                problems.append(f"the generate command `{generate}` failed: {detail_gen}")
+            gen_rc = prepared.returncode
+            if crashed_gen and gen_rc is not None and gen_rc > 0:
+                gen_rc = -(gen_rc - 128)
+            prep_fail = {"step": generate, "returncode": gen_rc, "timed_out": prepared.timed_out}
         elif amend:
             edits = worktree.tracked_edits(found)
             if edits:
@@ -805,9 +956,16 @@ def prepare_commands(ctx: Any, found: worktree.Worktree, env: dict[str, str], ho
         prepared = sandbox.run_command(setup, workdir=Path(found.path), timeout_s=timeout,
                                        budget=budget, env=env, home=home, exact_env=True)
         if not prepared.ok:
-            problems.append(f"the setup command `{setup}` failed: "
-                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
-            prep_fail = {"step": setup, "returncode": prepared.returncode, "timed_out": prepared.timed_out}
+            detail_setup = "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip()
+            crashed_setup, sig_label_setup = sandbox.is_signal_crash(prepared)
+            if crashed_setup and sig_label_setup:
+                problems.append(f"the setup command `{setup}` {sig_label_setup}: {detail_setup}")
+            else:
+                problems.append(f"the setup command `{setup}` failed: {detail_setup}")
+            setup_rc = prepared.returncode
+            if crashed_setup and setup_rc is not None and setup_rc > 0:
+                setup_rc = -(setup_rc - 128)
+            prep_fail = {"step": setup, "returncode": setup_rc, "timed_out": prepared.timed_out}
     return found, problems, prep_fail
 
 
@@ -835,7 +993,11 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
     if found.head != head_before:
         ctx.set_fact("commit", found.head)
         ctx.set_fact("files", _branch_files(found))
-        ctx.write_text("changes.diff", worktree.diff(found))
+        diff_text = worktree.diff(found)
+        ctx.write_text("changes.diff", diff_text)
+        from refactory_dsh.changed_functions import compute_and_write as _cf_write
+        cf_formatted = _cf_write(diff_text, Path(found.path), ctx.workdir, found.base)
+        ctx.set_fact("changed_functions", cf_formatted)
     if problems:
         return sandbox.SandboxResult(ok=False, returncode=1, elapsed_s=0.0, prep_failure=prep_fail,
                                      stderr=(
@@ -927,7 +1089,13 @@ def report(ctx: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
     payload = {**payload, "target": found.target, "branch": found.branch, "base": found.base, "head": found.head,
                "diff_stat": worktree.git(Path(found.path), "diff", "--stat", found.base, "HEAD").strip()}
     ctx.write_json(name, payload)
-    worktree.record_outcome(found, "succeeded")
+    # Record outcome only for runs that will NOT deliver (design_fast).
+    # For runs with a delivery plan, delivery._delivered records "succeeded"
+    # after a successful push, and _kept guards against recording it when
+    # the merge check fails, the merge is abandoned, or there are conflicts.
+    # Recording it here prematurely would persist through a failed delivery.
+    if not ctx.facts.get("delivery_plan"):
+        worktree.record_outcome(found, "succeeded")
     projects.record_run(Path(found.target), run=ctx.workdir, branch=found.branch, base=found.base,
                         status="succeeded")
     # Clean up the base worktree (created by base_check for the base comparison gate)

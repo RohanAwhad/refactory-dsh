@@ -167,9 +167,15 @@ def excusal_blocker(command: str, output: str, failures: set[str]) -> str | None
     return None
 
 
-def _parse_collection_errors(output: str) -> set[str]:
-    """Extract test files that had collection or import errors."""
+def _parse_collection_errors(output: str) -> tuple[set[str], bool]:
+    """Extract test files that had collection or import errors.
+
+    Returns ``(files, has_unlocatable)`` where *has_unlocatable* is True when
+    a collection error was detected but the importing file could not be
+    determined (e.g. vitest's "does not provide an export named").
+    """
     files: set[str] = set()
+    has_unlocatable = False
     for m in _PYTEST_ERROR.finditer(output):
         ident = m.group(1).strip()
         # Extract just the file path (before any ::)
@@ -183,7 +189,32 @@ def _parse_collection_errors(output: str) -> set[str]:
             m = re.search(r"([\w/.-]+\.py)", line)
             if m:
                 files.add(m.group(1))
-    return files
+    # Vitest collection errors — use non-greedy .*? to capture the full file path
+    for m in re.finditer(r'Failed to collect\s+([\w/.-]+?\.(?:spec\.ts|ts))', output):
+        files.add(m.group(1))
+    for m in re.finditer(r'Error:.*?Cannot find module.*?([\w/.-]+?\.(?:spec\.ts|ts))', output):
+        files.add(m.group(1))
+    # "does not provide an export named" — record the importing file from surrounding output
+    for m in re.finditer(r"does not provide an export named\s+'(\w+)'", output):
+        found_file = False
+        for line in output.splitlines():
+            if m.group(0) in line:
+                fm = re.search(r'([\w/.-]+?\.(?:spec\.ts|ts))', line)
+                if fm:
+                    files.add(fm.group(1))
+                    found_file = True
+                    break
+        if not found_file:
+            has_unlocatable = True
+    # "Failed to load url" pattern
+    for line in output.splitlines():
+        if "Failed to load url" in line:
+            m = re.search(r'([\w/.-]+?\.(?:spec\.ts|ts))', line)
+            if m:
+                files.add(m.group(1))
+            else:
+                has_unlocatable = True
+    return files, has_unlocatable
 
 
 def cache_key(base: str, setup: str, generate: str, check: str) -> str:
@@ -223,6 +254,9 @@ class FilteredCheckResult:
     inherited_detail: str
     base_environment_failure: str | None
     guardedness: dict | None
+    base_failures: set[str] | None = None
+    base_complete: bool = False
+    base_crashed: bool = False
 
 
 # ── three-condition excusal ──────────────────────────────────────────────
@@ -455,19 +489,29 @@ def _changed_files_in_test_dirs(path: Path, base: str, test_files: list[str]) ->
 def _read_cache(run: Path, key: str) -> BaseCheckResult | None:
     data = _read_json(run / CACHE_FILE)
     if data.get("cache_key") == key:
-        return BaseCheckResult(
+        result = BaseCheckResult(
             ok=data["ok"],
             failures=set(data.get("failures", [])),
             output=data.get("output", ""),
             exit_code=data.get("exit_code", 1),
             environment_failure=data.get("environment_failure"),
         )
+        # Attach base_complete as a transient attribute for filter_check (R5).
+        result._base_complete = data.get("base_complete", False)  # type: ignore[attr-defined]
+        return result
     return None
 
 
 def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
+    # Never cache a crash result — R2: later checks get a fresh attempt.
+    # Deterministic (non-crash) environment failures ARE cached so filter_check
+    # and the next attempt do not re-prepare the base (v5 correction 2).
+    if getattr(result, '_crashed', False):
+        return  # pragma: no cover — guarded by run_base_check
     cache_dir = run / CACHE_FILE.parent
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # Compute completeness for R5/R6.
+    base_complete = getattr(result, '_base_complete', False)
     data = {
         "cache_key": key,
         "ok": result.ok,
@@ -475,12 +519,20 @@ def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
         "output": result.output[-10000:],
         "exit_code": result.exit_code,
         "environment_failure": result.environment_failure,
+        "base_complete": base_complete,
     }
     (run / CACHE_FILE).write_text(json.dumps(data, indent=2) + "\n")
 
 
 def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
-    """Run the check on the unchanged base in a separate worktree, caching the result."""
+    """Run the check on the unchanged base in a separate worktree, caching the result.
+
+    When any step crashes (a signal that survives ``run_command``'s retry),
+    the base's HOME, worktree and cache are discarded and rebuilt from scratch
+    (R2).  On double failure the result is returned with ``environment_failure``
+    set but never cached, so later checks get a fresh attempt.  Deterministic
+    (non-crash) failures are cached as before.
+    """
     found = worktree.recorded(ctx.workdir)
     if found is None:
         return BaseCheckResult(ok=True, failures=set(), output="", exit_code=0)
@@ -493,50 +545,99 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     if cached is not None:
         return cached
 
-    # Create and prepare the base worktree on demand
-    try:
-        base_path, base_found = _ensure_base_worktree(ctx)
-    except ValueError as exc:
-        result = BaseCheckResult(
-            ok=False, failures=set(), output="", exit_code=-1,
-            environment_failure=str(exc),
+    def _try_base() -> tuple[BaseCheckResult, bool]:
+        """Attempt to prepare the base worktree and run the check.
+
+        Returns ``(result, is_crash)``.  ``is_crash`` is True when a signal
+        killed a preparation step and the base environment should be rebuilt.
+        """
+        try:
+            base_path, base_found = _ensure_base_worktree(ctx)
+        except ValueError as exc:
+            err_str = str(exc)
+            # Classify: use structured result from ensure_environment.
+            # prep_fail returned by ensure_environment carries returncode.
+            is_crash = any(tok in err_str for tok in ("killed by SIG", "killed by signal"))
+            r = BaseCheckResult(
+                ok=False, failures=set(), output=err_str, exit_code=-1,
+                environment_failure=err_str,
+            )
+            r._crashed = is_crash  # type: ignore[attr-defined]
+            return r, is_crash
+
+        home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        home.mkdir(parents=True, exist_ok=True)
+        budget_inner = getattr(ctx, "budget", None)
+        env = worktree.check_environment(base_path, home)
+
+        from refactory_dsh.repo_change import prepare_commands as _prep
+
+        _, problems, prep_fail = _prep(
+            ctx, base_found, env, home, timeout, budget_inner, amend=False)
+        if problems:
+            # Check if any problem is a signal crash.
+            is_crash = False
+            if prep_fail is not None and isinstance(prep_fail.get("returncode"), int):
+                prc = prep_fail["returncode"]
+                is_crash = prc < 0 or prc in sandbox._AMBIGUOUS_SHELL_EXITS
+            detail = "on the base: " + "\n".join(problems)
+            r = BaseCheckResult(
+                ok=False, failures=set(), output=detail, exit_code=-1,
+                environment_failure=detail,
+            )
+            r._crashed = is_crash  # type: ignore[attr-defined]
+            return r, is_crash
+
+        check_result = sandbox.run_command(
+            command, workdir=base_path, timeout_s=timeout,
+            budget=budget_inner, env=env, home=home, exact_env=True,
         )
-        _write_cache(ctx.workdir, key, result)
-        return result
+        crashed_chk, sig_chk = sandbox.is_signal_crash(check_result)
+        if crashed_chk:
+            r = BaseCheckResult(
+                ok=False, failures=set(), output=f"base check command {sig_chk}",
+                exit_code=-1, environment_failure=f"base check command {sig_chk}",
+            )
+            r._crashed = True  # type: ignore[attr-defined]
+            return r, True
 
-    home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
-    home.mkdir(parents=True, exist_ok=True)
-    budget = getattr(ctx, "budget", None)
-    env = worktree.check_environment(base_path, home)
-
-    # Generate, then setup, exactly as the attempt's check prepares its worktree
-    # (repo_change.prepare_commands), without amending anything on the base.
-    from refactory_dsh.repo_change import prepare_commands
-
-    _, problems, _ = prepare_commands(ctx, base_found, env, home, timeout, budget, amend=False)
-    if problems:
-        detail = "on the base: " + "\n".join(problems)
+        output = "\n".join(
+            (check_result.stdout or "", check_result.stderr or "")
+        ).strip()
+        failures = parse_test_failures(output)
         result = BaseCheckResult(
-            ok=False, failures=set(), output=detail, exit_code=-1,
-            environment_failure=detail,
+            ok=check_result.ok, failures=failures,
+            output=output, exit_code=check_result.returncode or 0,
         )
-        _write_cache(ctx.workdir, key, result)
-        return result
+        # Compute completeness for R5.
+        blocker = excusal_blocker(command, output, failures) if failures else None
+        result._base_complete = (blocker is None) if failures else check_result.ok  # type: ignore[attr-defined]
+        return result, False
 
-    # Run the check command on the base
-    check_result = sandbox.run_command(
-        command, workdir=base_path, timeout_s=timeout,
-        budget=budget, env=env, home=home, exact_env=True,
-    )
-    output = "\n".join(
-        (check_result.stdout or "", check_result.stderr or "")
-    ).strip()
-    failures = parse_test_failures(output)
+    result, is_crash = _try_base()
+    if is_crash:
+        # Discard and rebuild from scratch — R2.
+        home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        shutil.rmtree(home, ignore_errors=True)
+        if found is not None:
+            run_id = Path(found.path).name.removeprefix("run-")
+            remove_base_worktree(Path(found.target), run_id)
+        (ctx.workdir / CACHE_FILE).unlink(missing_ok=True)
+        result, is_crash = _try_base()
+        if is_crash or result.environment_failure:
+            # Double crash or deterministic failure after rebuild.
+            # Discard HOME and the base worktree so the NEXT check gets a
+            # fresh start too (R2: never reuse a base environment whose
+            # preparation crashed — the b27a rerun failure).
+            home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+            shutil.rmtree(home, ignore_errors=True)
+            if found is not None:
+                run_id = Path(found.path).name.removeprefix("run-")
+                remove_base_worktree(Path(found.target), run_id)
+            (ctx.workdir / CACHE_FILE).unlink(missing_ok=True)
+            result._crashed = is_crash  # type: ignore[attr-defined]
+            return result
 
-    result = BaseCheckResult(
-        ok=check_result.ok, failures=failures,
-        output=output, exit_code=check_result.returncode or 0,
-    )
     _write_cache(ctx.workdir, key, result)
     return result
 
@@ -620,7 +721,7 @@ def compute_test_guardedness(
         (test_result.stdout or "", test_result.stderr or "")
     ).strip()
     base_failures = parse_test_failures(test_output)
-    collection_errors = _parse_collection_errors(test_output)
+    collection_errors, _ = _parse_collection_errors(test_output)
 
     # Restore the base worktree: remove the copied files
     for dst in copied:
@@ -682,6 +783,373 @@ def compute_test_guardedness(
     }
 
 
+# ── site-revert check ────────────────────────────────────────────────────
+
+
+def _is_test_file(path: str) -> bool:
+    """Whether *path* is a test file (not a code site for revert purposes)."""
+    parts = Path(path).parts
+    name = Path(path).name
+    if name.startswith("test_") and name.endswith(".py"):
+        return True
+    if name.endswith("_test.py"):
+        return True
+    if name.endswith(".spec.ts"):
+        return True
+    if "tests" in parts or "test" in parts:
+        return True
+    return False
+
+
+def _extract_defined_names(added_lines: list[str]) -> set[str]:
+    """Extract def/class/assignment names from ``+`` lines of a hunk."""
+    names: set[str] = set()
+    for line in added_lines:
+        m = re.match(r'\s*(?:def|class)\s+(\w+)', line)
+        if m:
+            names.add(m.group(1))
+        m = re.match(r'\s*(\w+)\s*=', line)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def _is_import_only_failure(output: str, defined_names: set[str]) -> bool:
+    """Whether the failure is only NameError/AttributeError/ImportError on defined names.
+
+    Classifies from pytest's ``E   <ErrorType>: <message>`` lines, not the
+    truncated short-summary line ("…has no attrib..."), which leaves only the
+    module name quoted.  A failure is import-only when every NameError,
+    AttributeError or ImportError line names a definition the reverted hunks
+    removed.
+    """
+    if not defined_names:
+        return False
+    found_errors = False
+    all_names_defined = True
+    # Extract from pytest's E-lines: ``E   NameError: name 'foo' is not defined``
+    # and from full-output error lines.
+    error_types = ("NameError", "AttributeError", "ImportError")
+    for line in output.splitlines():
+        stripped = line.strip()
+        # Match pytest E-lines: "E   ErrorType: message"
+        # Also match plain "ErrorType: message" lines for non-pytest output.
+        for error_type in error_types:
+            if error_type not in stripped:
+                continue
+            m = re.match(rf'(?:E\s+)?({error_type}):?\s+(.*)', stripped)
+            if not m:
+                continue
+            found_errors = True
+            snippet = m.group(2)
+            quoted = re.findall(r"['\"](\w+)['\"]", snippet)
+            if quoted:
+                if not any(n in defined_names for n in quoted):
+                    all_names_defined = False
+            else:
+                all_names_defined = False
+    return found_errors and all_names_defined
+
+
+def compute_site_reverts(
+    ctx: Any, pairs: list[tuple[str, str, str]],
+) -> dict[str, Any]:
+    """Revert each site and run its named test to check reachability.
+
+    *pairs* is a list of ``(site_path_line, test_file_and_name, scope)`` tuples.
+    Operates on the run's own worktree (the attempt path), applies a reverse
+    patch of only the overlapping hunks, runs the named test, and restores
+    the file in a ``finally`` block.  Results are cached in a dedicated file.
+    """
+    found = worktree.recorded(ctx.workdir)
+    if found is None:
+        return {"no_base": True}
+
+    attempt_path = Path(found.path)
+    base = found.base
+    head = found.head
+
+    # Load or initialise cache
+    cache_file = ctx.workdir / ".refactory" / "site-revert-cache.json"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        cache = json.loads(cache_file.read_text()) if cache_file.exists() else {}
+    except (ValueError, OSError):
+        cache = {}
+
+    results: list[dict[str, Any]] = []
+    summary = {"caught": 0, "not_caught": 0, "collection_error": 0, "unavailable": 0}
+
+    import subprocess as _sp
+    import time as _time
+
+    total_timeout = 240  # cap total revert time (< gate DSH timeout)
+    start_time = _time.monotonic()
+    per_pair_timeout = 60
+
+    for site, test_name, scope in pairs:
+        # Time cap
+        elapsed = _time.monotonic() - start_time
+        if elapsed > total_timeout:
+            results.append({
+                "site": site, "test": test_name,
+                "result": "unavailable", "catches_site": False,
+            })
+            summary["unavailable"] += 1
+            continue
+
+        cache_key_str = f"{head}|{site}|{test_name}"
+        if cache_key_str in cache:
+            cached = cache[cache_key_str]
+            results.append(cached)
+            if cached.get("catches_site"):
+                summary["caught"] += 1
+            elif cached.get("result") == "collection_error":
+                summary["collection_error"] += 1
+            elif cached.get("result") == "unavailable":
+                summary["unavailable"] += 1
+            else:
+                summary["not_caught"] += 1
+            continue
+
+        # Test-file exclusion: a site inside a test file is not a code site
+        site_path = site.split(":")[0] if ":" in site else site
+        if _is_test_file(site_path):
+            entry = {"site": site, "test": test_name,
+                     "result": "unavailable", "catches_site": False}
+            results.append(entry)
+            cache[cache_key_str] = entry
+            summary["unavailable"] += 1
+            continue
+
+        # Parse site line range
+        parts = site.split(":")
+        if len(parts) < 2:
+            entry = {"site": site, "test": test_name,
+                     "result": "not_in_diff", "catches_site": False}
+            results.append(entry)
+            cache[cache_key_str] = entry
+            summary["not_caught"] += 1
+            continue
+        file_path = parts[0]
+        line_spec = parts[1]
+        if "-" in line_spec:
+            line_start, line_end = line_spec.split("-", 1)
+            try:
+                line_start, line_end = int(line_start), int(line_end)
+            except ValueError:
+                line_start = line_end = 0
+        else:
+            try:
+                line_start = line_end = int(line_spec)
+            except ValueError:
+                line_start = line_end = 0
+
+        # Check if file exists in the worktree
+        full_file = attempt_path / file_path
+        if not full_file.exists():
+            entry = {"site": site, "test": test_name,
+                     "result": "not_in_diff", "catches_site": False}
+            results.append(entry)
+            cache[cache_key_str] = entry
+            summary["not_caught"] += 1
+            continue
+
+        # Check if file exists on base (new file)
+        try:
+            _sp.run(
+                ["git", "-C", str(attempt_path), "cat-file", "-e", f"{base}:{file_path}"],
+                check=True, capture_output=True, timeout=10,
+            )
+            is_new_file = False
+        except _sp.CalledProcessError:
+            is_new_file = True
+        except Exception:
+            is_new_file = False
+
+        if is_new_file:
+            entry = {"site": site, "test": test_name,
+                     "result": "new_file", "catches_site": False}
+            results.append(entry)
+            cache[cache_key_str] = entry
+            summary["not_caught"] += 1
+            continue
+
+        # Get diff hunks for overlapping site
+        try:
+            diff_output = _sp.run(
+                ["git", "-C", str(attempt_path), "diff", "-U0", base, "HEAD", "--", file_path],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+        except Exception:
+            entry = {"site": site, "test": test_name,
+                     "result": "unavailable", "catches_site": False}
+            results.append(entry)
+            cache[cache_key_str] = entry
+            summary["unavailable"] += 1
+            continue
+
+        # Parse hunks and find overlapping ones
+        overlapping_hunks: list[str] = []
+        current_hunk_lines: list[str] = []
+        hunk_overlaps = False
+
+        for line in diff_output.splitlines():
+            if line.startswith("@@"):
+                if current_hunk_lines and hunk_overlaps:
+                    overlapping_hunks.extend(current_hunk_lines)
+                current_hunk_lines = [line]
+                # Parse hunk header for new-file line range
+                m = re.search(r'\+(\d+)(?:,(\d+))?', line)
+                if m:
+                    hunk_start = int(m.group(1))
+                    hunk_count = int(m.group(2)) if m.group(2) else 1
+                    if hunk_count == 0:
+                        # Pure deletion hunk: site line is the position or next
+                        hunk_overlaps = (line_start <= hunk_start + 1 and line_end >= hunk_start)
+                    else:
+                        hunk_end = hunk_start + hunk_count - 1
+                        hunk_overlaps = (line_start <= hunk_end and line_end >= hunk_start)
+                else:
+                    hunk_overlaps = False
+            elif current_hunk_lines:
+                current_hunk_lines.append(line)
+
+        if current_hunk_lines and hunk_overlaps:
+            overlapping_hunks.extend(current_hunk_lines)
+
+        if not overlapping_hunks:
+            entry = {"site": site, "test": test_name,
+                     "result": "not_in_diff", "catches_site": False}
+            results.append(entry)
+            cache[cache_key_str] = entry
+            summary["not_caught"] += 1
+            continue
+
+        # Build a reverse patch containing only overlapping hunks
+        header_lines = []
+        for line in diff_output.splitlines():
+            if line.startswith("@@"):
+                break
+            header_lines.append(line)
+
+        reverse_patch = "\n".join(header_lines + overlapping_hunks) + "\n"
+
+        # Extract defined names from the added lines
+        all_added = []
+        for line in overlapping_hunks:
+            if line.startswith("+") and not line.startswith("+++"):
+                all_added.append(line[1:])
+        defined_names = _extract_defined_names(all_added)
+
+        # Apply reverse patch and run the test
+        try:
+            _sp.run(
+                ["git", "-C", str(attempt_path), "apply", "--reverse", "--unidiff-zero"],
+                input=reverse_patch, capture_output=True, text=True, timeout=10, check=True,
+            )
+        except Exception as exc:
+            entry = {"site": site, "test": test_name,
+                     "result": "unavailable", "catches_site": False,
+                     "detail": f"patch apply failed: {exc}"}
+            results.append(entry)
+            cache[cache_key_str] = entry
+            summary["unavailable"] += 1
+            continue
+
+        try:
+            # Pick runner and build command
+            test_path = test_name.split("::")[0] if "::" in test_name else test_name
+            fn_name = test_name.split("::")[-1] if "::" in test_name else ""
+
+            if test_path.endswith(".py"):
+                if fn_name:
+                    cmd = f"python -m pytest -x -q {test_name}"
+                else:
+                    cmd = f"python -m pytest -x -q {test_path}"
+            elif test_path.endswith(".ts") or test_path.endswith(".spec.ts"):
+                if fn_name:
+                    cmd = f"npx vitest run {test_path} -t {fn_name}"
+                else:
+                    cmd = f"npx vitest run {test_path}"
+            else:
+                cmd = f"python -m pytest -x -q {test_name}"
+
+            home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
+            env = worktree.check_environment(attempt_path, home)
+
+            test_result = sandbox.run_command(
+                cmd, workdir=attempt_path,
+                timeout_s=min(per_pair_timeout, total_timeout - (_time.monotonic() - start_time)),
+                env=env, home=home, exact_env=True,
+            )
+
+            test_output = "\n".join(
+                (test_result.stdout or "", test_result.stderr or "")
+            ).strip()
+            rc = test_result.returncode
+
+            # Classify result
+            if getattr(test_result, "timed_out", False):
+                result = "unavailable"
+            elif rc is not None and rc < 0:
+                result = "unavailable"
+            elif rc in (4, 5) or "no tests ran" in test_output.lower():
+                # pytest exit 4 = no tests collected, 5 = no tests ran
+                result = "unavailable"
+            else:
+                coll_files, has_unlocatable = _parse_collection_errors(test_output)
+                test_path_for_coll = test_name.split("::")[0] if "::" in test_name else test_name
+                has_collection = (test_path_for_coll in coll_files
+                                  or any(test_path_for_coll.startswith(e) for e in coll_files)
+                                  or has_unlocatable)
+                if has_collection:
+                    result = "collection_error"
+                elif rc != 0:
+                    # Test failed — check if it's import-only
+                    if _is_import_only_failure(test_output, defined_names):
+                        result = "import_only"
+                    else:
+                        result = "fail"  # genuine assertion failure = site is caught
+                else:
+                    result = "pass"  # test still passes = site NOT caught
+
+        except Exception:
+            result = "unavailable"
+        finally:
+            # Restore the worktree
+            try:
+                _sp.run(
+                    ["git", "-C", str(attempt_path), "checkout", "HEAD", "--", file_path],
+                    capture_output=True, timeout=10,
+                )
+            except Exception:
+                pass
+
+        catches = result == "fail"
+        entry = {"site": site, "test": test_name,
+                 "result": result, "catches_site": catches}
+        results.append(entry)
+        cache[cache_key_str] = entry
+
+        if catches:
+            summary["caught"] += 1
+        elif result == "collection_error":
+            summary["collection_error"] += 1
+        elif result == "unavailable":
+            summary["unavailable"] += 1
+        else:
+            summary["not_caught"] += 1
+
+    # Write cache
+    try:
+        cache_file.write_text(json.dumps(cache, indent=2) + "\n")
+    except OSError:
+        pass
+
+    return {"pairs": results, "summary": summary}
+
+
 # ── integration function ────────────────────────────────────────────────
 
 
@@ -711,6 +1179,9 @@ def filter_check(
             new_failure_detail="", inherited_detail="",
             base_environment_failure=base_result.environment_failure,
             guardedness=guardedness,
+            base_failures=None,
+            base_complete=False,
+            base_crashed=getattr(base_result, '_crashed', False),
         )
 
     # Parse the attempt's failures
@@ -755,6 +1226,9 @@ def filter_check(
         ]
         new_failure_detail = "\n".join(new_lines) if new_lines else attempt_output
 
+    # Populate base_failures and base_complete for R5 (broken guarantees).
+    base_complete = getattr(base_result, '_base_complete', False)
+
     return FilteredCheckResult(
         all_excused=comparison.all_excused,
         inherited=comparison.inherited,
@@ -763,4 +1237,6 @@ def filter_check(
         inherited_detail=inherited_detail,
         base_environment_failure=None,
         guardedness=guardedness,
+        base_failures=base_result.failures,
+        base_complete=base_complete,
     )

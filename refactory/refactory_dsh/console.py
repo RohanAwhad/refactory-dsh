@@ -253,11 +253,26 @@ def _run_id(mode: str) -> str:
 #: because the console is the Python owner the Web composition reaches, and the
 #: graph bundle names the same module in its own `dataCommand`; each uses an
 #: absolute interpreter path so they do not depend on PATH.
-from refactory_dsh.paths import venv_bin as _venv_bin
-_REFACTORY_PYTHON = str(_venv_bin() / 'python')
-DATA_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.items"
-AGENT_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.agent_delivery"
-GATE_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.steering"
+def _refactory_python() -> str:
+    """The Python interpreter for node commands, resolved at call time.
+
+    After a re-exec under a pin, ``venv_bin()`` returns the pin's ``.venv/bin``,
+    so the commands point to the pin's Python.
+    """
+    from refactory_dsh.paths import venv_bin
+    return str(venv_bin() / 'python')
+
+
+def _data_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.items"
+
+
+def _agent_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.agent_delivery"
+
+
+def _gate_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.steering"
 
 
 def _node_environment(
@@ -349,6 +364,16 @@ def _open_mode(
     from refactory_dsh.lowering import DECLARATIONS, SUFFIX
 
     root = Path(workdir).expanduser().resolve()
+    from refactory_dsh.paths import require_build
+    try:
+        require_build(gui_mode=bool(os.environ.get("REFACTORY_GUI_MODE")))
+    except RuntimeError as exc:
+        # A stale build under the GUI must not refuse the open — warn and
+        # continue.  Main had no check here; the PR adds one, and refusing
+        # every open (including the case where a rebuild was skipped because
+        # a run was live) breaks the GUI workflow.
+        import logging as _clog
+        _clog.getLogger(__name__).warning("%s", exc)
     try:
         name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent,
                                            **({"model_context": model_context} if model_context else {}),
@@ -368,9 +393,9 @@ def _open_mode(
         "graph": str((graphs / f"{name}{SUFFIX}").resolve()),
         "declarations": str((root / DECLARATIONS).resolve()),
         "commandEnv": command_env,
-        "dataCommand": DATA_COMMAND,
-        "agentCommand": AGENT_COMMAND,
-        "gateCommand": GATE_COMMAND,
+        "dataCommand": _data_command(),
+        "agentCommand": _agent_command(),
+        "gateCommand": _gate_command(),
     }
 
 
@@ -514,6 +539,12 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         activity['wait_reason'] = f'step {lf_node} is being retried'
     # Report command corrections from facts.json
     facts_data = _read_json(run_root / 'facts.json')
+    # dm-127: show design review status when a user gate is due.
+    if gates(run_root):
+        from refactory_dsh.design_ops import design_review_status as _drs
+        drs_text = _drs(facts_data)
+        if drs_text:
+            activity['design_review_status'] = drs_text
     command_history = facts_data.get('command_history', [])
     if isinstance(command_history, list) and command_history:
         activity['command_corrections'] = len(command_history)
@@ -856,6 +887,18 @@ def gates(run_root: Path) -> list[dict[str, Any]]:
                                  SimpleNamespace(knobs={}, facts=_read_json(Path(run_root) / "facts.json"))),
                 "verdicts": verdicts,
             }
+    # Append CEO-sourced ledger notes to each gate, labelled as the CEO's.
+    for node_id, gate_dict in found.items():
+        try:
+            from refactory_dsh.steering import Ledger
+            entries = Ledger(run_root).entries()
+            ceo_notes = [
+                e["text"] for e in entries
+                if e.get("source") == "ceo" and isinstance(e.get("text"), str)
+            ]
+            gate_dict["ceo_notes"] = "\n\n".join(ceo_notes) if ceo_notes else ""
+        except Exception:
+            gate_dict["ceo_notes"] = ""
     return [found[node_id] for node_id in due if node_id in found]
 
 
@@ -1314,7 +1357,7 @@ def _parser() -> argparse.ArgumentParser:
     graph_control.add_argument("action", choices=[
         "pause", "resume", "stop", "preview", "rerun",
         "acknowledge", "amend-command", "withdraw", "redeliver",
-        "confirm-completion",
+        "confirm-completion", "skip",
     ])
     graph_control.add_argument("--node", default="")
     graph_control.add_argument("--text", default="")

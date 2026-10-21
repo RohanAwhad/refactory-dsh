@@ -324,19 +324,45 @@ intent-faithful plan, and design-v2 adds `design_doc` — the design document th
 code is written from. Between `design_doc` and `gate_strategy`, a **design review**
 step checks the document: a `design_review` agent reads the design, the brief and
 the code the design cites, and writes `reviews/design-review.md` listing open
-alternatives and unconfirmed claims as `BLOCKING:` findings. `gate_design_review`
+alternatives and unconfirmed claims as `BLOCKING:` findings. Between `design_doc`
+and `design_review`, a deterministic `check_design_claims` fn-gate verifies each
+claim in the subject-at-citation-quote format: that cited paths exist, quoted lines
+match within ±3 lines, and named identifiers from the claim's subject are present
+(Python via `ast`, TypeScript via word-boundary search). Mismatches reloop
+`design_doc` without spending a design-review attempt; on exhaustion the mismatches
+are appended to the review's feedback. `gate_design_review`
 reads that review using the same verdict and blocking-findings parsing as
 `gate_overwatch`, and adds two mechanical checks with no false positives: every
 `path:line` citation names an existing file with that many lines, and every
-quotation the design attributes to the brief appears verbatim in the brief. On
-failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
+quotation the design attributes to the brief appears verbatim in the brief. A fifth
+mechanical check validates per-changed-function repository questions (duplicates,
+callers, shared state) and the brief-example trace, for repository-change runs only.
+On failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
 proceeds to `gate_strategy` with the remaining findings shown — it never fails the
-run. A **person answers `gate_strategy`** at that point, because a
+run. A reviewer formatting miss re-runs `design_review` (via a `review_reloop` edge)
+without spending a `design_review_attempts` slot; the re-run counter is
+`design_review_reruns_used` (limit 2).
+
+The `deliverable_kind` fact, computed by `prepare_design`, distinguishes repository
+changes from artifacts. The `review_instructions` fact renders `REPO_CHANGE_REVIEW_INSTRUCTIONS`
+(composed from verification methods M2, M3, M11, M12) or `ARTIFACT_REVIEW_INSTRUCTIONS`
+into each reviewer's prompt via `{{review_instructions}}`. The `changed_functions` module
+maps diff hunk line ranges onto function spans via `ast` (Python) and hunk-range entries
+(TypeScript), and its output is rendered into prompts as `{{changed_functions}}`.
+
+For the post-build QA gate, `gate_qa` validates each of the three review files independently,
+naming the reviewer and function in any refusal. A `review_reloop` edge from `gate_qa` to
+`fork_qa` re-runs only the reviewers. The fast `gate_qa` validates `focused-qa.json`'s
+`repo_questions` key and strips `[repo-questions]`-prefixed problems from `failure_kind`'s
+word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
+PASS" or "Design review: FAIL, N unresolved" followed by the unresolved findings,
+carried by fact substitution to all template-rendered surfaces (terminal, GUI,
+headless refusal, `refactory status`). A **person answers `gate_strategy`** at that point, because a
 run that can approve its own plan is not reviewed at all, so a headless run refuses
 that gate unless the caller supplies the verdict. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in
 parallel**, merge into one synthesis whose blocking findings the QA gate reads, and
-are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs between the check and the reviews, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. A QA or
+are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs between the check and the reviews, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. At the post-build gates, **per-correction audit** checks each gate correction item by item: for every correction in the ledger it records the site in the diff, the test that reaches that site (via mechanical hunk-level revert), and the evidence scope (via AST-based patch-target detection); see docs/hardening.md §24-26. A QA or
 overwatch reloop goes back to the emit step, not to the plan a person approved.
 
 All authoring review uses the original brief, approved design and explicit user steering

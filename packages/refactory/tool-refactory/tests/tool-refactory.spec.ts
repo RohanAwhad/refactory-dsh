@@ -297,7 +297,7 @@ describe('dsh-tool-refactory', () => {
     await call(ctx, { action: 'steer', run: 'r1', note: 'no numpy', kind: 'constraint' })
     expect(subprocess.spawns[1]!.argv).toEqual([
       '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer',
-      '--run', 'r1', '--note', 'no numpy', '--kind', 'constraint',
+      '--run', 'r1', '--note', 'no numpy', '--kind', 'constraint', '--source', 'ceo',
     ])
     await call(ctx, { action: 'adopt', run: 'r1', as: 'adopted_demo' })
     expect(subprocess.spawns[2]!.argv).toEqual([

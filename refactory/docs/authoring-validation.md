@@ -73,6 +73,56 @@ independent full-mode roles. They inspect canonical receipts and delivered outpu
 then use targeted checks for uncovered requirements. They do not each repeat the
 whole model/Task feed.
 
+### Repository questions (design and design_fast only)
+
+For repository-change runs (those with a `target`, `refine`, or `source_project`),
+each reviewer must answer three structured questions per changed function:
+
+1. **Duplicates** — where else the repository does the same thing, with `path:line` evidence.
+2. **Callers** — who calls it and from which user path, with `path:line` evidence.
+3. **Shared state** — what it shares with what already runs (state, files, facts, locks), with `path:line` evidence.
+
+Each answer must include `path:line` evidence, or state `absent: <what was searched>`
+when the answer is genuinely "nowhere" or "shares nothing".
+
+The `changed-functions.json` file is computed by the `changed_functions` module, which
+maps diff hunk line ranges onto function spans via `ast` (Python) and hunk-range entries
+(TypeScript). It is written at `repo_change.py` materialise (unconditional) and
+`_check_in_worktree` (conditional). The `changed_functions` fact is rendered into each
+reviewer prompt as `{{changed_functions}}`.
+
+The design review also traces the brief's own example through the code in time order,
+naming the route a real run takes for every runtime that runs it.
+
+`gate_qa` and the fast `gate_qa` refuse a reviewer output that lacks an entry for a
+changed function, or gives an answer with no `path:line` evidence. `gate_design_review`
+performs the same check against the design's `[changed]` sites.
+
+### Claim checking
+
+The design review and code_reviewer check each factual claim about existing code at
+`file:line`, including uncited premises. A false claim is BLOCKING in the review output.
+Cited claims will be checked by a deterministic module (from a parallel run) once it
+lands; uncited-claim checking is prompt-only.
+
+### Deliverable-kind conditioning
+
+The `deliverable_kind` fact is computed at prepare time: `"repository_change"` when the
+run names a `target`, `refine`, or `source_project`; `"artifact"` otherwise. It uses
+`task.get(k) or ctx.knob(k, "")` for each key, so it works on both runtimes.
+
+Repository-change runs get `REPO_CHANGE_REVIEW_INSTRUCTIONS` (code-change review content
+composed from verification methods M2, M3, M11, M12, plus repository questions and
+claim-checking instructions). Artifact runs get `ARTIFACT_REVIEW_INSTRUCTIONS` (the
+rendering and exchange-format text previously inline in health_checker and qa_director).
+
+### Reviewer re-runs
+
+A reviewer formatting miss (missing or incomplete repo_questions) re-runs the reviewer
+without spending a builder attempt. Each gate has its own re-run counter (limit 2).
+On exhaustion, the problems join the ordinary findings and take the existing path.
+
+
 Overwatch receives the original brief, accepted strategy/criteria and design,
 current applicable ledger, merged reviews and final runtime evidence. It writes
 `reviews/overwatch.md` plus `intent-audit.json`. Fast focused QA writes its existing
@@ -84,6 +134,15 @@ under `process_notes` but are not baseline requirements. Compound asks must be d
 when they share an id. Each row identifies the requirement, status and supporting
 individual file paths with concrete command/output or source findings. Directories,
 line-number suffixes and the audit itself cannot serve as evidence references.
+
+For every constraint or correction row, each clause must include a `sites` array:
+`"sites": [{"site": "path:line", "tests": ["test_file::test_name"], "scope": "connected"}]`.
+Each site names the exact file:line in the diff that builds this clause, the test(s)
+that reach it, and the evidence scope (`local`, `connected`, `assembled`,
+`artifact`). A multi-clause correction must have sites on each clause, not a single
+site on the row. The gate's `correction_audit_problems` checks these sites
+mechanically: it verifies the site is in the diff, reverts it and runs the named
+test, and enforces the declared scope.
 
 Required behavior without adequate evidence is failed or unverified with a
 precise reason. A README limitation or reviewer/coordinator waiver cannot alter

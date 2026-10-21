@@ -146,6 +146,9 @@ def _read_resume_pending(root: Path) -> dict | None:
 def _build_owner_argv(root: Path) -> tuple[list[str] | None, str]:
     """Build the owner command line from run-config.json.
 
+    The interpreter is the driver's, or the pin's when the run was pinned or the
+    driver has drifted since launch (see pin.py).
+
     Primary: reads ``owner_argv`` from run-config.json (written by
     interactive.prepare() at run creation).  The stored argv is the fragment
     after the interpreter and without ``--workdir``, ``--headless`` or
@@ -162,13 +165,28 @@ def _build_owner_argv(root: Path) -> tuple[list[str] | None, str]:
     config = json.loads((root / '.refactory/run-config.json').read_text())
     mode = config['mode']
     project = config.get('project', '.')
+    # ── pin: use the pin's interpreter when the driver has drifted ──
+    python_exe = sys.executable
+    driver = config.get('driver')
+    if driver is not None:
+        if driver.get('pin_checkout'):
+            from refactory_dsh.pin import pin_python
+            pin_py = pin_python(Path(driver['pin_checkout']))
+            if pin_py.exists():
+                python_exe = str(pin_py)
+        else:
+            from refactory_dsh import pin as _pin
+            _drift = _pin.detect_drift(config)
+            if _drift is not None:
+                _pin_checkout = _pin.resolve_pin(driver, run_dir=root)
+                python_exe = str(_pin.pin_python(_pin_checkout))
     owner_argv = config.get('owner_argv')
 
     if owner_argv is not None:
-        # Primary path: stored argv fragment. Prepend current interpreter
+        # Primary path: stored argv fragment. Prepend the chosen interpreter
         # and append current root and flags so a moved run directory and a
         # changed venv are handled.
-        argv = [sys.executable] + list(owner_argv) + [
+        argv = [python_exe] + list(owner_argv) + [
             '--workdir', str(root), '--headless', '--resume']
         return argv, project
 
@@ -177,13 +195,12 @@ def _build_owner_argv(root: Path) -> tuple[list[str] | None, str]:
     eps = entry_points(group='refactory.owner_module')
     for ep in eps:
         module_name = ep.value
-        argv = [sys.executable, '-m', module_name, mode,
+        argv = [python_exe, '-m', module_name, mode,
                 '--workdir', str(root), '--headless', '--resume']
         return argv, project
 
     # No owner_argv and no entry point: cannot build argv.
     return None, project
-
 
 def _start_child(root: Path) -> subprocess.Popen | None:
     """Start the owner child process.  Returns None when no owner is available."""
@@ -336,9 +353,23 @@ def supervise(root: Path, *, max_respawns: int | None = None,
             if pending is not None:
                 # A person's explicit request — reset counter and start a new child
                 respawn_count = 0
+                # Detect drift BEFORE prepare() so a moved driver creates a pin
+                # instead of prepare() refusing with "configuration changed".
+                # Pass the driver checkout so prepare() skips only driver
+                # fingerprints; non-driver changes still refuse.
+                _skip_drv_sv: str | None = None
+                try:
+                    _sv_config = json.loads((root / '.refactory/run-config.json').read_text())
+                    from refactory_dsh import pin as _sv_pin
+                    if _sv_pin.detect_drift(_sv_config) is not None:
+                        _sv_pin.resolve_pin(_sv_config['driver'], run_dir=root)
+                        _skip_drv_sv = _sv_config.get('driver', {}).get('checkout')
+                except Exception:
+                    pass
                 try:
                     recovery.prepare(root, name,
-                                     acknowledge_failed=bool(pending.get('acknowledge_failed')))
+                                     acknowledge_failed=bool(pending.get('acknowledge_failed')),
+                                     skip_driver_paths=_skip_drv_sv)
                 except ValueError as exc:
                     reason = str(exc)
                     pid_for_record = child.pid if child is not None else os.getpid()
@@ -385,9 +416,21 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                                      reason=reason)
                 return last_exit_code if inline else None
 
+            # Detect drift before prepare() so a moved driver does not refuse.
+            # Pass the driver checkout so prepare() skips only driver
+            # fingerprints; non-driver changes still refuse.
+            _skip_drv_sv2: str | None = None
+            try:
+                _sv_config2 = json.loads((root / '.refactory/run-config.json').read_text())
+                from refactory_dsh import pin as _sv_pin2
+                if _sv_pin2.detect_drift(_sv_config2) is not None:
+                    _sv_pin2.resolve_pin(_sv_config2['driver'], run_dir=root)
+                    _skip_drv_sv2 = _sv_config2.get('driver', {}).get('checkout')
+            except Exception:
+                pass
             # Try recovery.prepare() to distinguish transient vs deterministic
             try:
-                recovery.prepare(root, name)
+                recovery.prepare(root, name, skip_driver_paths=_skip_drv_sv2)
             except ValueError as exc:
                 # Deterministic refusal — do not retry
                 reason = str(exc)
