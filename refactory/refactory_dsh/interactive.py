@@ -136,9 +136,11 @@ def prepare(
         import json
         from refactory_dsh.recovery import configuration_fingerprints
 
+        owner_argv = ['-m', 'refactory_dsh.interactive', identifier]
         (workdir / '.refactory/run-config.json').write_text(json.dumps({'mode': identifier,
             'project': str(project.resolve()), 'knobs': knobs or [], 'model_context': model_context,
             'resource_limits': resource_limits,
+            'owner_argv': owner_argv,
             'configuration_fingerprints': configuration_fingerprints(workdir, identifier, project)}))
         return name, graphs
 

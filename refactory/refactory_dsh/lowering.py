@@ -170,18 +170,10 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
         }
         if node.kind == "op":
             command_timeout_s = None
-            if node.call in ("refactory_dsh.create_ops:smoke", "refactory_dsh.fast_ops:smoke"):
-                # Resolve from the final state, after command-line/GUI knobs.
+            if _is_smoke_node(node):
                 # The operation owns up to three bounded passes plus sandbox
                 # discovery/launch overhead; the enclosing shell must outlast it.
-                from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
-
-                budget = int((state.get("knobs") or {}).get("smoke_timeout_s", {}).get(
-                    "value", DEFAULT_MODEL_SMOKE_TIMEOUT_S,
-                ))
-                if not 1 <= budget <= 86400:
-                    raise LoweringError("smoke_timeout_s must be between 1 and 86400 seconds")
-                command_timeout_s = 3 * budget + 600
+                command_timeout_s = 3 * _smoke_budget(state) + 600
             elif _is_check_node(node):
                 command_timeout_s = _check_envelope_s(state)
             elif _is_deliver_node(node):
@@ -218,17 +210,10 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 gate["gate_prompt"] = node.notes
             if node.gate_kind == "fn":
                 gate["evaluator_command"] = f"{RUNNER} {node.evaluator}"
-                if node.evaluator == "refactory_dsh.create_ops:gate_smoke":
-                    from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
-
-                    budget = int((state.get("knobs") or {}).get("smoke_timeout_s", {}).get(
-                        "value", DEFAULT_MODEL_SMOKE_TIMEOUT_S,
-                    ))
-                    if not 1 <= budget <= 86400:
-                        raise LoweringError("smoke_timeout_s must be between 1 and 86400 seconds")
+                if _is_smoke_node(node):
                     # Revised execution, optional original comparison, and discovery.
                     # Moving smoke into a gate must retain its bounded shell envelope.
-                    gate["command_timeout_s"] = 2 * budget + 600
+                    gate["command_timeout_s"] = 2 * _smoke_budget(state) + 600
                 elif _is_check_node(node):
                     gate["command_timeout_s"] = _check_envelope_s(state)
             nodes[node_id] = GateNode(**common, **gate)
@@ -283,6 +268,36 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             for knob_name, entry in (state.get("knobs") or {}).items()
         },
     )
+
+
+SMOKE_PRODUCES = frozenset(("smoke_score", "smoke_ok"))
+
+
+def _is_smoke_node(node: Any) -> bool:
+    """Whether this node runs a smoke validation and needs the smoke envelope.
+
+    Two-factor discriminator: the node must both (1) produce ``smoke_score``
+    and ``smoke_ok`` — facts only the smoke gate/op produces — and
+    (2) declare ``smoke_timeout_s`` in its knobs.  This excludes
+    ``prepare``, which declares ``smoke_timeout_s`` in its knobs (because it
+    relays the value as a fact) but does not produce the smoke results.
+    """
+    return (
+        SMOKE_PRODUCES.issubset(set(node.produces))
+        and "smoke_timeout_s" in node.knobs
+    )
+
+
+def _smoke_budget(state: dict[str, Any]) -> int:
+    """The smoke budget from the state's knobs, validated."""
+    from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
+
+    budget = int((state.get("knobs") or {}).get("smoke_timeout_s", {}).get(
+        "value", DEFAULT_MODEL_SMOKE_TIMEOUT_S,
+    ))
+    if not 1 <= budget <= 86400:
+        raise LoweringError("smoke_timeout_s must be between 1 and 86400 seconds")
+    return budget
 
 
 def _is_check_node(node: Any) -> bool:

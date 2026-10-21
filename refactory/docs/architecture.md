@@ -668,15 +668,47 @@ registration (core-only install), the overlay is `None` and the block is
 skipped. A product registration is available only in processes whose
 installed distribution declares the entry point.
 
+### Product-supplied configuration
+
+Two additional patterns let core consume product-defined behaviour without
+naming product modules by string:
+
+1. **Node properties (lowering).** Lowering detects smoke nodes by
+   `SMOKE_PRODUCES.issubset(node.produces) and 'smoke_timeout_s' in node.knobs`
+   — a two-factor predicate matching the `_is_check_node` pattern
+   (`CHECK_PRODUCES` + `check_timeout_s`). A mode that wants the smoke
+   envelope declares these in its node. Core reads the properties; it never
+   matches a product module name. Product modes: `CreateMode` at
+   `create.py:37`, `EditMode` at `edit.py:31`.
+
+2. **Run-record fields (supervisor).** The supervisor reads `owner_argv`
+   from `run-config.json`, written by `interactive.prepare()` at
+   `interactive.py:139`. The stored argv omits `--workdir`; the supervisor
+   appends the current root at call time, keeping its current-root behaviour
+   and avoiding stale absolute paths. For backward compatibility with runs
+   created before this change, the supervisor discovers the owner module
+   from the `refactory.owner_module` entry point.
+
+**Behaviour changes:** Behaviour is unchanged on both runtimes
+(`python -m refactory_dsh.design` and `refactory ceo`). After pulling:
+`uv sync` is needed to register the new entry point
+(`refactory.owner_module`). Runs created before this change respawn through
+the `refactory.owner_module` entry point, so `uv sync` is required. No
+other manual action required. The `owner_argv` field in `run-config.json`
+is written automatically by `interactive.prepare()` on new runs. Existing
+in-progress runs use the entry-point fallback, which reproduces today's
+behaviour exactly.
+
 ### Entry-point groups
 
-Three groups register product behaviour that core discovers at call time:
+Four groups register product behaviour that core discovers at call time:
 
 | Group | pyproject.toml key | Discoverer | Degradation | Stale-install guard |
 |---|---|---|---|---|
 | `refactory.environment_overlay` | `worktree = "…worktree:_worktree_environment_overlay"` | `model.get_environment_overlay()` | `None` → skip overlay | Yes — `RuntimeError` when worktree record exists |
 | `refactory.worktree_state` | `worktree = "…worktree:_worktree_state_bridge"` | `agent_delivery.get_worktree_state()` | `None` → recorded returns None, skip shared_changed | Yes — `RuntimeError` when worktree record exists at workdir |
 | `refactory.delivery_identity` | `authoring = "…authoring_evidence:delivery_identity"` | `agent_delivery.get_delivery_identity()` | `None` + not reviewer or no EVIDENCE → skip enrichment | Conditional — `RuntimeError` when node in REVIEWERS AND EVIDENCE file exists |
+| `refactory.owner_module` | `interactive = "refactory_dsh.interactive"` | `supervisor._build_owner_argv()` | `None` → record start failure, supervisor exits cleanly | No — used only as fallback for old runs without `owner_argv` |
 
 Each discoverer follows the same pattern: a module-level sentinel, at-most-one
 `entry_points()` lookup, cache, and `None`. The stale-install guard fails
@@ -692,7 +724,7 @@ same entry-point discovery:
 | Worker | `worker_node.execute` → `model` | .venv/bin/python |
 | Interactive owner | `interactive.py` → `model` | .venv/bin/python |
 | Console | `console` → `model` | .venv/bin/python |
-| Supervisor child | spawns `-m refactory_dsh.interactive` (the interactive owner) → `model` | sys.executable |
+| Supervisor child | reads `owner_argv` from run-config.json (the interactive owner) → `model` | sys.executable |
 | FnNode ops | `python -m refactory_dsh.run` (startup.ts) → `model` | PATH python |
 | Evaluator model judge | `evaluators.py` → sandbox → `model` | sys.executable (PYTHONPATH=refactory/) |
 

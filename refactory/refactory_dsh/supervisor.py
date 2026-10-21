@@ -143,19 +143,58 @@ def _read_resume_pending(root: Path) -> dict | None:
     return data
 
 
-def _build_owner_argv(root: Path) -> tuple[list[str], str]:
-    """Build the owner command line from run-config.json. Returns (argv, project)."""
+def _build_owner_argv(root: Path) -> tuple[list[str] | None, str]:
+    """Build the owner command line from run-config.json.
+
+    Primary: reads ``owner_argv`` from run-config.json (written by
+    interactive.prepare() at run creation).  The stored argv is the fragment
+    after the interpreter and without ``--workdir``, ``--headless`` or
+    ``--resume``: ``['-m', 'refactory_dsh.interactive', identifier]``.
+    The supervisor appends the current ``root`` and the flags at call time,
+    keeping its current-root behaviour and avoiding stale absolute paths.
+
+    Fallback for old runs without ``owner_argv``: discovers the owner module
+    from the ``refactory.owner_module`` entry point.
+
+    Returns ``(None, project)`` when no owner_argv and no entry point exist
+    (core-only install).
+    """
     config = json.loads((root / '.refactory/run-config.json').read_text())
     mode = config['mode']
     project = config.get('project', '.')
-    argv = [sys.executable, '-m', 'refactory_dsh.interactive', mode,
+    owner_argv = config.get('owner_argv')
+
+    if owner_argv is not None:
+        # Primary path: stored argv fragment. Prepend current interpreter
+        # and append current root and flags so a moved run directory and a
+        # changed venv are handled.
+        argv = [sys.executable] + list(owner_argv) + [
             '--workdir', str(root), '--headless', '--resume']
-    return argv, project
+        return argv, project
+
+    # Fallback: discover the owner module from a product entry point.
+    from importlib.metadata import entry_points
+    eps = entry_points(group='refactory.owner_module')
+    for ep in eps:
+        module_name = ep.value
+        argv = [sys.executable, '-m', module_name, mode,
+                '--workdir', str(root), '--headless', '--resume']
+        return argv, project
+
+    # No owner_argv and no entry point: cannot build argv.
+    return None, project
 
 
-def _start_child(root: Path) -> subprocess.Popen:
-    """Start the owner child process."""
+def _start_child(root: Path) -> subprocess.Popen | None:
+    """Start the owner child process.  Returns None when no owner is available."""
     argv, project = _build_owner_argv(root)
+    if argv is None:
+        record_start_failure(root, os.getpid(), 1,
+                             run_state.spine_status(root),
+                             run_state.spine_status(root),
+                             reason='no owner_argv in run-config.json and no '
+                                    'refactory.owner_module entry point')
+        return None
     log_path = root / 'recovery.log'
     log_path.parent.mkdir(parents=True, exist_ok=True)
     output = log_path.open('ab')
@@ -245,6 +284,9 @@ def supervise(root: Path, *, max_respawns: int | None = None,
             child = _start_child(root)
             _current_child = child
 
+            if child is None:
+                return None
+
             # Clear start-failure from a previous cycle if we got this far
             if sf_path.exists():
                 try:
@@ -309,6 +351,8 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                 _from_resume_pending = True
                 child = _start_child(root)
                 _current_child = child
+                if child is None:
+                    return last_exit_code if inline else None
                 # Clear any start-failure from the previous child
                 if sf_path.exists():
                     try:
@@ -371,6 +415,8 @@ def supervise(root: Path, *, max_respawns: int | None = None,
             child_start_time = int(time.time() * 1000) / 1000
             child = _start_child(root)
             _current_child = child
+            if child is None:
+                return last_exit_code if inline else None
             history_entry['child_pid'] = child.pid
 
             _append_supervision_history(root, history_entry)
