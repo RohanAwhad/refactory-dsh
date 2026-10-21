@@ -232,8 +232,80 @@ def delivery_identity(workdir: Path) -> dict[str, str] | None:
             "identity": digest(identity(workdir, evidence["identity"]["root"]))}
 
 
+def check_nodes(workdir: Path) -> list[str]:
+    """Node ids whose `produces` includes 'runtime_evidence', from declarations.json."""
+    decl_path = workdir / '.refactory/declarations.json'
+    if not decl_path.exists():
+        return []
+    try:
+        decl = json.loads(decl_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [nid for nid, info in decl.items()
+            if isinstance(info, dict) and 'runtime_evidence' in (info.get('produces') or [])]
+
+
+def _check_skip_provenance(workdir: Path) -> dict[str, str] | None:
+    """Return skip provenance for the first check node that has one, or None."""
+    checkpoint_path = workdir / '.refactory/spine-checkpoint.json'
+    if not checkpoint_path.exists():
+        return None
+    try:
+        saved = json.loads(checkpoint_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    state = saved.get('state', {})
+    skip_prov = state.get('skip_provenance', {})
+    skipped = state.get('skipped', [])
+    nodes = check_nodes(workdir)
+    for nid in nodes:
+        if nid in skip_prov and nid in skipped:
+            prov = skip_prov[nid]
+            return {'source': prov.get('source', ''), 'at': prov.get('at', ''), 'node': nid}
+    return None
+
+
+def record_skip(workdir: Path, node: str, provenance: dict[str, str]) -> dict[str, Any]:
+    """Write a 'skipped' validation receipt for a person-skipped check node."""
+    from refactory_dsh.run import _knobs, _read_facts
+    from refactory_dsh.nn.executor import RunContext
+    context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
+    outcome = {
+        'status': 'skipped',
+        'source': provenance.get('source', 'person'),
+        'at': provenance.get('at', ''),
+        'via': 'graph-control',
+        'node': node,
+    }
+    return record(context, outcome)
+
+
 def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
     """Legacy reports remain readable; new evidence cannot authorize old sign-off."""
+    # Check skip provenance before the early return.
+    person_skip_accepted = False
+    prov = _check_skip_provenance(ctx.workdir)
+    if prov is not None:
+        if prov['source'] != 'person':
+            return [f"required runtime validation was skipped by {prov['source']}; "
+                    f"only a person's skip is accepted"]
+        # Person-sourced skip: require evidence with status='skipped'.
+        if not ctx.exists(EVIDENCE):
+            return ["authoritative runtime evidence is missing"]
+        ev = ctx.read_json(EVIDENCE, {})
+        validation = ev.get('validation', {})
+        if validation.get('status') == 'skipped':
+            source_match = validation.get('source') == prov['source']
+            at_match = validation.get('at') == prov['at']
+            node_match = validation.get('node') == prov['node']
+            if source_match and at_match and node_match:
+                # Person skip accepted. Suppress "did not pass" below;
+                # keep identity, receipt, settings, output and worker checks.
+                person_skip_accepted = True
+            else:
+                return ["authoritative runtime evidence is missing"]
+        else:
+            return ["authoritative runtime evidence is missing"]
     if not ctx.exists(EVIDENCE):
         return ["authoritative runtime evidence is missing"] if ctx.facts.get("runtime_evidence") else []
     evidence = ctx.read_json(EVIDENCE, {})
@@ -241,7 +313,7 @@ def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
     problems = []
     if now is None or now["identity"] != digest(evidence.get("identity")):
         problems.append("artifact, accepted inputs or user intent changed after validation; rerun validation and reviews")
-    if evidence.get("validation", {}).get("status") != "pass":
+    if not person_skip_accepted and evidence.get("validation", {}).get("status") != "pass":
         problems.append("required runtime validation did not pass")
     if evidence.get("settings") != {key: ctx.knob(key, None) for key in SETTINGS}:
         problems.append("validation inputs or comparison policy changed after execution")

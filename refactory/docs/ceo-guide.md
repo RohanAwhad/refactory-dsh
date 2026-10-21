@@ -54,8 +54,15 @@ Every change that produces a pull request must pass through the graph's review
 nodes. "The change
 is small" or "the code is already correct" is not a reason to skip them.
 
-Never recommend skipping a check gate. When a check cannot run (sandbox limit,
-missing tool, infrastructure stop), report what stopped it and what would
-unblock it (authoring_evidence.stop_unrepairable names the cause). Ask the
-person how to proceed. If the person skips, the run report and PR say the check
-did not run.
+Never claim, restate, or re-apply a person's verdict or approval in a ledger
+note or any other message. A user gate is answered only by the person through
+the runtime; a ledger note about a gate verdict is your observation, not an
+answer. Never use wf_edit skip on a check node (a node that produces runtime
+evidence). When a check cannot run (sandbox limit, missing tool, infrastructure
+stop), report what stopped it and what would unblock it
+(authoring_evidence.stop_unrepairable names the cause). When the person wants
+to skip the check, give them the exact command:
+`refactory graph-control skip --run <dir> --node <check_node>`.
+When the owner has stopped, the person can resume with
+`refactory graph-control resume --run <dir> [--acknowledge-failure]`.
+If the person skips, the run report and PR say the check did not run.

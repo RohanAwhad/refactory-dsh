@@ -435,6 +435,10 @@ def run(
                         print(f"  {line}", file=sys.stderr)
                 print(f"  Answer it with one of {verdicts_str} (add --note \"...\" to say why):", file=sys.stderr)
                 print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
+                if gate_info.get("ceo_notes"):
+                    print(f"  CEO observation:", file=sys.stderr)
+                    for ceo_line in gate_info["ceo_notes"].splitlines():
+                        print(f"    {ceo_line}", file=sys.stderr)
                 print(f"  Then continue the run:", file=sys.stderr)
                 print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
         except (OSError, ValueError, KeyError, TypeError):

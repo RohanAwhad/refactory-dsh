@@ -418,6 +418,8 @@ export class Spine {
   private afters: Map<string, string>
   private completed: string[]
   private skipped: string[]
+  private skipProvenance: Map<string, { source: string; at: string }>
+  private pendingSkipReceipts: Array<{ node: string; provenance: { source: string; at: string } }>
   private readonly gateVerdicts: Map<string, string>
   private readonly iterations: Record<string, number>
   private readonly feedback: Record<string, string>
@@ -441,6 +443,8 @@ export class Spine {
     this.afters = new Map()
     this.completed = []
     this.skipped = []
+    this.skipProvenance = new Map()
+    this.pendingSkipReceipts = []
     this.gateVerdicts = new Map()
     this.iterations = {}
     this.feedback = {}
@@ -616,6 +620,13 @@ export class Spine {
     while (!cursor.some(node => this.pauseBoundaries.has(node))) {
       const node = cursor.find(entry => skipped.includes(entry))
       if (node === undefined) break
+      // Queue skip receipt for person-skipped nodes passed over by advanceSkipped
+      if (!dryRun) {
+        const prov = this.skipProvenance.get(node)
+        if (prov?.source === 'person') {
+          this.pendingSkipReceipts.push({ node, provenance: prov })
+        }
+      }
       const position = JSON.stringify([cursor, [...afters], pass?.finished])
       if (seen.has(position)) throw new Error('skipped nodes form a workflow cycle; unskip a step before continuing')
       seen.add(position)
@@ -677,6 +688,18 @@ export class Spine {
   /** The node(s) due now, or `done`. */
   next(): SpineNext {
     this.retryEdges()
+    // Person-skip routing rule: route person-skipped conditional-only gates via proceed.
+    for (const nid of [...this.cursor]) {
+      if (!this.skipped.includes(nid)) continue
+      const prov = this.skipProvenance.get(nid)
+      if (prov?.source !== 'person') continue
+      const body = this.nodes.get(nid)
+      if (body?._type !== 'GateNode') continue
+      if (this.unconditionalTarget(nid) !== undefined) continue
+      if (this.outgoing(nid).length === 0) continue
+      this.verdict(nid, 'proceed', 'skipped by the person')
+      this.pendingSkipReceipts.push({ node: nid, provenance: prov })
+    }
     this.advanceSkipped()
     const pass = this.pass === undefined ? {} : { pass: { ...this.pass } }
     if (this.halted !== undefined || (this.cursor.length === 0 && this.pass === undefined)) {
@@ -1061,14 +1084,16 @@ export class Spine {
   }
 
   /** Admit a skip before the runtime retires its pending delivery attempts. */
-  planSkip(node: string): string[] {
+  planSkip(node: string, opts?: { source?: string }): string[] {
     if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before skipping work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (this.completed.includes(node)) throw new Error(`${node} already entered or completed; skip a due/future step, or explicitly redo completed work`)
     if (this.pass?.node === node) throw new Error(`${node} already has an active data pass; finish or skip its current body before changing the dataset`)
     if (body._type === 'GateNode' && this.unconditionalTarget(node) === undefined && this.outgoing(node).length > 0) {
-      throw new Error(`${node} has conditional successors; route its verdict explicitly instead of an ambiguous skip`)
+      if (opts?.source !== 'person') {
+        throw new Error(`${node} has conditional successors; route its verdict explicitly instead of an ambiguous skip`)
+      }
     }
     // A skipped container bypasses its body, but still reaches its continuation.
     // Keep child skip flags independent so unskip(container) restores that body.
@@ -1083,19 +1108,23 @@ export class Spine {
   }
 
   /** Graph mutation: skip a node's work, retaining its unambiguous continuation. */
-  skip(node: string): SpineNext {
-    this.planSkip(node)
+  skip(node: string, opts?: { source?: string; at?: string }): SpineNext {
+    this.planSkip(node, opts)
     const skipped = [...this.skipped]
     const logLength = this.log.length
+    const hadProvenance = this.skipProvenance.has(node)
     if (!this.skipped.includes(node)) {
       this.skipped.push(node)
       this.log.push(`skipped ${node}`)
     }
+    const provenance = { source: opts?.source ?? 'ceo', at: opts?.at ?? new Date().toISOString() }
+    this.skipProvenance.set(node, provenance)
     try {
       return this.next()
     } catch (error) {
       this.skipped = skipped
       this.log.length = logLength
+      if (!hadProvenance) this.skipProvenance.delete(node)
       throw error
     }
   }
@@ -1104,6 +1133,7 @@ export class Spine {
   unskip(node: string): SpineNext {
     if (this.skipped.includes(node)) {
       this.skipped = this.skipped.filter(entry => entry !== node)
+      this.skipProvenance.delete(node)
       this.log.push(`unskipped ${node}`)
     }
     return this.next()
@@ -1233,7 +1263,10 @@ export class Spine {
   /** Clear current completion and gate decisions without erasing graph edits. */
   private invalidateNodes(affected: Set<string>, clearSkips = true, preserveIterations = false): void {
     this.completed = this.completed.filter(entry => !affected.has(entry))
-    if (clearSkips) this.skipped = this.skipped.filter(entry => !affected.has(entry))
+    if (clearSkips) {
+      this.skipped = this.skipped.filter(entry => !affected.has(entry))
+      for (const id of affected) this.skipProvenance.delete(id)
+    }
     for (const id of affected) {
       this.gateVerdicts.delete(id)
       if (!preserveIterations) delete this.iterations[id]
@@ -1468,6 +1501,15 @@ export class Spine {
     this.cursor = cursor
     this.completed = completed
     this.skipped = list(saved.skipped)
+    // Restore skip provenance from checkpoint (backward-compatible with older checkpoints).
+    this.skipProvenance.clear()
+    if (saved.skip_provenance != null && typeof saved.skip_provenance === 'object') {
+      for (const [id, prov] of Object.entries(saved.skip_provenance as Record<string, { source: string; at: string }>)) {
+        this.skipProvenance.set(id, prov)
+      }
+    }
+    // Restore pending skip receipts (backward-compatible).
+    this.pendingSkipReceipts = Array.isArray(saved.pending_skip_receipts) ? [...saved.pending_skip_receipts] : []
     this.pauseBoundaries.clear()
     for (const node of list(saved.pause_before)) this.pauseBoundaries.add(node)
     this.gateVerdicts.clear()
@@ -1522,6 +1564,8 @@ export class Spine {
       cursor: [...this.cursor],
       completed: [...this.completed],
       skipped: [...this.skipped],
+      skip_provenance: Object.fromEntries(this.skipProvenance),
+      pending_skip_receipts: [...this.pendingSkipReceipts],
       pause_before: [...this.pauseBoundaries],
       gate_verdicts: Object.fromEntries(this.gateVerdicts),
       iterations: { ...this.iterations },
