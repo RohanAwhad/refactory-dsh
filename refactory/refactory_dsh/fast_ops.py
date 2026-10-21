@@ -477,8 +477,52 @@ def gate_qa(ctx: Any) -> str:
     unbuilt_diag = check.get("unbuilt_diagnosis", "")
     if unbuilt_diag:
         findings.insert(0, unbuilt_diag)
+    # ── per-changed-function entry validation in focused-qa.json ──
+    deliverable_kind_value = str(ctx.facts.get("deliverable_kind", ""))
+    if isinstance(qa, dict) and deliverable_kind_value == "repository_change":
+        from refactory_dsh.authoring_evidence import validate_repo_questions
+        import json as _json
+
+        changed_fns: list[str] = []
+        if ctx.exists("changed-functions.json"):
+            try:
+                cf_data = _json.loads(ctx.read_text("changed-functions.json"))
+                changed_fns = [entry["function"] for entry in cf_data
+                               if isinstance(entry, dict) and "function" in entry]
+            except (ValueError, KeyError):
+                pass
+
+        if changed_fns:
+            repo_questions = qa.get("repo_questions")
+            if repo_questions is None:
+                findings.append("[repo-questions] focused_qa: no 'repo_questions' key in focused-qa.json")
+            elif not isinstance(repo_questions, list):
+                findings.append("[repo-questions] focused_qa: repo_questions is not a list")
+            else:
+                findings.extend(validate_repo_questions(repo_questions, changed_fns, "focused_qa"))
+
     findings.extend(correction_problems)
     if findings:
+        # Separate repo-questions from other findings.
+        rq_findings = [f for f in findings if f.startswith("[repo-questions]")]
+        non_rq_findings = [f for f in findings if not f.startswith("[repo-questions]")]
+
+        # When ONLY repo-questions problems remain, route to review_reloop.
+        if rq_findings and not non_rq_findings and not check_failed:
+            # Check re-run budget
+            reruns_used = int(ctx.facts.get("review_reruns_used", 0)) + 1
+            ctx.set_fact("review_reruns_used", reruns_used)
+            if reruns_used <= 2:
+                rq_report = "\n".join(rq_findings)
+                ctx.set_fact("repair_feedback", rq_report)
+                ctx.write_text("repair.txt", rq_report + "\n")
+                return Verdict("review_reloop", rq_report)
+            else:
+                rq_report = "\n".join(rq_findings)
+                raise ValueError(
+                    f"repository-question re-runs exhausted after {reruns_used} attempt(s): {rq_report}"
+                )
+
         # Classify only refactory's own text; check stderr/stdout is target text
         # and must not be word-scanned (correction 1: gate_qa classifies target text).
         # robustness_notes contain target test IDs and must not be classified
@@ -488,14 +532,13 @@ def gate_qa(ctx: Any) -> str:
             refactory_findings = [
                 f for f in findings
                 if not f.startswith("requested runtime check failed")
+                and not f.startswith("[repo-questions]")
                 and f != robustness_notes
                 and f not in correction_problems
             ]
         else:
-            refactory_findings = [
-                f for f in findings
-                if f != robustness_notes and f not in correction_problems
-            ]
+            refactory_findings = [f for f in non_rq_findings
+                                  if f != robustness_notes and f not in correction_problems]
         if refactory_findings:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)

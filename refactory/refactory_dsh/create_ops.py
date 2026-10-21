@@ -2249,6 +2249,52 @@ def gate_qa(ctx: Any) -> str:
             note_text = "\n".join(scope_notes)
             if reason:
                 reason += "\n" + note_text
+    # ── per-changed-function entry validation (design mode only) ──
+    deliverable_kind_value = str(ctx.facts.get("deliverable_kind", ""))
+    if not reason and deliverable_kind_value == "repository_change":
+        from refactory_dsh.authoring_evidence import check_review_questions
+        import json as _json
+
+        changed_fns: list[str] = []
+        if ctx.exists("changed-functions.json"):
+            try:
+                cf_data = _json.loads(ctx.read_text("changed-functions.json"))
+                changed_fns = [entry["function"] for entry in cf_data
+                               if isinstance(entry, dict) and "function" in entry]
+            except (ValueError, KeyError):
+                pass
+
+        if changed_fns:
+            rq_problems: list[str] = []
+            _review_file_to_node = {
+                "reviews/health-check.md": "health_checker",
+                "reviews/code-review.md": "code_reviewer",
+                "reviews/qa.md": "qa_director",
+            }
+            for review in snapshot["reviews"]:
+                reviewer_name = _review_file_to_node.get(
+                    review["path"],
+                    review["path"].rsplit("/", 1)[-1].replace(".md", "").replace("-", "_"),
+                )
+                review_text_content = ctx.read_text(review["path"])
+                rq_problems.extend(
+                    check_review_questions(review_text_content, changed_fns, reviewer_name))
+            if rq_problems:
+                # Check re-run budget
+                reruns_used = int(ctx.facts.get("review_reruns_used", 0)) + 1
+                ctx.set_fact("review_reruns_used", reruns_used)
+                if reruns_used <= 2:
+                    rq_report = "\n".join(rq_problems)
+                    ctx.write_text("reviews/qa-gate.txt", rq_report + "\n")
+                    ctx.set_fact("qa_gate", rq_report)
+                    return Verdict("review_reloop", rq_report)
+                else:
+                    # At the limit, raise naming the node and function
+                    rq_report = "\n".join(rq_problems)
+                    raise ValueError(
+                        f"repository-question re-runs exhausted after {reruns_used} attempt(s): {rq_report}"
+                    )
+
     if reason:
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
         ctx.set_fact("qa_gate", reason)

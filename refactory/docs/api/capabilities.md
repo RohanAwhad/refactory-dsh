@@ -7659,6 +7659,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "design_doc"
     },
     {
+      "condition": "review_reloop",
+      "source": "gate_design_review",
+      "target": "design_review"
+    },
+    {
       "condition": "proceed",
       "source": "gate_design_review",
       "target": "gate_strategy"
@@ -7692,6 +7697,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": "reloop",
       "source": "gate_qa",
       "target": "emit"
+    },
+    {
+      "condition": "review_reloop",
+      "source": "gate_qa",
+      "target": "fork_qa"
     },
     {
       "condition": "proceed",
@@ -8469,7 +8479,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "bcc24737c05230f3317f959516d89f4f81c14c4ad7a6a80d608e0fc564e7e895"
+    "reviewed_schema": "4418facf658dcc2f579e30cd14ecd7deb0c3dc25903bdb5a2d84849e06497ab3"
   }
 }
 ```
@@ -8511,6 +8521,11 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "condition": "reloop",
       "source": "gate_qa",
       "target": "emit"
+    },
+    {
+      "condition": "review_reloop",
+      "source": "gate_qa",
+      "target": "focused_qa"
     },
     {
       "condition": "proceed",
@@ -8867,7 +8882,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "eab48d871a8c7d9bdff259e77503824538b01ff1e36989949124e9d57469ecb8"
+    "reviewed_schema": "e50a5164c556fe0c79f4b32592609d4e77f21f17d9e4bb92fa0b414e2f7fbadf"
   }
 }
 ```

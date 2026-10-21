@@ -103,6 +103,7 @@ class DesignMode(Mode):
                     "reviews/design-review-feedback.txt", "pitfalls-review.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
+                      "deliverable_kind", "review_instructions",
                       *repo_change.produces(), "delivery", "delivery_plan",
                       "has_pitfalls_step", "pitfalls", "pitfalls_review",
                       "claims_check_feedback", "claims_check_attempts_used", "design_review_status"),
@@ -378,6 +379,10 @@ class DesignMode(Mode):
                 "or whose named test does not exercise the ask.\n"
                 "- An ask in the brief that has no corresponding row in the Ask mapping table.\n\n"
                 "List each finding as a line starting with `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem.\n\n"
+                "{{review_instructions}}\n\n"
+                "Trace the brief's own example through the code in time order, naming the route a "
+                "real run takes for every runtime that runs it. Write the trace in a section headed "
+                "`## Brief example trace`, with path:line citations for each step.\n\n"
                 "End with a line that is exactly `VERDICT: PASS` when there are "
                 "no blocking findings, or `VERDICT: FAIL` when there are any."
             ),
@@ -395,9 +400,9 @@ class DesignMode(Mode):
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
                       "design_review_findings", "pitfall_coverage",
-                      "finding_coverage", "design_review_status"),
+                      "finding_coverage", "design_review_reruns_used", "design_review_status"),
             knobs=("design_review_attempts",),
-            max_iterations=4,
+            max_iterations=6,
             notes="proceed on PASS with no findings; reloop to design_doc otherwise; "
                   "never fail the run",
         ))
@@ -438,7 +443,11 @@ class DesignMode(Mode):
             produces=("emit",),
             notes="write the artifact's files",
         ))
-        graph.add(repo_change.materialise_node())
+        graph.add(repo_change.materialise_node(
+            writes=("changes.diff", "changed-functions.json"),
+            produces=("artifact", "files", "commit", "change", "emission_refused",
+                      "changed_functions"),
+        ))
         graph.add(Node(
             "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
             resource_role="final_validation",
@@ -473,27 +482,17 @@ class DesignMode(Mode):
                 + "You are the health checker. Run the artifact the way a user would: run "
                 "targeted checks for uncovered requirements. Reuse the canonical acceptance "
                 "receipt for the check already executed. Record every command and "
-                "its exact output in `reviews/health-check.md`. For visual deliverables, "
-                "render actual representative output and inspect it at a useful size; "
-                "record the renderer and image path. Text existing in SVG/XML does not "
-                "prove it is visible or readable. If rendering or visual inspection is "
-                "unavailable, say so and leave the visual requirement unverified. "
-                "For exchange-format files, use an established consuming application "
-                "or independent format reader to open representative actual output and "
-                "inspect imported units, structure, geometry and required semantics. "
-                "Record normal loading, audit findings and recovery/repair separately. "
-                "Your own tag parser, or rendering a paired format, does not establish "
-                "interoperability. If a required consumer check cannot run, name that "
-                "unverified requirement rather than reporting a pass. Preserve the "
-                "current artifact and evidence, name the missing validation dependency, "
-                "and give the CEO or person the exact action needed to unblock it. "
-                "Rewriting the artifact or repeating the same probe cannot supply an "
-                "unavailable tool; do not prescribe those as a remedy. "
+                "its exact output in `reviews/health-check.md`. "
                 "Anything that fails or is "
                 "missing is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A "
-                "check you did not run is not a check that passed."
+                "check you did not run is not a check that passed.\n"
+                "{{review_instructions}}\n"
+                "Changed functions:\n{{changed_functions}}\n\n"
+                "Read reviews/verification.md. For each verifier finding that concerns a "
+                "changed function, address it in that function's repo_questions entry.\n"
             ),
-            reads=("brief.json", "design.md"),
+            reads=("brief.json", "design.md", "changed-functions.json",
+                   "reviews/verification.md"),
             writes=("reviews/health-check.md",),
             produces=("health_check",),
             notes="run the artifact and record what happened, command by command",
@@ -521,9 +520,17 @@ class DesignMode(Mode):
                 "A matching number elsewhere in prose is not evidence for the requested "
                 "field. Record findings in "
                 "`reviews/code-review.md`. A defect that would stop the artifact working "
-                "is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
+                "is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
+                "{{review_instructions}}\n"
+                "Changed functions:\n{{changed_functions}}\n\n"
+                "Read reviews/verification.md. For each verifier finding that concerns a "
+                "changed function, address it in that function's repo_questions entry.\n\n"
+                "When a false claim about design.md is found, report it against the code file "
+                "that relies on the claim, not against design.md, because BLOCKING: design.md "
+                "is downgraded by scope_filter_findings.\n"
             ),
-            reads=("brief.json", "design.md", "emit.txt", "pitfalls.json"),
+            reads=("brief.json", "design.md", "emit.txt", "pitfalls.json",
+                   "changed-functions.json", "reviews/verification.md"),
             writes=("reviews/code-review.md",),
             produces=("code_review",),
             notes="review the emitted files against the design",
@@ -544,13 +551,16 @@ class DesignMode(Mode):
                 "the exit code. Include conflicting nearby numbers, unsupported counts, "
                 "and alternative sign/unit encodings when the interface parses them. "
                 "Accepted output must match the request; unsupported input must fail "
-                "clearly without silently substituting a valid case. For visual output, "
-                "exercise small and large dimensions and inspect rendered labels and "
-                "bounds; distinguish geometry correctness from presentation quality. Write "
+                "clearly without silently substituting a valid case. Write "
                 "`reviews/qa.md` with each check and its exact result. Anything that "
-                "breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
+                "breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
+                "{{review_instructions}}\n"
+                "Changed functions:\n{{changed_functions}}\n\n"
+                "Read reviews/verification.md. For each verifier finding that concerns a "
+                "changed function, address it in that function's repo_questions entry.\n"
             ),
-            reads=("brief.json", "design.md", "strategy.json"),
+            reads=("brief.json", "design.md", "strategy.json",
+                   "changed-functions.json", "reviews/verification.md"),
             writes=("reviews/qa.md",),
             produces=("qa_review",),
             notes="attack the artifact against the brief",
@@ -568,9 +578,10 @@ class DesignMode(Mode):
         graph.add(Node(
             "gate_qa", "gate", evaluator="refactory_dsh.create_ops:gate_qa",
             reads=("reviews/qa-synthesized.md", "reviews/health-check.md",
-                   "reviews/code-review.md", "reviews/qa.md"),
+                   "reviews/code-review.md", "reviews/qa.md",
+                   "changed-functions.json"),
             writes=("reviews/qa-gate.txt",),
-            produces=("qa_gate",),
+            produces=("qa_gate", "review_reruns_used"),
             max_iterations=4,
             notes="proceed only when every review ran and none is blocking",
         ))
@@ -690,6 +701,7 @@ class DesignMode(Mode):
         graph.connect("check_design_claims", "design_doc", condition="reloop")
         graph.connect("design_review", "gate_design_review")
         graph.connect("gate_design_review", "design_doc", condition="reloop")
+        graph.connect("gate_design_review", "design_review", condition="review_reloop")
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
         graph.connect("gate_strategy", "pick_corrections", condition="proceed")
@@ -704,6 +716,7 @@ class DesignMode(Mode):
         graph.connect("join_qa", "synthesize_qa")
         graph.connect("synthesize_qa", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
+        graph.connect("gate_qa", "fork_qa", condition="review_reloop")
         graph.connect("gate_qa", "overwatch", condition="proceed")
         graph.connect("overwatch", "gate_overwatch")
         graph.connect("gate_overwatch", "emit", condition="reloop")

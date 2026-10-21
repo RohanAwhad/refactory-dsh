@@ -152,8 +152,9 @@ def materialise_node(**fields: Any) -> Node:
     """The op that applies ``emit.txt`` as the run's next attempt (`materialise`)."""
     return Node(**{
         "id": "materialise", "kind": "op", "call": f"{OPS}:materialise",
-        "reads": (EMIT_FILE,), "writes": ("changes.diff",),
-        "produces": ("artifact", "files", "commit", "change", "emission_refused"),
+        "reads": (EMIT_FILE,), "writes": ("changes.diff", "changed-functions.json"),
+        "produces": ("artifact", "files", "commit", "change", "emission_refused",
+                     "changed_functions"),
         "notes": "commit the emitted files on the run's branch, or write the artifact directory",
         **fields,
     })
@@ -838,10 +839,14 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
     worktree._write_json(Path(ctx.workdir) / EMISSION, {"digest": digest, "attempt_on": found.head,
                                                          "applied_to": rev})
     _warn_if_shared_changed(advanced, "since the last check")
-    ctx.write_text("changes.diff", worktree.diff(advanced))
+    diff_text = worktree.diff(advanced)
+    ctx.write_text("changes.diff", diff_text)
+    from refactory_dsh.changed_functions import compute_and_write as _cf_write
+    cf_formatted = _cf_write(diff_text, Path(advanced.path), ctx.workdir, advanced.base)
     wrapper = Path(ctx.workdir).resolve() / worktree.WRAPPER
     return {"artifact": advanced.path, "files": _branch_files(advanced),
             "commit": advanced.head,
+            "changed_functions": cf_formatted,
             "change": (
                 f"The artifact is a git worktree of {advanced.target} on branch {advanced.branch}. "
                 f"The change under review is `git -C {advanced.path} diff {advanced.base[:12]}`, also "
@@ -860,6 +865,7 @@ def _materialise_directory(ctx: Any, source: Path | None, files: tuple[str, ...]
     """Write the emitted files into the artifact directory, replacing an earlier attempt's.
 
     Given ``source``, its ``files`` are copied in first; the artifact may not replace it.
+    Always writes ``changed-functions.json`` (empty list when no diff exists).
     """
     checked, _, _ = _emitted(ctx.read_text(EMIT_FILE), edits=False)
     root = _artifact_root(str(ctx.facts["name"]))
@@ -899,7 +905,11 @@ def _materialise_directory(ctx: Any, source: Path | None, files: tuple[str, ...]
     finally:
         if not preserve_backup and not (previous.exists() and not root.exists()):
             shutil.rmtree(temporary)
-    return {"artifact": str(root), "files": sorted(set(files) | {str(path) for path in checked})}
+    # Write changed-functions.json as [] for directory-mode (no worktree, no diff).
+    import json as _json
+    (ctx.workdir / "changed-functions.json").write_text(_json.dumps([]) + "\n")
+    return {"artifact": str(root), "files": sorted(set(files) | {str(path) for path in checked}),
+            "changed_functions": "(none)"}
 
 
 # ── how it is checked, and reported ───────────────────────────────────────────
@@ -983,7 +993,11 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
     if found.head != head_before:
         ctx.set_fact("commit", found.head)
         ctx.set_fact("files", _branch_files(found))
-        ctx.write_text("changes.diff", worktree.diff(found))
+        diff_text = worktree.diff(found)
+        ctx.write_text("changes.diff", diff_text)
+        from refactory_dsh.changed_functions import compute_and_write as _cf_write
+        cf_formatted = _cf_write(diff_text, Path(found.path), ctx.workdir, found.base)
+        ctx.set_fact("changed_functions", cf_formatted)
     if problems:
         return sandbox.SandboxResult(ok=False, returncode=1, elapsed_s=0.0, prep_failure=prep_fail,
                                      stderr=(

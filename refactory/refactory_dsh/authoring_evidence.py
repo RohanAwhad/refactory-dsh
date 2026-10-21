@@ -21,6 +21,63 @@ _RESOURCE_EXIT_CODES: frozenset[int] = frozenset({
     128 + 25,  # SIGXFSZ — RLIMIT_FSIZE exceeded
 })
 
+from refactory_dsh.verification import M2_METHOD, M3_METHOD, M11_METHOD, M12_METHOD
+
+REPO_CHANGE_REVIEW_INSTRUCTIONS = (
+    "\n## Code-change review instructions\n"
+    "This is a change to an existing repository. Read the diff file by file. For "
+    "each changed function, trace the call path from each entry point the change "
+    "touches. Verify the change is wired into the route a real run takes — not a "
+    "step only one runtime reaches, a gate another mode no longer passes through, "
+    "or a check reading the wrong file. Check correctness, edge cases, missing "
+    "tests, scope creep and stubs. Confirm each new or modified function is "
+    "reachable from the runtime's actual execution path, naming that path.\n\n"
+    "Apply these verification methods to each changed function:\n"
+    + M2_METHOD + "\n" + M3_METHOD + "\n" + M11_METHOD + "\n" + M12_METHOD + "\n\n"
+    "## Repository questions\n"
+    "For each function listed below (or, for a design review, each "
+    "[changed] site), answer these three questions in a ```json fenced block with "
+    'this shape: [{"function":"<the entry exactly as listed under Changed functions, '
+    'e.g. pkg/mod.py::Class.method>", "duplicates":"where else the '
+    'repository does the same thing, with path:line evidence", "callers":"who calls '
+    "it and from which user path (the target's entry points: CLI commands, API "
+    'routes, scheduled jobs, test harnesses), with path:line evidence", '
+    '"shared_state":"what it shares with what already runs (state, files, facts, '
+    'locks), with path:line evidence"}]\n'
+    "Each answer gives path:line evidence, or states "
+    '"absent: <what was searched>" when the answer is genuinely "nowhere" or '
+    '"shares nothing". An entry with no path:line evidence and no absent: marker '
+    "is incomplete. Copy each function name exactly as it is listed (path::name); "
+    "an entry under any other name does not count.\n\n"
+    "For every factual claim about existing code — whether it cites a file or not, "
+    'including premises like "X calls Y", "this runs on every route", "module A '
+    'never calls B" — verify the claim at file:line. A false claim is BLOCKING.\n'
+)
+
+ARTIFACT_REVIEW_INSTRUCTIONS = (
+    "\n## Artifact review instructions\n"
+    "This is a standalone artifact or package. For visual deliverables, render "
+    "actual representative output and inspect it at a useful size; record the "
+    "renderer and image path. Text existing in SVG/XML does not prove it is "
+    "visible or readable. For exchange-format files, use an established consuming "
+    "application or independent format reader to open representative actual output "
+    "and inspect imported units, structure, geometry and required semantics. "
+    "Record normal loading, audit findings and recovery/repair separately. "
+    "Your own tag parser, or rendering a paired format, does not establish "
+    "interoperability. If rendering or visual inspection is unavailable, say so "
+    "and leave the visual requirement unverified. If a required consumer check "
+    "cannot run, name that unverified requirement rather than reporting a pass. "
+    "Preserve the current artifact and evidence, name the missing validation "
+    "dependency, and give the CEO or person the exact action needed to unblock it. "
+    "Rewriting the artifact or repeating the same probe cannot supply an "
+    "unavailable tool; do not prescribe those as a remedy. "
+    "For visual output, exercise small and large dimensions and "
+    "inspect rendered labels and bounds; distinguish geometry correctness from "
+    "presentation quality.\n"
+)
+
+_PATH_LINE_RE = re.compile(r'\b[\w/._-]+\.\w+:\d+\b')
+
 from refactory_dsh.invocations import EVIDENCE  # canonical in invocations
 AUDIT = "intent-audit.json"
 from refactory_dsh.invocations import REVIEWERS  # canonical in invocations
@@ -529,6 +586,148 @@ def wire_reviews(graph: Any) -> None:
                                    knobs=(*node.knobs, "review_attempts"))
     report = graph.nodes["report"]
     graph.nodes["report"] = replace(report, reads=(*report.reads, EVIDENCE, AUDIT))
+
+
+def validate_repo_questions(
+    record: Any, expected_functions: list[str], reviewer_name: str,
+) -> list[str]:
+    """Validate a parsed JSON repo_questions record against the expected function list.
+
+    Returns a list of ``[repo-questions]``-prefixed problem strings (empty = pass).
+    """
+    problems: list[str] = []
+    if not isinstance(record, list):
+        problems.append(f"[repo-questions] {reviewer_name}: repo_questions is not a list")
+        return problems
+
+    # Normalise expected: strip :line suffix, deduplicate
+    normalised_expected: dict[str, str] = {}
+    for fn in expected_functions:
+        key = re.sub(r':\d+(-\d+)?$', '', fn).strip()
+        if key:
+            normalised_expected[key] = fn
+
+    # Build a set of function names from the record
+    record_functions: set[str] = set()
+    for entry in record:
+        if isinstance(entry, dict) and "function" in entry:
+            record_functions.add(str(entry["function"]).strip())
+
+    # Check every expected function has a matching entry
+    for norm_key, orig_fn in normalised_expected.items():
+        found = False
+        for rf in record_functions:
+            rf_norm = re.sub(r':\d+(-\d+)?$', '', rf).strip()
+            if rf_norm == norm_key or rf == orig_fn:
+                found = True
+                break
+        if not found:
+            problems.append(
+                f"[repo-questions] {reviewer_name}: no entry for changed function '{orig_fn}'"
+            )
+
+    # Check each entry has the three required answers with path:line evidence
+    for entry in record:
+        if not isinstance(entry, dict):
+            continue
+        fn = str(entry.get("function", "?"))
+        for key in ("duplicates", "callers", "shared_state"):
+            answer = str(entry.get(key, ""))
+            if not answer:
+                problems.append(
+                    f"[repo-questions] {reviewer_name}: entry for '{fn}', answer '{key}' has no path:line evidence"
+                )
+                continue
+            has_path_line = bool(_PATH_LINE_RE.search(answer))
+            has_absent = "absent:" in answer.lower()
+            if not has_path_line and not has_absent:
+                problems.append(
+                    f"[repo-questions] {reviewer_name}: entry for '{fn}', answer '{key}' has no path:line evidence"
+                )
+
+    return problems
+
+
+def check_review_questions(
+    review_text: str, changed_functions: list[str], reviewer_name: str,
+    *, require_brief_trace: bool = False, target: str = "",
+) -> list[str]:
+    """Validate the review text for repository questions (markdown reviewers).
+
+    Returns a list of ``[repo-questions]``-prefixed problem strings (empty = pass).
+    """
+    problems: list[str] = []
+
+    # Find the ## Repository questions section
+    rq_match = re.search(
+        r'(?:^|\n)##\s+Repository questions\s*\n(.*)',
+        review_text, re.DOTALL,
+    )
+    if rq_match is None:
+        problems.append(
+            f"[repo-questions] {reviewer_name}: the review has no '## Repository questions' section with a JSON block"
+        )
+        return problems
+
+    section_text = rq_match.group(1)
+    # Stop at next ## heading
+    next_heading = re.search(r'\n##\s+', section_text)
+    if next_heading:
+        section_text = section_text[:next_heading.start()]
+
+    # Find a ```json fenced block
+    json_match = re.search(r'```json\s*\n(.*?)```', section_text, re.DOTALL)
+    if json_match is None:
+        problems.append(
+            f"[repo-questions] {reviewer_name}: the review has no '## Repository questions' section with a JSON block"
+        )
+        return problems
+
+    try:
+        record = json.loads(json_match.group(1))
+    except (json.JSONDecodeError, ValueError):
+        problems.append(
+            f"[repo-questions] {reviewer_name}: the review has no '## Repository questions' section with a JSON block"
+        )
+        return problems
+
+    problems.extend(validate_repo_questions(record, changed_functions, reviewer_name))
+
+    # Brief-example trace check
+    if require_brief_trace:
+        bt_match = re.search(
+            r'(?:^|\n)##\s+Brief example trace\s*\n(.*?)(?:\n##\s+|\Z)',
+            review_text, re.DOTALL,
+        )
+        if bt_match is None:
+            problems.append(
+                f"[repo-questions] {reviewer_name}: the design review has no "
+                "'## Brief example trace' section with path:line evidence and runtime names"
+            )
+        else:
+            trace_text = bt_match.group(1)
+            citations = _PATH_LINE_RE.findall(trace_text)
+            if len(citations) < 2:
+                problems.append(
+                    f"[repo-questions] {reviewer_name}: the design review has no "
+                    "'## Brief example trace' section with path:line evidence and runtime names"
+                )
+            else:
+                # Check for runtime names
+                if target and "refactory" in target.lower():
+                    runtime_names = ("walker", "dsh", "ceo", "gui", "fast")
+                else:
+                    runtime_names = ("cli", "api", "server", "worker", "test",
+                                     "walker", "dsh", "ceo", "gui", "fast")
+                trace_lower = trace_text.lower()
+                has_runtime = any(name in trace_lower for name in runtime_names)
+                if not has_runtime:
+                    problems.append(
+                        f"[repo-questions] {reviewer_name}: the design review has no "
+                        "'## Brief example trace' section with path:line evidence and runtime names"
+                    )
+
+    return problems
 
 
 def correction_audit_problems(ctx: Any) -> list[str]:
