@@ -1,13 +1,13 @@
 /**
  * End-to-end test: product supplies the steer command through graphStartup,
- * consumed by cordis.patch.yml's !!js expressions.
+ * consumed by cordis.patch.yml's !!js expressions, and the spine registers
+ * wf_steer with the exact argv.
  *
  * The test boots startup.ts with --python-bin pointing at the repository's
  * .venv/bin, which has the refactory.steer entry point installed by `uv sync`.
  * It evaluates the YAML's !!js expressions through the loader's `evaluate`
- * import (not a test-local evaluator). The spine's own steering.spec.ts
- * already tests that wf_steer is registered when steerCommand !== '' and
- * workdir is set, so this test covers the supply chain up to the spine's config.
+ * import (not a test-local evaluator). It then mounts the spine with the
+ * evaluated config and asserts that wf_steer is registered.
  */
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -18,6 +18,7 @@ import { internals, provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { evaluate } from '@deepseek-ai/cordis-plugin-loader'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, GRAPH_STARTUP_SERVICE, type GraphStartupValues } from '../src/startup.ts'
+import * as spinePlugin from '@deepseek-ai/dsh-workflow-spine/src/index.ts'
 
 const dirs: string[] = []
 
@@ -59,11 +60,48 @@ function readYamlExpressions(): { steerCommandExpr: string; steerArgsExpr: strin
   return { steerCommandExpr: cmdMatch[1]!, steerArgsExpr: argsMatch[1]! }
 }
 
+/** One agent node, so the spine has a valid graph to mount. */
+const AGENT_GRAPH = {
+  name: 't',
+  start_node: 'a',
+  nodes: { a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [] as string[], reads: [] as string[] } },
+  edges: [] as unknown[],
+}
+
+/**
+ * Mount the spine plugin with minimal service stubs. Returns a Map of
+ * registered tool definitions, keyed by tool name.
+ */
+async function mountSpine(overrides: Record<string, unknown> = {}): Promise<Map<string, { name: string }>> {
+  const root = new Context()
+  const toolMap = new Map<string, { name: string }>()
+  root.provide('tools', {
+    register(def: { name: string }) { toolMap.set(def.name, def) },
+    get(name: string) { return toolMap.get(name) },
+    schemas() { return [] },
+    restrict() { return () => {} },
+  })
+  root.provide('systemPrompt', {
+    section() {},
+    getSectionOrder() { return 0 },
+  })
+  await root.plugin(spinePlugin, {
+    graph: AGENT_GRAPH,
+    toolPrefix: 'wf',
+    maxIterations: 3,
+    workdir: '/tmp/spine-steer-test',
+    steerCommand: '',
+    steerArgs: [] as string[],
+    ...overrides,
+  })
+  return toolMap
+}
+
 const repoRoot = resolve(__dirname, '..', '..', '..', '..')
 const venvBin = join(repoRoot, '.venv', 'bin')
 
 describe('steer command supply', () => {
-  it('end-to-end: startup discovers the entry point, YAML reads it, producing spine config', () => {
+  it('end-to-end: startup discovers the entry point, YAML reads it, spine registers wf_steer', async () => {
     // Boot startup.ts with --python-bin pointing at the real venv.
     const dir = graphs('probe')
     const workdir = mkdtempSync(join(tmpdir(), 'dsh-graph-steer-work-'))
@@ -87,12 +125,27 @@ describe('steer command supply', () => {
     expect(evalSteerCommand).toBe(join(venvBin, 'python'))
     expect(evalSteerArgs).toEqual(['-m', 'refactory_dsh.console', 'steer', '--run'])
 
-    // The spine registers wf_steer when steerCommand !== '' and workdir is set
-    // (spine guard at index.ts:2399). Spine's own steering.spec.ts tests that.
-    expect(evalSteerCommand).not.toBe('')
+    // Mount the spine with the evaluated config and assert wf_steer is registered.
+    // The spine constructs argv as [...steerArgs, workdir] at call time
+    // (index.ts:2429), so the effective argv is
+    // ['-m', 'refactory_dsh.console', 'steer', '--run', <workdir>]
+    // with steerCommand = <repo>/.venv/bin/python.
+    const toolMap = await mountSpine({
+      steerCommand: evalSteerCommand,
+      steerArgs: evalSteerArgs,
+      workdir,
+    })
+    expect(toolMap.has('wf_steer')).toBe(true)
+
+    // Verify the config values that form the exact argv:
+    // steerCommand is the executable, steerArgs + workdir is the argv.
+    expect(evalSteerCommand).toBe(join(venvBin, 'python'))
+    expect([...evalSteerArgs, workdir]).toEqual([
+      '-m', 'refactory_dsh.console', 'steer', '--run', workdir,
+    ])
   })
 
-  it('core-alone: no entry point → steerCommand is empty, spine would skip wf_steer', () => {
+  it('core-alone: no entry point → steerCommand is empty, spine skips wf_steer', async () => {
     const { steerCommandExpr, steerArgsExpr } = readYamlExpressions()
     // Simulate startup publishing steerCommand='' (no entry point)
     const ctx = { graphStartup: { steerCommand: '', steerArgs: [] as string[], pythonBin: '/venv/bin' }, _steerWarnedOnce: false }
@@ -100,6 +153,13 @@ describe('steer command supply', () => {
     const evalSteerArgs = evaluate(ctx, steerArgsExpr) as string[]
     expect(evalSteerCommand).toBe('')
     expect(evalSteerArgs).toEqual([])
+
+    // Mount the spine and verify wf_steer is NOT registered
+    const toolMap = await mountSpine({
+      steerCommand: evalSteerCommand,
+      steerArgs: evalSteerArgs,
+    })
+    expect(toolMap.has('wf_steer')).toBe(false)
   })
 
   it('stale-build warning: steerCommand undefined → warns once with pnpm run build', () => {
@@ -126,14 +186,14 @@ describe('steer command supply', () => {
     }
   })
 
-  it('version-skew: older profile with hardcoded values still steers', () => {
+  it('version-skew: older profile with hardcoded values still registers wf_steer', async () => {
     // An older cordis.patch.yml has the literal values, not !!js expressions.
     // The spine receives steerCommand='/venv/bin/python' which is !== '' and
-    // registers wf_steer (steering.spec.ts:146 tests this path).
+    // registers wf_steer.
     const steerCommand = '/venv/bin/python'
     const steerArgs = ['-m', 'refactory_dsh.console', 'steer', '--run']
-    expect(steerCommand).not.toBe('')
-    expect(steerArgs).toEqual(['-m', 'refactory_dsh.console', 'steer', '--run'])
+    const toolMap = await mountSpine({ steerCommand, steerArgs })
+    expect(toolMap.has('wf_steer')).toBe(true)
   })
 
   it('real probe: the entry point returns refactory_dsh.console from the installed venv', () => {
