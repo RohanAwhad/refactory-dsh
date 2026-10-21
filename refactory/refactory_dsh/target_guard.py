@@ -556,25 +556,32 @@ def restore_target(root: Path, before: dict[str, Any],
                     shutil.copy2(baseline_copy, full)
                     result["restored"].append(path)
                 elif before.get("git") and path not in before.get("changes", {}):
-                    # Clean tracked file: restore from git
+                    # Path was not in git status before the node: either a clean
+                    # tracked file, or a path that did not exist at all.
                     prefix = ""
                     top_str = (_git(root, "rev-parse", "--show-toplevel") or str(root)).strip()
                     top = Path(top_str).resolve()
                     if root.resolve() != top:
                         prefix = str(root.resolve().relative_to(top)) + "/"
-                    content = _git(root, "show", f"HEAD:{prefix}{path}")
-                    if content is not None:
-                        full.parent.mkdir(parents=True, exist_ok=True)
-                        full.write_text(content)
-                        # Restore mode from git ls-tree
-                        ls = _git(root, "ls-tree", "HEAD", f"{prefix}{path}")
-                        if ls and ls.startswith("100755"):
-                            full.chmod(0o755)
-                        elif ls and ls.startswith("100644"):
-                            full.chmod(0o644)
+                    ls = _git(root, "ls-tree", "HEAD", f"{prefix}{path}")
+                    if not ls:
+                        # Not tracked in git: the file did not exist before the
+                        # node.  The set-aside in (a) already removed it.
                         result["restored"].append(path)
                     else:
-                        result["errors"].append(f"{path} (git show failed)")
+                        # Clean tracked file: restore from git.
+                        content = _git(root, "show", f"HEAD:{prefix}{path}")
+                        if content is not None:
+                            full.parent.mkdir(parents=True, exist_ok=True)
+                            full.write_text(content)
+                            # Restore mode from git ls-tree
+                            if ls.startswith("100755"):
+                                full.chmod(0o755)
+                            elif ls.startswith("100644"):
+                                full.chmod(0o644)
+                            result["restored"].append(path)
+                        else:
+                            result["errors"].append(f"{path} (git show failed)")
                 elif pre_digest == "-":
                     # Path did not exist before the node; set-aside is the restore.
                     result["restored"].append(path)
