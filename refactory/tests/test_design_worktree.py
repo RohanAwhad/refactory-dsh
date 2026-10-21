@@ -685,16 +685,24 @@ def test_an_emit_that_edits_the_worktree_is_refused(repo, tmp_path):
 
 def test_an_emit_during_which_the_target_moves_warns_but_succeeds(
         repo, tmp_path, capsys):
-    """In a worktree run the target is not where the run works; a change
-    there is a warning, not a failure."""
+    """An emit that writes into the target is now refused and restored (dm-159).
+
+    The _EditingModel writes app.py into the target during emit.  emit is
+    output-only, so strayed() moves target_changes from warn to fail.  The
+    target is restored and the set-aside copy of app.py exists.
+    """
     run = tmp_path / "run"
     result = _design(run, _EditingModel(
         _answers(render({"tool.py": "print('built')\n"})), lambda: repo),
         target=str(repo))
-    assert result.exit_ok is True, result.error
-    warned = capsys.readouterr().err
-    assert "files outside its worktree changed" in warned
-    assert "app.py" in warned
+    assert result.exit_ok is False
+    assert "changed while agent" in (result.error or "")
+    # The target is restored — app.py has its committed content.
+    assert (repo / "app.py").read_text() == "print('app')\n"
+    # The set-aside copy exists under agent-delivery.
+    from refactory_dsh import agent_delivery
+    found_set_aside = list((run / agent_delivery.ROOT).rglob("target-set-aside/app.py"))
+    assert found_set_aside, "the set-aside copy of app.py must exist"
 
 
 def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
