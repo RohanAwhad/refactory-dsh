@@ -627,15 +627,97 @@ def check_artifact(ctx: Any) -> str:
         ctx.write_json("check-record.json", {
             "status": "refused", "validation": detail,
             "attempt": int(ctx.facts.get("attempts_used", 0)),
+            "check_mode": "full", "targeted_command": None,
         })
         return Verdict("reloop", detail)
     command = str(ctx.facts["check"])
-    result = repo_change.run_check(ctx, command, int(ctx.knob("check_timeout_s", 180)))
+    check_timeout = int(ctx.knob("check_timeout_s", 180))
+
+    # ── Targeted pre-pass ──────────────────────────────────────────────
+    from refactory_dsh.failfast import targeted_prepass, detect_stuck, record_check_history
+
+    prev_record = ctx.read_json("check-record.json", {})
+    # Read base_unavailable before it is cleared below.
+    _saved_base_unavailable = ctx.facts.get("base_unavailable") or ""
+
+    prepass = targeted_prepass(
+        prev_record, command,
+        lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout),
+        check_timeout,
+        root=(worktree.recorded(ctx.workdir).path
+              if worktree.recorded(ctx.workdir) is not None else None),
+    )
+
+    if prepass.early_stop:
+        # Stop early: the targeted test still fails.
+        detail = prepass.digest_text or "(targeted check failed)"
+        ctx.write_text("check.txt", detail + "\n")
+        ctx.set_fact("validation", detail)
+
+        # R5: keep design-constraint lines in early-stop feedback.
+        from refactory_dsh import design_contract
+        run_name = str(ctx.facts.get("name") or "")
+        parsed = design_contract.parse(
+            ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
+        )
+        left_lines = [
+            f"Design constraint: {site['path']} [left: {site['reason']}] "
+            "— do not change this; fix the tests or callers instead."
+            for site in parsed.rule_sites
+            if site.get("status") == "left" and site.get("reason")
+        ]
+        if left_lines:
+            detail = "\n".join(left_lines) + "\n\n" + detail
+
+        # base_unavailable note
+        base_note = _saved_base_unavailable
+        if base_note:
+            detail = detail + "\n\n" + base_note
+
+        # Stuck detection on early-stop path too (correction item 4)
+        found_wt = worktree.recorded(ctx.workdir)
+        stuck_notice = detect_stuck(
+            prev_record, prepass.runners,
+            "\n".join(filter(None, [
+                getattr(prepass.result, "stdout", None) or "",
+                getattr(prepass.result, "stderr", None) or "",
+            ])).strip(),
+            found_wt.path if found_wt else None,
+            prev_record.get("commit"),
+            str(ctx.facts.get("commit", "")),
+        )
+        if stuck_notice:
+            detail = stuck_notice + "\n\n" + detail
+
+        outcome = {
+            "command": prepass.targeted_command, "status": "code_failure",
+            "check_mode": "targeted", "targeted_command": prepass.targeted_command,
+        }
+        evidence.record(ctx, outcome)
+        ctx.write_json("check-record.json", {
+            "status": "fail",
+            "validation": detail[:4000],
+            "digest": prepass.digest_text,
+            "attempt": int(ctx.facts.get("attempts_used", 0)),
+            "command": prepass.targeted_command,
+            "runners": prepass.runners,
+            "raw_tail": prepass.raw_tail,
+            "check_mode": "targeted",
+            "targeted_command": prepass.targeted_command,
+            "inherited": list(prev_record.get("inherited", [])),
+            "commit": str(ctx.facts.get("commit", "")),
+        })
+        # Do NOT append to convergence history — targeted runs excluded.
+        return repair(ctx, [detail], early_stop=True)
+
+    result = repo_change.run_check(ctx, command, check_timeout)
     detail = "\n".join((result.problem(), result.stdout or "", result.stderr or "")).strip()
     outcome = {"command": command, "status": "pass" if result.ok else evidence.check_failure_kind(
         result, budget=getattr(ctx, "budget", None)),
         "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
-        "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
+        "timed_out": result.timed_out, "elapsed_s": result.elapsed_s,
+        "check_mode": "full",
+        "targeted_command": prepass.targeted_command if prepass.ran else None}
     apply_cwd_escaped(result, outcome)
     ctx.write_text("check.txt", detail or "ok\n")
 
@@ -672,12 +754,16 @@ def check_artifact(ctx: Any) -> str:
             ctx.write_json("check-record.json", {
                 "status": "guarded", "validation": detail,
                 "attempt": int(ctx.facts.get("attempts_used", 0)),
+                "check_mode": "full",
+                "targeted_command": prepass.targeted_command if prepass.ran else None,
             })
             return repair(ctx, [detail])
         ctx.set_fact("validation", "(the check passed)")
         ctx.write_json("check-record.json", {
             "status": "pass", "validation": "(the check passed)",
             "attempt": int(ctx.facts.get("attempts_used", 0)),
+            "check_mode": "full",
+            "targeted_command": prepass.targeted_command if prepass.ran else None,
         })
         return "proceed"
 
@@ -732,6 +818,8 @@ def check_artifact(ctx: Any) -> str:
             ctx.write_json("check-record.json", {
                 "status": "pass", "validation": validation_msg,
                 "attempt": int(ctx.facts.get("attempts_used", 0)),
+                "check_mode": "full",
+                "targeted_command": prepass.targeted_command if prepass.ran else None,
             })
             # ── enforce test guardedness on excused pass too (R3) ──
             unexempted = enforce_guardedness(ctx)
@@ -746,6 +834,8 @@ def check_artifact(ctx: Any) -> str:
                 ctx.write_json("check-record.json", {
                     "status": "guarded", "validation": detail,
                     "attempt": int(ctx.facts.get("attempts_used", 0)),
+                    "check_mode": "full",
+                    "targeted_command": prepass.targeted_command if prepass.ran else None,
                 })
                 return repair(ctx, [detail])
             return "proceed"
@@ -811,22 +901,21 @@ def check_artifact(ctx: Any) -> str:
     if left_lines or guarantee_lines:
         detail = "\n".join(left_lines + guarantee_lines) + "\n\n" + detail
 
+    # Stuck detection on the full-check path.
+    found_wt_stuck = worktree.recorded(ctx.workdir)
+    stuck_notice = detect_stuck(
+        prev_record, digest.to_dict()["runners"],
+        "\n".join((result.stdout or "", result.stderr or "")).strip(),
+        found_wt_stuck.path if found_wt_stuck else None,
+        prev_record.get("commit"),
+        str(ctx.facts.get("commit", "")),
+    )
+    if stuck_notice:
+        detail = stuck_notice + "\n\n" + detail
+
     # R6: store failure history and blocker result for convergence detection.
     attempt_output_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
-    current_failures = sorted(base_check.parse_test_failures(attempt_output_r6))
-    history = list(ctx.facts.get("check_failures_history", []))
-    history.append(current_failures)
-    ctx.set_fact("check_failures_history", history)
-
-    # R6 correction 3: record the blocker result from the full check output,
-    # not the feedback text.  Convergence in repair() reads this.
-    check_command = str(ctx.facts.get("check") or "").strip()
-    blocker_result = base_check.excusal_blocker(
-        check_command, attempt_output_r6, set(current_failures)
-    ) if current_failures else "empty failure set"
-    blocker_history = list(ctx.facts.get("check_blocker_history", []))
-    blocker_history.append(blocker_result)
-    ctx.set_fact("check_blocker_history", blocker_history)
+    record_check_history(ctx, "full", attempt_output_r6, command)
 
     # Write base_unavailable note into check.txt as well (R2 correction 5).
     base_note = ctx.facts.get("base_unavailable")
@@ -836,6 +925,7 @@ def check_artifact(ctx: Any) -> str:
             ctx.write_text("check.txt", check_txt.rstrip() + "\n\n" + base_note + "\n")
 
     # Record exactly what the builder will be given (feedback re-fill reads it).
+    _inherited_list = sorted(filtered.inherited) if found is not None else []
     ctx.write_json("check-record.json", {
         "status": "fail",
         "validation": detail[:4000],
@@ -844,6 +934,10 @@ def check_artifact(ctx: Any) -> str:
         "command": command,
         "runners": digest.to_dict().get("runners", []),
         "raw_tail": digest.raw_tail[-500:],
+        "check_mode": "full",
+        "targeted_command": prepass.targeted_command if prepass.ran else None,
+        "inherited": _inherited_list,
+        "commit": str(ctx.facts.get("commit", "")),
     })
 
     return repair(ctx, [detail])
