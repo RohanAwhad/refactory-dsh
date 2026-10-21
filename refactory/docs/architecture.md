@@ -341,18 +341,23 @@ On failure it reloops to `design_doc`; when `design_review_attempts` runs out, i
 proceeds to `gate_strategy` with the remaining findings shown — it never fails the
 run. A reviewer formatting miss re-runs `design_review` (via a `review_reloop` edge)
 without spending a `design_review_attempts` slot; the re-run counter is
-`design_review_reruns_used` (limit 2).
+`design_review_reruns_used`. There is one re-run. After it, missing repository
+questions are advisory and are shown with the findings. Only changed product code needs
+repository questions; see [authoring validation](authoring-validation.md#reviewer-re-runs).
 
 The `deliverable_kind` fact, computed by `prepare_design`, distinguishes repository
 changes from artifacts. The `review_instructions` fact renders `REPO_CHANGE_REVIEW_INSTRUCTIONS`
 (composed from verification methods M2, M3, M11, M12) or `ARTIFACT_REVIEW_INSTRUCTIONS`
 into each reviewer's prompt via `{{review_instructions}}`. The `changed_functions` module
 maps diff hunk line ranges onto function spans via `ast` (Python) and hunk-range entries
-(TypeScript), and its output is rendered into prompts as `{{changed_functions}}`.
+(TypeScript). It marks each entry `test` or `generated`, and keeps only the run's own
+changes when the branch merged its base in. The product entries are rendered into prompts
+as `{{changed_functions}}`.
 
 For the post-build QA gate, `gate_qa` validates each of the three review files independently,
 naming the reviewer and function in any refusal. A `review_reloop` edge from `gate_qa` to
-`fork_qa` re-runs only the reviewers. The fast `gate_qa` validates `focused-qa.json`'s
+`fork_qa` re-runs only the reviewers, once. After that re-run, missing repository questions
+are advisory: the gate proceeds, and the pull request lists them. The fast `gate_qa` validates `focused-qa.json`'s
 `repo_questions` key and strips `[repo-questions]`-prefixed problems from `failure_kind`'s
 word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
 PASS" or "Design review: FAIL, N unresolved" followed by the unresolved findings,
