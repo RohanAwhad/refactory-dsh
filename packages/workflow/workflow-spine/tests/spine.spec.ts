@@ -978,6 +978,12 @@ describe('a fork with nothing to fan out to', () => {
     expect(state.skipped).toEqual(['b'])
   })
 
+  type SkipProvenance = Record<string, { source: string; at: string }>;
+
+  function prov(state: Record<string, unknown>): SkipProvenance {
+    return (state.skip_provenance ?? {}) as SkipProvenance
+  }
+
   it('skip() without opts defaults to ceo source', () => {
     const graph: WorkflowGraph = {
       name: 't', start_node: 'a',
@@ -990,9 +996,9 @@ describe('a fork with nothing to fan out to', () => {
     const spine = new Spine(graph)
     spine.skip('b')
     const state = spine.state()
-    expect(state.skip_provenance).toBeDefined()
-    expect(state.skip_provenance.b.source).toBe('ceo')
-    expect(typeof state.skip_provenance.b.at).toBe('string')
+    expect(prov(state)).toBeDefined()
+    expect(prov(state).b.source).toBe('ceo')
+    expect(typeof prov(state).b.at).toBe('string')
   })
 
   it('planSkip with person source bypasses conditional-gate refusal', () => {
@@ -1027,9 +1033,9 @@ describe('a fork with nothing to fan out to', () => {
     }
     const spine = new Spine(graph)
     spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
-    expect(spine.state().skip_provenance.b).toBeDefined()
+    expect(prov(spine.state()).b).toBeDefined()
     spine.unskip('b')
-    expect(spine.state().skip_provenance.b).toBeUndefined()
+    expect(prov(spine.state()).b).toBeUndefined()
   })
 
   it('invalidateNodes clears provenance when clearSkips is true', () => {
@@ -1056,7 +1062,7 @@ describe('a fork with nothing to fan out to', () => {
     spine.redo('gate')
     const state = spine.state()
     // After redo, provenance for b should be cleared
-    expect(state.skip_provenance.b).toBeUndefined()
+    expect(prov(state).b).toBeUndefined()
   })
 
   it('restore reads skip_provenance from checkpoint', () => {
@@ -1107,9 +1113,9 @@ describe('a fork with nothing to fan out to', () => {
     const spine = new Spine(graph)
     spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
     spine.unskip('b')
-    expect(spine.state().skip_provenance.b).toBeUndefined()
+    expect(prov(spine.state()).b).toBeUndefined()
     spine.skip('b', { source: 'person', at: '2026-02-01T00:00:00Z' })
-    expect(spine.state().skip_provenance.b).toEqual({ source: 'person', at: '2026-02-01T00:00:00Z' })
+    expect(prov(spine.state()).b).toEqual({ source: 'person', at: '2026-02-01T00:00:00Z' })
   })
 
   it('person-skip routing rule routes conditional-only gate via proceed', () => {

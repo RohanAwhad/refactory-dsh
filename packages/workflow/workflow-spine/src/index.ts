@@ -87,6 +87,13 @@ export interface Config {
    */
   interactiveOpen: boolean
   /**
+   * Whether a person is attached to this composition. True when the graph was
+   * started with `--chat` (terminal) or `interactiveOpen` (GUI CEO). A headless
+   * CEO with `personAttached === false` cannot write `source='user-relayed'` via
+   * `wf_steer`; the runtime silently downgrades to `'ceo'`.
+   */
+  personAttached?: boolean
+  /**
    * The command that lowers a mode and prints its JSON payload, called as
    * `<openCommand> <openArgs...> <mode>` (with `--workdir <dir>` and one
    * `--knob NAME=VALUE` per knob appended). The payload names the run directory
@@ -1105,7 +1112,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /** Consume only controls addressed to this exact durable invocation. */
-  function applyControls(spine: Spine, workdir: string | undefined, env: Record<string, string>, dataCommand: string, agentCmd?: string): void {
+  function applyControls(spine: Spine, workdir: string | undefined, env: Record<string, string>, dataCommand: string, _agentCommand?: string): void {
     if (workdir === undefined) return
     const directory = join(workdir, '.refactory', 'graph-controls')
     if (!existsSync(directory)) return
@@ -1259,6 +1266,7 @@ export function apply(ctx: Context, config: Config): void {
     workdir: string | undefined,
     commandEnv: Record<string, string>,
     dataCommand: string,
+    agentCommand: string,
     warnings: string[],
   ): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown; ran?: RanStep | undefined }> {
     if (!config.executeCommands) return { next: spine.next() }
@@ -1541,7 +1549,7 @@ export function apply(ctx: Context, config: Config): void {
     drainSkipReceipts(spine, workdir, commandEnv, agentCommand)
     let drained: Awaited<ReturnType<typeof drain>>
     const warnings: string[] = []
-    try { drained = await drain(spine, workdir, commandEnv, dataCommand, warnings) }
+    try { drained = await drain(spine, workdir, commandEnv, dataCommand, agentCommand, warnings) }
     catch (error) {
       recordStatus(spine, workdir, 'failed', error instanceof Error ? error.message : String(error))
       throw error
