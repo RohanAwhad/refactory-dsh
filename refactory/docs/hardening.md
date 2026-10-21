@@ -975,6 +975,119 @@ refuse when a new package appears (not only when an existing one changed).
 
 ---
 
+## 24. Per-correction audit (#431)
+
+**How it works.** `correction_audit_problems()` in `authoring_evidence.py` runs
+at every post-build gate (`gate_overwatch` in full modes, `gate_qa` in fast
+modes). For each correction or constraint in the ledger it reads the overwatch's
+`intent-audit.json`, finds the clause-level `sites` arrays, and checks three
+things for every clause:
+
+1. **Site in diff.** The cited `file:line` must fall inside a hunk of the
+   run's `git diff base..HEAD`.
+2. **Test reachability via site revert.** `compute_site_reverts` (§26) reverts
+   only the overlapping hunks, runs the named test, and records whether it
+   fails. A test that still passes after the revert does not reach the site.
+3. **Evidence scope.** `patch_scope` (§25) checks whether the named test
+   patches the project's own modules on the tested path. A test that does
+   is `local`, not `connected`.
+
+A clause that fails any check is BLOCKING. The message names the correction id,
+the clause, the site and the test.
+
+**Withdrawn corrections.** A correction whose audit row has `status == "excluded"`
+with a `user_change` pointing to a later ledger entry is skipped — it was
+withdrawn. This reuses the existing exclusion validation path.
+
+**Evidence forms.** Not every clause has a code site:
+- **prohibition:** a "do not…" clause names a `pattern`; code confirms the
+  pattern is absent from the `+` lines of the diff.
+- **doc:** cites a changed documentation file.
+- **design:** cites a `design.md` heading; code confirms the heading exists.
+- **test:** cites a code site plus the test; the revert runs against the code
+  site, not the test file. A site inside a test file is not a code site.
+
+**New-file sites.** A site in a file the base lacks (`new_file` result) or a
+site whose revert fails only with an import error on a name the reverted hunks
+define (`import_only` result) passes only when the same clause has a sibling
+site in an existing file whose revert fails its test.
+
+**Test.** `test_correction_audit.py::test_correction_audit_unbuilt_blocks`,
+`test_correction_audit_no_base_does_not_block`.
+
+## 25. Evidence scope enforcement (#431)
+
+**How it works.** `patch_scope.py` checks each named test for patches of the
+project's own modules on the tested path. It checks the specific test function
+plus the fixtures it requests (including conftest fixtures), not the whole file.
+
+Scope definitions (from `code_reviewer.md` category 8, quoted as written):
+- **local**: a unit test exists that tests the stated outcome in isolation
+- **connected**: a test exists that calls a real entry point crossing a module
+  boundary, mocking only external I/O
+- **assembled**: a smoke test or startup check verifies end-to-end behavior
+- **artifact**: the artifact exists and has correct content
+
+This repository's rules:
+- a test that patches the project's own modules on the tested path is local,
+  not connected;
+- assembled means driving a mode's `run()` with no project-module patch on the
+  path;
+- artifact means reading the delivered output.
+
+**Allowlist.** Targets that are always allowed: clocks (`time.time`,
+`datetime.datetime.now`, etc.), randomness (`random.*`, `Math.random`) and
+environment (`os.environ`, `process.env`).
+
+**Detection.** Python: `monkeypatch.setattr` (string and object forms),
+`monkeypatch.setenv`/`delenv` (allowed), `unittest.mock.patch`,
+`unittest.mock.patch.object`, `MagicMock` assignments. TypeScript: `vi.mock`,
+`vi.spyOn` with regex-based detection. Project modules are relative imports
+plus workspace package names.
+
+**Test.** `test_patch_scope.py` (11 tests covering each detection pattern).
+
+## 26. Site-revert checks (#431)
+
+**How it works.** `compute_site_reverts()` in `base_check.py` mechanically
+reverts each changed site to the base and runs the named test to check whether
+it catches the change.
+
+1. Get the diff hunks via `git diff -U0 base HEAD -- file`.
+2. Find hunks whose added-line range overlaps the site's line range.
+3. For pure-deletion hunks, the site line is the hunk position or the next line.
+4. Build a reverse patch of only the overlapping hunks.
+5. Apply with `git apply --reverse --unidiff-zero` (the `--unidiff-zero` flag
+   handles pure-addition hunks).
+6. Run the named test with `pytest <file>::<name>` or `vitest run <file> -t
+   <name>`, in the attempt's worktree under `worktree.check_environment`.
+7. Classify the result:
+   - `fail` → the test assertion fails, the site is caught ✓
+   - `pass` → the test still passes, the site is NOT caught ✗
+   - `collection_error` → import/collection error, not a catch
+   - `import_only` → fails only due to import of a name the reverted hunk
+     defines, not a catch
+   - `unavailable` → timed out, signalled, test-file site, no tests ran
+8. Restore the file with `git checkout HEAD -- <file>` in a `finally` block.
+
+**Test-file exclusion.** A site inside a test file (`test_*.py`, `*_test.py`,
+`*.spec.ts`, or under a `tests/` directory) is not a code site.
+
+**Cache.** Results are cached per `(HEAD, path:line, test_name)` in
+`.refactory/site-revert-cache.json`, a dedicated file separate from
+`base-check.json`.
+
+**Time cap.** Total revert time is capped below the gate's DSH timeout (240 s
+default). Past the cap, remaining pairs are reported as `unavailable`.
+
+**Blocking rule.** Missing or unavailable revert results are BLOCKING. The only
+exemptions are:
+1. A `## Site revert exemptions` section in `design.md`.
+2. An explicit no-base record (`{"no_base": true}`) — modes without a base skip
+   diff and revert checks.
+
+**Test.** `test_correction_audit.py`.
+
 Two things that were on this list have moved off it, which is the point of keeping it:
 
 - **mathlib is no longer untested.** It was installed and the mathlib problem ran, and

@@ -56,13 +56,36 @@ FULL_REVIEW_CONTEXT = REVIEW_CONTEXT.replace("{{repair_feedback}}", "{{validatio
 AUDIT_INSTRUCTIONS = (
     "\nWrite intent-audit.json as {\"requirements\":[{\"id\":\"baseline id\", "
     "\"requirement\":\"the concrete ask(s) checked\", \"status\":\"pass|fail|unverified|excluded\", "
-    "\"clauses\":[{\"clause\":\"one distinct obligation\", \"evidence\":[{\"path\":\"file\", \"detail\":\"finding\"}]}], "
+    "\"clauses\":[{\"clause\":\"one distinct obligation\", "
+    "\"sites\":[{\"site\":\"path:line\", \"tests\":[\"test_file::test_name\"], \"scope\":\"connected\"}], "
+    "\"evidence\":[{\"path\":\"file\", \"detail\":\"finding\"}]}], "
     "\"evidence\":[{\"path\":\"actual file path\", \"detail\":\"command/output or precise finding\"}], "
     "\"reason\":\"explanation\", \"user_change\":\"ledger id or brief, only for an explicit user exclusion\", "
     "\"user_quote\":\"exact text of that explicit exclusion\"}]}. "
     "For every constraint or correction row, list each distinct clause — every separate "
     "obligation in the text — in the \"clauses\" array, each with its own evidence from "
-    "the diff. Omitting a clause that is in the text, or listing a clause with no "
+    "the diff. Each clause must include a `sites` array: "
+    "`\"sites\": [{\"site\": \"path:line\", \"tests\": [\"test_file::test_name\"], \"scope\": \"connected\"}]`. "
+    "Each site names the exact file:line in the diff that builds this clause, the test(s) "
+    "that reach it, and the evidence scope (local, connected, assembled, artifact). "
+    "A multi-clause correction must have sites on each clause, not a single site on the row. "
+    "Cite call sites alongside definition sites: a new helper's definition site needs "
+    "a sibling call-site entry in an existing file. "
+    "For each clause whose `sites` is empty, provide a `kind` field: "
+    "\"prohibition\" (a \"do not…\" clause, with a `pattern`), \"doc\" (cite the "
+    "changed doc file), \"design\" (cite the design.md heading that now carries it), "
+    "or \"test\" (cite the code site plus the test — the code site, not the test file, is the site). "
+    "A site inside a test file is not a code site.\n"
+    "Scope means (from code_reviewer.md category 8, quoted as written):\n"
+    "- local: a unit test exists that tests the stated outcome in isolation\n"
+    "- connected: a test exists that calls a real entry point crossing a module boundary, mocking only external I/O\n"
+    "- assembled: a smoke test or startup check verifies end-to-end behavior\n"
+    "- artifact: the artifact exists and has correct content\n"
+    "This repository's rules:\n"
+    "- a test that patches the project's own modules on the tested path is local, not connected;\n"
+    "- assembled means driving a mode's run() with no project-module patch on the path;\n"
+    "- artifact means reading the delivered output.\n"
+    "Omitting a clause that is in the text, or listing a clause with no "
     "evidence, is a structural failure. "
     "Cover EVERY baseline id in authoring-evidence.json, decomposing compound asks "
     "into separate rows with the same id when needed. Map every ask, accepted criterion, "
@@ -286,9 +309,28 @@ def audit_problems(ctx: Any) -> list[str]:
         if row.get("status") == "excluded":
             change = row.get("user_change")
             quote = row.get("user_quote")
-            if (not isinstance(change, str) or change not in changes or not row.get("reason") or not isinstance(quote, str)
-                    or not quote.strip() or quote not in baseline.get(change, {}).get("text", "")):
-                problems.append(f"{key}: exclusion has no explicit user change; reviewers cannot waive requirements")
+            entry_text = ""
+            if isinstance(change, str) and change in changes:
+                entry_text = baseline.get(change, {}).get("text", "")
+            entry_preview = (f"{change}: {entry_text[:40]}" if entry_text
+                             else str(change))
+            conditions: list[str] = []
+            if not isinstance(change, str) or change not in changes:
+                conditions.append(f"unknown user_change {change!r}")
+            if isinstance(change, str) and change in changes:
+                if (not isinstance(quote, str) or not quote.strip()
+                        or quote not in entry_text):
+                    conditions.append(
+                        "user_quote is not an exact substring of that entry"
+                    )
+            if not row.get("reason"):
+                conditions.append("missing reason")
+            if conditions:
+                problems.append(
+                    f"{entry_preview} — {key}: exclusion rejected "
+                    f"({', '.join(conditions)}); "
+                    "reviewers cannot waive requirements"
+                )
             continue
         # ── clause-level check for constraint/correction rows ──
         base_item = baseline.get(key, {})
@@ -405,15 +447,391 @@ def wire_reviews(graph: Any) -> None:
     for name in ("gate_qa", "gate_overwatch"):
         node = graph.nodes[name]
         graph.nodes[name] = replace(node, reads=(*node.reads, EVIDENCE, *((AUDIT,) if name == "gate_overwatch" else ())), max_iterations=12,
-                                   writes=(*node.writes, "validation.txt"),
+                                   writes=(*node.writes, "validation.txt",
+                                           "site-revert-results.json", "correction-audit.json"),
                                    produces=(*node.produces, "validation", "attempts_used", "review_attempts_used"),
                                    knobs=(*node.knobs, "review_attempts"))
     report = graph.nodes["report"]
     graph.nodes["report"] = replace(report, reads=(*report.reads, EVIDENCE, AUDIT))
 
 
+def correction_audit_problems(ctx: Any) -> list[str]:
+    """Compute per-correction audit: check sites, reverts and scope.
+
+    Called from ``gate_overwatch`` and ``gate_qa``.  Writes
+    ``correction-audit.json`` with the per-clause results.  Returns a list of
+    blocking messages.
+    """
+    if not ctx.exists(EVIDENCE):
+        return []
+    evidence_data = ctx.read_json(EVIDENCE, {})
+    try:
+        audit = ctx.read_json(AUDIT, {})
+    except ValueError:
+        audit = {}
+    rows = audit.get("requirements", []) if isinstance(audit, dict) else []
+    baseline = {item["id"]: item for item in evidence_data.get("requirements", [])}
+    changes = {key for key, value in baseline.items()
+               if value.get("kind") in ("correction", "constraint")}
+
+    from refactory_dsh import base_check, worktree
+
+    found = worktree.recorded(ctx.workdir)
+    no_base = found is None
+
+    # Collect all (site, test, scope) pairs from clause-level sites arrays
+    all_pairs: list[tuple[str, str, str]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        key = row.get("id", "")
+        if key not in changes:
+            continue
+        for clause in row.get("clauses", []):
+            if not isinstance(clause, dict):
+                continue
+            for site_entry in clause.get("sites", []):
+                if not isinstance(site_entry, dict):
+                    continue
+                site = site_entry.get("site", "")
+                for test in site_entry.get("tests", []):
+                    scope = site_entry.get("scope", "local")
+                    all_pairs.append((site, test, scope))
+
+    # Run site reverts (skipped when no base or check failed)
+    revert_results: dict[str, Any] = {}
+    if not no_base and all_pairs:
+        focused = ctx.read_json("focused-check.json", {}) if ctx.exists("focused-check.json") else {}
+        check_failed = focused.get("status") == "fail" if focused else False
+        if not check_failed:
+            revert_results = base_check.compute_site_reverts(ctx, all_pairs)
+        else:
+            revert_results = {"skipped": "check failed"}
+
+    # Read design.md for exemptions and heading verification
+    design_text = ctx.read_text("design.md") if ctx.exists("design.md") else ""
+    design_headings = set()
+    for line in design_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            heading_text = stripped.lstrip("#").strip()
+            design_headings.add(heading_text.lower())
+
+    # Parse exemptions
+    exempted_sites: set[str] = set()
+    if "## Site revert exemptions" in design_text:
+        in_section = False
+        for line in design_text.splitlines():
+            s = line.strip()
+            if s.lower() == "## site revert exemptions":
+                in_section = True
+                continue
+            if in_section and s.startswith("## "):
+                break
+            if in_section and (s.startswith("- ") or s.startswith("* ")):
+                import re as _re
+                m = _re.match(r'[`*]*([^`*\s]+:\d+(?:-\d+)?)', s[2:].strip())
+                if m:
+                    exempted_sites.add(m.group(1))
+
+    # Read the +lines from the diff for prohibition checks
+    diff_added_lines: list[str] = []
+    if not no_base:
+        import subprocess
+        try:
+            diff_output = subprocess.run(
+                ["git", "-C", str(found.path), "diff", "-U0", found.base, "HEAD"],
+                capture_output=True, text=True, timeout=30,
+            ).stdout
+            for line in diff_output.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    diff_added_lines.append(line[1:])
+        except Exception:
+            pass
+
+    problems: list[str] = []
+    audit_output: list[dict[str, Any]] = []
+
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        key = row.get("id", "")
+        if key not in changes:
+            continue
+        if row.get("status") == "excluded":
+            continue
+
+        base_item = baseline.get(key, {})
+        text_preview = base_item.get("text", "")[:80]
+        clauses = row.get("clauses", [])
+        clause_results: list[dict[str, Any]] = []
+
+        for ci, clause in enumerate(clauses if isinstance(clauses, list) else []):
+            if not isinstance(clause, dict):
+                continue
+            sites = clause.get("sites", [])
+            clause_status = "pass"
+            site_results: list[dict[str, Any]] = []
+
+            kind = clause.get("kind", "")
+
+            # Handle non-code clause kinds
+            if kind == "prohibition":
+                pattern = clause.get("pattern", "")
+                if pattern and not any(pattern in line for line in diff_added_lines):
+                    site_results.append({"site": "prohibition", "status": "pass"})
+                else:
+                    if pattern:
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: prohibition pattern {pattern!r} "
+                            "found in added lines"
+                        )
+                    site_results.append({"site": "prohibition", "status": "fail"})
+                clause_results.append({
+                    "clause": clause.get("clause", ""),
+                    "sites": site_results, "status": clause_status,
+                })
+                continue
+
+            if kind == "doc":
+                doc_path = clause.get("path", "")
+                if doc_path and not no_base:
+                    try:
+                        diff_files = subprocess.run(
+                            ["git", "-C", str(found.path), "diff", "--name-only",
+                             found.base, "HEAD"],
+                            capture_output=True, text=True, timeout=10,
+                        ).stdout.strip().splitlines()
+                        if doc_path in diff_files:
+                            site_results.append({"site": doc_path, "status": "pass"})
+                        else:
+                            clause_status = "fail"
+                            problems.append(
+                                f"{key} clause {ci + 1}: doc file {doc_path!r} "
+                                "is not in the diff"
+                            )
+                            site_results.append({"site": doc_path, "status": "fail"})
+                    except Exception:
+                        site_results.append({"site": doc_path, "status": "unavailable"})
+                else:
+                    site_results.append({"site": doc_path or "?", "status": "pass"})
+                clause_results.append({
+                    "clause": clause.get("clause", ""),
+                    "sites": site_results, "status": clause_status,
+                })
+                continue
+
+            if kind == "design":
+                heading = clause.get("heading", "")
+                if heading and heading.lower() in design_headings:
+                    site_results.append({"site": f"design.md#{heading}", "status": "pass"})
+                elif heading:
+                    clause_status = "fail"
+                    problems.append(
+                        f"{key} clause {ci + 1}: design heading {heading!r} "
+                        "not found in current design.md"
+                    )
+                    site_results.append({"site": f"design.md#{heading}", "status": "fail"})
+                else:
+                    site_results.append({"site": "design.md", "status": "pass"})
+                clause_results.append({
+                    "clause": clause.get("clause", ""),
+                    "sites": site_results, "status": clause_status,
+                })
+                continue
+
+            # Code sites
+            if not sites and not no_base:
+                clause_status = "fail"
+                problems.append(
+                    f"{key} clause {ci + 1}: correction has no site in the diff"
+                )
+                clause_results.append({
+                    "clause": clause.get("clause", ""),
+                    "sites": [], "status": clause_status,
+                })
+                continue
+            elif not sites and no_base:
+                # No base — skip site checks
+                clause_results.append({
+                    "clause": clause.get("clause", ""),
+                    "sites": [], "status": "pass",
+                })
+                continue
+
+            has_sibling_pass = False
+            needs_sibling: list[int] = []
+
+            for si, site_entry in enumerate(sites):
+                if not isinstance(site_entry, dict):
+                    continue
+                site = site_entry.get("site", "")
+                tests = site_entry.get("tests", [])
+                declared_scope = site_entry.get("scope", "local")
+
+                sr: dict[str, Any] = {"site": site, "in_diff": True, "tests": [], "status": "pass"}
+
+                if no_base:
+                    # Keep scope check only
+                    for test_name in tests:
+                        test_info = {"name": test_name, "scope_declared": declared_scope,
+                                     "scope_actual": declared_scope}
+                        sr["tests"].append(test_info)
+                    site_results.append(sr)
+                    continue
+
+                # Check revert results
+                for test_name in tests:
+                    revert_data = revert_results.get("pairs", {})
+                    revert_entry = None
+                    if isinstance(revert_data, list):
+                        revert_entry = next(
+                            (p for p in revert_data
+                             if p.get("site") == site and p.get("test") == test_name),
+                            None,
+                        )
+
+                    result = revert_entry.get("result", "unavailable") if revert_entry else "unavailable"
+
+                    test_info: dict[str, Any] = {
+                        "name": test_name,
+                        "revert_result": result,
+                        "scope_declared": declared_scope,
+                        "scope_actual": declared_scope,
+                    }
+
+                    # Scope check
+                    from refactory_dsh import patch_scope
+                    test_path = test_name.split("::")[0] if "::" in test_name else test_name
+                    site_path = site.split(":")[0] if ":" in site else site
+                    site_files = [site_path]
+                    project_modules = ["refactory_dsh"]
+
+                    try:
+                        if test_path.endswith(".py"):
+                            test_file = ctx.workdir / test_path
+                            if not test_file.exists() and found:
+                                test_file = Path(found.path) / test_path
+                            if test_file.exists():
+                                test_source = test_file.read_text()
+                                fn_name = test_name.split("::")[-1] if "::" in test_name else ""
+                                violations = patch_scope.check_python_patches(
+                                    test_source, fn_name, project_modules, site_files,
+                                )
+                                if violations and declared_scope in ("connected", "assembled", "artifact"):
+                                    test_info["scope_actual"] = "local"
+                        elif test_path.endswith(".ts") or test_path.endswith(".spec.ts"):
+                            test_file = ctx.workdir / test_path
+                            if not test_file.exists() and found:
+                                test_file = Path(found.path) / test_path
+                            if test_file.exists():
+                                test_source = test_file.read_text()
+                                fn_name = test_name.split("::")[-1] if "::" in test_name else test_name.split(" > ")[-1] if " > " in test_name else ""
+                                violations = patch_scope.check_typescript_patches(
+                                    test_source, fn_name, project_modules, site_files,
+                                )
+                                if violations and declared_scope in ("connected", "assembled", "artifact"):
+                                    test_info["scope_actual"] = "local"
+                    except Exception:
+                        pass
+
+                    if test_info["scope_actual"] != declared_scope and declared_scope in ("connected", "assembled", "artifact"):
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: test {test_name} patches the "
+                            f"changed function (scope {test_info['scope_actual']}, "
+                            f"declared {declared_scope})"
+                        )
+
+                    if result in ("new_file", "import_only"):
+                        needs_sibling.append(si)
+                    sr["tests"].append(test_info)
+
+                # Determine site status
+                test_results = [t.get("revert_result", "unavailable") for t in sr["tests"]]
+                if not test_results:
+                    sr["status"] = "unavailable"
+                elif any(r == "fail" for r in test_results):
+                    sr["status"] = "pass"
+                    has_sibling_pass = True
+                elif all(r in ("new_file", "import_only") for r in test_results):
+                    sr["status"] = "needs_sibling"
+                elif any(r == "pass" for r in test_results):
+                    # test passed = site not caught
+                    sr["status"] = "fail"
+                    if site not in exempted_sites:
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: site {site} not reached by any "
+                            "test (revert did not cause failure)"
+                        )
+                elif any(r in ("unavailable", "collection_error") for r in test_results):
+                    sr["status"] = "unavailable"
+                    if site not in exempted_sites:
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: site {site} revert unavailable"
+                        )
+                else:
+                    sr["status"] = "pass"
+
+                site_results.append(sr)
+
+            # Resolve sibling paths for new_file / import_only
+            for si in needs_sibling:
+                if not has_sibling_pass and si < len(site_results):
+                    sr = site_results[si]
+                    site = sr.get("site", "?")
+                    clause_status = "fail"
+                    problems.append(
+                        f"{key} clause {ci + 1}: site {site} new file with no sibling"
+                    )
+                    sr["status"] = "fail"
+
+            clause_results.append({
+                "clause": clause.get("clause", ""),
+                "sites": site_results, "status": clause_status,
+            })
+
+        overall_status = "pass" if all(
+            c.get("status") == "pass" for c in clause_results
+        ) else "fail"
+        audit_output.append({
+            "id": key,
+            "text_preview": text_preview,
+            "clauses": clause_results,
+            "status": overall_status,
+        })
+
+    # Write correction-audit.json
+    ctx.write_json("correction-audit.json", audit_output)
+    # Write site-revert-results.json
+    if isinstance(revert_results, dict) and "pairs" in revert_results:
+        ctx.write_json("site-revert-results.json", revert_results)
+    elif no_base:
+        ctx.write_json("site-revert-results.json", {"no_base": True})
+    else:
+        ctx.write_json("site-revert-results.json", revert_results)
+
+    return problems
+
+
+def read_correction_audit(ctx: Any) -> list[str]:
+    """Pure reader for correction-audit.json.  Returns blocking messages."""
+    if not ctx.exists("correction-audit.json"):
+        return []
+    data = ctx.read_json("correction-audit.json", [])
+    return [
+        f"{item['id']}: {clause.get('status', 'fail')}: "
+        f"{', '.join(s.get('site', '?') for s in clause.get('sites', []))}"
+        for item in data if isinstance(item, dict) and item.get("status") != "pass"
+        for clause in item.get("clauses", []) if clause.get("status") != "pass"
+    ]
+
+
 def require_completion(ctx: Any) -> None:
     workers = ("focused_qa",) if "repair_attempts" in ctx.knobs else REVIEWERS[:-1]
-    problems = current_problems(ctx, workers) + audit_problems(ctx)
+    problems = current_problems(ctx, workers) + audit_problems(ctx) + read_correction_audit(ctx)
     if problems:
         raise ValueError("authoring sign-off is incomplete or stale: " + "; ".join(problems))

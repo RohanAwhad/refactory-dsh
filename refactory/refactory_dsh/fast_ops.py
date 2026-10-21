@@ -359,10 +359,12 @@ def gate_qa(ctx: Any) -> str:
         findings.append(f"requested runtime check failed (exit {check.get('returncode')}): {check_output}")
     findings.extend(evidence.current_problems(ctx, ("focused_qa",)))
     findings.extend(evidence.audit_problems(ctx))
+    correction_problems = evidence.correction_audit_problems(ctx)
     # Prepend unbuilt-package diagnosis so the builder sees it first.
     unbuilt_diag = check.get("unbuilt_diagnosis", "")
     if unbuilt_diag:
         findings.insert(0, unbuilt_diag)
+    findings.extend(correction_problems)
     if findings:
         # Classify only refactory's own text; check stderr/stdout is target text
         # and must not be word-scanned (correction 1: gate_qa classifies target text).
@@ -370,9 +372,10 @@ def gate_qa(ctx: Any) -> str:
             refactory_findings = [
                 f for f in findings
                 if not f.startswith("requested runtime check failed")
+                and f not in correction_problems
             ]
         else:
-            refactory_findings = findings
+            refactory_findings = [f for f in findings if f not in correction_problems]
         if refactory_findings:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)

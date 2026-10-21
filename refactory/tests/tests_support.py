@@ -432,9 +432,11 @@ class FakeModel:
                                      "detail": "scripted fixture inspected the executed result"}]}
                 if item.get("kind") in ("correction", "constraint"):
                     text = item.get("text", "")
+                    sites = getattr(self, '_correction_sites', {}).get(item["id"], [])
                     row["clauses"] = [{"clause": text,
                                        "evidence": [{"path": "authoring-evidence.json",
-                                                      "detail": "full constraint verified"}]}]
+                                                      "detail": "full constraint verified"}],
+                                       "sites": sites}]
                 audit_rows.append(row)
             (root / "intent-audit.json").write_text(json.dumps({"requirements": audit_rows}))
         return answer
