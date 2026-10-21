@@ -11,28 +11,45 @@ from __future__ import annotations
 
 from typing import Any
 
-VERIFICATION_METHODS = """
+_METHODS_HEADER = """
 Apply each of these design-blind verification methods to the brief, the diff
 and the repository. Do not read design.md or strategy.json.
-
-M1  Adversarial inputs — find inputs the change accepts that would produce
-    wrong output or violate the brief's constraints.
-M2  Trace a real case — pick a concrete scenario the brief describes, trace it
-    through the diff line by line, and report where it goes wrong or is not handled.
-M3  Where else does this pattern appear — search the repository for every call
-    site, re-export, or copy of the code the diff changes, and report any that
-    the diff does not update.
-M11 Verify claims against code — for every claim the diff's comments or
-    docstrings make, confirm the code matches.
-M12 Shared state — identify every file, environment variable, lock or process
-    the diff's code reads or writes, find every other reader/writer in the
-    repository, and report conflicts.
-M13 Boundary values — for every numeric or string parameter the diff parses,
-    test zero, one, maximum, empty, and type-boundary values against the code.
-M15 Weakened tests — for every test the diff changes, determine whether the
-    assertion is now weaker than before; a test that would pass when the code
-    is wrong is blocking.
 """
+
+M1_METHOD = """M1  Adversarial inputs — find inputs the change accepts that would produce
+    wrong output or violate the brief's constraints."""
+
+M2_METHOD = """M2  Trace a real case — pick a concrete scenario the brief describes, trace it
+    through the diff line by line, and report where it goes wrong or is not handled."""
+
+M3_METHOD = """M3  Where else does this pattern appear — search the repository for every call
+    site, re-export, or copy of the code the diff changes, and report any that
+    the diff does not update."""
+
+M11_METHOD = """M11 Verify claims against code — for every claim the diff's comments or
+    docstrings make, confirm the code matches."""
+
+M12_METHOD = """M12 Shared state — identify every file, environment variable, lock or process
+    the diff's code reads or writes, find every other reader/writer in the
+    repository, and report conflicts."""
+
+M13_METHOD = """M13 Boundary values — for every numeric or string parameter the diff parses,
+    test zero, one, maximum, empty, and type-boundary values against the code."""
+
+M15_METHOD = """M15 Weakened tests — for every test the diff changes, determine whether the
+    assertion is now weaker than before; a test that would pass when the code
+    is wrong is blocking."""
+
+VERIFICATION_METHODS = (
+    _METHODS_HEADER + "\n"
+    + M1_METHOD + "\n"
+    + M2_METHOD + "\n"
+    + M3_METHOD + "\n"
+    + M11_METHOD + "\n"
+    + M12_METHOD + "\n"
+    + M13_METHOD + "\n"
+    + M15_METHOD + "\n"
+)
 
 VERIFIER_PROMPT = (
     "Artifact directory (absolute): {{artifact}}\n"

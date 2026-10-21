@@ -440,8 +440,8 @@ def test_constants_values():
         CONSOLE_FILE, REVIEWERS, DELIVER_ENTRY_POINTS, EVIDENCE,
     )
 
-    assert CHECK_PRODUCES == ("commit", "files", "inherited_failures")
-    assert CHECK_WRITES == ("changes.diff", "test-guardedness.json")
+    assert CHECK_PRODUCES == ("commit", "files", "inherited_failures", "changed_functions")
+    assert CHECK_WRITES == ("changes.diff", "test-guardedness.json", "changed-functions.json")
     assert INSTALL_TIMEOUT_S == 1800
     assert HOOK_SUPPRESS == {"LEFTHOOK": "0", "HUSKY": "0"}
     assert CHECK_HOME == P(".refactory") / "check-home"
