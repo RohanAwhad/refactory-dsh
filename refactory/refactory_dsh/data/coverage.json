@@ -558,15 +558,21 @@
         {
           "arguments": {},
           "explanation": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated."
+        },
+        {
+          "arguments": {
+            "run": "/path/to/run"
+          },
+          "explanation": "Check a specific run's driver pin state: its recorded commit, profile name, and whether a pin exists."
         }
       ],
       "interfaces": {
         "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
-        "cli": "refactory doctor",
+        "cli": "refactory doctor [--run DIR]",
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
-      "purpose": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated.",
-      "reviewed_schema": "4e5762fd76050e80185bfba003afaadb79684ea7d61fc91e1c086a5ccbcd1d76"
+      "purpose": "Inspect prerequisites and configured credentials without a model call; with --run, also report a run's driver pin state. Configured does not mean authenticated.",
+      "reviewed_schema": "22c0386b3491338de9e7ddfe53d52c1fd72bb93a87a9798061d8e3b33fda4f2b"
     },
     "cli:list": {
       "doc": "refactory/docs/cli.md",
@@ -624,6 +630,30 @@
       },
       "purpose": "Manage installed mode packages through registry subcommands; read their help before mutations.",
       "reviewed_schema": "be7bcd90aa83a34d63c41828e491c54b431cab1fdcea3ce59520246693aebaf0"
+    },
+    "cli:pin": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "pin_action": "list"
+          },
+          "explanation": "List all driver pins with their commit, creation time and driver checkout. Each pin is a prepared worktree of an older commit that a resumed run uses when the driver has moved."
+        },
+        {
+          "arguments": {
+            "pin_action": "prune"
+          },
+          "explanation": "Remove pins no live or resumable run refers to and clean up their graph-pin profiles from the person's DSH home."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI route.",
+        "cli": "refactory pin {list,prune}",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI route."
+      },
+      "purpose": "Manage driver pins: list active pins and their runs, or prune those no run refers to. A pin is a prepared worktree of the commit a run was launched with, shared across runs at the same commit.",
+      "reviewed_schema": "d47740d328a9f172e8f92555f1da70c29bcfe21fe4c8124ee2066559dfaeca14"
     },
     "cli:projects": {
       "doc": "refactory/docs/cli.md",

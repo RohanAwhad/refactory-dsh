@@ -1194,3 +1194,109 @@ Two things that were on this list have moved off it, which is the point of keepi
   where it is not, so a CI machine without it is honest rather than green by omission.
 - **SRF's own optimizer is no longer unused.** `map_elites` is ported, counted
   separately from the thirteen modes, and asserted by name (§8).
+
+
+## Pin integrity
+
+### Repository guard
+
+The `repo_guard` pytest plugin (loaded via `conftest.py`) snapshots the
+repository's worktree list, hooks and git config at session start and compares
+at session end. Any change attributed to the test session fails the suite.
+
+Pin tests use temporary git repositories created with `git init` in `tmp_path`.
+No test creates a worktree in the real repository under test, so the guard never
+fires for pin operations.
+
+### Hooks isolation during pin preparation
+
+A pin's `pnpm install` runs prepare scripts (such as `lefthook install`) that
+can rewrite the driver's shared hooks. Pin creation isolates hooks:
+
+1. `extensions.worktreeConfig` is enabled on the driver (the same extension
+   run worktrees already enable, and the canary checks already expect).
+2. `core.hooksPath` is set to `<gitdir>/hooks.isolated` as a per-worktree
+   config on the pin (the same path `worktree._isolate_hooks` uses for run
+   worktrees), so hooks write to the pin's own git dir, not the driver's
+   shared hooks.
+3. The `LEFTHOOK=0` and `HUSKY=0` environment variables are set during
+   `pnpm install` and `pnpm build`.
+
+### Dirty driver pinning
+
+When a driver has uncommitted changes to machinery paths at launch, the unified
+diff is recorded in the driver record (`dirty_diff`). When a pin is created,
+`git apply` applies that diff to the pin's worktree. If the diff conflicts with
+the pin's commit (the checkout has moved and the changes overlap), pin creation
+refuses with a `RuntimeError` naming the commit and the conflicting paths.
+
+### File lock for concurrent pin creation
+
+`create_pin()` acquires an exclusive `flock` on
+`<refactory_home>/pins/<key>.lock` before preparing a pin. Concurrent callers
+block until the first one finishes, then find the prepared pin and return it.
+A rebuild (`require_build`) is also refused when a live run uses the checkout:
+the run is registered on its driver at launch, and `_refuse_if_live_runs`
+checks every registered run's owner lock before allowing a build.
+
+### In-place pin preparation
+
+The pin is prepared directly at its final path (`<refactory_home>/pins/<key>/`),
+guarded by an exclusive file lock (`<key>.lock`). The `pin.json` file is the
+readiness marker: it is written only after all preparation steps (worktree
+creation, hooks isolation, dirty diff application, `uv sync`, `pnpm install`,
+`pnpm build`, and profile provisioning) succeed. A failure at any point removes
+the pin directory and propagates the error. Concurrent callers block on the lock
+and, after the first one finishes, find the prepared pin via `pin.json` and
+return it immediately.
+
+### Worker dispatch under a pin
+
+The dispatched worker (`worker_node.py`) compares `sys.prefix` (the venv root)
+with the pin's venv, not `os.path.realpath(sys.executable)`.  A uv venv's Python
+is a symlink to the shared uv interpreter, so `realpath` resolves both the
+driver's and the pin's binaries to the same target and the re-exec would never
+fire.  When the prefixes differ, the worker re-execs with
+`[pin_py, '-m', 'refactory_dsh.worker_node', *sys.argv[1:]]` so the pin's
+package is loaded rather than the driver's `worker_node.py` file path that
+`sys.argv[0]` holds under `-m` dispatch.
+
+A re-exec loop guard prevents infinite re-execs when the pin's venv is broken:
+the environment variable `_REFACTORY_WORKER_REEXEC` is set before `os.execv`.
+If the re-exec'd process still finds itself on the wrong venv, it fails with
+a diagnostic message naming both interpreters instead of re-exec'ing again.
+
+### Drift scope
+
+`detect_drift` counts only fingerprint paths under the driver checkout as
+driver drift, using `Path.is_relative_to` on resolved paths so a sibling
+directory like `<checkout>-runs/` is never counted.  Paths under `.factory/`
+inside the checkout (the run's own graphs and artefacts) are also excluded
+from driver drift.
+
+Changes to non-driver paths — the run's own `graphs/` directory, project
+packages — are not driver drift and do not trigger pinning.  Recovery's
+`prepare()` and the supervisor's `prepare()` calls still refuse those changes
+with "prepared configuration … changed; dependent results need explicit
+invalidation" even when the driver has moved and a pin is being created.
+The `skip_driver_paths` parameter tells `prepare()` which fingerprint paths
+to skip (the driver's); all others are still validated.
+
+### Stale-build handling on resume
+
+`interactive.run()` passes `check_only=True` to `require_build()` on resume
+and respawn.  A stale build on a resume child warns to stderr instead of
+attempting a rebuild.  Where a rebuild is attempted (a fresh launch with no live
+runs), a failed `pnpm run build` is caught and logged as a warning rather than
+stopping the launch.
+
+### Supervisor drift detection
+
+The supervisor loop calls `recovery.prepare()` at two sites: the resume-pending
+path (where a person explicitly resumes) and the transient-exit respawn path.
+Both sites detect drift before `prepare()` and, when the driver has moved,
+resolve the pin and pass `skip_driver_paths=` the driver checkout to
+`prepare()`.  This skips only the driver's fingerprints; non-driver
+fingerprints (the run's graphs, project packages) are still validated and
+raise the "prepared configuration … changed" refusal as on main.  The
+re-exec'd owner child validates against the pin's files after re-exec.

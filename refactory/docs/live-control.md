@@ -118,6 +118,45 @@ A control that cannot be applied — a stale revision, an unsupported action, a 
 
 To change completed work, choose a completed node and prompt correction, press **Preview affected results**, inspect the invalidated nodes, then **Confirm correction and rerun**. The console equivalent is `graph-control preview --node NODE`, followed by `graph-control rerun --node NODE --text "CORRECTION" --revision REVISION` with the returned revision and the same `--run`. The owner refuses a stale preview. Prior evidence is archived and dependent results invalidated before execution; a note alone does not silently rewrite completed work. Unsafe replay plans, including unsettled concurrent work, are refused.
 
+## Resuming after the driver moved
+
+When a run's driver checkout moves to a new commit (or its fingerprinted files are
+edited) between launch and resume, the run creates a **pin**: a prepared git
+worktree of the original commit under `~/.refactory/pins/<commit>/checkout`. The
+pin has its own `uv sync`, `pnpm install` and `pnpm build`, and a DSH profile
+named `graph-pin-<commit12>` provisioned in the person's own `~/.dsh` — so
+credentials stay where they are and DSH_HOME is never changed.
+
+The resume path detects drift by comparing the recorded commit and configuration
+fingerprints against the current checkout.  Only fingerprints under the driver
+checkout (by path component, not string prefix) count as driver drift; the run's
+own graphs, `.factory/` artefacts, and project packages are not driver drift
+and are still validated normally — a changed run graph raises the same "prepared
+configuration … changed" refusal as before.
+
+When drift is found, the owner process re-execs under the pin's Python
+interpreter. After re-exec, `REPO_ROOT` resolves to the pin, so every
+path — `dsh_command()`, `venv_bin()`, the node commands — naturally points
+to the pin's code. The loop-breaking guard: if `REPO_ROOT` already equals
+the pin checkout, re-exec is skipped.
+
+A dirty driver (uncommitted changes to machinery paths at launch) records a
+unified diff. When the pin is created, `git apply` applies that diff to the pin's
+worktree, so the pin matches the exact state the run was launched with. A
+conflicting diff refuses with a message naming the commit and the conflict.
+
+Pins are shared: two runs at the same commit use the same pin. `refactory pin
+list` shows all pins; `refactory pin prune` removes those no live or resumable run
+refers to.
+
+## Which project a run uses
+
+`wf_open` passes `session.header.cwd` as `--project` to the open command, so a
+session opened in another directory runs with that directory as its project.
+`startup.ts` reads `REFACTORY_PROJECT` from the environment when set and falls
+back to `process.cwd()` only when absent, so the CLI's `--project` is no longer
+overridden.
+
 ## Recover a known boundary
 
 The run's status includes whether its owner process is alive. A failed run with a live owner may still apply queued controls and does not need recovery — wait for it or send another control. A failed run whose owner is not alive cannot apply pending controls; explicit recovery (resume) is needed to start a fresh owner from the saved checkpoint.

@@ -132,6 +132,11 @@ function loadGraph(mode: string, graphsDir: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'))
 }
 
+/** Resolve the project path: from the environment or from the process's cwd. */
+export function resolveRefactoryProject(): string {
+  return process.env.REFACTORY_PROJECT || process.cwd()
+}
+
 /**
  * Parse and provide the run as an ordinary Cordis service. `--help` and usage
  * errors provide nothing, which fails the runner row (and therefore boot) loudly.
@@ -171,7 +176,7 @@ export function apply(ctx: Context): void {
       // them is the run, not the checkout. The project — where `.factory/packages`
       // and the packages of modes live — has to be said out loud, and this is where
       // the checkout is known: the directory the profile was started in.
-      REFACTORY_PROJECT: process.cwd(),
+      REFACTORY_PROJECT: resolveRefactoryProject(),
       REFACTORY_INTENT: taskName,
       // An op node's command is lowered as a bare `python -m refactory_dsh.run` (lowering.RUNNER),
       // so graphs name no machine path; the run's interpreter leading PATH is what resolves it.

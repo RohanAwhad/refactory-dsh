@@ -1581,7 +1581,7 @@ def _launched(monkeypatch) -> list[list[str]]:
 
     seen: list[list[str]] = []
     monkeypatch.setattr(workers, "run_graph_command", lambda argv, **kwargs: seen.append(argv) or _Run())
-    monkeypatch.setattr(interactive, "require_build", lambda: None)
+    monkeypatch.setattr(interactive, "require_build", lambda **kw: None)
     monkeypatch.setattr(dsh_profile, "require", lambda *a, **k: None)
     return seen
 
