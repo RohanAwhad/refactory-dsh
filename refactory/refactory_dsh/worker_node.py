@@ -33,7 +33,19 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
 
     node = spec['node_id']
     from refactory_dsh.nn.executor import RunContext, render
+    from refactory_dsh.agent_delivery import fill_feedback
     context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
+    # Re-fill feedback keys before rendering
+    values = {**context.knobs, **context.facts}
+    try:
+        values, refilled_keys = fill_feedback(
+            workdir, node, values,
+            feedback_keys=spec.get("feedback_keys"),
+        )
+        if refilled_keys:
+            context = RunContext(workdir, knobs=context.knobs, facts={**context.facts, **{k: values[k] for k in refilled_keys}})
+    except (RuntimeError, ValueError):
+        pass
     client = DshModelClient(**spec['model_context']).for_node(node)
     delivery = begin(workdir, node, render(prompt, context), spec['writes'],
                      reads=spec['reads'], model_context=client.context())

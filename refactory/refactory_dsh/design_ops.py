@@ -101,6 +101,8 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
 
             print(f"refactory: warning: {readiness['warning']}", file=sys.stderr)
     ctx.write_json("brief.json", {"name": name, "brief": brief, "check": check})
+    # Write initial check-record.json so emit finds its input
+    ctx.write_json("check-record.json", {"status": "not_run", "validation": "(no check has run yet)"})
     for feedback in ("research-review.txt", "check.txt"):
         ctx.write_text(feedback, "not run: initial authoring pass; no prior feedback\n")
     ctx.write_text("reviews/design-review-feedback.txt",
@@ -119,6 +121,15 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         "pitfalls": "(no pitfalls analysis yet)",
         "pitfalls_review": "(no pitfalls review has run yet)",
     } if deliver else {}
+    # Write feedback-initial.json so a redo before QA re-fills
+    feedback_initial = {
+        "validation": "(no check has run yet)",
+        **UNREFUSED,
+    }
+    import json as _json_mod
+    (Path(ctx.workdir) / "feedback-initial.json").write_text(
+        _json_mod.dumps(feedback_initial, indent=2) + "\n"
+    )
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
             "research_review": "(no research review has run yet)", "research_scope": research_scope,
             "design_review_feedback": "(no design review has run yet)",
@@ -425,6 +436,10 @@ def check_artifact(ctx: Any) -> str:
         detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
         ctx.write_text("check.txt", detail + "\n")
         ctx.set_fact("validation", detail)
+        ctx.write_json("check-record.json", {
+            "status": "refused", "validation": detail,
+            "attempt": int(ctx.facts.get("attempts_used", 0)),
+        })
         return Verdict("reloop", detail)
     command = str(ctx.facts["check"])
     result = repo_change.run_check(ctx, command, int(ctx.knob("check_timeout_s", 180)))
@@ -463,8 +478,16 @@ def check_artifact(ctx: Any) -> str:
                 "PR why each test pins existing behaviour."
             )
             ctx.write_text("check.txt", detail + "\n")
+            ctx.write_json("check-record.json", {
+                "status": "guarded", "validation": detail,
+                "attempt": int(ctx.facts.get("attempts_used", 0)),
+            })
             return repair(ctx, [detail])
         ctx.set_fact("validation", "(the check passed)")
+        ctx.write_json("check-record.json", {
+            "status": "pass", "validation": "(the check passed)",
+            "attempt": int(ctx.facts.get("attempts_used", 0)),
+        })
         return "proceed"
 
     # Name the specific resource limit when a file-size stop occurs.
@@ -508,6 +531,10 @@ def check_artifact(ctx: Any) -> str:
             outcome["inherited_failures"] = sorted(filtered.inherited)
             ctx.set_fact("inherited_failures", sorted(filtered.inherited))
             evidence.record(ctx, outcome)
+            ctx.write_json("check-record.json", {
+                "status": "pass", "validation": validation_msg,
+                "attempt": int(ctx.facts.get("attempts_used", 0)),
+            })
             # ── enforce test guardedness on excused pass too (R3) ──
             unexempted = enforce_guardedness(ctx)
             if unexempted:
@@ -518,6 +545,10 @@ def check_artifact(ctx: Any) -> str:
                     "PR why each test pins existing behaviour."
                 )
                 ctx.write_text("check.txt", detail + "\n")
+                ctx.write_json("check-record.json", {
+                    "status": "guarded", "validation": detail,
+                    "attempt": int(ctx.facts.get("attempts_used", 0)),
+                })
                 return repair(ctx, [detail])
             return "proceed"
         if filtered.new_failures and filtered.inherited:
@@ -539,6 +570,24 @@ def check_artifact(ctx: Any) -> str:
         # Otherwise prepend the diagnosis so the builder sees it.
         if unbuilt_msg:
             detail = unbuilt_msg + "\n\n" + detail
+
+    # Build digest of new failures
+    from refactory_dsh.check_digest import digest_check_output, format_digest
+    check_output = detail
+    digest = digest_check_output(check_output)
+    digest_text = format_digest(digest)
+    if digest_text.strip():
+        detail = digest_text + "\n\n" + detail[-2000:]
+
+    ctx.write_json("check-record.json", {
+        "status": "fail",
+        "validation": detail[:4000],
+        "digest": digest_text,
+        "attempt": int(ctx.facts.get("attempts_used", 0)),
+        "command": command,
+        "runners": digest.to_dict().get("runners", []),
+        "raw_tail": digest.raw_tail[-500:],
+    })
 
     return repair(ctx, [detail])
 

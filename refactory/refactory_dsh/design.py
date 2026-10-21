@@ -90,7 +90,8 @@ class DesignMode(Mode):
             "prepare", "op", call=f"{OPS}:prepare_design",
             knobs=("name", "brief", "check", *repo_change.knob_names(), *delivery.knobs()),
             writes=("brief.json", "research-review.txt", "check.txt", "delivery.md",
-                    "reviews/design-review-feedback.txt", "pitfalls-review.txt"),
+                    "reviews/design-review-feedback.txt", "pitfalls-review.txt",
+                    "check-record.json", "feedback-initial.json"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
                       *repo_change.produces(), "delivery", "delivery_plan",
@@ -384,10 +385,12 @@ class DesignMode(Mode):
                 "but emit.txt: do not apply or test your change anywhere — the target, the "
                 "run's worktree or a copy — because materialise and the check do that after "
                 "you answer and send you the result. Then return a short completion message.\n"
+                "{{probe_instruction}}\n"
             ),
-            reads=("brief.json", "design.md", "check.txt"),
+            reads=("brief.json", "design.md", "check.txt", "check-record.json"),
             writes=(repo_change.EMIT_FILE,),
             produces=("emit",),
+            feedback_keys=("validation", "qa_gate", "overwatch_review"),
             notes="write the artifact's files",
         ))
         graph.add(repo_change.materialise_node())

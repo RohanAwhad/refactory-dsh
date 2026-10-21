@@ -208,7 +208,28 @@ def focused_check(ctx: Any) -> dict[str, Any]:
         review_files = sorted(create_ops.parse_files(ctx.read_text("emit.txt")))
     ctx.write_json("focused-source.json", {"root": output, "files": _checked_files(Path(output)),
                                           "review_files": review_files})
+    # Build digest when check fails
+    if payload.get("status") == "fail":
+        from refactory_dsh.check_digest import digest_check_output, format_digest
+        raw = (payload.get("stderr") or "") + "\n" + (payload.get("stdout") or "")
+        digest = digest_check_output(raw)
+        digest_text = format_digest(digest)
+        payload["digest"] = digest_text
+        payload["runners"] = digest.to_dict().get("runners", [])
     ctx.write_json("focused-check.json", payload)
+    # Write check-record.json every run
+    cr_status = "pass" if payload.get("status") != "fail" else "fail"
+    cr_record: dict[str, Any] = {
+        "status": cr_status,
+        "command": command or None,
+    }
+    if payload.get("digest"):
+        cr_record["digest"] = payload["digest"]
+        cr_record["validation"] = payload["digest"][:4000]
+        cr_record["runners"] = payload.get("runners", [])
+    elif cr_status == "pass":
+        cr_record["validation"] = "(the check passed)"
+    ctx.write_json("check-record.json", cr_record)
 
     from refactory_dsh import base_check
     guardedness = None
@@ -420,8 +441,20 @@ def gate_verification(ctx: Any) -> str:
 
     # 1. Check failure → _repair (spends a repair_attempts slot).
     if check_data.get("status") == "fail":
-        check_output = check_data.get("stderr") or check_data.get("stdout") or ""
-        detail = f"requested runtime check failed (exit {check_data.get('returncode')}): {check_output}"
+        # Use the digest from check-record.json when available
+        cr_path = ctx.workdir / "check-record.json" if hasattr(ctx, 'workdir') else None
+        digest_text = check_data.get("digest", "")
+        if not digest_text and cr_path:
+            try:
+                cr = json.loads(cr_path.read_text()) if cr_path and cr_path.is_file() else {}
+                digest_text = cr.get("digest", "")
+            except (json.JSONDecodeError, OSError):
+                pass
+        if digest_text:
+            detail = f"requested runtime check failed (exit {check_data.get('returncode')}):\n{digest_text}"
+        else:
+            check_output = check_data.get("stderr") or check_data.get("stdout") or ""
+            detail = f"requested runtime check failed (exit {check_data.get('returncode')}): {check_output}"
         return _repair(ctx, [detail.strip()], kind="check")
 
     # 2. Guardedness block → _repair (spends a repair_attempts slot).

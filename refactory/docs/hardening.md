@@ -1,5 +1,74 @@
 # Hardening: what the audit found, and what holds it now
 
+## Failure digest, feedback re-fill and builder probe (dm-120, dm-121)
+
+### The failure digest
+
+Before this change, the builder received raw check output — up to 500 lines of
+stack traces, passing-test lines and source-map noise — or, after a redo, the
+literal `{{validation}}` placeholder unfilled.
+
+The **failure digest** (`check_digest.py`) parses check output per runner (pytest,
+vitest and node's test runner; unknown runners fall back to the raw tail).  Each
+failing test's id, assertion or error message and a short traceback are extracted,
+with ANSI codes, passing-test lines and source-map warnings stripped.  The digest
+is stored in `check-record.json`, which is a file (not a fact) and therefore
+survives a redo or rerun.
+
+### Feedback re-fill
+
+Each builder's emit node declares its feedback keys as a `Node.feedback_keys`
+field.  Before rendering, `agent_delivery.fill_feedback` — called at the three
+render sites (worker_node, nn/executor, agent_delivery.main) — checks whether any
+declared key is absent from the facts.  When one is:
+
+1. Re-derive from the producing gate's persisted file (`check-record.json`,
+   `validation.txt`, `reviews/qa-gate.txt`, `reviews/overwatch-gate.txt`,
+   `repair.txt`).
+2. Fall back to `feedback-initial.json` (prepare-time recorded values).
+3. Refuse only when both are missing.
+
+The re-fill is resolved through the `refactory.feedback_refill` entry-point group,
+following the same pattern as `refactory.environment_overlay`.  Core modules
+(`agent_delivery`, `worker_node`, `nn.executor`) import nothing from the product;
+they reach the refill logic only through the entry point.
+
+### The builder probe
+
+The emit prompt's "do not apply or test your change anywhere" exists because
+direct edits to the worktree bypass materialise and the check.  The builder probe
+gives a safe alternative:
+
+- **Standalone clone** (`git clone --no-local --depth 1`): not a linked worktree.
+  No `.git` registration.  `origin` removed after clone.
+- **Hooks off**: `core.hooksPath=/dev/null`, `LEFTHOOK=0`, `HUSKY=0`.
+- **Isolated HOME and DSH_HOME**: per-probe directories under `probe-<id>/`.
+- **PATH stripped**: the run worktree's `.venv/bin` and `node_modules/.bin` are
+  removed so tools resolve from the clone, not from the run's worktree.
+- **Deleted afterwards**: the probe directory is removed in a `finally` block.
+  Leaked probes are swept by `materialise` (owner PID check).
+- **Not an attempt**: no `commit_attempt`, no attempt counter increment.
+- **target_guard preserved**: the existing test at `test_design_worktree.py:667`
+  continues to pass.  The probe cleans up before `finish()`.
+
+#### Why each isolation guarantee exists
+
+| Guarantee | Reason |
+|---|---|
+| Standalone clone | dm-96: a PR's checks registered 59 worktrees in the target's .git |
+| Origin removed | A push from the probe could reach the shared .git |
+| Hooks off | pnpm and lefthook rewrite shared hooks (dm-96) |
+| Isolated HOME | Tool caches stay out of the worktree's diff |
+| PATH stripped | A missing tool from the clone must not resolve into the run's worktree |
+| Deleted afterwards | A tool timeout can SIGKILL the probe; materialise sweeps leaked dirs |
+
+#### What is not isolated
+
+Installs use the person's real HOME (`worktree.py:1229-1230`), as the check's
+installs do.  `~/.npmrc`, `~/.netrc`, uv configuration and keyrings are how most
+private indexes sign in.
+
+
 Every issue closed before this pass was re-read against the code and probed for its
 own acceptance criteria — by running them, not by grepping for identifiers. Five
 were not finished, four of those while being marked done. This records each one, the

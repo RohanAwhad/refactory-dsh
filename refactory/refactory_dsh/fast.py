@@ -84,7 +84,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         resource_role="final_validation",
         knobs=("check", "check_timeout_s"),
         reads=("emit.txt",) + (() if artifact else ("authoring-evidence.json", "smoke.json")),
-        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json")
+        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json", "check-record.json")
                + (("check.txt", *repo_change.CHECK_WRITES) if artifact else ()),
         produces=("focused_check", "output_path", "review_files", "runtime_evidence")
                  + (repo_change.CHECK_PRODUCES if artifact else ()),
@@ -246,7 +246,8 @@ class DesignFastMode(DesignMode):
             "prepare", "op", call=f"{OPS}:prepare_artifact", resource_role="work",
             knobs=("name", "brief", "check", "source_project", *repo_change.knob_names()),
             writes=("brief.json", "source-manifest.json", "repair.txt", "research-review.txt", "check.txt",
-                    "reviews/design-review-feedback.txt"),
+                    "reviews/design-review-feedback.txt",
+                    "check-record.json", "feedback-initial.json"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
                       "source_project", "source_files", "repair_feedback", "repairs_used",
@@ -273,9 +274,12 @@ class DesignFastMode(DesignMode):
                 "you answer and send you the result. The runtime runs the requested check "
                 "and one focused QA review next. Preserve all requested behavior. After "
                 "writing emit.txt, return a short completion message. Do not invoke "
-                "downstream graph operations yourself."
-            ), reads=("brief.json", "source-manifest.json", "implementation-plan.txt", "repair.txt"),
-            writes=(repo_change.EMIT_FILE,), produces=("emit",), notes="implement the small artifact/change directly",
+                "downstream graph operations yourself.\n"
+                "{{probe_instruction}}\n"
+            ), reads=("brief.json", "source-manifest.json", "implementation-plan.txt", "repair.txt", "check-record.json"),
+            writes=(repo_change.EMIT_FILE,), produces=("emit",),
+            feedback_keys=("repair_feedback",),
+            notes="implement the small artifact/change directly",
         ))
         graph.add(repo_change.materialise_node(
             call=f"{OPS}:materialise_artifact", resource_role="work",
