@@ -37,7 +37,8 @@ REPO_CHANGE_REVIEW_INSTRUCTIONS = (
     "## Repository questions\n"
     "For each function listed below (or, for a design review, each "
     "[changed] site), answer these three questions in a ```json fenced block with "
-    'this shape: [{"function":"qualified.name", "duplicates":"where else the '
+    'this shape: [{"function":"<the entry exactly as listed under Changed functions, '
+    'e.g. pkg/mod.py::Class.method>", "duplicates":"where else the '
     'repository does the same thing, with path:line evidence", "callers":"who calls '
     "it and from which user path (the target's entry points: CLI commands, API "
     'routes, scheduled jobs, test harnesses), with path:line evidence", '
@@ -46,7 +47,8 @@ REPO_CHANGE_REVIEW_INSTRUCTIONS = (
     "Each answer gives path:line evidence, or states "
     '"absent: <what was searched>" when the answer is genuinely "nowhere" or '
     '"shares nothing". An entry with no path:line evidence and no absent: marker '
-    "is incomplete.\n\n"
+    "is incomplete. Copy each function name exactly as it is listed (path::name); "
+    "an entry under any other name does not count.\n\n"
     "For every factual claim about existing code — whether it cites a file or not, "
     'including premises like "X calls Y", "this runs on every route", "module A '
     'never calls B" — verify the claim at file:line. A false claim is BLOCKING.\n'

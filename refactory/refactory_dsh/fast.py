@@ -105,7 +105,8 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
         qa_prompt = qa_prompt.replace(
             '"not_run":["checks outside this focused scope"]}',
             '"not_run":["checks outside this focused scope"], '
-            '"repo_questions":[{"function":"name", "duplicates":"...", '
+            '"repo_questions":[{"function":"<exactly as listed under Changed functions, '
+            'e.g. pkg/mod.py::Class.method>", "duplicates":"...", '
             '"callers":"...", "shared_state":"..."}]}',
         )
     focused_qa_prompt = (
