@@ -933,6 +933,20 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
             except (json.JSONDecodeError, OSError):
                 pass
 
+    from refactory_dsh.authoring_evidence import _check_skip_provenance
+    skip_prov = _check_skip_provenance(ctx.workdir)
+    check_skipped_info: dict[str, Any] | None = None
+    check_note = ""
+    if skip_prov is not None and skip_prov.get("source") == "person":
+        check_skipped_info = {
+            "source": skip_prov["source"],
+            "at": skip_prov["at"],
+            "via": "graph-control",
+            "node": skip_prov["node"],
+        }
+        check_note = (f"the check did not run (skipped by the person at {skip_prov['at']} "
+                      f"via graph-control on node {skip_prov['node']}; covers later attempts)")
+
     report_payload: dict[str, Any] = {
         "name": ctx.facts.get("name"),
         "artifact": ctx.facts.get("artifact"),
@@ -943,6 +957,9 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
         "validation_evidence": ev,
         "intent_audit": audit,
     }
+    if check_skipped_info is not None:
+        report_payload["check_skipped"] = check_skipped_info
+        report_payload["check_note"] = check_note
     if planning_models:
         report_payload["planning_models"] = planning_models
     # Surface process notes with their followed/not-followed statement.

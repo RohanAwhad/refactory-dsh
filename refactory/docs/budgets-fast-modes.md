@@ -86,7 +86,7 @@ cannot count as a pass.
 
 Canonical smoke runs before focused QA. Its real receipts join the requested check result in the QA context. The worker must map every brief/criteria/ledger obligation to current evidence in `intent-audit.json`; it cannot waive a requirement or silently repair source. Missing dependencies stop with an unblock explanation. Changed source or intent invalidates the earlier receipt/sign-off. See [authoring validation](authoring-validation.md).
 
-Read `authoring-evidence.json`, `intent-audit.json`, `focused-check.json`, `focused-qa.json` and `fast-report.json` in the run
+Read `authoring-evidence.json`, `intent-audit.json`, `focused-check.json`, `focused-qa.json`, `fast-report.json`, `site-revert-results.json` and `correction-audit.json` in the run
 directory. They separate command results, model-authored review, structural
 admission and runtime smoke. Exhausted repair produces an unresolved report and
 no success report. A model's favorable review is not proof of artifact quality.

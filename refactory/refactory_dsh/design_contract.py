@@ -121,25 +121,37 @@ def _h1(lines: list[str]) -> str:
     return ""
 
 
+# A backticked marker is in marker position only when what follows is the end of
+# the entry or optional spaces then a separator character.
+_MARKER_SEP = re.compile(r'\s*(?:[—–:;]|- |\.\s*$)|\s*$')
+
+
 def _find_marker(body: str, bare_pattern: str, backtick_pattern: str) -> re.Match | None:
     """Find the first match, preferring bare/bold over backtick-wrapped.
 
     Pass 1: try *bare_pattern*, skipping matches inside inline code spans
-    (odd preceding backtick count).  Pass 2: if no bare/bold match, try
-    *backtick_pattern* with no backtick-count check (the backticks are
-    literal in the match).
-
-    This preserves the existing test at ``test_delivery.py:218-287``:
-    on a line where `` `[changed]` `` appears as a prose mention before
-    ``**[changed]**``, pass 1 finds ``**[changed]**`` (the prose mention
-    is inside a code span and skipped by the odd-backtick filter).
-    Pass 2 is never tried because pass 1 succeeds.
+    (odd preceding backtick count), matches right after a quote character,
+    and matches inside an unclosed ``[left`` construction.
+    Pass 2: if no bare/bold match, try *backtick_pattern* with a separator
+    guard — the match is accepted only when what follows matches
+    ``_MARKER_SEP`` (end-of-entry, or optional spaces then ``—``, ``–``,
+    ``:``, ``- ``, ``;``, or a final ``.``).
     """
     for m in re.finditer(bare_pattern, body, re.IGNORECASE):
-        if body[:m.start()].count('`') % 2 == 0:
-            return m
-    for m in re.finditer(backtick_pattern, body, re.IGNORECASE):
+        if body[:m.start()].count('`') % 2 != 0:
+            continue
+        # (a) Quote guard: skip if immediately preceded by a quote character.
+        if m.start() > 0 and body[m.start() - 1] in ('"', "'"):
+            continue
+        # (b) Open-bracket guard: skip if inside an unclosed [left ...].
+        prefix = body[:m.start()]
+        last_left = prefix.lower().rfind('[left')
+        if last_left >= 0 and ']' not in prefix[last_left + 1:]:
+            continue
         return m
+    for m in re.finditer(backtick_pattern, body, re.IGNORECASE):
+        if _MARKER_SEP.match(body[m.end():]):
+            return m
     return None
 
 
@@ -473,5 +485,11 @@ def prompt_contract() -> str:
         "expects new tests that pass on the base (for example, tests that "
         "pin existing behaviour), list each test file path and the reason "
         "it cannot fail without the change. A new test that passes on the "
-        "base and is not listed here will be rejected.\n"
+        "base and is not listed here will be rejected.\n\n"
+        "9. `## Site revert exemptions` (optional) — when a changed site "
+        "cannot be caught by a mechanical revert-and-test (for example, a "
+        "change that affects only logging or a side-channel that no test "
+        "observes), list the site path:line and the reason. A changed site "
+        "whose revert is not caught and that is not listed here will block "
+        "the correction audit.\n"
     )

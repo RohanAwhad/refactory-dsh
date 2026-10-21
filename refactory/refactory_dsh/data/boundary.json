@@ -97,7 +97,8 @@
     "refactory_dsh.worktree",
     "refactory_dsh.check_digest",
     "refactory_dsh.builder_probe",
-    "refactory_dsh.feedback_refill"
+    "refactory_dsh.feedback_refill",
+    "refactory_dsh.patch_scope"
   ],
   "allowed_leaks": {},
   "references": [

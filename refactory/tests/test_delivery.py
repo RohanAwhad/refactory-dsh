@@ -587,6 +587,14 @@ def test_b24ar_backticked_markers_produce_site_what_changed(tmp_path):
     ("[new]", "changed", ""),
     ("`[new]`", "changed", ""),
     ("[new: added this]", "changed", "added this"),
+    # dm-119: a [left] site whose description mentions [changed] parses as left
+    ("design_contract.py:177-209 [left: parse() calls _find_marker for [changed] first]", "left", ""),
+    # Quote guard: marker right after a quote character is skipped
+    ("file.py:10 — '[changed]' is a valid marker", "unmarked", ""),
+    # Open-bracket guard: marker inside an open [left ...] is skipped
+    ("file.py:10 [left: mentions [changed] here] — reason", "left", ""),
+    # Both guards: inside [left:] and after a quote
+    ('file.py:10 [left: the old code used "[changed]" markers]', "left", ""),
 ])
 def test_marker_form_recognised(form, expected_status, expected_desc):
     """Every unambiguous marker form is recognised by the parser."""
@@ -2034,6 +2042,56 @@ def test_the_approval_card_itself_names_the_repository_a_run_would_create(github
     assert said in card["prompt"] and "{{" not in card["prompt"]
 
 
+def test_pr_body_says_check_skipped_by_person(tmp_path):
+    """dm-115: PR body says the check did not run when person-skipped."""
+    import subprocess
+    import json as _j
+    from types import SimpleNamespace
+    ctx = _TitleCtx(
+        facts={"brief": "Fix something", "name": "b1", "check": "pnpm test"},
+        files={
+            "design.json": _j.dumps({
+                "check_skipped": {
+                    "source": "person",
+                    "at": "2026-10-20T22:25:29+00:00",
+                    "via": "graph-control",
+                    "node": "check",
+                }
+            }),
+            "authoring-evidence.json": _j.dumps({
+                "validation": {"status": "skipped", "source": "person",
+                               "at": "2026-10-20T22:25:29+00:00", "node": "check"},
+            }),
+        },
+        workdir=tmp_path,
+    )
+    # Write files to disk for _body
+    (tmp_path / "design.json").write_text(ctx._files["design.json"])
+    (tmp_path / "authoring-evidence.json").write_text(ctx._files["authoring-evidence.json"])
+    (tmp_path / "facts.json").write_text(_j.dumps(ctx.facts))
+    # Set up a minimal git repo so worktree.git works.
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@test.com"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], capture_output=True, check=True)
+    (tmp_path / "file.txt").write_text("content\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "tool.py").write_text("print('built')\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "attempt"], capture_output=True, check=True)
+    head = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "did not run" in body
+    assert "skipped by the person" in body
+    assert "covers later attempts" in body
+
+
 def _stacked(github: Path, tmp_path: Path) -> tuple[Path, str]:
     """A repository on GitHub with a pushed branch `stack` one commit ahead of main; main is checked out."""
     repo = git_repo(tmp_path / "repo")
@@ -3403,6 +3461,9 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     ]
 
     model = FakeModel(answers)
+    # The constraint is about the design, so the audit cites the corrected
+    # design's heading rather than a code site.
+    model._siteless_clause = {"kind": "design", "heading": "Summary"}
     result = DesignMode().run(
         run, model=model,
         verdicts={"gate_strategy": "proceed"},
