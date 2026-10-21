@@ -857,6 +857,18 @@ def gates(run_root: Path) -> list[dict[str, Any]]:
                                  SimpleNamespace(knobs={}, facts=_read_json(Path(run_root) / "facts.json"))),
                 "verdicts": verdicts,
             }
+    # Append CEO-sourced ledger notes to each gate, labelled as the CEO's.
+    for node_id, gate_dict in found.items():
+        try:
+            from refactory_dsh.steering import Ledger
+            entries = Ledger(run_root).entries()
+            ceo_notes = [
+                e["text"] for e in entries
+                if e.get("source") == "ceo" and isinstance(e.get("text"), str)
+            ]
+            gate_dict["ceo_notes"] = "\n\n".join(ceo_notes) if ceo_notes else ""
+        except Exception:
+            gate_dict["ceo_notes"] = ""
     return [found[node_id] for node_id in due if node_id in found]
 
 
@@ -1315,7 +1327,7 @@ def _parser() -> argparse.ArgumentParser:
     graph_control.add_argument("action", choices=[
         "pause", "resume", "stop", "preview", "rerun",
         "acknowledge", "amend-command", "withdraw", "redeliver",
-        "confirm-completion",
+        "confirm-completion", "skip",
     ])
     graph_control.add_argument("--node", default="")
     graph_control.add_argument("--text", default="")

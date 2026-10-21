@@ -432,6 +432,20 @@ def main() -> int:
         elif request['action'] == 'reviewers':
             from refactory_dsh.authoring_evidence import REVIEWERS
             result = {'reviewers': list(REVIEWERS)}
+        elif request['action'] == 'record-skip':
+            from refactory_dsh import authoring_evidence as evidence
+            from refactory_dsh.run import _knobs, _read_facts
+            from refactory_dsh.nn.executor import RunContext
+            context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
+            provenance = request.get('provenance', {})
+            outcome = {
+                'status': 'skipped',
+                'source': provenance.get('source', 'person'),
+                'at': provenance.get('at', ''),
+                'via': 'graph-control',
+                'node': request.get('node', ''),
+            }
+            result = evidence.record(context, outcome)
         elif request['action'] == 'pending-prompt':
             node = request['node']
             pending = _pending(workdir, node)

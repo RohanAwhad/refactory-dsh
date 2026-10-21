@@ -344,6 +344,76 @@ def test_ceo_notes_are_not_requirements(tmp_path):
     assert user_texts, "user-relayed corrections must remain requirements"
 
 
+def test_person_skip_lets_require_completion_pass(tmp_path):
+    """dm-115: A person's skip with matching evidence lets require_completion pass."""
+    ctx = audit_context(tmp_path)
+    # Write declarations.json with a check node that produces runtime_evidence
+    decl_dir = tmp_path / ".refactory"
+    decl_dir.mkdir(exist_ok=True)
+    import json
+    (decl_dir / "declarations.json").write_text(json.dumps({
+        "check": {"produces": ["runtime_evidence"]}
+    }))
+    # Write a spine checkpoint with person skip provenance
+    (decl_dir / "spine-checkpoint.json").write_text(json.dumps({
+        "state": {
+            "skipped": ["check"],
+            "skip_provenance": {
+                "check": {"source": "person", "at": "2026-10-20T22:25:29+00:00"}
+            }
+        }
+    }))
+    # Write evidence with status='skipped' and matching provenance
+    (tmp_path / evidence.EVIDENCE).write_text(json.dumps({
+        "schema": 1, "id": "test",
+        "identity": {"root": str(tmp_path), "files": {}, "intent": [], "inputs": {}},
+        "requirements": [], "process_notes": [],
+        "settings": {key: None for key in evidence.SETTINGS},
+        "receipts": {}, "outputs": {},
+        "validation": {
+            "status": "skipped",
+            "source": "person",
+            "at": "2026-10-20T22:25:29+00:00",
+            "via": "graph-control",
+            "node": "check",
+        }
+    }))
+    problems = evidence.current_problems(ctx)
+    assert not any("did not pass" in p for p in problems), f"person skip should be accepted, got: {problems}"
+    # Should not raise
+    evidence.require_completion(ctx)
+
+
+def test_ceo_skip_is_refused_by_require_completion(tmp_path):
+    """dm-115: A CEO skip is refused by current_problems, naming the source."""
+    ctx = audit_context(tmp_path)
+    import json
+    decl_dir = tmp_path / ".refactory"
+    decl_dir.mkdir(exist_ok=True)
+    (decl_dir / "declarations.json").write_text(json.dumps({
+        "check": {"produces": ["runtime_evidence"]}
+    }))
+    (decl_dir / "spine-checkpoint.json").write_text(json.dumps({
+        "state": {
+            "skipped": ["check"],
+            "skip_provenance": {
+                "check": {"source": "ceo", "at": "2026-10-20T22:25:29+00:00"}
+            }
+        }
+    }))
+    problems = evidence.current_problems(ctx)
+    assert any("ceo" in p for p in problems), f"CEO skip should be refused, got: {problems}"
+
+
+def test_requirements_excludes_ceo_note_naming_gate_verdict(tmp_path):
+    """dm-113: A CEO note naming a gate verdict is excluded from requirements."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("correction", "gate_strategy: proceed. The person approved.", source="ceo")
+    reqs = evidence.requirements(ctx)
+    ceo_texts = [r["text"] for r in reqs if "gate_strategy" in r.get("text", "")]
+    assert not ceo_texts, "CEO note naming a gate verdict must not be a requirement"
+
+
 # ── ask 1: gate_overwatch says what actually failed ───────────────────────
 
 

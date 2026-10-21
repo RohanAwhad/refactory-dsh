@@ -962,6 +962,216 @@ describe('a fork with nothing to fan out to', () => {
     expect(new Spine(graph).skip('fork').status).toBe('done')
   })
 
+  it('skip() with provenance opts records person source', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    const state = spine.state()
+    expect(state.skip_provenance).toEqual({ b: { source: 'person', at: '2026-01-01T00:00:00Z' } })
+    expect(state.skipped).toEqual(['b'])
+  })
+
+  it('skip() without opts defaults to ceo source', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.skip('b')
+    const state = spine.state()
+    expect(state.skip_provenance).toBeDefined()
+    expect(state.skip_provenance.b.source).toBe('ceo')
+    expect(typeof state.skip_provenance.b.at).toBe('string')
+  })
+
+  it('planSkip with person source bypasses conditional-gate refusal', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'b', condition: 'proceed' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+      ],
+    }
+    const spine = new Spine(graph)
+    // CEO skip should throw for conditional-only gate
+    expect(() => spine.planSkip('gate')).toThrow(/conditional successors/)
+    // Person skip should succeed
+    expect(() => spine.planSkip('gate', { source: 'person' })).not.toThrow()
+  })
+
+  it('unskip clears provenance', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    expect(spine.state().skip_provenance.b).toBeDefined()
+    spine.unskip('b')
+    expect(spine.state().skip_provenance.b).toBeUndefined()
+  })
+
+  it('invalidateNodes clears provenance when clearSkips is true', () => {
+    // Graph: a → gate (reloop→a, proceed→b), b
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'b', condition: 'proceed' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('a')
+    spine.verdict('gate', 'proceed')
+    // Skip b with person provenance
+    spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    // Redo gate (which calls invalidateNodes with clearSkips=true for b)
+    spine.redo('gate')
+    const state = spine.state()
+    // After redo, provenance for b should be cleared
+    expect(state.skip_provenance.b).toBeUndefined()
+  })
+
+  it('restore reads skip_provenance from checkpoint', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    const checkpoint = spine.checkpoint()
+    const spine2 = new Spine(graph)
+    spine2.restore(checkpoint)
+    expect(spine2.state().skip_provenance).toEqual({ b: { source: 'person', at: '2026-01-01T00:00:00Z' } })
+  })
+
+  it('restore tolerates missing skip_provenance', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.skip('b')
+    const checkpoint = spine.checkpoint()
+    // Remove skip_provenance from saved data
+    delete (checkpoint.state as any).skip_provenance
+    const spine2 = new Spine(graph)
+    spine2.restore(checkpoint)
+    expect(spine2.state().skip_provenance).toEqual({})
+  })
+
+  it('provenance survives unskip and re-skip', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    spine.unskip('b')
+    expect(spine.state().skip_provenance.b).toBeUndefined()
+    spine.skip('b', { source: 'person', at: '2026-02-01T00:00:00Z' })
+    expect(spine.state().skip_provenance.b).toEqual({ source: 'person', at: '2026-02-01T00:00:00Z' })
+  })
+
+  it('person-skip routing rule routes conditional-only gate via proceed', () => {
+    // Graph: a → gate (all conditional edges), gate proceed → b, gate reloop → a
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', gate_prompt: 'ok?', reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'b', condition: 'proceed' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+      ],
+    }
+    // Case A: skip queued before check is due
+    const spineA = new Spine(graph)
+    spineA.skip('gate', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    // gate is not in cursor yet (a is), so routing hasn't fired
+    spineA.complete('a')
+    // Now gate enters cursor and the routing rule should fire
+    const nextA = spineA.next()
+    expect(nextA.status).toBe('ready')
+    expect(nextA.nodes!.map((n: any) => n.id)).toEqual(['b'])
+
+    // Case B: skip when gate is due
+    const spineB = new Spine(graph)
+    spineB.complete('a')
+    // gate is now in cursor
+    spineB.skip('gate', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    const nextB = spineB.next()
+    expect(nextB.status).toBe('ready')
+    expect(nextB.nodes!.map((n: any) => n.id)).toEqual(['b'])
+  })
+
+  it('person-skip survives checkpoint/restore (case D)', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', gate_prompt: 'ok?', reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'b', condition: 'proceed' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.skip('gate', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    const checkpoint = spine.checkpoint()
+    const spine2 = new Spine(graph)
+    spine2.restore(checkpoint)
+    spine2.complete('a')
+    const next = spine2.next()
+    expect(next.status).toBe('ready')
+    expect(next.nodes!.map((n: any) => n.id)).toEqual(['b'])
+  })
+
   it('is inert when its targets are already skipped, and ends the run without a join', () => {
     const spine = new Spine({
       name: 't',

@@ -79,6 +79,7 @@
         commandEnv: !!js ctx.graphStartup.commandEnv
         dataCommand: !!js ctx.graphStartup.dataCommand
         agentCommand: !!js ctx.graphStartup.agentCommand
+        personAttached: !!js ctx.graphStartup.chat
         gateCommand: !!js ctx.graphStartup.gateCommand
         steerCommand: !!js ctx.graphStartup.pythonBin + '/python'
         steerArgs: ['-m', 'refactory_dsh.console', 'steer', '--run']

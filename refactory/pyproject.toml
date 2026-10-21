@@ -30,5 +30,8 @@ py-modules = []
 [project.entry-points.'refactory.environment_overlay']
 worktree = "refactory_dsh.worktree:_worktree_environment_overlay"
 
+[project.entry-points.'refactory.skip_receipt']
+skip_receipt = "refactory_dsh.authoring_evidence:record_skip"
+
 [tool.setuptools.package-data]
 refactory_dsh = ["*.mjs", "patches/*.yml", "data/*.json"]
