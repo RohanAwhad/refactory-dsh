@@ -85,6 +85,15 @@ when they share an id. Each row identifies the requirement, status and supportin
 individual file paths with concrete command/output or source findings. Directories,
 line-number suffixes and the audit itself cannot serve as evidence references.
 
+For every constraint or correction row, each clause must include a `sites` array:
+`"sites": [{"site": "path:line", "tests": ["test_file::test_name"], "scope": "connected"}]`.
+Each site names the exact file:line in the diff that builds this clause, the test(s)
+that reach it, and the evidence scope (`local`, `connected`, `assembled`,
+`artifact`). A multi-clause correction must have sites on each clause, not a single
+site on the row. The gate's `correction_audit_problems` checks these sites
+mechanically: it verifies the site is in the diff, reverts it and runs the named
+test, and enforces the declared scope.
+
 Required behavior without adequate evidence is failed or unverified with a
 precise reason. A README limitation or reviewer/coordinator waiver cannot alter
 the baseline. An exclusion must cite an explicit user change and quote its exact
