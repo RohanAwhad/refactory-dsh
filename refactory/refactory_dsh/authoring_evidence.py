@@ -72,10 +72,14 @@ AUDIT_INSTRUCTIONS = (
     "Cite call sites alongside definition sites: a new helper's definition site needs "
     "a sibling call-site entry in an existing file. "
     "For each clause whose `sites` is empty, provide a `kind` field: "
-    "\"prohibition\" (a \"do not…\" clause, with a `pattern`), \"doc\" (cite the "
-    "changed doc file), \"design\" (cite the design.md heading that now carries it), "
+    "\"prohibition\" (a \"do not…\" clause — requires a `pattern` field naming the "
+    "forbidden text), \"doc\" (requires a `path` field naming a changed documentation "
+    "file — .md, .rst, .txt or under docs/), \"design\" (requires a non-empty "
+    "`heading` field naming a design.md heading that exists in the current file), "
     "or \"test\" (cite the code site plus the test — the code site, not the test file, is the site). "
-    "A site inside a test file is not a code site.\n"
+    "A site inside a test file is not a code site. "
+    "The `sites` value must be a JSON array (even if empty); omitting it or "
+    "setting it to a non-array value is a structural failure.\n"
     "Scope means (from code_reviewer.md category 8, quoted as written):\n"
     "- local: a unit test exists that tests the stated outcome in isolation\n"
     "- connected: a test exists that calls a real entry point crossing a module boundary, mocking only external I/O\n"
@@ -574,18 +578,35 @@ def correction_audit_problems(ctx: Any) -> list[str]:
 
             kind = clause.get("kind", "")
 
+            # A clause whose sites is not a list is a structural failure.
+            if not isinstance(sites, list):
+                clause_status = "fail"
+                problems.append(
+                    f"{key} clause {ci + 1}: sites must be a list"
+                )
+                clause_results.append({
+                    "clause": clause.get("clause", ""),
+                    "sites": [], "status": clause_status,
+                })
+                continue
+
             # Handle non-code clause kinds
             if kind == "prohibition":
                 pattern = clause.get("pattern", "")
-                if pattern and not any(pattern in line for line in diff_added_lines):
+                if not pattern:
+                    clause_status = "fail"
+                    problems.append(
+                        f"{key} clause {ci + 1}: prohibition clause requires a pattern"
+                    )
+                    site_results.append({"site": "prohibition", "status": "fail"})
+                elif not any(pattern in line for line in diff_added_lines):
                     site_results.append({"site": "prohibition", "status": "pass"})
                 else:
-                    if pattern:
-                        clause_status = "fail"
-                        problems.append(
-                            f"{key} clause {ci + 1}: prohibition pattern {pattern!r} "
-                            "found in added lines"
-                        )
+                    clause_status = "fail"
+                    problems.append(
+                        f"{key} clause {ci + 1}: prohibition pattern {pattern!r} "
+                        "found in added lines"
+                    )
                     site_results.append({"site": "prohibition", "status": "fail"})
                 clause_results.append({
                     "clause": clause.get("clause", ""),
@@ -595,7 +616,19 @@ def correction_audit_problems(ctx: Any) -> list[str]:
 
             if kind == "doc":
                 doc_path = clause.get("path", "")
-                if doc_path and not no_base:
+                _is_doc = (doc_path and (
+                    doc_path.endswith((".md", ".rst", ".txt"))
+                    or doc_path.startswith("docs/")
+                    or "/docs/" in doc_path
+                ))
+                if not doc_path or not _is_doc:
+                    clause_status = "fail"
+                    problems.append(
+                        f"{key} clause {ci + 1}: doc clause requires a path to a "
+                        "documentation file (.md/.rst/.txt or under docs/)"
+                    )
+                    site_results.append({"site": doc_path or "?", "status": "fail"})
+                elif not no_base:
                     try:
                         diff_files = subprocess.run(
                             ["git", "-C", str(found.path), "diff", "--name-only",
@@ -614,7 +647,7 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                     except Exception:
                         site_results.append({"site": doc_path, "status": "unavailable"})
                 else:
-                    site_results.append({"site": doc_path or "?", "status": "pass"})
+                    site_results.append({"site": doc_path, "status": "pass"})
                 clause_results.append({
                     "clause": clause.get("clause", ""),
                     "sites": site_results, "status": clause_status,
@@ -623,17 +656,21 @@ def correction_audit_problems(ctx: Any) -> list[str]:
 
             if kind == "design":
                 heading = clause.get("heading", "")
-                if heading and heading.lower() in design_headings:
+                if not heading:
+                    clause_status = "fail"
+                    problems.append(
+                        f"{key} clause {ci + 1}: design clause requires a non-empty heading"
+                    )
+                    site_results.append({"site": "design.md", "status": "fail"})
+                elif heading.lower() in design_headings:
                     site_results.append({"site": f"design.md#{heading}", "status": "pass"})
-                elif heading:
+                else:
                     clause_status = "fail"
                     problems.append(
                         f"{key} clause {ci + 1}: design heading {heading!r} "
                         "not found in current design.md"
                     )
                     site_results.append({"site": f"design.md#{heading}", "status": "fail"})
-                else:
-                    site_results.append({"site": "design.md", "status": "pass"})
                 clause_results.append({
                     "clause": clause.get("clause", ""),
                     "sites": site_results, "status": clause_status,
@@ -677,6 +714,17 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         test_info = {"name": test_name, "scope_declared": declared_scope,
                                      "scope_actual": declared_scope}
                         sr["tests"].append(test_info)
+                    site_results.append(sr)
+                    continue
+
+                # A code site with an empty tests list fails the clause.
+                if not tests:
+                    sr["status"] = "fail"
+                    if site not in exempted_sites:
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: site {site} has no tests"
+                        )
                     site_results.append(sr)
                     continue
 
@@ -753,15 +801,21 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         needs_sibling.append(si)
                     sr["tests"].append(test_info)
 
-                # Determine site status
+                # Determine site status — fail closed: any status other than
+                # a known catch (fail) is a failure, never a pass.
                 test_results = [t.get("revert_result", "unavailable") for t in sr["tests"]]
-                if not test_results:
-                    sr["status"] = "unavailable"
-                elif any(r == "fail" for r in test_results):
+                if any(r == "fail" for r in test_results):
                     sr["status"] = "pass"
                     has_sibling_pass = True
                 elif all(r in ("new_file", "import_only") for r in test_results):
                     sr["status"] = "needs_sibling"
+                elif any(r == "not_in_diff" for r in test_results):
+                    sr["status"] = "fail"
+                    if site not in exempted_sites:
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: site {site} is not in the diff"
+                        )
                 elif any(r == "pass" for r in test_results):
                     # test passed = site not caught
                     sr["status"] = "fail"
@@ -771,15 +825,14 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                             f"{key} clause {ci + 1}: site {site} not reached by any "
                             "test (revert did not cause failure)"
                         )
-                elif any(r in ("unavailable", "collection_error") for r in test_results):
-                    sr["status"] = "unavailable"
+                else:
+                    # unavailable, collection_error, or any unknown status — fail closed
+                    sr["status"] = "fail"
                     if site not in exempted_sites:
                         clause_status = "fail"
                         problems.append(
                             f"{key} clause {ci + 1}: site {site} revert unavailable"
                         )
-                else:
-                    sr["status"] = "pass"
 
                 site_results.append(sr)
 

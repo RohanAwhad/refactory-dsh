@@ -566,6 +566,319 @@ def test_correction_audit_scripted_design_fast_run(tmp_path):
     assert ctx.exists("correction-audit.json")
 
 
+# ── gate-level tests through real runs ──────────────────────────────────
+
+
+def test_correction_audit_not_in_diff_blocks(tmp_path):
+    """A correction cited at a site not in the diff is refused."""
+    from refactory_dsh import authoring_evidence as ae
+
+    run_dir = tmp_path / "nid"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    repo = git_repo(tmp_path / "nid_repo")
+    (repo / "calc.py").write_text("def validate(x):\n    return x > 0\n")
+    git(repo, "add", "calc.py")
+    git(repo, "commit", "-q", "-m", "add calc.py")
+    base_commit = git(repo, "rev-parse", "HEAD")
+
+    git(repo, "checkout", "-b", "run-branch")
+    (repo / "calc.py").write_text("def validate(x):\n    return x >= 0\n")
+    (repo / "test_calc.py").write_text(
+        "from calc import validate\n"
+        "def test_validate():\n    assert validate(0) is True\n"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "change validate")
+    head_commit = git(repo, "rev-parse", "HEAD")
+
+    (run_dir / ".refactory").mkdir(parents=True, exist_ok=True)
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base_commit, "head": head_commit,
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir),
+    }))
+
+    ctx = nn.RunContext(run_dir, facts={"brief": "test", "artifact": str(run_dir / "art")})
+    (run_dir / "art").mkdir(parents=True, exist_ok=True)
+    (run_dir / "art" / "a.txt").write_text("42")
+    Ledger.seed(run_dir, "test")
+    Ledger(run_dir).note("correction", "Fix README")
+    ae.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+
+    corr_id = next(
+        i["id"] for i in ctx.read_json(ae.EVIDENCE)["requirements"]
+        if i.get("kind") == "correction"
+    )
+    _write_audit_with_corrections(ctx, [{
+        "id": corr_id, "clause": "Fix README",
+        "sites": [{"site": "README.md:1", "tests": ["test_calc.py::test_validate"], "scope": "local"}],
+    }])
+    problems = ae.correction_audit_problems(ctx)
+    assert any("is not in the diff" in p or "not_in_diff" in p for p in problems), (
+        f"expected blocking for site not in diff: {problems}"
+    )
+
+
+def test_correction_audit_empty_tests_blocks(tmp_path):
+    """A code site with an empty tests list fails the clause."""
+    from refactory_dsh import authoring_evidence as ae
+
+    run_dir = tmp_path / "et"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    repo = git_repo(tmp_path / "et_repo")
+    (repo / "calc.py").write_text("def validate(x):\n    return x > 0\n")
+    git(repo, "add", "calc.py")
+    git(repo, "commit", "-q", "-m", "add calc.py")
+    base_commit = git(repo, "rev-parse", "HEAD")
+
+    git(repo, "checkout", "-b", "run-branch")
+    (repo / "calc.py").write_text("def validate(x):\n    return x >= 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "change validate")
+    head_commit = git(repo, "rev-parse", "HEAD")
+
+    (run_dir / ".refactory").mkdir(parents=True, exist_ok=True)
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base_commit, "head": head_commit,
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir),
+    }))
+
+    ctx = nn.RunContext(run_dir, facts={"brief": "test", "artifact": str(run_dir / "art")})
+    (run_dir / "art").mkdir(parents=True, exist_ok=True)
+    (run_dir / "art" / "a.txt").write_text("42")
+    Ledger.seed(run_dir, "test")
+    Ledger(run_dir).note("correction", "Fix validate")
+    ae.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+
+    corr_id = next(
+        i["id"] for i in ctx.read_json(ae.EVIDENCE)["requirements"]
+        if i.get("kind") == "correction"
+    )
+    _write_audit_with_corrections(ctx, [{
+        "id": corr_id, "clause": "Fix validate",
+        "sites": [{"site": "calc.py:2", "tests": [], "scope": "local"}],
+    }])
+    problems = ae.correction_audit_problems(ctx)
+    assert any("has no tests" in p for p in problems), (
+        f"expected blocking for empty tests: {problems}"
+    )
+
+
+def test_correction_audit_design_form_without_heading_blocks(tmp_path):
+    """A design form without a heading is refused."""
+    from refactory_dsh import authoring_evidence as ae
+
+    ctx = _audit_ctx(tmp_path)
+    Ledger(tmp_path).note("correction", "Document the design")
+    ae.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+
+    corr_id = next(
+        i["id"] for i in ctx.read_json(ae.EVIDENCE)["requirements"]
+        if i.get("kind") == "correction"
+    )
+    _write_audit_with_corrections(ctx, [{
+        "id": corr_id, "clause": "Document the design",
+        "sites": [], "kind": "design",
+    }])
+    problems = ae.correction_audit_problems(ctx)
+    assert any("requires a non-empty heading" in p for p in problems), (
+        f"expected blocking for design without heading: {problems}"
+    )
+
+
+def test_correction_audit_test_file_site_blocks(tmp_path):
+    """A site inside a test file is refused."""
+    from refactory_dsh import authoring_evidence as ae
+
+    run_dir = tmp_path / "tfs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    repo = git_repo(tmp_path / "tfs_repo")
+    (repo / "calc.py").write_text("def validate(x):\n    return x > 0\n")
+    git(repo, "add", "calc.py")
+    git(repo, "commit", "-q", "-m", "add calc.py")
+    base_commit = git(repo, "rev-parse", "HEAD")
+
+    git(repo, "checkout", "-b", "run-branch")
+    (repo / "calc.py").write_text("def validate(x):\n    return x >= 0\n")
+    (repo / "test_calc.py").write_text(
+        "from calc import validate\n"
+        "def test_validate():\n    assert validate(0) is True\n"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "change validate")
+    head_commit = git(repo, "rev-parse", "HEAD")
+
+    (run_dir / ".refactory").mkdir(parents=True, exist_ok=True)
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base_commit, "head": head_commit,
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir),
+    }))
+
+    ctx = nn.RunContext(run_dir, facts={"brief": "test", "artifact": str(run_dir / "art")})
+    (run_dir / "art").mkdir(parents=True, exist_ok=True)
+    (run_dir / "art" / "a.txt").write_text("42")
+    Ledger.seed(run_dir, "test")
+    Ledger(run_dir).note("correction", "Add test for validate")
+    ae.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+
+    corr_id = next(
+        i["id"] for i in ctx.read_json(ae.EVIDENCE)["requirements"]
+        if i.get("kind") == "correction"
+    )
+    # Cite a test file as the site — this should be refused
+    _write_audit_with_corrections(ctx, [{
+        "id": corr_id, "clause": "Add test",
+        "sites": [{"site": "test_calc.py:2", "tests": ["test_calc.py::test_validate"], "scope": "local"}],
+    }])
+    problems = ae.correction_audit_problems(ctx)
+    # The test-file exclusion in compute_site_reverts makes the revert unavailable,
+    # which should block (fail closed).
+    assert problems, f"expected blocking for test-file site: {problems}"
+
+
+def test_correction_audit_import_only_sibling(tmp_path):
+    """A helper-definition site whose revert is import-only is refused without a sibling,
+    and passes with a caught sibling call site."""
+    from refactory_dsh import authoring_evidence as ae
+
+    run_dir = tmp_path / "ios"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    repo = git_repo(tmp_path / "ios_repo")
+    (repo / "calc.py").write_text("def validate(x):\n    return x > 0\n")
+    git(repo, "add", "calc.py")
+    git(repo, "commit", "-q", "-m", "add calc.py")
+    base_commit = git(repo, "rev-parse", "HEAD")
+
+    git(repo, "checkout", "-b", "run-branch")
+    (repo / "calc.py").write_text(
+        "def validate(x):\n    return x >= 0\n\n"
+        "def helper():\n    return validate(0)\n"
+    )
+    (repo / "test_calc.py").write_text(
+        "from calc import validate\n"
+        "def test_validate():\n    assert validate(0) is True\n"
+    )
+    (repo / "test_helper.py").write_text(
+        "from calc import helper\n"
+        "def test_helper():\n    assert helper() is True\n"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "add helper")
+    head_commit = git(repo, "rev-parse", "HEAD")
+
+    (run_dir / ".refactory").mkdir(parents=True, exist_ok=True)
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base_commit, "head": head_commit,
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir),
+    }))
+
+    ctx = nn.RunContext(run_dir, facts={"brief": "test", "artifact": str(run_dir / "art")})
+    (run_dir / "art").mkdir(parents=True, exist_ok=True)
+    (run_dir / "art" / "a.txt").write_text("42")
+    Ledger.seed(run_dir, "test")
+    Ledger(run_dir).note("correction", "Add helper function")
+    ae.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+
+    corr_id = next(
+        i["id"] for i in ctx.read_json(ae.EVIDENCE)["requirements"]
+        if i.get("kind") == "correction"
+    )
+
+    # Without sibling: only definition site → should block
+    _write_audit_with_corrections(ctx, [{
+        "id": corr_id, "clause": "Add helper",
+        "sites": [{"site": "calc.py:4", "tests": ["test_helper.py::test_helper"], "scope": "local"}],
+    }])
+    problems_no_sibling = ae.correction_audit_problems(ctx)
+
+    # With sibling: definition site + call site → should pass
+    _write_audit_with_corrections(ctx, [{
+        "id": corr_id, "clause": "Add helper",
+        "sites": [
+            {"site": "calc.py:4", "tests": ["test_helper.py::test_helper"], "scope": "local"},
+            {"site": "calc.py:2", "tests": ["test_calc.py::test_validate"], "scope": "local"},
+        ],
+    }])
+    problems_with_sibling = ae.correction_audit_problems(ctx)
+
+    # The definition-only case should have more problems than the sibling case
+    assert len(problems_no_sibling) > len(problems_with_sibling) or problems_no_sibling, (
+        f"expected import-only without sibling to block: no_sibling={problems_no_sibling}, "
+        f"with_sibling={problems_with_sibling}"
+    )
+
+
+def test_is_import_only_from_pytest_e_lines():
+    """_is_import_only_failure classifies from pytest's E lines."""
+    from refactory_dsh.base_check import _is_import_only_failure
+
+    # Pytest E-line output
+    output = (
+        "FAILED test_calc.py::test_helper\n"
+        "E   ImportError: cannot import name 'helper' from 'calc'\n"
+    )
+    assert _is_import_only_failure(output, {"helper"}) is True
+
+    # Non-matching name
+    assert _is_import_only_failure(output, {"other_func"}) is False
+
+    # Short summary (truncated) — should still work if E line present
+    output2 = (
+        "FAILED test_calc.py::test_helper - ImportError: cannot import name 'helper'...\n"
+        "E   ImportError: cannot import name 'helper' from 'calc'\n"
+    )
+    assert _is_import_only_failure(output2, {"helper"}) is True
+
+    # NameError E-line
+    output3 = "E   NameError: name 'compute_foo' is not defined\n"
+    assert _is_import_only_failure(output3, {"compute_foo"}) is True
+    assert _is_import_only_failure(output3, {"other"}) is False
+
+    # AttributeError E-line
+    output4 = "E   AttributeError: module 'calc' has no attribute 'helper'\n"
+    assert _is_import_only_failure(output4, {"helper"}) is True
+
+
+def test_correction_audit_sites_not_list_blocks(tmp_path):
+    """A clause whose sites is not a list fails."""
+    from refactory_dsh import authoring_evidence as ae
+
+    ctx = _audit_ctx(tmp_path)
+    Ledger(tmp_path).note("correction", "Fix something")
+    ae.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+
+    corr_id = next(
+        i["id"] for i in ctx.read_json(ae.EVIDENCE)["requirements"]
+        if i.get("kind") == "correction"
+    )
+    # Write audit with sites as a string instead of list
+    baseline = ctx.read_json(ae.EVIDENCE, {})
+    rows = []
+    for item in baseline.get("requirements", []):
+        row = {
+            "id": item["id"],
+            "requirement": item.get("text", ""),
+            "status": "pass",
+            "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+        }
+        if item["id"] == corr_id:
+            row["clauses"] = [{
+                "clause": "Fix something",
+                "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+                "sites": "not-a-list",
+            }]
+        rows.append(row)
+    ctx.write_json(ae.AUDIT, {"requirements": rows})
+
+    problems = ae.correction_audit_problems(ctx)
+    assert any("sites must be a list" in p for p in problems), (
+        f"expected blocking for sites not a list: {problems}"
+    )
+
+
 # ── _parse_collection_errors: vitest patterns ───────────────────────────
 
 

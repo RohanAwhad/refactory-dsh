@@ -1205,13 +1205,19 @@ modes). For each correction or constraint in the ledger it reads the overwatch's
 things for every clause:
 
 1. **Site in diff.** The cited `file:line` must fall inside a hunk of the
-   run's `git diff base..HEAD`.
+   run's `git diff base..HEAD`. A `not_in_diff` result is a failure.
 2. **Test reachability via site revert.** `compute_site_reverts` (§27) reverts
    only the overlapping hunks, runs the named test, and records whether it
    fails. A test that still passes after the revert does not reach the site.
+   A code site with an empty `tests` list fails the clause.
 3. **Evidence scope.** `patch_scope` (§26) checks whether the named test
    patches the project's own modules on the tested path. A test that does
    is `local`, not `connected`.
+
+**Fail closed.** Any status other than a known catch (`fail`) is a failure,
+never a pass. This includes `not_in_diff`, `unavailable`, `collection_error`,
+`import_only` (without a caught sibling) and `pass` (the test did not catch
+the revert).
 
 A clause that fails any check is BLOCKING. The message names the correction id,
 the clause, the site and the test.
@@ -1221,12 +1227,16 @@ with a `user_change` pointing to a later ledger entry is skipped — it was
 withdrawn. This reuses the existing exclusion validation path.
 
 **Evidence forms.** Not every clause has a code site:
-- **prohibition:** a "do not…" clause names a `pattern`; code confirms the
-  pattern is absent from the `+` lines of the diff.
-- **doc:** cites a changed documentation file.
-- **design:** cites a `design.md` heading; code confirms the heading exists.
+- **prohibition:** requires a `pattern` field; code confirms the pattern is
+  absent from the `+` lines of the diff. Missing `pattern` fails the clause.
+- **doc:** requires a `path` field naming a changed documentation file
+  (`.md`, `.rst`, `.txt`, or under `docs/`). A path to a non-doc file fails.
+- **design:** requires a non-empty `heading` field that exists in the current
+  `design.md`. Missing or unknown heading fails the clause.
 - **test:** cites a code site plus the test; the revert runs against the code
   site, not the test file. A site inside a test file is not a code site.
+
+A clause whose `sites` is not a list fails with "sites must be a list".
 
 **New-file sites.** A site in a file the base lacks (`new_file` result) or a
 site whose revert fails only with an import error on a name the reverted hunks

@@ -817,32 +817,36 @@ def _extract_defined_names(added_lines: list[str]) -> set[str]:
 def _is_import_only_failure(output: str, defined_names: set[str]) -> bool:
     """Whether the failure is only NameError/AttributeError/ImportError on defined names.
 
-    Extracts the symbol name from error messages like:
-      NameError: name 'compute_foo' is not defined
-      AttributeError: module 'bar' has no attribute 'baz'
-      ImportError: cannot import name 'qux' from 'pkg'
-    The previous regex used non-greedy ``.*?`` which matched zero characters
-    and captured the first word after the error type (e.g. ``cannot``, ``name``,
-    ``module``), never the actual symbol name inside quotes.
+    Classifies from pytest's ``E   <ErrorType>: <message>`` lines, not the
+    truncated short-summary line ("…has no attrib..."), which leaves only the
+    module name quoted.  A failure is import-only when every NameError,
+    AttributeError or ImportError line names a definition the reverted hunks
+    removed.
     """
     if not defined_names:
         return False
-    # Pattern 1: name in quotes  —  NameError: name 'foo' is not defined
-    # Pattern 2: no attribute 'bar'  —  AttributeError: … has no attribute 'bar'
-    # Pattern 3: cannot import name 'qux'  —  ImportError: cannot import name 'qux'
     found_errors = False
     all_names_defined = True
-    for error_type in ("NameError", "AttributeError", "ImportError"):
-        for m in re.finditer(rf"{error_type}:?\s+.{{0,200}}", output):
+    # Extract from pytest's E-lines: ``E   NameError: name 'foo' is not defined``
+    # and from full-output error lines.
+    error_types = ("NameError", "AttributeError", "ImportError")
+    for line in output.splitlines():
+        stripped = line.strip()
+        # Match pytest E-lines: "E   ErrorType: message"
+        # Also match plain "ErrorType: message" lines for non-pytest output.
+        for error_type in error_types:
+            if error_type not in stripped:
+                continue
+            m = re.match(rf'(?:E\s+)?({error_type}):?\s+(.*)', stripped)
+            if not m:
+                continue
             found_errors = True
-            snippet = m.group(0)
-            # Extract all quoted names from the error snippet
+            snippet = m.group(2)
             quoted = re.findall(r"['\"](\w+)['\"]", snippet)
             if quoted:
                 if not any(n in defined_names for n in quoted):
                     all_names_defined = False
             else:
-                # No quoted name found — cannot confirm it's about a defined name
                 all_names_defined = False
     return found_errors and all_names_defined
 
