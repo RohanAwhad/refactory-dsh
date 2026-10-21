@@ -160,15 +160,22 @@ def _extract_patch_targets_from_nodes(
 
 
 def _is_on_path(target: str, site_files: list[str]) -> bool:
-    """Whether the patched target lives in one of the site files."""
-    # Strip the function/attribute name; get the module path
+    """Whether the patched target lives in one of the site files.
+
+    Checks whether the site file's module path appears as a contiguous
+    subsequence of the target's dotted path.  For example,
+    ``refactory_dsh.design_ops.check_artifact`` matches site file
+    ``design_ops.py`` because ``['design_ops']`` appears inside
+    ``['refactory_dsh', 'design_ops', 'check_artifact']`` at index 1.
+    """
     parts = target.split(".")
     for site_file in site_files:
         # Normalize: refactory_dsh/foo.py -> refactory_dsh.foo
-        normalized = site_file.replace("/", ".").replace(".py", "")
-        for i in range(len(parts)):
-            candidate = ".".join(parts[:i + 1])
-            if candidate == normalized or normalized.endswith(candidate):
+        normalized = site_file.replace("/", ".").replace(".py", "").replace(".ts", "")
+        norm_parts = normalized.split(".")
+        # Check if the site's module path appears as a contiguous subsequence
+        for start in range(len(parts) - len(norm_parts) + 1):
+            if parts[start:start + len(norm_parts)] == norm_parts:
                 return True
     return False
 
