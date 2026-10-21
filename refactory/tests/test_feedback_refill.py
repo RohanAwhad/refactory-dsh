@@ -361,6 +361,159 @@ def test_redo_before_check_refills_from_initial(tmp_path):
     assert updated["validation"] == "(no check has run yet)"
 
 
+# ── walker re-fill ────────────────────────────────────────────────────────────
+
+def test_walker_refill_does_not_raise(tmp_path, monkeypatch):
+    """The walker uses _internal_fact for re-filled feedback keys, so emit
+    does not need to declare them as produced facts.
+
+    Without the _internal_fact fix (nn/executor.py ~687), set_fact would add
+    validation to _produced, and _check_produces would raise ExecutionError
+    because validation is not in _declared_facts.
+    """
+    from refactory_dsh import nn
+    from refactory_dsh.nn import Node, Graph
+
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    (workdir / ".refactory").mkdir()
+
+    # Write check-record.json for re-derivation
+    (workdir / "check-record.json").write_text(json.dumps({
+        "status": "fail",
+        "validation": "## Failing tests\n\ntest_foo.py::test_bar",
+    }))
+
+    class WalkerFakeModel:
+        def complete(self, prompt, *, system="", workdir=None):
+            if workdir:
+                (Path(workdir) / "emit.txt").write_text("===FILE: tool.py===\nresult\n")
+            return "done"
+        def context(self):
+            return {"provider": "test", "model": "test"}
+        def route(self):
+            return {"worker_backend": "dsh"}
+
+    graph = Graph()
+    graph.add(Node("emit", "agent",
+                   prompt_template="Write {{validation}}",
+                   writes=("emit.txt",),
+                   reads=("check-record.json",),
+                   produces=("emit",),
+                   feedback_keys=("validation",)))
+
+    model = WalkerFakeModel()
+    ctx = nn.RunContext(workdir, facts={"name": "test"}, model=model)
+    # emit declares emit.txt as a write and "emit" as a produced fact.
+    # validation is NOT in declared_facts — that is the point:
+    # _internal_fact bypasses the declaration check.
+    ctx.enforce_writes = False
+
+    monkeypatch.setattr("refactory_dsh.agent_delivery.begin",
+                        lambda workdir, node, prompt, writes, **kw:
+                        {"prompt": prompt, "node": node, "status": "pending"})
+    monkeypatch.setattr("refactory_dsh.agent_delivery.finish",
+                        lambda workdir, node, **kw:
+                        {"node": node, "status": "delivered"})
+
+    executor = nn.Executor(graph, ctx)
+    executor.run()
+
+    # If _internal_fact was not used, set_fact would raise ExecutionError
+    # because validation is not in _declared_facts.
+    assert "validation" in ctx.facts
+    assert "test_bar" in ctx.facts["validation"]
+
+
+def test_worker_refill_without_spec_keys(tmp_path, monkeypatch):
+    """When the worker spec has no feedback_keys, fill_feedback reads
+    the node's keys from declarations.json and still re-fills.
+
+    This pins the lowering round-trip: a real lower_workflow spec that
+    drops feedback_keys must still be re-filled through the worker route.
+    """
+    from refactory_dsh import worker_node
+    from refactory_dsh.run import NODE_ENV
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.lowering import write_declarations
+
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / ".refactory").mkdir(parents=True)
+
+    # Lower the real design mode to get declarations.json with feedback_keys
+    mode = DesignMode()
+    write_declarations(mode.state_dict(), run)
+
+    # Write check-record.json with a known validation string
+    validation_text = "## Failing tests\n\ntest_foo.py::test_bar — AssertionError"
+    (run / "check-record.json").write_text(json.dumps({
+        "status": "fail", "validation": validation_text,
+    }))
+    (run / "feedback-initial.json").write_text(json.dumps({
+        "validation": "(no check has run yet)",
+        "qa_gate": "(no review has refused anything yet)",
+        "overwatch_review": "(no audit has refused anything yet)",
+    }))
+
+    # Write required input files
+    (run / "brief.json").write_text(json.dumps({
+        "name": "test", "brief": "test", "check": "echo ok",
+    }))
+    (run / "design.md").write_text("# Design\n")
+    (run / "check.txt").write_text("failed\n")
+
+    # facts.json without validation (simulating a redo)
+    (run / "facts.json").write_text(json.dumps({
+        "name": "test", "brief": "test", "check": "echo ok",
+    }))
+
+    captured_prompt = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        def for_node(self, node, **kw):
+            return self
+        def complete(self, prompt, workdir=None):
+            captured_prompt.append(prompt)
+            p = Path(workdir) if workdir else run
+            (p / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+            return "done"
+        def context(self):
+            return {"provider": "test", "model": "test"}
+        def route(self):
+            return {"worker_backend": "dsh"}
+
+    # Spec WITHOUT feedback_keys — the worker must read them from declarations.json
+    spec = {
+        "schema_version": 1,
+        "node_id": "emit",
+        "prompt": "Write {{validation}}\n{{qa_gate}}\n{{overwatch_review}}",
+        "reads": ["brief.json", "design.md", "check.txt", "check-record.json"],
+        "writes": ["emit.txt"],
+        "model_context": {"provider": "test", "model": "test"},
+    }
+
+    manifest = {"id": "emit", "type": "AgentNode", "command": "echo"}
+    monkeypatch.setenv(NODE_ENV, json.dumps(manifest))
+    monkeypatch.chdir(run)
+
+    with patch("refactory_dsh.model.DshModelClient", FakeClient):
+        with patch("refactory_dsh.agent_delivery.begin",
+                   return_value={"prompt": "test", "node": "emit", "status": "pending"}):
+            with patch("refactory_dsh.agent_delivery.finish",
+                       return_value={"node": "emit", "status": "delivered"}):
+                receipt = worker_node.execute(spec, run)
+
+    assert receipt["status"] == "delivered"
+    assert captured_prompt, "model should have been called"
+    # The prompt must not contain literal {{validation}}
+    prompt_text = captured_prompt[0]
+    assert "{{validation}}" not in prompt_text, \
+        "validation must be re-filled even when spec has no feedback_keys"
+
+
 # ── design_fast full route ────────────────────────────────────────────────────
 
 def test_digest_design_fast_full_route(tmp_path, monkeypatch):

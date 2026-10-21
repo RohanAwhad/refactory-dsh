@@ -372,6 +372,17 @@ def run_probe(
     """
     workdir = Path(workdir)
 
+    # Check for repeated emission first — if the emission already went through
+    # the full check, there is no point building a targeted command or cloning.
+    emission_file = workdir / emission_path
+    if emission_file.is_file():
+        if _emission_matches_last(workdir, emission_file.read_text()):
+            return ProbeResult(
+                status="refused",
+                refusal="this emission has already been checked; "
+                        "see check-record.json for the result",
+            )
+
     # Build the targeted command
     facts_path = workdir / "facts.json"
     if facts_path.is_file():
