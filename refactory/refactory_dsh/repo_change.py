@@ -686,16 +686,59 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
         # text, and the files it deletes, are gone from the last attempt itself.
         rev = str(last["applied_to"])
         deletes = tuple(name for name in deletes if worktree.committed_text(found, name) is not None)
-    # During a merge-in-progress, edits must apply to the worktree text for
-    # EVERY path, not only unmerged ones.  A cleanly-merged file contains main's
-    # changes in the worktree but not in the committed text; reading from the
-    # commit would silently revert main's change.
+    # ── Start a pending merge if materialise needs to commit one ──
+    # When the delivery gate recorded a pending merge (pending-merge.json) and
+    # MERGE_HEAD is not present, start the merge now.  The merge exists only
+    # inside this function: on ANY failure, the except/finally blocks abort it.
+    pending_merge_path = Path(ctx.workdir) / ".refactory" / "pending-merge.json"
+    pending_merge_data = None
+    if pending_merge_path.exists():
+        try:
+            pending_merge_data = json.loads(pending_merge_path.read_text())
+        except (OSError, ValueError):
+            pass
     merge_in_progress = False
     try:
         worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
         merge_in_progress = True
     except ValueError:
         pass
+    if not merge_in_progress and pending_merge_data:
+        target_tip = str(pending_merge_data.get("target_tip", ""))
+        pm_conflict_files = pending_merge_data.get("conflict_files", [])
+        if target_tip:
+            merge_env = {**os.environ, **worktree.COMMITTER}
+            try:
+                worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                             "merge", "--no-commit", "--no-verify", target_tip,
+                             env=merge_env)
+            except ValueError:
+                pass  # expected — conflicts
+            # Check if merge is actually in progress now.
+            try:
+                worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+                merge_in_progress = True
+            except ValueError:
+                pass  # clean fast-forward — no MERGE_HEAD
+            # Resolve generated-file conflicts to theirs (main's side).
+            if merge_in_progress:
+                try:
+                    _pm_conflict_output = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
+                except ValueError:
+                    _pm_conflict_output = ""
+                _pm_unmerged = [f for f in _pm_conflict_output.strip().splitlines() if f.strip()]
+                _pm_authored_set = set(pm_conflict_files)
+                for _pm_cfile in _pm_unmerged:
+                    if _pm_cfile not in _pm_authored_set:
+                        try:
+                            worktree.git(path, *worktree.NO_HOOKS, "checkout", "--theirs", "--", _pm_cfile)
+                            worktree.git(path, *worktree.NO_HOOKS, "add", "--", _pm_cfile)
+                        except ValueError:
+                            pass
+    # During a merge-in-progress, edits must apply to the worktree text for
+    # EVERY path, not only unmerged ones.  A cleanly-merged file contains main's
+    # changes in the worktree but not in the committed text; reading from the
+    # commit would silently revert main's change.
     unmerged_paths: set[str] = set()
     if merge_in_progress:
         try:
@@ -790,6 +833,8 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
                 pass
             (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
         raise
+    # Clean up pending-merge record after a successful merge commit.
+    pending_merge_path.unlink(missing_ok=True)
     worktree._write_json(Path(ctx.workdir) / EMISSION, {"digest": digest, "attempt_on": found.head,
                                                          "applied_to": rev})
     _warn_if_shared_changed(advanced, "since the last check")

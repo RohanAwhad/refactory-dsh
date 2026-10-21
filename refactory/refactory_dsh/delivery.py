@@ -1698,19 +1698,20 @@ PENDING_MERGE = Path(".refactory") / "pending-merge.json"
 def evaluate_delivery_conflicts(ctx: Any) -> "Verdict | str":
     """Gate evaluator: reloop to emit on authored-file conflict, proceed otherwise.
 
-    When ``delivery_conflict_files`` is non-empty, this evaluator starts
-    ``git merge --no-commit <target_tip>`` in the worktree so that emit runs
-    on a merge-in-progress tree. Generated-file conflicts are resolved to
-    theirs (main's side). Authored conflicting files keep their markers so the
-    builder can resolve them.
+    When ``delivery_conflict_files`` is non-empty, this evaluator records the
+    conflict (main's tip, the conflicted paths, and the conflict detail) in
+    ``pending-merge.json`` so materialise can start the merge in one step.
+    The evaluator does NOT start the merge itself — the worktree stays clean
+    while the builder works.  Materialise runs ``git merge --no-commit``,
+    applies the emission, and either commits the merge or aborts it.
 
-    On any failure the merge is aborted so the worktree is never left mid-merge.
+    This ensures a stop at any point (emit crash, materialise refusal, budget
+    exhaustion) leaves the worktree clean with no MERGE_HEAD.
     """
     from refactory_dsh.nn import Verdict
 
-    # Abort any stale merge left by a previous iteration, a crashed emit,
-    # or a crashed materialise, before doing anything else.  This ensures the
-    # worktree is never left mid-merge even when emit fails.
+    # Abort any stale merge left by a crashed materialise before doing anything
+    # else.  This is the only place a stale MERGE_HEAD is cleaned up.
     _abort_pending_merge(ctx)
 
     conflict_files = ctx.facts.get("delivery_conflict_files") or []
@@ -1727,94 +1728,40 @@ def evaluate_delivery_conflicts(ctx: Any) -> "Verdict | str":
     used = int(ctx.facts.get("delivery_conflict_reloops", 0)) + 1
     ctx.set_fact("delivery_conflict_reloops", used)
     if used > allowed:
-        _abort_pending_merge(ctx)
         raise ValueError(
             f"delivery conflict resolution exhausted {allowed} attempts; "
             f"conflicting files: {', '.join(conflict_files)}. "
             f"To resume: graph-control redeliver --run <run_dir>"
         )
 
-    found = worktree.recorded(ctx.workdir)
-    if found is None:
-        raise ValueError("delivery_gate: no worktree recorded")
-    worktree.verify_git_link(found)
+    # Record the pending merge for materialise.  The worktree stays clean —
+    # materialise starts the merge, applies the emission, and commits or
+    # aborts in one deterministic step.
+    worktree._write_json(Path(ctx.workdir) / PENDING_MERGE,
+                         {"target_tip": target_tip, "conflict_files": conflict_files})
 
-    path = Path(found.path)
+    # Build the description the builder receives via {{validation}}.
+    description_parts = [f"Merge conflict with main ({target_tip[:12]}). "
+                         f"Conflicting authored files: {', '.join(conflict_files)}.\n"
+                         f"During this merge, ===EDIT: blocks apply to the working tree "
+                         f"text (with conflict markers for conflicted files, with main's "
+                         f"changes for cleanly merged files), not the committed text. "
+                         f"Resolve every conflict so no <<<<<<< / >>>>>>> markers "
+                         f"remain.\n"]
+    for entry in detail:
+        description_parts.append(f"\n### {entry['path']}\n")
+        if entry.get("base"):
+            description_parts.append(f"**Base (common ancestor):**\n```\n{entry['base']}\n```\n")
+        if entry.get("ours"):
+            description_parts.append(f"**Ours (this run's version):**\n```\n{entry['ours']}\n```\n")
+        if entry.get("theirs"):
+            description_parts.append(f"**Theirs (main's version):**\n```\n{entry['theirs']}\n```\n")
+        if entry.get("main_diff"):
+            description_parts.append(f"**What main changed:**\n```diff\n{entry['main_diff']}\n```\n")
 
-    # Abort any stale merge left by a previous iteration or crash.
-    try:
-        worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
-        worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
-    except ValueError:
-        pass  # no stale merge
-
-    merge_env = {**os.environ, **worktree.COMMITTER}
-    try:
-        try:
-            worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-                         "merge", "--no-commit", "--no-verify", target_tip, env=merge_env)
-            # Clean merge — no conflicts.  The builder still needs to commit it.
-        except ValueError:
-            pass  # expected — conflicts
-
-        # Verify merge is in progress.
-        try:
-            worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
-        except ValueError:
-            # merge --no-commit completed cleanly (fast-forward or clean merge).
-            # Let it proceed — materialise's commit will create a merge commit.
-            pass
-
-        # Resolve generated-file conflicts to theirs (main's side).
-        try:
-            conflict_output = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
-        except ValueError:
-            conflict_output = ""
-        unmerged = [f for f in conflict_output.strip().splitlines() if f.strip()]
-        authored_set = set(conflict_files)
-        for cfile in unmerged:
-            if cfile not in authored_set:
-                # Generated file — resolve to theirs (main's side).
-                try:
-                    worktree.git(path, *worktree.NO_HOOKS, "checkout", "--theirs", "--", cfile)
-                    worktree.git(path, *worktree.NO_HOOKS, "add", "--", cfile)
-                except ValueError:
-                    pass  # leave it for the builder
-
-        # Record the pending merge for crash recovery.
-        worktree._write_json(Path(ctx.workdir) / PENDING_MERGE,
-                             {"target_tip": target_tip, "conflict_files": conflict_files})
-
-        # Build the description the builder receives via {{validation}}.
-        description_parts = [f"Merge conflict with main ({target_tip[:12]}). "
-                             f"Conflicting authored files: {', '.join(conflict_files)}.\n"
-                             f"During this merge, ===EDIT: blocks apply to the working tree "
-                             f"text (with conflict markers for conflicted files, with main's "
-                             f"changes for cleanly merged files), not the committed text. "
-                             f"Resolve every conflict so no <<<<<<< / >>>>>>> markers "
-                             f"remain.\n"]
-        for entry in detail:
-            description_parts.append(f"\n### {entry['path']}\n")
-            if entry.get("base"):
-                description_parts.append(f"**Base (common ancestor):**\n```\n{entry['base']}\n```\n")
-            if entry.get("ours"):
-                description_parts.append(f"**Ours (this run's version):**\n```\n{entry['ours']}\n```\n")
-            if entry.get("theirs"):
-                description_parts.append(f"**Theirs (main's version):**\n```\n{entry['theirs']}\n```\n")
-            if entry.get("main_diff"):
-                description_parts.append(f"**What main changed:**\n```diff\n{entry['main_diff']}\n```\n")
-
-        description = "\n".join(description_parts)
-        ctx.set_fact("validation", description)
-        return Verdict("reloop", description)
-    except BaseException:
-        # On any failure, abort the merge so the worktree is never left mid-merge.
-        try:
-            worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
-            worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
-        except ValueError:
-            pass
-        raise
+    description = "\n".join(description_parts)
+    ctx.set_fact("validation", description)
+    return Verdict("reloop", description)
 
 
 def _abort_pending_merge(ctx: Any) -> None:

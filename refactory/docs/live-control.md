@@ -314,23 +314,28 @@ no longer pushes the reviewed commit behind main. Instead:
 
 1. Delivery records the conflict (which files, their base/ours/theirs content,
    and what main changed) and raises `NotDelivered` — nothing is pushed.
-2. The `delivery_gate` evaluator reads the conflict facts, starts
-   `git merge --no-commit <target_tip>` in the worktree, resolves generated-file
-   conflicts to theirs (main's side), and returns `Verdict("reloop")`.
-3. The run goes back to `emit`. The builder receives the conflict markers in the
-   authored files and the conflict detail via `{{validation}}`.
-4. Materialise refuses an emission that leaves conflict markers. When MERGE_HEAD
-   is present, `git commit` creates a merge commit with main's tip as the second
-   parent.
-5. The check, the base comparison and the reviews run on the merged result before
-   delivery tries again.
-6. The loop is bounded by `check_attempts` (default 3). A run that cannot resolve
-   stops, naming the conflicting files. `graph-control redeliver` restarts it.
+2. The `delivery_gate` evaluator reads the conflict facts and records them in
+   `pending-merge.json` (main's tip, the conflicted paths). It does **not**
+   start a merge — the worktree stays clean while the builder works. It
+   returns `Verdict("reloop")`.
+3. The run goes back to `emit`. The builder receives the conflict detail via
+   `{{validation}}` (base, ours, theirs, and what main changed for each file).
+4. Materialise reads `pending-merge.json`, starts `git merge --no-commit
+   <target_tip>`, resolves generated-file conflicts to theirs (main's side),
+   applies the emission, and either commits the merge or aborts it — all in
+   one deterministic step. An emission that leaves conflict markers or omits a
+   conflicted path is refused, and the merge is aborted.
+5. The check, the base comparison and the reviews run on the merged result
+   before delivery tries again.
+6. The loop is bounded by `check_attempts` (default 3). A run that cannot
+   resolve stops, naming the conflicting files. `graph-control redeliver`
+   restarts it.
 
-On any failure the merge is aborted and `pending-merge.json` is deleted, so a
-worktree is never left mid-merge. After a crash between the merge commit and
-the record write, `require_current` adopts the existing merge commit rather
-than refusing.
+The merge exists only inside materialise (`_commit_emission`). A stop at any
+point — a crash at emit, a refused emission, budget exhaustion, or a person's
+stop — leaves the worktree clean with no MERGE_HEAD. After a crash between
+the merge commit and the record write, `require_current` adopts the existing
+merge commit rather than refusing.
 
 After delivery pushes a merge commit, it advances the worktree record (head and
 base) to the merge, so a later attempt builds on it and the next push
