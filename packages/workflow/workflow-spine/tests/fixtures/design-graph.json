@@ -48,7 +48,7 @@
     "gate_design_review": {
       "id": "gate_design_review",
       "evaluator_type": "fn",
-      "max_iterations": 4,
+      "max_iterations": 6,
       "_type": "GateNode"
     },
     "gate_overwatch": {
@@ -203,6 +203,11 @@
     },
     {
       "source": "gate_design_review",
+      "target": "design_review",
+      "condition": "review_reloop"
+    },
+    {
+      "source": "gate_design_review",
       "target": "gate_strategy",
       "condition": "proceed"
     },
@@ -235,6 +240,11 @@
       "source": "gate_qa",
       "target": "emit",
       "condition": "reloop"
+    },
+    {
+      "source": "gate_qa",
+      "target": "fork_qa",
+      "condition": "review_reloop"
     },
     {
       "source": "gate_qa",

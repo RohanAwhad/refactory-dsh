@@ -52,10 +52,10 @@ TARGET_RECORD = Path(".refactory") / "target.json"
 DELIVERY_SHOWN = Path(".refactory") / "delivery-shown.json"
 
 #: What a node that calls run_check writes.
-CHECK_WRITES = ("changes.diff", "test-guardedness.json")
+CHECK_WRITES = ("changes.diff", "test-guardedness.json", "changed-functions.json")
 
 #: What a node that calls run_check produces.
-CHECK_PRODUCES = ("commit", "files", "inherited_failures")
+CHECK_PRODUCES = ("commit", "files", "inherited_failures", "changed_functions")
 
 INVOCATION = Path('.refactory/invocation.json')
 
