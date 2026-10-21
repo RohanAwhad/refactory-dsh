@@ -19,7 +19,9 @@ import {
 import { TAB, mountBody } from './mount.client.tsx'
 import { mockDialog } from './dialog.client.ts'
 
-const CHOICES = { project: '/repo', modes: [MODE, AUTHORING, DISABLED], strategies: STRATEGIES, packages: [PACKAGE] }
+import { PROJECT } from './fake-console.client.ts'
+
+const CHOICES = { project: '/repo', modes: [MODE, AUTHORING, DISABLED], strategies: STRATEGIES, packages: [PACKAGE], projects: [PROJECT] }
 
 /** The knob values Start and Run once send before anything is changed. */
 const KNOBS = ['rounds=3', 'temperature=0.5', 'source_root=/tmp/src', 'preset=broad', 'verbose=false']
@@ -69,7 +71,7 @@ describe('the picker before it has read anything', () => {
     expect(console.packages).toHaveBeenCalledTimes(1)
     expect(instance.getSnapshot().byTab[TAB]?.choices).toEqual({
       kind: 'ready',
-      value: { project: '/repo', modes: [], strategies: NO_STRATEGIES, packages: [] },
+      value: { project: '/repo', modes: [], strategies: NO_STRATEGIES, packages: [], projects: [] },
     })
   })
 

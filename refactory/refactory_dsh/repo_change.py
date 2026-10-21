@@ -130,6 +130,11 @@ def knobs() -> dict[str, Knob]:
                                      "before setup and each check; whatever it changes in tracked files "
                                      "is amended into the attempt. A generator that itself needs a build "
                                      "includes that build in its own command"),
+        "include_uncommitted": Knob(False, "bool", frozen=True,
+                                    description="start from the target's uncommitted changes instead "
+                                                "of only committed HEAD; copies modified, staged, "
+                                                "untracked and deleted files into the worktree and "
+                                                "commits them as the run's base"),
     }
 
 
@@ -316,6 +321,33 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
         else:
             print(f"refactory: {note}", file=sys.stderr)
     found = worktree.create(target, base, run_id, ctx.workdir)
+    # When opted in, copy the person's uncommitted changes into the worktree and
+    # commit them as the run's own base, so the attempts' diffs show only the run's
+    # change.  The person's checkout is never modified.
+    # On a redo of prepare, the branch already has attempt commits; do not re-copy,
+    # which would add a second base commit on top of existing attempts and re-pin
+    # the base over them.
+    uncommitted_entries: list[dict[str, str]] = []
+    if ctx.knob("include_uncommitted", False) not in (False, 0, "0", "false"):
+        # Guard on the branch having no attempt commits, not on the record
+        # existing.  A first prepare on a clean tree writes no record (no
+        # entries), so checking "record exists" would let a redo after the
+        # person edits files copy them over existing attempt commits.
+        has_attempts = found.head != found.base
+        if not has_attempts:
+            uncommitted_entries = worktree.copy_uncommitted(target, Path(found.path), ctx.workdir)
+            # Re-read the worktree record so `found.head` and `found.base` reflect the
+            # new commit.
+            found = worktree.recorded(ctx.workdir) or found
+            if uncommitted_entries:
+                print(f"refactory: {len(uncommitted_entries)} uncommitted file(s) copied into the "
+                      f"worktree and committed as the run's base", file=sys.stderr)
+        else:
+            existing_record = worktree.uncommitted_record(found)
+            if existing_record:
+                uncommitted_entries = existing_record
+            print(f"refactory: skipping uncommitted-changes copy on redo "
+                  f"(branch has attempt commits)", file=sys.stderr)
     worktree.write_wrapper(found, ctx.workdir)
     # Every step of a worktree run is held to its own worktree (#319, #347).
     # Changes to the target or the launcher checkout are warnings: another
@@ -327,7 +359,7 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
                                    output_only=(*OUTPUT_ONLY, *output_only),
                                    also=(Path(found.path),),
                                    warn_also=warn_dirs)
-    if baseline["changes"]:
+    if baseline["changes"] and not uncommitted_entries:
         target_guard.warn(f"{len(baseline['changes'])} uncommitted change(s) in {target} are not part of "
                           f"this run, which starts from commit {found.base[:12]}: "
                           f"{target_guard._named(sorted(baseline['changes']))}")
@@ -808,8 +840,13 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
         return sandbox.SandboxResult(ok=False, returncode=1, elapsed_s=0.0, prep_failure=prep_fail,
                                      stderr=(
             "the worktree's environment could not be prepared:\n" + "\n".join(problems)))
-    return sandbox.run_command(command, workdir=Path(found.path), timeout_s=timeout,
-                               budget=budget, env=env, home=home, exact_env=True)
+    result = sandbox.run_command(command, workdir=Path(found.path), timeout_s=timeout,
+                                budget=budget, env=env, home=home, exact_env=True,
+                                worktree_root=Path(found.path))
+    if result.cwd_outside:
+        target_guard.warn(f"the check's command ended in {result.cwd_outside}, outside "
+                          f"the run's worktree {found.path}")
+    return result
 
 
 def refused(ctx: Any) -> str:
@@ -845,6 +882,7 @@ def run_check(ctx: Any, command: str, timeout: float) -> Any:
         target_guard.warn(f"tracked files in the run's worktree had changed since materialise and were put "
                           f"back, so the check runs the committed attempt: {target_guard._named(restored)}")
     result = _check_in_worktree(ctx, found, command, timeout)
+    # _check_in_worktree already warns about cwd escape; do not warn twice.
     _warn_if_shared_changed(found, "while preparing for and running the check")
     # The reviews and the next attempt read the worktree, and edits apply to the
     # committed attempt: a check that reformats a file must not leave them apart.
@@ -877,6 +915,15 @@ def report(ctx: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         target_guard.warn(f"tracked files in the run's worktree differ from its last attempt and are not "
                           f"part of its branch {found.branch}: {target_guard._named(edited)}")
     _warn_if_shared_changed(found, "during the reviews")
+    # Record uncommitted-changes metadata in the report for the PR's Verification.
+    uncommitted = worktree.uncommitted_record(found)
+    if uncommitted:
+        payload = {**payload, "uncommitted_base": True,
+                   "uncommitted_files": uncommitted}
+        verification = payload.get("verification_notes", [])
+        verification = list(verification) if isinstance(verification, list) else []
+        verification.insert(0, "The base included uncommitted changes from the working tree")
+        payload["verification_notes"] = verification
     payload = {**payload, "target": found.target, "branch": found.branch, "base": found.base, "head": found.head,
                "diff_stat": worktree.git(Path(found.path), "diff", "--stat", found.base, "HEAD").strip()}
     ctx.write_json(name, payload)

@@ -370,7 +370,7 @@ def gate_pitfalls(ctx: Any) -> str:
 
     raw = ctx.read_text("pitfalls.json") if ctx.exists("pitfalls.json") else ""
     source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
-    problems = pitfalls_mod.validate_pitfalls(raw, source)
+    problems = pitfalls_mod.validate_pitfalls(raw, source, run_dir=str(ctx.workdir))
 
     if not problems:
         ctx.write_text("pitfalls-review.txt", "ok\n")
@@ -390,6 +390,18 @@ def gate_pitfalls(ctx: Any) -> str:
             f"pitfalls are still not valid after {used} attempt(s):\n{report}"
         )
     return Verdict("reloop", report)
+
+
+def apply_cwd_escaped(result: Any, outcome: dict[str, Any]) -> None:
+    """Record ``cwd_escaped`` into *outcome* when *result* shows a directory escape.
+
+    Both ``check_artifact`` and ``fast_ops.focused_check`` apply this logic:
+    when ``sandbox.run_command`` was called with a ``worktree_root`` and the
+    command left that directory, ``result.cwd_outside`` is set.  This helper
+    centralises the recording so the logic is not replicated in each call site.
+    """
+    if getattr(result, "cwd_outside", None):
+        outcome["cwd_escaped"] = result.cwd_outside
 
 
 def check_artifact(ctx: Any) -> str:
@@ -421,6 +433,7 @@ def check_artifact(ctx: Any) -> str:
         result, budget=getattr(ctx, "budget", None)),
         "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
+    apply_cwd_escaped(result, outcome)
     ctx.write_text("check.txt", detail or "ok\n")
 
     # Whether the new tests fail without the change is evidence for the reviewers, passing
@@ -693,7 +706,8 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
         "artifact": ctx.facts.get("artifact"),
         "files": ctx.facts.get("files", []),
         "check": ctx.facts.get("check"),
-        "checked": True,
+        "checked": bool(ev and isinstance(ev.get("validation"), dict)
+                        and ev["validation"].get("status") == "pass"),
         "validation_evidence": ev,
         "intent_audit": audit,
     }

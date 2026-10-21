@@ -864,6 +864,10 @@ def test_a_check_outside_a_worktree_keeps_todays_environment(tmp_path, monkeypat
     monkeypatch.setenv("PYTHONPATH", "/kept")
     result = sandbox.run_command('echo "$HOME"; echo "${PYTHONPATH-unset}"', workdir=tmp_path / "artifact")
     assert result.stdout.splitlines() == [str(tmp_path / "artifact"), "/kept"]
+    # Without worktree_root the sentinel is absent and no false positive occurs.
+    assert result.cwd_outside is None
+    assert "__REFACTORY_CWD_ESCAPED" not in result.stderr
+    assert "__refactory" not in result.stderr
 
 
 def test_global_memory_lives_in_refactorys_home():

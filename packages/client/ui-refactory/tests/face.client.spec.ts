@@ -27,7 +27,7 @@ import {
 const SESSION = 's-test' as SessionId
 const TAB = 'tab-1' as TabId
 
-const CHOICES: RefactoryChoices = { project: '/repo', modes: [MODE], strategies: STRATEGIES, packages: [PACKAGE] }
+const CHOICES: RefactoryChoices = { project: '/repo', modes: [MODE], strategies: STRATEGIES, packages: [PACKAGE], projects: [] }
 
 type StoreInstance = ReturnType<ReturnType<typeof createRefactoryStore>['create']>
 

@@ -39,7 +39,7 @@ import { searchBudget } from './store.ts'
 export type RefactoryRemote = {
   readonly refactoryConsole: Pick<
     RefactoryConsoleRemote,
-    'help' | 'workers' | 'project' | 'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'runStream' | 'status' | 'leaderboard'
+    'help' | 'workers' | 'project' | 'projects' | 'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'runStream' | 'status' | 'leaderboard'
       | 'runs' | 'graphControl' | 'watchStream' | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
       | 'profiles' | 'profileSave' | 'profileResolve' | 'comparison'
       | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
@@ -446,13 +446,18 @@ export function refactoryFace(
         console.modes(signal),
         console.strategies(signal),
         console.packages(signal),
-      ]).then(([project, modes, strategies, packages]) => {
+        console.projects ? console.projects(signal) : Promise.resolve({ ok: true as const, value: [] as readonly import('@deepseek-ai/dsh-refactory-console/types').RefactoryProject[] }),
+      ]).then(([project, modes, strategies, packages, projects]) => {
         if (catalogueGenerations.get(tabId) !== generation) return
         if (!project.ok) { actions.failed(tabId, project.error.message); return }
         if (!modes.ok) { actions.failed(tabId, modes.error.message); return }
         if (!strategies.ok) { actions.failed(tabId, strategies.error.message); return }
         if (!packages.ok) { actions.failed(tabId, packages.error.message); return }
-        actions.loaded(tabId, { project: project.value, modes: modes.value, strategies: strategies.value, packages: packages.value })
+        // When the projects call fails, the panel still loads with an empty
+        // target picker and a console note, rather than failing the whole panel.
+        const projectsList = projects.ok ? projects.value : []
+        if (!projects.ok) globalThis.console.warn('refactory: projects list unavailable:', projects.error.message)
+        actions.loaded(tabId, { project: project.value, modes: modes.value, strategies: strategies.value, packages: packages.value, projects: projectsList })
       })
     }
     return {

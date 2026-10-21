@@ -1243,6 +1243,7 @@ def _parser() -> argparse.ArgumentParser:
     docs_parser.add_argument("--offset", type=int, default=0, help="character offset within page or section")
     docs_parser.add_argument("--limit", type=int, default=6000, help="maximum text characters, 1..12000")
     add(sub.add_parser("workers", help="effective project worker defaults and provenance; read only"))
+    add(sub.add_parser("projects", help="the registered projects for target selection"))
     add(sub.add_parser("modes", help="the catalogue of startable modes"))
     add(sub.add_parser("runs", help="every run under the root"))
     add(sub.add_parser("strategies", help="the named outer loops, optimizers and evaluators"))
@@ -1334,6 +1335,7 @@ def _parser() -> argparse.ArgumentParser:
     graph_control.add_argument("action", choices=[
         "pause", "resume", "stop", "preview", "rerun",
         "acknowledge", "amend-command", "withdraw", "redeliver",
+        "confirm-completion",
     ])
     graph_control.add_argument("--node", default="")
     graph_control.add_argument("--text", default="")
@@ -1695,6 +1697,16 @@ def runtime_context(project: Path, *, provider: str = "", model: str = "") -> di
     }
 
 
+def list_projects() -> list[dict[str, Any]]:
+    """The registered projects, as the GUI's target picker needs them.
+
+    Calls the same ``projects.load()`` the CLI's ``refactory projects`` uses, so the
+    CLI and the GUI list the same projects.
+    """
+    from refactory_dsh import projects
+    return projects.load()["projects"]
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     # The forwarding verbs carry their own addressing flags, so `--project` is
@@ -1712,6 +1724,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.verb == "workers":
             from refactory_dsh.worker_config import effective
             payload = effective(project)
+        elif args.verb == "projects":
+            payload = list_projects()
         elif args.verb == "modes":
             payload = catalogue(project=project)
         elif args.verb == "strategies":

@@ -462,6 +462,13 @@ export interface RefactorySingleRunRequest {
  * produced and this package states the face itself; the Host half that mounts it
  * still has to select this contribution in its own assembly.
  */
+/** A registered project, as ``refactory projects`` lists them. */
+export interface RefactoryProject {
+  readonly name: string
+  readonly path: string
+  readonly kind: string
+}
+
 export interface RefactoryConsoleRemote {
   /** Live schemas and reviewed interface guidance. */
   help?: (topic: string, signal?: AbortSignal) => Promise<RemoteResult<Record<string, unknown>>>
@@ -481,6 +488,8 @@ export interface RefactoryConsoleRemote {
   importPackage: (source: string, name: string, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryPackageChoice[]>>
   /** @param run - the run whose candidates are read. @param signal - caller cancellation. @returns the candidates by score, each with what a person did to it. */
   leaderboard: (run: string, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryCandidateRow[]>>
+  /** @param signal - caller cancellation. @returns the registered projects for target selection. */
+  projects?: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryProject[]>>
   /** @param signal - caller cancellation. @returns the mode catalogue. */
   modes: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryModeChoice[]>>
   /** @param signal - caller cancellation. @returns the mode packages. */

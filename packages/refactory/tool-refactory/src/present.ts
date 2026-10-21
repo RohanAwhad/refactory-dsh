@@ -33,7 +33,7 @@ const TITLE_TEXT = 60
 /** Actions that only read, so a UI may treat them as lookups rather than changes. */
 const READ_ACTIONS = new Set([
   'runtime', 'help', 'docs', 'workers', 'profiles', 'profile-resolve', 'comparison', 'modes', 'runs',
-  'strategies', 'status', 'artifacts', 'leaderboard', 'candidate', 'best',
+  'strategies', 'status', 'artifacts', 'leaderboard', 'candidate', 'best', 'projects',
 ])
 
 /**
@@ -109,6 +109,7 @@ function callTitle(args: PresentArgs): string {
     case 'edit': return `Edit the mode ${mode}`
     case 'design': return `Design and build ${args.name ?? 'an artifact'}`
     case 'stop': return `Stop ${run}`
+    case 'projects': return 'List target projects'
     default: return `refactory ${args.action}`
   }
 }

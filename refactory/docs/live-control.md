@@ -354,6 +354,14 @@ node with an outgoing edge, not a fork branch or a director's child (they
 continue at the join or the director's successor), and not a data node's
 per-item exit (it returns to its data node).
 
+### Check gates
+
+A check that could not run appears as "did not run" in the PR Verification
+section and in the run report, derived from `validation.status` in
+`authoring-evidence.json`. The CEO may ask the person how to proceed (naming
+what stopped the check and what would unblock it), but it never recommends
+skipping a check gate.
+
 ### Forward-only invalidation
 
 Replaying a node invalidates only its forward path. Nodes reached exclusively
@@ -401,6 +409,26 @@ when the person reruns without `--text`. When the person supplies `--text`,
 the gate's reason appears first and the person's text follows it. A gate
 that proceeded clears its stored reason, so a rerun after a passed gate
 shows no stale refusal.
+
+### Goal completion
+
+Goal completion requires `done` status in spine-status.json. A
+`tools/pre-execute` listener in the spine denies `update_goal complete` when
+the recorded status is not `done` and no person-issued `completion_override`
+matches the current status. The person can override via
+`refactory graph-control confirm-completion`, which writes a
+`completion_override` bound to the current status and invocation into
+spine-status.json. The override is cleared when `recordStatus()` writes a
+different status, so a resumed or new invocation does not inherit it.
+
+### CEO-dispatched prompt integrity
+
+The CEO's prompt recording listener attributes prompts to due nodes by the
+delivery key: the node id from the execution contract embedded in prompt.txt,
+keyed by run and node. A prompt naming no due node's key is recorded under
+none and no records are cleared, so an unrelated `send_message` does not
+refuse faithful reviewers. Only top-level CEO calls are recorded; a
+reviewer subagent's own `send_message` is not recorded as a CEO prompt.
 
 ### CEO redo and attempt limits
 
@@ -451,7 +479,22 @@ message names this alternative.
 | spine-status.json | refactory_dsh/invocations.py | lines 84,89 | Checks existence only | Not affected |
 | spine-status.json | refactory_dsh/live.py | `snapshot` (120) | Reads all fields | Includes `last_failure` in return, overrides `wait_reason` |
 | spine-status.json | refactory_dsh/repo_change.py | line 62 | Reads `status` | `ready` not in FINISHED → run still active |
+| spine-status.json | workflow-spine/src/index.ts | C1 `tools/pre-execute` listener | Reads `status`, `completion_override` | Denies `update_goal complete` when status ≠ done and no matching override |
 
 Release checks exercised live CLI observation and native gate answers, pause/resume, reviewed replay and owned stop. Separate registered dead-owner recovery checks passed through public CLI resume and the native Resume control, preserving completed artifacts, saved configuration and accumulated resources while executing only the remaining node. An unavailable-provider guard prevented model execution. See the [validation record](release-validation-20260926.md).
+
+## Target selection and uncommitted changes
+
+The GUI lets a person pick a run's target repository or project from the registered projects list (the same registry as `refactory projects`). The `target` knob names the repository; an empty value starts a new project. A target `<select>` appears in the **Configure a run** section of `RefactoryBody` when registered projects exist and the chosen mode declares the `target` parameter (design and design_fast; not create or edit).
+
+The `include_uncommitted` knob (off by default) opts a run into starting from the person's uncommitted changes. When set, modified tracked files, staged files, untracked unignored files and deleted tracked files are copied into the worktree and committed as the run's base. The run records each file with its kind and content hash. The PR's Verification says "The base included uncommitted changes from the working tree." The person's checkout is never changed.
+
+## cwd escape detection
+
+When a check's command changes its working directory outside the run's worktree, the check outcome includes `cwd_escaped` naming the directory. This is advisory: the check still passes or fails on its own exit code. Detection uses an EXIT trap that compares the shell's final `$PWD` with the worktree root (both realpath'd, prefix check), writing a sentinel to a file rather than stdout or stderr. A `cd` into a subdirectory of the worktree is not flagged. The trap fires even after `exit`, and the command's original exit status is preserved.
+
+## Worktree and staging isolation
+
+Design and design_fast modes use a git worktree of the target repository, on a branch `refactory/run-<id>`. Create, create_fast, edit and edit_fast modes stage their package in a per-run directory (`<run>/.factory-staging/.factory/packages/<name>/`), so two parallel runs never collide. At registration, the staged package is copied atomically (rename the old aside, rename the new in, then delete the old) to the shared `.factory/packages/<name>/`. If the shared package's state differs from what prepare recorded — including when it now exists but did not before — registration refuses, naming the other run (read from `.origin.json`). After a successful register the origin stamp in `.origin.json` identifies the registering run so a reloop does not refuse itself. Modes that only write into their run directory (loop, optimize) need no isolation.
 
 [Profiles and candidate evidence](optimization-profiles.md) · [Fast modes and resource recovery](budgets-fast-modes.md) · [Worker capabilities](models.md#model-provider-versus-coding-agent)
