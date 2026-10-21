@@ -95,9 +95,7 @@ TITLE_LIMIT = 72
 VERIFY_ATTEMPTS = 5
 VERIFY_WAIT_S = 2.0
 
-#: The callable names of delivery's entry points, used by graph_control to find
-#: the deliver node by its callable rather than by its id or a command substring.
-DELIVER_ENTRY_POINTS = frozenset({"refactory_dsh.delivery:deliver_design"})
+from refactory_dsh.invocations import DELIVER_ENTRY_POINTS  # canonical in invocations
 
 
 #: A GitHub remote: HTTPS, with or without a user, or SSH in either spelling.
