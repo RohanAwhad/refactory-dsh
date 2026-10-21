@@ -467,6 +467,7 @@ def gate_qa(ctx: Any) -> str:
         findings.append(f"requested runtime check failed (exit {check.get('returncode')}): {check_output}")
     findings.extend(evidence.current_problems(ctx, ("focused_qa",)))
     findings.extend(evidence.audit_problems(ctx))
+    correction_problems = evidence.correction_audit_problems(ctx)
     # Prepend robustness notes ([left] sites, broken guarantees) so the builder
     # sees them first — they were stored in the payload by focused_check (R5).
     robustness_notes = check.get("robustness_notes", "")
@@ -500,6 +501,7 @@ def gate_qa(ctx: Any) -> str:
             else:
                 findings.extend(validate_repo_questions(repo_questions, changed_fns, "focused_qa"))
 
+    findings.extend(correction_problems)
     if findings:
         # Separate repo-questions from other findings.
         rq_findings = [f for f in findings if f.startswith("[repo-questions]")]
@@ -532,9 +534,11 @@ def gate_qa(ctx: Any) -> str:
                 if not f.startswith("requested runtime check failed")
                 and not f.startswith("[repo-questions]")
                 and f != robustness_notes
+                and f not in correction_problems
             ]
         else:
-            refactory_findings = [f for f in non_rq_findings if f != robustness_notes]
+            refactory_findings = [f for f in non_rq_findings
+                                  if f != robustness_notes and f not in correction_problems]
         if refactory_findings:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
