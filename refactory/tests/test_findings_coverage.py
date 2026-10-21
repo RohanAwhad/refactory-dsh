@@ -1,0 +1,503 @@
+"""Tests for finding coverage: research and perspective findings must be
+addressed or set aside in the design.
+
+Each test fails without the corresponding production change.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from refactory_dsh import nn
+from refactory_dsh.nn import Verdict
+from test_pitfalls import _contract
+from tests_support import (
+    DESIGN_DOC_ANSWER,
+    DESIGN_REVIEW_ANSWER,
+    FakeModel,
+    PITFALLS_ANSWER,
+    RESEARCH_ANSWER,
+    REVIEW_ANSWERS,
+    VERIFICATION_ANSWER,
+    render,
+    strategy_answer,
+)
+
+
+# ── gate integration tests (1–4) ──────────────────────────────────────────
+
+def test_gate_reloops_when_research_finding_missing(tmp_path):
+    """1: A finding in a research file, missing from the design, fails the gate."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({
+        'source': str(tmp_path),
+        'design_review_attempts_used': 0,
+        'has_pitfalls_step': False,
+    })
+    ctx._declared_reads = ('reviews/design-review.md', 'design.md', 'brief.json',
+                            'research/')
+    (tmp_path / 'reviews').mkdir(parents=True, exist_ok=True)
+    ctx.write_text('reviews/design-review.md',
+                   'All confirmed.\n\nVERDICT: PASS\n')
+    (tmp_path / 'research').mkdir(exist_ok=True)
+    (tmp_path / 'research' / 'foo.md').write_text(
+        '### FND-foo-1 \u2014 lowering op-name strings\n\n# Foo\n\nDetails.\n')
+    ctx.write_text('design.md', _contract(
+        body='## Research and perspective findings\n\n(empty)'))
+    ctx.write_json('brief.json', {'name': 'x', 'brief': 'do a thing'})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == 'reloop'
+    assert 'FND-foo-1' in verdict.reason
+    assert 'lowering op-name strings' in verdict.reason
+    assert 'research/foo.md' in verdict.reason
+
+
+def test_gate_reloops_when_perspective_finding_missing(tmp_path):
+    """2: A finding in a perspective file, missing from the design, fails."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({
+        'source': str(tmp_path),
+        'design_review_attempts_used': 0,
+        'has_pitfalls_step': False,
+    })
+    ctx._declared_reads = ('reviews/design-review.md', 'design.md', 'brief.json',
+                            'strategy/')
+    (tmp_path / 'reviews').mkdir(parents=True, exist_ok=True)
+    ctx.write_text('reviews/design-review.md',
+                   'All confirmed.\n\nVERDICT: PASS\n')
+    (tmp_path / 'strategy').mkdir(exist_ok=True)
+    (tmp_path / 'strategy' / 'bar.md').write_text(
+        '### FND-bar-1 \u2014 refactory_packages must be walked\n\n'
+        '# Bar\n\nDetails.\n')
+    ctx.write_text('design.md', _contract(
+        body='## Research and perspective findings\n\n(empty)'))
+    ctx.write_json('brief.json', {'name': 'x', 'brief': 'do a thing'})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == 'reloop'
+    assert 'FND-bar-1' in verdict.reason
+    assert 'refactory_packages must be walked' in verdict.reason
+    assert 'strategy/bar.md' in verdict.reason
+
+
+def test_gate_passes_when_finding_set_aside(tmp_path):
+    """3: A finding set aside with a reason passes."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({
+        'source': str(tmp_path),
+        'design_review_attempts_used': 0,
+        'has_pitfalls_step': False,
+    })
+    ctx._declared_reads = ('reviews/design-review.md', 'design.md', 'brief.json',
+                            'research/')
+    (tmp_path / 'reviews').mkdir(parents=True, exist_ok=True)
+    ctx.write_text('reviews/design-review.md',
+                   'All confirmed.\n\nVERDICT: PASS\n')
+    (tmp_path / 'research').mkdir(exist_ok=True)
+    (tmp_path / 'research' / 'foo.md').write_text(
+        '### FND-foo-1 \u2014 some finding\n\n# Foo\n\nDetails.\n')
+    ctx.write_text('design.md', _contract(
+        body='## Research and perspective findings\n\n'
+             '- FND-foo-1: [set-aside: not relevant to this change]'))
+    ctx.write_json('brief.json', {'name': 'x', 'brief': 'do a thing'})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == 'proceed'
+    assert 'set aside' in ctx.facts.get('finding_coverage', '')
+
+
+def test_dropped_finding_still_reaches_coverage(tmp_path):
+    """4: A finding dropped by the summary still blocks the design."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({
+        'source': str(tmp_path),
+        'design_review_attempts_used': 0,
+        'has_pitfalls_step': False,
+    })
+    ctx._declared_reads = ('reviews/design-review.md', 'design.md', 'brief.json',
+                            'research/')
+    (tmp_path / 'reviews').mkdir(parents=True, exist_ok=True)
+    ctx.write_text('reviews/design-review.md',
+                   'All confirmed.\n\nVERDICT: PASS\n')
+    (tmp_path / 'research').mkdir(exist_ok=True)
+    (tmp_path / 'research' / 'foo.md').write_text(
+        '### FND-foo-1 \u2014 finding A\n\n# Foo\n\nDetails.\n')
+    (tmp_path / 'research' / 'bar.md').write_text(
+        '### FND-bar-1 \u2014 finding B\n\n# Bar\n\nDetails.\n')
+    # The design addresses foo but not bar (summary dropped bar)
+    ctx.write_text('design.md', _contract(
+        body='## Research and perspective findings\n\n'
+             '- FND-foo-1: addressed at `file.py:1`'))
+    ctx.write_json('brief.json', {'name': 'x', 'brief': 'do a thing'})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == 'reloop'
+    assert 'FND-bar-1' in verdict.reason
+
+
+# ── unit tests: finding_coverage (5–10) ────────────────────────────────────
+
+def test_bare_id_without_site_is_not_addressed():
+    """5: A bare id with no site or heading is missing."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n- FND-foo-1\n')
+    findings = [{'id': 'FND-foo-1', 'source_file': 'research/foo.md',
+                 'text': 'a finding'}]
+    _, _, missing = finding_coverage(design, findings)
+    assert 'FND-foo-1' in missing
+
+
+def test_id_at_site_is_addressed():
+    """6: An id with a valid site reference is addressed."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n'
+             '- FND-foo-1: addressed at `file.py:1`\n')
+    findings = [{'id': 'FND-foo-1', 'source_file': 'research/foo.md',
+                 'text': 'a finding'}]
+    addressed, _, _ = finding_coverage(design, findings)
+    assert 'FND-foo-1' in addressed
+
+
+def test_id_at_heading_is_addressed():
+    """7: An id with a § heading reference is addressed."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n'
+             '- FND-foo-1: § Changes\n')
+    findings = [{'id': 'FND-foo-1', 'source_file': 'research/foo.md',
+                 'text': 'a finding'}]
+    addressed, _, _ = finding_coverage(design, findings)
+    assert 'FND-foo-1' in addressed
+
+
+def test_finding_coverage_set_aside():
+    """8: A set-aside marker is recognised."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n'
+             '- FND-foo-1: [set-aside: reason]\n')
+    findings = [{'id': 'FND-foo-1', 'source_file': 'research/foo.md',
+                 'text': 'a finding'}]
+    _, set_aside, _ = finding_coverage(design, findings)
+    assert 'FND-foo-1' in set_aside
+
+
+def test_finding_coverage_missing():
+    """9: A finding not in the section is missing."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n(nothing here)\n')
+    findings = [{'id': 'FND-foo-1', 'source_file': 'research/foo.md',
+                 'text': 'a finding'}]
+    _, _, missing = finding_coverage(design, findings)
+    assert 'FND-foo-1' in missing
+
+
+def test_full_id_equality_matching():
+    """10: FND-foo-10 does not satisfy FND-foo-1."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n'
+             '- FND-foo-10: addressed at `file.py:1`\n')
+    findings = [
+        {'id': 'FND-foo-1', 'source_file': 'research/foo.md', 'text': 'first'},
+        {'id': 'FND-foo-10', 'source_file': 'research/foo.md', 'text': 'tenth'},
+    ]
+    addressed, _, missing = finding_coverage(design, findings)
+    assert 'FND-foo-1' in missing
+    assert 'FND-foo-10' in addressed
+
+
+# ── unit tests: collect_findings and definitions (11–17) ───────────────────
+
+def test_collect_findings_dashed_slugs(tmp_path):
+    """11: Slugs with dashes (api-surface, adversarial-gaps, step-2) parse."""
+    from refactory_dsh.findings_coverage import collect_findings
+    (tmp_path / 'research').mkdir()
+    (tmp_path / 'research' / 'api-surface.md').write_text(
+        '### FND-api-surface-1 \u2014 first finding\n')
+    (tmp_path / 'strategy').mkdir()
+    (tmp_path / 'strategy' / 'adversarial-gaps.md').write_text(
+        '### FND-adversarial-gaps-1 \u2014 a gap\n')
+    (tmp_path / 'research' / 'step-2.md').write_text(
+        '### FND-step-2-3 \u2014 third finding of step-2\n')
+    findings, blocking = collect_findings(tmp_path, ['research/', 'strategy/'])
+    ids = {f['id']: f for f in findings}
+    assert 'FND-api-surface-1' in ids
+    assert ids['FND-api-surface-1']['slug'] == 'api-surface'
+    assert 'FND-adversarial-gaps-1' in ids
+    assert ids['FND-adversarial-gaps-1']['slug'] == 'adversarial-gaps'
+    assert 'FND-step-2-3' in ids
+    assert ids['FND-step-2-3']['slug'] == 'step-2'
+    assert not blocking
+
+
+def test_gate_research_rejects_files_with_no_ids(tmp_path):
+    """12: gate_research reloops when a research file has no FND ids."""
+    from refactory_dsh import create_ops
+    workdir = tmp_path / 'run'
+    workdir.mkdir()
+    entries = [{'focus': 'question', 'slug': 'foo', 'finding': 'an answer'}]
+    (workdir / 'research-plan.json').write_text(json.dumps(entries))
+    (workdir / 'research').mkdir()
+    (workdir / 'research' / 'foo.md').write_text(
+        '# Question\n\nAn answer with no ids.\n')
+    facts: dict[str, Any] = {
+        'research_scope': 'scoped', 'research_attempts_used': 0}
+    ctx = type('Ctx', (), {
+        'workdir': workdir,
+        'knob': lambda self, name, default='': (
+            {'research_attempts': 3}.get(name, default)),
+        'read_text': lambda self, name: (workdir / name).read_text()
+            if (workdir / name).exists() else '',
+        'exists': lambda self, name: (workdir / name).exists(),
+        'write_text': lambda self, name, text: (workdir / name).write_text(text),
+        'set_fact': lambda self, name, value: facts.update({name: value}),
+        'facts': facts,
+    })()
+    verdict = create_ops.gate_research(ctx)
+    assert isinstance(verdict, Verdict)
+    assert 'no FND' in verdict.reason or 'finding ids' in verdict.reason
+
+
+def test_file_with_no_ids_becomes_path_finding(tmp_path):
+    """13: A strategy file with no ids becomes a finding whose id is its path."""
+    from refactory_dsh.findings_coverage import collect_findings
+    (tmp_path / 'strategy').mkdir()
+    (tmp_path / 'strategy' / 'bar.md').write_text(
+        '# A strategy file\n\nNo ids here.\n')
+    findings, blocking = collect_findings(tmp_path, ['strategy/'])
+    assert len(findings) == 1
+    assert findings[0]['id'] == 'strategy/bar.md'
+
+
+def test_slug_mismatch_is_blocking(tmp_path):
+    """14: An id whose slug does not match its file is blocking."""
+    from refactory_dsh.findings_coverage import collect_findings
+    (tmp_path / 'research').mkdir()
+    (tmp_path / 'research' / 'foo.md').write_text(
+        '### FND-bar-1 \u2014 something\n')
+    findings, blocking = collect_findings(tmp_path, ['research/'])
+    assert any('slug' in p and 'bar' in p for p in blocking)
+
+
+def test_duplicate_id_is_blocking(tmp_path):
+    """15: Duplicate ids are blocking."""
+    from refactory_dsh.findings_coverage import collect_findings
+    (tmp_path / 'research').mkdir()
+    (tmp_path / 'research' / 'foo.md').write_text(
+        '### FND-foo-1 \u2014 first\n### FND-foo-1 \u2014 second\n')
+    findings, blocking = collect_findings(tmp_path, ['research/'])
+    assert any('duplicate' in p.lower() and 'FND-foo-1' in p for p in blocking)
+
+
+def test_definition_vs_reference(tmp_path):
+    """16: A mid-line reference is not a definition (no slug check)."""
+    from refactory_dsh.findings_coverage import collect_findings
+    (tmp_path / 'strategy').mkdir()
+    (tmp_path / 'strategy' / 'adversarial-gaps.md').write_text(
+        '### FND-adversarial-gaps-1 \u2014 a gap\n\n'
+        'see FND-api-surface-1 from the research\n')
+    findings, blocking = collect_findings(tmp_path, ['strategy/'])
+    ids = {f['id'] for f in findings}
+    assert 'FND-adversarial-gaps-1' in ids
+    # No slug mismatch for the mid-line reference
+    assert not any('api-surface' in p and 'slug' in p for p in blocking)
+
+
+def test_definitions_with_markdown_decoration():
+    """17: A bulleted bold definition is parsed."""
+    from refactory_dsh.findings_coverage import definitions
+    defs = definitions('- **FND-api-1** \u2014 bulleted finding\n')
+    assert len(defs) == 1
+    assert defs[0][0] == 'FND-api-1'
+
+
+# ── scripted run tests (18–20) ────────────────────────────────────────────
+
+def test_scripted_design_run_dropped_finding(tmp_path):
+    """18: A finding dropped by the summary still reaches the coverage check
+    and causes a reloop; the second design_doc prompt names it."""
+    from refactory_dsh.design import DesignMode
+
+    second_design_doc = (
+        "# Do the thing\n\n"
+        "## Summary\n\nFix it properly.\n\n"
+        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "a tool" | \u00a7 Changes | test_tool.py |\n\n'
+        "## Rule and sites\n\n"
+        "- `tool.py:1` \u2014 **[changed]**\n\n"
+        "## Docs\n\n"
+        "- docs/models.md\n\n"
+        "## Changes\n\n"
+        "- tool.py\n\n"
+        "## Research and perspective findings\n\n"
+        "- FND-api-surface-1: addressed at `tool.py:1`\n"
+        "- FND-existing-modes-1: addressed at \u00a7 Changes\n"
+        "- FND-acceptance-1: addressed at `tool.py:1`\n"
+        "- FND-simplest-1: addressed at `tool.py:1`\n"
+        "- FND-criteria-1: addressed at \u00a7 Changes\n"
+        "- FND-extra-1: addressed at `tool.py:1`\n\n"
+        "## Anti-patterns to avoid\n\n"
+        "- PIT-001: addressed at `tool.py:1`\n"
+    )
+
+    answers = [
+        RESEARCH_ANSWER,
+        PITFALLS_ANSWER,
+        "perspectives",
+        "one plan",
+        DESIGN_DOC_ANSWER,      # first attempt — missing FND-extra-1
+        DESIGN_REVIEW_ANSWER,
+        second_design_doc,       # second attempt — addresses FND-extra-1
+        DESIGN_REVIEW_ANSWER,
+        render({"tool.py": "print('built')\n"}),
+        VERIFICATION_ANSWER,
+        *REVIEW_ANSWERS,
+    ]
+    model = FakeModel(answers)
+    model._write_extra_research = True
+
+    result = DesignMode().run(
+        tmp_path / "run",
+        model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "my_tool", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+
+    # The second design_doc prompt must name the missing finding
+    design_doc_prompts = [
+        p for p in model.prompts if 'What the design review found' in p
+    ]
+    assert len(design_doc_prompts) >= 2
+    second_prompt = design_doc_prompts[1]
+    assert 'FND-extra-1' in second_prompt
+    assert 'extra finding text' in second_prompt
+    assert 'research/extra.md' in second_prompt
+
+
+def test_scripted_create_run_finding_coverage(tmp_path):
+    """19: A create run whose strategy drops a finding raises CreateError,
+    and strategy-review.txt names the missing finding."""
+    from refactory_dsh.create import CreateConfig, CreateError, create
+
+    def bad_strategy(name: str) -> str:
+        ops = f"refactory_packages.{name}.ops"
+        return json.dumps({
+            "considered": [
+                {"approach": "count up", "why_not": ""},
+                {"approach": "compute", "why_not": "too complex"},
+            ],
+            "chosen": "count up",
+            "why": "simplest",
+            "will_not": ["threads"],
+            "closest_existing": "circle_packing/adaptive",
+            "knobs": [{"name": "target", "kind": "int", "default": 3,
+                        "lo": 1, "hi": 9, "description": "where to stop"}],
+            "nodes": [
+                {"id": "start", "kind": "op", "call": f"{ops}:start",
+                 "writes": ["state.json"], "produces": ["value"],
+                 "knobs": ["target"]},
+                {"id": "step", "kind": "op", "call": f"{ops}:step",
+                 "reads": ["state.json"], "writes": ["state.json"],
+                 "produces": ["value"]},
+                {"id": "check", "kind": "gate", "evaluator": f"{ops}:check",
+                 "reads": ["state.json"], "produces": ["done"],
+                 "max_iterations": 20},
+                {"id": "finish", "kind": "op", "call": f"{ops}:finish",
+                 "reads": ["state.json"], "writes": ["best.json"],
+                 "produces": ["best"]},
+            ],
+            "edges": [
+                {"source": "start", "target": "step"},
+                {"source": "step", "target": "check"},
+                {"source": "check", "target": "step", "condition": "retry"},
+                {"source": "check", "target": "finish", "condition": "proceed"},
+            ],
+            "start": "start",
+            "score": "best",
+            "findings": {
+                # Deliberately drop FND-api-surface-1
+                "FND-existing-modes-1": "step node handles existing modes",
+                "FND-acceptance-1": "check node handles acceptance",
+                "FND-simplest-1": "step node handles simplest",
+                "FND-criteria-1": "check node handles criteria",
+            },
+        })
+
+    name = "test_pkg"
+    answers = [
+        RESEARCH_ANSWER,
+        "perspectives",
+        bad_strategy(name),   # first attempt — drops FND-api-surface-1
+        bad_strategy(name),   # second attempt — still drops it
+    ]
+    model = FakeModel(answers)
+
+    with pytest.raises(CreateError):
+        create(
+            CreateConfig(
+                name=name,
+                brief="count to a target and score how close",
+                single_shot=True,
+                workdir=tmp_path / "create",
+            ),
+            client=model,
+        )
+
+    review_path = tmp_path / "create" / "strategy-review.txt"
+    assert review_path.exists()
+    review_text = review_path.read_text()
+    assert 'FND-api-surface-1' in review_text
+
+
+def test_dsh_run_node_reports_missing_finding(tmp_path):
+    """20: gate_design_review reports a missing finding on DSH."""
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh import lowering
+
+    state = DesignMode().state_dict()
+    d = tmp_path / 'run'
+    d.mkdir()
+    lowering.write_declarations(state, d)
+
+    (d / 'research').mkdir()
+    (d / 'research' / 'foo.md').write_text(
+        '### FND-foo-1 \u2014 important finding\n\n# Foo\n\nDetails.\n')
+
+    (d / 'reviews').mkdir()
+    (d / 'reviews' / 'design-review.md').write_text(
+        'All confirmed.\n\nVERDICT: PASS\n')
+
+    (d / 'design.md').write_text(_contract(
+        body='## Research and perspective findings\n\n(nothing)\n'))
+    (d / 'brief.json').write_text(json.dumps(
+        {'name': 'x', 'brief': 'do a thing'}))
+
+    (d / '.refactory').mkdir(exist_ok=True)
+    facts_data = {
+        'source': str(tmp_path),
+        'design_review_attempts_used': 0,
+    }
+    (d / '.refactory' / 'facts.json').write_text(json.dumps(facts_data))
+
+    from refactory_dsh.run import run_node
+    result = run_node(
+        'refactory_dsh.design_ops:gate_design_review',
+        workdir=d,
+        node_id='gate_design_review',
+    )
+
+    assert isinstance(result, Verdict)
+    assert 'FND-foo-1' in result.reason
+    assert 'important finding' in result.reason

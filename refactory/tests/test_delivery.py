@@ -2325,6 +2325,14 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
         "- tool.py\n"
     )
     tricky_design += (
+        "\n## Research and perspective findings\n\n"
+        "- FND-api-surface-1: addressed at `tool.py:1`\n"
+        "- FND-existing-modes-1: addressed at § Changes\n"
+        "- FND-acceptance-1: addressed at `tool.py:1`\n"
+        "- FND-simplest-1: addressed at `tool.py:1`\n"
+        "- FND-criteria-1: addressed at § Changes\n"
+    )
+    tricky_design += (
         "\n## Anti-patterns to avoid\n\n"
         "- PIT-001: addressed at `tool.py:1`\n"
     )

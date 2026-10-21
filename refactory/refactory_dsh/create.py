@@ -228,15 +228,18 @@ class CreateMode(Mode):
                 "including one that argues for the simplest thing that satisfies the "
                 "brief, and one that says what the acceptance criteria must be. Spawn "
                 "one subagent per perspective and have each write `strategy/<slug>.md` "
-                "under the run directory. Then write `strategy-plan.json` as an array of "
-                "`{\"perspective\", \"slug\", \"intent_items\"}` objects, where "
-                "`intent_items` lists the asks from the brief that perspective covers. "
-                "Every ask must be covered by at least one perspective; name the "
-                "uncovered ones rather than leaving them out.\n\n"
+                "under the run directory, with each finding as a heading "
+                "`### FND-<slug>-<n> \u2014 <the finding>`, numbered from 1 within the "
+                "file. Then write `strategy-plan.json` as an array of "
+                "`{\"perspective\", \"slug\", \"intent_items\", \"ids\"}` objects, "
+                "where `intent_items` lists the asks from the brief that perspective "
+                "covers and `ids` lists the `FND-<slug>-<n>` ids from that "
+                "perspective's file. Every ask must be covered by at least one "
+                "perspective; name the uncovered ones rather than leaving them out.\n\n"
                 "## Reference package\n{{reference}}\n"
             ),
             reads=("brief.json", "survey.json", "research-plan.json"),
-            writes=("strategy-plan.json",),
+            writes=("strategy-plan.json", "strategy/"),
             produces=("strategy_plan",),
             notes="choose the strategy perspectives and their intent coverage",
         ))
@@ -256,19 +259,26 @@ class CreateMode(Mode):
                 "unresolved. Then decide "
                 "the approach: consider at least two, say why the one you chose wins, "
                 "say what it will not do, name the existing mode it is closest to, and "
-                "describe the graph you intend to write.\n\n" + STRATEGY_SCHEMA
+                "describe the graph you intend to write.\n\n"
+                "The research detail files (`research/*.md`) and strategy detail "
+                "files (`strategy/*.md`) are available as reads. Each carries finding "
+                "ids (`FND-<slug>-<n>`). Include a `findings` field in the strategy "
+                "mapping every finding id to the node or knob that handles it, or "
+                "`[set-aside: reason]`.\n\n" + STRATEGY_SCHEMA
             ),
             reads=("brief.json", "survey.json", "research-plan.json",
-                   "strategy-plan.json", "strategy-review.txt"),
+                   "strategy-plan.json", "strategy-review.txt",
+                   "research/", "strategy/"),
             writes=("strategy.json",),
             produces=("strategy",),
             notes="compile the perspectives into one intent-faithful strategy",
         ))
         graph.add(Node(
             "review", "gate", evaluator=f"{OPS}:review_design",
-            reads=("strategy.json",),
+            reads=("strategy.json", "research/", "strategy/"),
             writes=("strategy-review.txt",),
-            produces=("design_review", "design_attempts_used"),
+            produces=("design_review", "design_attempts_used",
+                      "finding_coverage"),
             knobs=("design_attempts",),
             max_iterations=8,
             notes="check the intended graph before any code exists",

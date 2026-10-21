@@ -91,6 +91,7 @@ class RunContext:
         self.iteration = 0
         self.node_id = ""
         self._declared: tuple[str, ...] = ()
+        self._declared_reads: tuple[str, ...] = ()
         self._declared_facts: tuple[str, ...] = ()
         self._produced: set[str] = set()
         self.writes_made: list[str] = []
@@ -165,6 +166,11 @@ class RunContext:
     def _internal_fact(self, name: str, value: Any) -> None:
         """A fact the run itself records, not one a node claims to produce."""
         self.facts[name] = value
+
+    @property
+    def declared_reads(self) -> tuple[str, ...]:
+        """The current node's declared reads, for gate discovery."""
+        return self._declared_reads
 
     def _check_produces(self) -> None:
         if not self.enforce_writes:
@@ -478,6 +484,7 @@ class Executor:
                     # before it.
                     self.ctx.node_id = node.id
                     self.ctx._declared = node.writes  # noqa: SLF001
+                    self.ctx._declared_reads = node.reads  # noqa: SLF001
                     self.ctx._declared_facts = node.produces  # noqa: SLF001
                     self.ctx._produced = set()  # noqa: SLF001
                     self.ctx.write_json(CURRENT_ITEM, item)
@@ -506,6 +513,7 @@ class Executor:
             self.ctx.iteration = len(self.steps)
             self.ctx.node_id = current
             self.ctx._declared = node.writes  # noqa: SLF001 - the run owns the context
+            self.ctx._declared_reads = node.reads  # noqa: SLF001
             self.ctx._declared_facts = node.produces  # noqa: SLF001
             self.ctx._produced = set()  # noqa: SLF001
             step_started = time.time()
@@ -593,6 +601,7 @@ class Executor:
             self.ctx.iteration = len(self.steps)
             self.ctx.node_id = current
             self.ctx._declared = node.writes  # noqa: SLF001 - the run owns the context
+            self.ctx._declared_reads = node.reads  # noqa: SLF001
             self.ctx._declared_facts = node.produces  # noqa: SLF001
             self.ctx._produced = set()  # noqa: SLF001
             started = time.time()

@@ -193,6 +193,7 @@ def run_node(
     )
     ctx.node_id = node_id
     ctx._declared = tuple(declared["writes"])  # noqa: SLF001 - the runner owns the context
+    ctx._declared_reads = tuple(declared["reads"])  # noqa: SLF001
     ctx._declared_facts = tuple(declared["produces"])  # noqa: SLF001
     try:
         produced = resolve(target)(ctx)

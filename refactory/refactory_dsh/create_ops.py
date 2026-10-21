@@ -320,7 +320,7 @@ def prepare(ctx: Any) -> dict[str, Any]:
     }
 
 
-def _plan(text: str) -> list[dict[str, str]]:
+def _plan(text: str) -> list[dict[str, Any]]:
     """The plan's entries, or an empty list when the answer is not a plan.
 
     Tolerant about the fences and prose around the array — a model that writes
@@ -337,13 +337,13 @@ def _plan(text: str) -> list[dict[str, str]]:
         return []
     if not isinstance(payload, list):
         return []
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, Any]] = []
     for item in payload:
         if not isinstance(item, dict):
             continue
         entries.append({
             key: str(item.get(key) or "").strip() for key in ("focus", "slug", "finding")
-        })
+        } | {"ids": item.get("ids") or []})
     return entries
 
 
@@ -370,7 +370,8 @@ def record_findings(ctx: Any) -> dict[str, Any]:
         path = f"research/{slug}.md"
         if ctx.exists(path) and ctx.read_text(path).strip():
             continue
-        ctx.write_text(path, f"# {entry['focus']}\n\n{entry['finding']}\n")
+        fnd_id = f"FND-{slug}-1"
+        ctx.write_text(path, f"### {fnd_id} \u2014 {entry['finding']}\n\n# {entry['focus']}\n\n{entry['finding']}\n")
         recorded.append(path)
     return {"findings_recorded": recorded}
 
@@ -426,6 +427,28 @@ def gate_research(ctx: Any) -> str:
                 ctx.exists(path) and ctx.read_text(path).strip()
             ):
                 problems.append(f"{label}: {path} is missing or empty")
+            elif slug and RESEARCH_SLUG.fullmatch(slug) and ctx.exists(path):
+                content = ctx.read_text(path)
+                from refactory_dsh.findings_coverage import definitions
+                defs = definitions(content)
+                if content.strip() and not defs:
+                    problems.append(
+                        f"{label}: {path} has no FND-<slug>-<n> finding ids"
+                    )
+                else:
+                    for fid, fslug, _fn, _line_text in defs:
+                        if fslug != slug:
+                            problems.append(
+                                f"{label}: {path} has id {fid} with slug "
+                                f"'{fslug}' but the file's slug is '{slug}'"
+                            )
+                    seen_fids: set[str] = set()
+                    for fid, _fslug, _fn, _line_text in defs:
+                        if fid in seen_fids:
+                            problems.append(
+                                f"{label}: {path} has duplicate id {fid}"
+                            )
+                        seen_fids.add(fid)
     used = int(ctx.facts.get("research_attempts_used", 0)) + 1
     report = "\n".join(f"- {problem}" for problem in problems)
     ctx.write_text("research-review.txt", report or "ok\n")
@@ -495,7 +518,8 @@ Write one JSON object and nothing else:
             "notes": "..."}],
  "edges": [{"source": "...", "target": "...", "condition": null}],
  "start": "<node id>",
- "score": "<which produced fact score() reads, and why that is the right number>"}
+ "score": "<which produced fact score() reads, and why that is the right number>",
+ "findings": {"FND-<slug>-<n>": "<node or knob that handles it, or [set-aside: reason]>"}}
 
 Rules:
 - At least two approaches in `considered`. One approach is not a choice.
@@ -539,7 +563,8 @@ Write one JSON array and nothing else, one object per direction:
 
 [{"focus": "<the question this direction answers>",
   "slug": "<a file-name-safe name for it>",
-  "finding": "<what the answer is, in one paragraph>"}]
+  "finding": "<what the answer is, in one paragraph>",
+  "ids": ["FND-<slug>-1", "FND-<slug>-2"]}]
 
 Rules:
 - Between three and five directions for a full design, or one to three for a scoped change. The research scope is a fact set by the prepare step.
@@ -547,6 +572,8 @@ Rules:
   where that direction's long form belongs.
 - `finding` states what the answer *is*. A direction nobody could answer says so in
   the finding ("not answered: <why>") rather than being dropped or invented.
+- Each finding in `research/<slug>.md` is a heading `### FND-<slug>-<n> \u2014 <the finding>`,
+  numbered from 1 within the file, and `ids` lists them.
 - A plan that says subagents are still working is not a plan: by the time you answer,
   the work is either done or it is not.
 """
@@ -623,6 +650,8 @@ def review_design(ctx: Any) -> str:
     raw = ctx.read_text("strategy.json")
     attempts_allowed = int(ctx.knob("design_attempts", 2))
     problems = _review(raw)
+    from refactory_dsh import findings_coverage
+    problems.extend(findings_coverage.gate_problems(ctx, document='strategy.json'))
     used = int(ctx.facts.get("design_attempts_used", 0)) + 1
     report = "\n".join(f"- {problem}" for problem in problems)
     ctx.write_text("strategy-review.txt", report or "ok\n")

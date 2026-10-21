@@ -205,13 +205,17 @@ class DesignMode(Mode):
                 "and five perspectives on how this artifact could be built — including "
                 "the simplest thing that could pass the check, and one that says what "
                 "the check will not catch. Spawn one subagent per perspective and have "
-                "it write `strategy/<slug>.md` under the run directory. Then write "
+                "it write `strategy/<slug>.md` under the run directory, with each "
+                "finding as a heading `### FND-<slug>-<n> \u2014 <the finding>`, numbered "
+                "from 1 within the file. Then write "
                 "`strategy-plan.json` as an array of `{\"perspective\", \"slug\", "
-                "\"intent_items\"}` objects, where `intent_items` lists the asks from "
-                "the brief that perspective covers. Every ask must be covered."
+                "\"intent_items\", \"ids\"}` objects, where `intent_items` lists the "
+                "asks from the brief that perspective covers and `ids` lists the "
+                "`FND-<slug>-<n>` ids from that perspective's file. Every ask must "
+                "be covered."
             ),
             reads=("brief.json", "research-plan.json", "pitfalls.json"),
-            writes=("strategy-plan.json",),
+            writes=("strategy-plan.json", "strategy/"),
             produces=("strategy_plan",),
             notes="choose the perspectives and record what each one covers",
         ))
@@ -234,8 +238,12 @@ class DesignMode(Mode):
                 "establish that the output means what the user requested. For exchange "
                 "formats, plan acceptance by an established consuming application or "
                 "independent format reader, not just a parser the artifact author writes."
+                "\n\nThe research detail files (`research/*.md`) and strategy detail "
+                "files (`strategy/*.md`) are available as reads. Each carries finding "
+                "ids (`FND-<slug>-<n>`). Carry every finding id forward into the plan."
             ),
-            reads=("brief.json", "research-plan.json", "strategy-plan.json", "pitfalls.json"),
+            reads=("brief.json", "research-plan.json", "strategy-plan.json", "pitfalls.json",
+                   "research/", "strategy/"),
             writes=("strategy.json",),
             produces=("strategy",),
             notes="compile the perspectives into one plan",
@@ -274,10 +282,17 @@ class DesignMode(Mode):
                 "naming the site (a backticked `path:line` from Rule and sites) or the "
                 "section (§ heading name) that handles it, or set it aside with "
                 "`[set-aside: <reason>]`. A high-risk pitfall that is missing or set "
-                "aside without a reason fails the contract.\n"
+                "aside without a reason fails the contract.\n\n"
+                "10. `## Research and perspective findings` \u2014 for each finding id "
+                "(FND-<slug>-<n>) from research/*.md and strategy/*.md, either address "
+                "it at a valid site (backticked `path:line` from Rule and sites) or "
+                "\u00a7 heading reference, or set it aside with `[set-aside: <reason>]`. "
+                "A finding id that is neither addressed nor set aside is blocking. "
+                "Read the detail files directly \u2014 a finding the summary dropped "
+                "is still required.\n"
             ),
             reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt",
-                   "pitfalls.json"),
+                   "pitfalls.json", "research/", "strategy/"),
             writes=("design.md",),
             produces=("design",),
             notes="write the design document the code is written from",
@@ -345,10 +360,11 @@ class DesignMode(Mode):
             "gate_design_review", "gate",
             evaluator=f"{OPS}:gate_design_review",
             reads=("reviews/design-review.md", "design.md", "brief.json",
-                   "pitfalls.json"),
+                   "pitfalls.json", "research/", "strategy/"),
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
-                      "design_review_findings", "pitfall_coverage"),
+                      "design_review_findings", "pitfall_coverage",
+                      "finding_coverage"),
             knobs=("design_review_attempts",),
             max_iterations=4,
             notes="proceed on PASS with no findings; reloop to design_doc otherwise; "

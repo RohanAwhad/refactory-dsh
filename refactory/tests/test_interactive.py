@@ -437,6 +437,7 @@ def _gate_ctx(tmp_path, *, research_scope, direction_count):
     research_dir.mkdir(exist_ok=True)
     for entry in entries:
         (research_dir / f"{entry['slug']}.md").write_text(
+            f"### FND-{entry['slug']}-1 \u2014 {entry['finding']}\n\n"
             f"# {entry['focus']}\n{entry['finding']}\n")
     facts = {"research_scope": research_scope, "research_attempts_used": 0}
     return SimpleNamespace(

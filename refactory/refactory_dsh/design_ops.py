@@ -324,6 +324,10 @@ def gate_design_review(ctx: Any) -> str:
         ctx.set_fact("pitfall_coverage",
                      "pitfalls check skipped: no pitfalls_researcher in this graph")
 
+    # ── mechanical check 5: finding coverage ──
+    from refactory_dsh import findings_coverage
+    problems.extend(findings_coverage.gate_problems(ctx))
+
     # ── decide: proceed, reloop, or exhaust ──
     allowed = int(ctx.knob("design_review_attempts", 2))
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
