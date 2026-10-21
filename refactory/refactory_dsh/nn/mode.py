@@ -37,6 +37,22 @@ _TOP_LEVEL = frozenset({"version", "graph", "knobs", "ports", "memory"})
 _KNOB_ENTRY = frozenset({"value", "spec"})
 
 
+def graph_identity(state: dict) -> dict:
+    """Strip the steering block from all ``prompt_template`` values for comparison.
+
+    ``progress.json`` stores the transformed graph (with steering baked in via
+    ``for_run`` at ``executor.py:796``). Ledger additions must not count as
+    "graph or instructions changed".
+    """
+    import copy as _copy
+    from refactory_dsh.steering import strip_steering
+    state = _copy.deepcopy(state)
+    for node in (state.get("nodes") or {}).values():
+        if isinstance(node, dict) and "prompt_template" in node:
+            node["prompt_template"] = strip_steering(node["prompt_template"])
+    return state
+
+
 class StateError(ValueError):
     """A state dict is not a valid state for this mode."""
 
@@ -55,6 +71,10 @@ class RunResult:
     #: How many model calls the run made, so an inserted agent node's cost is a
     #: reported number rather than something a reader has to infer from wall clock.
     model_calls: int = 0
+    #: The gate id that stopped the run, when a user gate had no verdict.
+    gate_stop: str | None = None
+    #: Whether the run was halted by a ``halt`` verdict.
+    halted: bool = False
 
 
 class _Values:
@@ -300,7 +320,7 @@ class Mode:
         from refactory_dsh.steering import for_run
 
         graph = for_run(mode.graph(), Path(workdir))
-        if record.get("graph") is not None and record["graph"] != graph.to_state():
+        if record.get("graph") is not None and graph_identity(record["graph"]) != graph_identity(graph.to_state()):
             raise ValueError("graph or instructions changed; dependent results are invalid; start a new run")
         source_manifest = Path(workdir) / "source-manifest.json"
         if source_manifest.exists():

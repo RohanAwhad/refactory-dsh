@@ -363,8 +363,9 @@ word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design
 PASS" or "Design review: FAIL, N unresolved" followed by the unresolved findings,
 carried by fact substitution to all template-rendered surfaces (terminal, GUI,
 headless refusal, `refactory status`). A **person answers `gate_strategy`** at that point, because a
-run that can approve its own plan is not reviewed at all, so a headless run refuses
-that gate unless the caller supplies the verdict. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
+run that can approve its own plan is not reviewed at all, so a walker run stops at
+the gate and records the visit; a headless DSH run stops and prints the steer and resume commands;
+the caller can supply the verdict up front via the ledger. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in
 parallel**, merge into one synthesis whose blocking findings the QA gate reads, and
 are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs between the check and the reviews, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. A **failure digest** is built from the check output per runner (pytest, vitest, node's test runner) and stored in `check-record.json`, which survives redo; the builder receives the digest rather than the raw output. A **builder probe** is available during emit: the builder can test named failing tests in a throwaway standalone clone before making its final emission. At the post-build gates, **per-correction audit** checks each gate correction item by item: for every correction in the ledger it records the site in the diff, the test that reaches that site (via mechanical hunk-level revert), and the evidence scope (via AST-based patch-target detection); see docs/hardening.md §25-27. A QA or
@@ -487,9 +488,9 @@ changed inputs expire an unused answer, and a later visit asks again even when t
 files are identical. Legacy unscoped answers remain history, not authorization.
 Explicit upfront `--approve` or `RunContext.verdicts` remains standing authorization
 from the caller. A ledger-backed upfront approval remains active when that same
-work directory is reopened; it has no separate invocation identifier. Without a
+work directory is resumed; it has no separate invocation identifier. Without a
 current scoped answer or standing authorization, a
-headless run **refuses** at the gate and names it.
+walker run **stops** at the gate; a headless DSH run stops and prints the steer and resume commands.
 
 **It is inert when unused.** An empty ledger renders the empty string and `annotate`
 returns the workflow it was given. A run nobody steered is the run it would have been,
