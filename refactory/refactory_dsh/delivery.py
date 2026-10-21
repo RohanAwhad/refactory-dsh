@@ -1663,10 +1663,19 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             return None
 
     ev_data = _read_evidence()
+    # Person-skipped check: read from the report's check_skipped field.
+    report_data = ctx.read_json("design.json", None) if ctx.exists("design.json") else None
+    check_skipped = report_data.get("check_skipped") if isinstance(report_data, dict) else None
     check_passed = (ev_data is not None
                     and isinstance(ev_data.get('validation'), dict)
                     and ev_data['validation'].get('status') == 'pass')
-    if check_passed:
+    if isinstance(check_skipped, dict) and check_skipped.get('source') == 'person':
+        check_line = (
+            f"- **Check:** `{check_cmd}` did not run "
+            f"(skipped by the person at {check_skipped.get('at', '?')} via graph-control; "
+            f"covers later attempts).\n"
+        )
+    elif check_passed:
         check_line = f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
     elif check_cmd:
         check_ran_and_failed = (ev_data is not None

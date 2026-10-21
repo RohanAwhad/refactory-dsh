@@ -110,6 +110,7 @@ The native panel's **Graph controls** offers pause/resume/stop. The console expo
 uv run refactory graph-control pause --run /absolute/run
 uv run refactory graph-control resume --run /absolute/run
 uv run refactory graph-control stop --run /absolute/run
+uv run refactory graph-control skip --run /absolute/run --node check
 ```
 
 Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of the run's current owner process (from the console launch record, or from the spine checkpoint when the launch record is absent or stale, matching how `refactory status` determines `owner_alive`). Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
@@ -400,7 +401,12 @@ A check that could not run appears as "did not run" in the PR Verification
 section and in the run report, derived from `validation.status` in
 `authoring-evidence.json`. The CEO may ask the person how to proceed (naming
 what stopped the check and what would unblock it), but it never recommends
-skipping a check gate.
+skipping a check gate. A person who wants to skip the check uses
+`refactory graph-control skip --run <dir> --node <check_node>` from the CLI.
+The GUI panel does not offer a skip button; use the CLI command. A person's
+skip records `source: 'person'` provenance in the spine checkpoint and is
+accepted by `require_completion`. A CEO's `wf_edit` skip records
+`source: 'ceo'` and is refused.
 
 ### Forward-only invalidation
 

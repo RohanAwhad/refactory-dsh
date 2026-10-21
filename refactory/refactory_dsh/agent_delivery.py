@@ -25,6 +25,7 @@ CONTRACT_END = '<!-- end refactory worker execution -->'
 _UNSET: object = object()
 _worktree_state: Any | None | object = _UNSET
 _delivery_identity: Any | None | object = _UNSET
+_skip_receipt: Any | None | object = _UNSET
 
 
 def get_worktree_state() -> Any | None:
@@ -61,6 +62,24 @@ def get_delivery_identity() -> Any | None:
         else:
             _delivery_identity = None
     return _delivery_identity
+
+
+def get_skip_receipt() -> Any | None:
+    """Return the registered skip-receipt recorder, discovering it via entry points on first call."""
+    global _skip_receipt
+    if _skip_receipt is _UNSET:
+        eps = importlib.metadata.entry_points(group='refactory.skip_receipt')
+        if len(eps) > 1:
+            raise RuntimeError(
+                f"expected at most one 'refactory.skip_receipt' entry point, "
+                f"got {len(eps)}: {[ep.name for ep in eps]}"
+            )
+        if eps:
+            ep = next(iter(eps))
+            _skip_receipt = ep.load()
+        else:
+            _skip_receipt = None
+    return _skip_receipt
 
 
 def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
@@ -489,6 +508,14 @@ def main() -> int:
             result = {'requested': nodes}
         elif request['action'] == 'reviewers':
             result = {'reviewers': list(REVIEWERS)}
+        elif request['action'] == 'record-skip':
+            recorder = get_skip_receipt()
+            if recorder is None:
+                raise RuntimeError(
+                    "no 'refactory.skip_receipt' entry point is installed, so a person's "
+                    "skip cannot be recorded; re-run `uv sync` in this checkout"
+                )
+            result = recorder(workdir, str(request.get('node', '')), request.get('provenance', {}))
         elif request['action'] == 'pending-prompt':
             node = request['node']
             pending = _pending(workdir, node)

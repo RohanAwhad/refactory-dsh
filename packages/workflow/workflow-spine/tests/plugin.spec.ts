@@ -240,7 +240,75 @@ describe('workflow-spine real composition', () => {
     expect(spineSection!.text).toContain('x_redo')
     expect(spineSection!.text).toContain('review nodes')
     expect(spineSection!.text).toContain('not a reason to skip')
-    expect(spineSection!.text).toContain('Never recommend skipping a check gate')
+    expect(spineSection!.text).toContain('Never claim, restate, or re-apply a person')
+    expect(spineSection!.text).toContain('user gate is answered only by the person')
+    expect(spineSection!.text).toContain('graph-control skip')
+    expect(spineSection!.text).toContain('x_edit skip')
+    expect(spineSection!.text).not.toContain('apply user steering')
+    expect(spineSection!.text).not.toContain('skip the tests')
+  })
+
+  it('headless CEO cannot write user-relayed (downgraded to ceo)', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(UserQuestionService)
+    ctx.on('user-questions/request', request => Promise.resolve({
+      answers: request.questions.map(question => ({ id: question.id, selected: ['proceed'] })),
+    }))
+    // Mount with personAttached: false and interactiveOpen: false (headless)
+    await ctx.plugin(workflowSpine, {
+      graph, toolPrefix: 'wf', maxIterations: 3,
+      personAttached: false, interactiveOpen: false,
+    })
+    const assembly = await ctx.systemPrompt.assemble()
+    const spineSection = assembly.sections.find(s => s.name === 'tool:wf-spine')
+    expect(spineSection).toBeDefined()
+    // The headless CEO should not see the relay sentence
+    expect(spineSection!.text).not.toContain("source to 'user-relayed'")
+  })
+
+  it('GUI CEO preset counts as attached via interactiveOpen', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(UserQuestionService)
+    ctx.on('user-questions/request', request => Promise.resolve({
+      answers: request.questions.map(question => ({ id: question.id, selected: ['proceed'] })),
+    }))
+    // Mount with interactiveOpen: true and personAttached: false (as ceo.patch.yml would)
+    await ctx.plugin(workflowSpine, {
+      graph, toolPrefix: 'wf', maxIterations: 3,
+      interactiveOpen: true, personAttached: false,
+      openCommand: '/bin/true', steerCommand: '/bin/true', steerArgs: [],
+    })
+    const assembly = await ctx.systemPrompt.assemble()
+    const spineSection = assembly.sections.find(s => s.name === 'tool:wf-spine')
+    expect(spineSection).toBeDefined()
+    // The GUI CEO should see the relay sentence because effectivePersonAttached is true
+    expect(spineSection!.text).toContain("source to 'user-relayed'")
+  })
+
+  it('skip provenance via wf_edit records source ceo', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const skipGraph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    await ctx.plugin(workflowSpine, { graph: skipGraph, toolPrefix: 'wf', maxIterations: 3 })
+    await run(ctx, 'wf_edit', { node: 'b', action: 'skip' })
+    const state = await run(ctx, 'wf_state', {}) as any
+    expect(state.skip_provenance).toBeDefined()
+    expect(state.skip_provenance.b).toBeDefined()
+    expect(state.skip_provenance.b.source).toBe('ceo')
+    expect(state.skipped).toEqual(['b'])
   })
 })
 
