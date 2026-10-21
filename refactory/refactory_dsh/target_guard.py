@@ -573,7 +573,7 @@ def restore_target(root: Path, before: dict[str, Any],
                         content = _git(root, "show", f"HEAD:{prefix}{path}")
                         if content is not None:
                             full.parent.mkdir(parents=True, exist_ok=True)
-                            full.write_text(content)
+                            full.write_bytes(content.encode("utf-8", "surrogateescape"))
                             # Restore mode from git ls-tree
                             if ls.startswith("100755"):
                                 full.chmod(0o755)
