@@ -671,7 +671,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 
 | kind | name | signature |
 |---|---|---|
-| function | `apply_emission` | `(answer: 'str', found: 'worktree.Worktree', workdir: 'Path') -> 'tuple[dict[Path, str], tuple[Path, ...], str, list[str]]'` |
+| function | `apply_emission` | `(answer: 'str', found: 'worktree.Worktree', workdir: 'Path', *, from_worktree: 'bool' = False) -> 'tuple[dict[Path, str], tuple[Path, ...], str, list[str]]'` |
 | function | `knob_names` | `() -> 'tuple[str, ...]'` |
 | function | `knobs` | `() -> 'dict[str, Knob]'` |
 | function | `locate` | `(ctx: 'Any', name: 'str', task: 'dict[str, Any]', *, in_worktree: 'bool \| None' = None, needs_worktree: 'tuple[str, ...]' = (), output_only: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
