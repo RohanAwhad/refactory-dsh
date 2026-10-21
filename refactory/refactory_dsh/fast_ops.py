@@ -581,6 +581,13 @@ def gate_verification(ctx: Any) -> str:
 
 def report_artifact(ctx: Any) -> dict[str, Any]:
     if ctx.read_json("focused-check.json", {}).get("status") != "pass":
+        from refactory_dsh.authoring_evidence import _check_skip_provenance
+        prov = _check_skip_provenance(ctx.workdir)
+        if prov is not None and prov['source'] != 'person':
+            raise ValueError(
+                f"artifact has no passing required runtime check "
+                f"(skipped by {prov['source']}; only a person's skip is accepted)"
+            )
         raise ValueError("artifact has no passing required runtime check")
     result = design_ops.report_artifact(ctx)
     report = _report(ctx, "completed", [])

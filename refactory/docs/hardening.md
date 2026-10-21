@@ -1130,6 +1130,33 @@ refuse when a new package appears (not only when an existing one changed).
 `test_reloop_register_does_not_refuse_itself`,
 `test_edit_whose_source_changed_refuses_at_register`.
 
+## 25. CEO gate verdicts and check skips (#363, dm-113, dm-115)
+
+**Gate verdicts.** A user gate is answered only by a person. The
+mechanical defense: `wf_verdict` throws when a verdict argument is
+passed for a user gate (index.ts, the holding test at
+plugin.spec.ts:116). The CEO's system prompt says it never claims,
+restates, or re-applies a person's verdict; this is defense-in-depth.
+A headless CEO (`graphStartup.chat === false`) cannot write
+`source='user-relayed'` via `wf_steer`; the runtime silently
+downgrades to `'ceo'`. A CEO note about a gate verdict is recorded
+as the CEO's observation, not an answer, and is shown to the person
+at the gate labelled as the CEO's.
+
+**Check skips.** Only a person can skip the check, through
+`refactory graph-control skip --node <check_node>`. The source
+`'person'` is hard-coded in `applyControls`, not read from the
+control file. Skip provenance is stored in the spine checkpoint's
+`state.skip_provenance` map — the single source of truth.
+`require_completion` accepts a person-sourced skip and refuses a
+CEO-sourced skip, naming the source. The CEO's `wf_edit skip`
+records `source: 'ceo'` and is refused by `planSkip` for
+conditional-only gates (the normal check shape) and by
+`require_completion` for any shape.
+
+Residual: an external-backend worker can write a graph-control file,
+the same residual as #429's confirm-completion.
+
 ---
 
 ## 24. One note is one ledger entry — heading escape (dm-132)

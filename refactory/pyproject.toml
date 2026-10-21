@@ -30,6 +30,9 @@ py-modules = []
 [project.entry-points.'refactory.environment_overlay']
 worktree = "refactory_dsh.worktree:_worktree_environment_overlay"
 
+[project.entry-points.'refactory.skip_receipt']
+skip_receipt = "refactory_dsh.authoring_evidence:record_skip"
+
 [project.entry-points.'refactory.worktree_state']
 worktree = "refactory_dsh.worktree:_worktree_state_bridge"
 

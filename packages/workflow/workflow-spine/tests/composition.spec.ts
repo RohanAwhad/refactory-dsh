@@ -695,8 +695,16 @@ describe('asking a person', () => {
 })
 
 describe('CEO instructions include the source rule (C5)', () => {
-  it('tells the CEO to set source to user-relayed when relaying the person\'s words', async () => {
+  it('headless mount omits the relay sentence', async () => {
     const { ctx } = await mount()
+    const section = (await ctx.systemPrompt.assemble()).sections.find(s => s.name === 'tool:wf-spine')
+    expect(section).toBeDefined()
+    // Default mount has personAttached: false and interactiveOpen: false
+    expect(section!.text).not.toContain("source to 'user-relayed'")
+  })
+
+  it('attached mount includes the relay sentence', async () => {
+    const { ctx } = await mount({ personAttached: true })
     const section = (await ctx.systemPrompt.assemble()).sections.find(s => s.name === 'tool:wf-spine')
     expect(section).toBeDefined()
     expect(section!.text).toContain("source to 'user-relayed'")
