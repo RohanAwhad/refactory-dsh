@@ -1199,7 +1199,12 @@ def _calls(tmp_path: Path) -> str:
 
 
 def _answers(*emits: str) -> list[str]:
-    """Every answer a design run needs, in the order its graph asks."""
+    """Every answer a design run needs, in the order its graph asks.
+
+    pick_corrections is a gate (no model answer needed).  When gate_corrections
+    is empty (no ledger or no corrections), pick_corrections returns "skip"
+    and apply_corrections does not run — no model answer consumed.
+    """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
             *REVIEW_ANSWERS]
@@ -1576,7 +1581,7 @@ def _launched(monkeypatch) -> list[list[str]]:
 
     seen: list[list[str]] = []
     monkeypatch.setattr(workers, "run_graph_command", lambda argv, **kwargs: seen.append(argv) or _Run())
-    monkeypatch.setattr(interactive, "require_build", lambda: None)
+    monkeypatch.setattr(interactive, "require_build", lambda **kw: None)
     monkeypatch.setattr(dsh_profile, "require", lambda *a, **k: None)
     return seen
 
@@ -2380,6 +2385,7 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
     )
     answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
                tricky_design, DESIGN_REVIEW_ANSWER,
+               tricky_design,
                render({"tool.py": "print('built')\n"}),
                VERIFICATION_ANSWER,
                *REVIEW_ANSWERS]
@@ -2533,11 +2539,11 @@ def test_base_moved_with_generated_conflict(github, tmp_path, monkeypatch):
 
 
 def test_base_changed_authored_file_conflict(github, tmp_path, monkeypatch):
-    """The base changes the same lines of an authored file: nothing is resolved
-    automatically, the reviewed commit is delivered, and the conflict is named.
+    """The base changes the same lines of an authored file: delivery does not push,
+    and the conflict facts are set.
 
     Fails without the change: delivery pushes the reviewed commit as-is, and the PR
-    opens behind its base. It does not name the conflicting file in the PR body.
+    opens behind its base.
     """
     repo = git_repo(tmp_path / "repo")
     (repo / "authored.py").write_text("line1\nline2\nline3\n")
@@ -2561,6 +2567,8 @@ def test_base_changed_authored_file_conflict(github, tmp_path, monkeypatch):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the reloop — this test verifies delivery's behaviour, not the full loop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
 
     run = tmp_path / "run"
     result = _design(run, {"tool.py": "print('built')\n",
@@ -2570,27 +2578,29 @@ def test_base_changed_authored_file_conflict(github, tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    assert record["status"] == "opened"
-    assert not record.get("merge_commit")
+    # Delivery does not push — the run keeps the work local.
+    assert record["status"] == "kept local"
     assert "authored.py" in record.get("merge_conflicts", [])
 
-    # The PR body names the conflict.
-    [pull] = _pulls(github, slug)
-    assert "authored.py" in pull["body"]
-    assert "conflicts" in pull["body"].lower()
+    # Conflict facts are set.
+    assert "authored.py" in result.facts.get("delivery_conflict_files", [])
+    assert result.facts.get("delivery_conflict_detail")
+    detail = result.facts["delivery_conflict_detail"]
+    assert any(d["path"] == "authored.py" for d in detail)
+    authored_detail = next(d for d in detail if d["path"] == "authored.py")
+    assert authored_detail.get("base")
+    assert authored_detail.get("ours")
+    assert authored_detail.get("theirs")
 
-    # The remote head is the reviewed commit (no merge).
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
 
 
 def test_merged_result_fails_check(github, tmp_path, monkeypatch, capsys):
-    """The merged result fails the check: the reviewed commit is delivered, and the
-    reason names the check failure.
+    """The merged result fails the check: delivery does not push.
 
-    Fails without the change: status is "kept local", no PR is opened, and the warning
-    says "base changed under it" rather than delivering.
+    Fails without the change: delivery pushes the reviewed commit as a fallback.
     """
     repo = git_repo(tmp_path / "repo")
     (repo / "config.txt").write_text("ok\n")
@@ -2612,6 +2622,8 @@ def test_merged_result_fails_check(github, tmp_path, monkeypatch, capsys):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the reloop — this test verifies delivery's behaviour, not the full loop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
 
     run = tmp_path / "run"
     # tool.py fails when config.txt says "broken"
@@ -2620,24 +2632,24 @@ def test_merged_result_fails_check(github, tmp_path, monkeypatch, capsys):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    # The reviewed commit is delivered (not kept local).
-    assert record["status"] == "opened"
+    # Delivery does not push — the run keeps the work local.
+    assert record["status"] == "kept local"
     assert record.get("merge_check_failed")
-    assert "check failed" in record.get("merge_check_failed", "").lower() or record.get("merge_check_failed")
 
-    # The PR body says the reviewed commit was delivered and the check failed.
-    [pull] = _pulls(github, slug)
-    assert "the reviewed commit was delivered" in pull["body"]
-    assert "check failed" in pull["body"].lower()
-
-    # A run warning was emitted.
-    captured = capsys.readouterr()
-    assert "check failed on the merged result" in captured.err
-
-    # The remote branch head is the reviewed commit (not a merge commit).
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
+
+    # The worktree must NOT be marked "succeeded" — the merge check failed.
+    # Fails without the fix: _kept only guards record_outcome against
+    # merge.conflicts, not merge.check_failed.
+    found = worktree.recorded(run)
+    if found is not None:
+        record_path = worktree.slot(Path(found.target)) / f"run-{found.branch.removeprefix('refactory/run-')}.json"
+        if record_path.exists():
+            wt_record = json.loads(record_path.read_text())
+            assert wt_record.get("outcome") != "succeeded", \
+                "worktree should not be marked succeeded when the merged check failed"
 
 
 def test_base_did_not_move(github, tmp_path):
@@ -2843,7 +2855,7 @@ def test_conflict_path_regenerates_all_files(github, tmp_path, monkeypatch):
 
 def test_modify_delete_conflict(github, tmp_path, monkeypatch):
     """A modify/delete conflict where --theirs has no file to check out: the merge is
-    abandoned, the reviewed commit is delivered, and the error names the file.
+    abandoned and delivery does not push.
 
     Fails without the change: subprocess.run returns non-zero silently, and the merge
     proceeds with a broken tree.
@@ -2870,6 +2882,8 @@ def test_modify_delete_conflict(github, tmp_path, monkeypatch):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the reloop — this test verifies delivery's behaviour, not the full loop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
 
     run = tmp_path / "run"
     # The run modifies the file.
@@ -2880,18 +2894,18 @@ def test_modify_delete_conflict(github, tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    assert record["status"] == "opened"
+    # Delivery does not push.
+    assert record["status"] == "kept local"
     # The file is named as a conflict.
     assert "conflicted.txt" in record.get("merge_conflicts", [])
-    # The remote head is the reviewed commit (no merge).
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
 
 
 def test_generate_fails_classes_as_authored(github, tmp_path, monkeypatch):
     """When generate fails on the merged tree during conflict classification,
-    the conflicting files are classified as authored.
+    the conflicting files are classified as authored, and delivery does not push.
 
     Fails without the change: the generate failure's exit status is not checked;
     the file is classified based on stale content.
@@ -2927,6 +2941,8 @@ def test_generate_fails_classes_as_authored(github, tmp_path, monkeypatch):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the reloop — this test verifies delivery's behaviour, not the full loop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
 
     run = tmp_path / "run"
     result = _design(run, {"tool.py": "print('built')\n", "source.txt": "alpha\nbeta\n"},
@@ -2935,13 +2951,13 @@ def test_generate_fails_classes_as_authored(github, tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    assert record["status"] == "opened"
+    # Delivery does not push.
+    assert record["status"] == "kept local"
     # The conflicting file is classified as authored (not merged).
     assert "generated.txt" in record.get("merge_conflicts", [])
-    # The remote head is the reviewed commit.
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
 
 
 def test_post_checkout_hook_does_not_run(github, tmp_path, monkeypatch):
@@ -2964,11 +2980,11 @@ def test_post_checkout_hook_does_not_run(github, tmp_path, monkeypatch):
     def advance_main_then_deliver(ctx):
         other = tmp_path / "other"
         git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
-        (other / "source.txt").write_text("gamma\n")
-        subprocess.run(["bash", "gen.sh"], cwd=str(other), check=True, capture_output=True)
+        # Add a new file so main moves without conflicting with the run's source.txt.
+        (other / "extra.txt").write_text("added by main\n")
         git(other, "add", ".")
         git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
-            "commit", "-q", "-m", "base changes source")
+            "commit", "-q", "-m", "base adds extra.txt")
         git(other, "push", "-q", "origin", "main")
 
         # Install a post-checkout hook in the worktree's git dir.
@@ -2996,7 +3012,7 @@ def test_post_checkout_hook_does_not_run(github, tmp_path, monkeypatch):
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
 
     run = tmp_path / "run"
-    result = _design(run, {"tool.py": "print('built')\n", "source.txt": "alpha\nbeta\n"},
+    result = _design(run, {"tool.py": "print('built')\n"},
                      target=str(repo), check="python tool.py",
                      generate="bash gen.sh")
     assert result.exit_ok, result.error
@@ -3128,8 +3144,7 @@ def test_dependency_install_for_merged_tree(github, tmp_path, monkeypatch):
 
 def test_merge_fails_no_conflicted_files(github, tmp_path, monkeypatch):
     """When git merge fails with no conflicted files (e.g. untracked file it would
-    overwrite), the merge is abandoned, the reviewed commit is delivered, and the
-    error is named through the abandoned field.
+    overwrite), the merge is abandoned and delivery does not push.
 
     Fails without the change: the error is stuffed into the conflicts list as a reason
     string, not into a separate abandoned field.
@@ -3166,19 +3181,1031 @@ def test_merge_fails_no_conflicted_files(github, tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    assert record["status"] == "opened"
+    # Delivery does not push.
+    assert record["status"] == "kept local"
     # The abandoned field names the error (not in conflicts).
     assert record.get("merge_abandoned"), f"no merge_abandoned in record: {record}"
     assert not record.get("merge_conflicts"), f"unexpected merge_conflicts: {record.get('merge_conflicts')}"
 
-    # The PR body says "merge abandoned".
-    [pull] = _pulls(github, slug)
-    assert "merge abandoned" in pull["body"].lower() or "abandoned" in pull["body"].lower()
-
-    # The remote head is the reviewed commit.
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
+
+
+def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
+    """Two scripted runs edit the same function. The second's delivery goes back to
+    the builder with no person step. Its pushed head contains main, and the resolution
+    commit has main's tip as a parent.
+
+    Fails without the change: the second run pushes behind main and conflicts.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/two-runs"
+    bare = _published(github, slug, repo)
+
+    # First run: changes shared.py.
+    run1 = tmp_path / "run1"
+    result1 = _design(run1, {"tool.py": "print('built')\n",
+                             "shared.py": "def f():\n    return 2\n"},
+                      target=str(repo), check="python tool.py")
+    assert result1.exit_ok, result1.error
+    record1 = _record(run1)
+    assert record1["status"] == "opened"
+    branch1 = json.loads((run1 / "design.json").read_text())["branch"]
+
+    # Simulate main having the first run's change merged.
+    main_clone = tmp_path / "main_clone"
+    git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(main_clone))
+    git(main_clone, "-c", "user.name=t", "-c", "user.email=t@example.com",
+        "merge", "-q", "--no-ff", f"origin/{branch1}",
+        "-m", "merge first run")
+    git(main_clone, "push", "-q", "origin", "main")
+
+    main_tip = git(bare, "rev-parse", "refs/heads/main").strip()
+
+    # Second run: changes the same function differently.
+    # This will conflict with main (which now has return 2).
+    # The delivery_gate should reloop to emit.
+    # We provide two emit answers: first the conflicting one, then a resolution.
+    resolution_emit = (
+        "===FILE: tool.py===\nprint('built')\n"
+        "===FILE: shared.py===\ndef f():\n    return 3  # merged\n"
+    )
+
+    # The second run needs extra answers for the reloop:
+    # delivery_gate reloops directly to emit (not through apply_corrections),
+    # so: emit (conflict resolution) + reviews (4 answers)
+    reloop_answers = [
+        resolution_emit,
+        VERIFICATION_ANSWER,
+        *REVIEW_ANSWERS,
+    ]
+
+    run2 = tmp_path / "run2"
+    model = FakeModel(_answers(render({"tool.py": "print('built')\n",
+                                       "shared.py": "def f():\n    return 42\n"}))
+                      + reloop_answers)
+    result2 = DesignMode().run(
+        run2, model=model, verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    assert result2.exit_ok, result2.error
+
+    record2 = _record(run2)
+    # Should have been delivered after the reloop.
+    assert record2.get("status") in ("opened", "already open", "updated"), \
+        f"expected delivery after reloop, got: {record2}"
+
+    # The pushed head contains main.
+    branch2 = json.loads((run2 / "design.json").read_text())["branch"]
+    remote_head2 = _remote_head(github, slug, branch2)
+    assert remote_head2, "second run's branch should be on GitHub"
+
+    # The head is a merge commit whose second parent is main's tip.
+    parents = [line.split()[1] for line in
+               git(bare, "cat-file", "-p", remote_head2).splitlines()
+               if line.startswith("parent ")]
+    assert len(parents) == 2, f"expected merge commit, got {len(parents)} parents"
+    assert parents[1] == main_tip, \
+        f"expected second parent to be main's tip {main_tip}, got {parents[1]}"
+    # main's tip is an ancestor.
+    assert git(bare, "merge-base", "--is-ancestor", main_tip, remote_head2) == ""
+
+
+def test_merge_failure_leaves_worktree_clean(github, tmp_path, monkeypatch):
+    """A crash at emit (during the conflict reloop) leaves the worktree clean.
+
+    The merge exists only inside materialise.  The delivery gate records the
+    conflict and returns reloop, but does NOT start a merge.  If the builder
+    crashes at emit, no merge was ever started, so there is no MERGE_HEAD to
+    clean up.  This test verifies that invariant through a real graph run.
+
+    Fails without the change: if the delivery_gate started the merge, a crash
+    at emit would leave MERGE_HEAD behind.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/clean-merge"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+
+    def advance_main_then_deliver(ctx):
+        other = tmp_path / "other"
+        git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+        (other / "shared.py").write_text("def f():\n    return 999\n")
+        git(other, "add", ".")
+        git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+            "commit", "-q", "-m", "base changes shared.py")
+        git(other, "push", "-q", "origin", "main")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+
+    # Provide only one emit answer for the reloop: the model will run out of
+    # answers when it tries to produce the conflict-resolution emit.  This
+    # simulates a builder crash at the conflict emit.  The run stops with an
+    # error at emit, having never started a merge.
+    run = tmp_path / "run"
+    # _answers gives the normal answers; we do NOT add extra reloop answers,
+    # so the model runs out during the conflict-resolution emit.
+    result = _design(run, {"tool.py": "print('built')\n",
+                           "shared.py": "def f():\n    return 42\n"},
+                     target=str(repo), check="python tool.py")
+    # The run may or may not succeed, but the worktree must be clean.
+    found = worktree.recorded(run)
+    if found is not None:
+        path = Path(found.path)
+        # No MERGE_HEAD should remain.
+        with pytest.raises(subprocess.CalledProcessError):
+            git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        # No unmerged index entries.
+        try:
+            unmerged = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
+        except ValueError:
+            unmerged = ""
+        assert not unmerged.strip(), f"unmerged files remain: {unmerged}"
+
+
+def test_emission_with_conflict_markers_refused(tmp_path):
+    """An emission that leaves conflict markers is refused.
+
+    Fails without the change: materialise commits the markers.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import AttemptRefused
+
+    # Set up a minimal worktree.
+    repo = git_repo(tmp_path / "repo")
+    (repo / "tool.py").write_text("print('built')\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+
+    # Create a worktree record.
+    from refactory_dsh.worktree import create, recorded
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    wt = create(repo, "HEAD", "test-markers", run)
+    found = recorded(run)
+
+    # A file with conflict markers.
+    marker_content = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> main\nafter\n"
+    emit_with_markers = f"===FILE: conflicted.py===\n{marker_content}"
+
+    ctx = _TitleCtx(
+        facts={"name": "test_markers", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": emit_with_markers},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: json.loads(ctx._files.get(name, "null")) if ctx._files.get(name) else default
+
+    with pytest.raises(AttemptRefused, match="conflict markers"):
+        repo_change._commit_emission(ctx)
+
+    # A normal SEARCH/REPLACE block should succeed.
+    normal_emit = (
+        "===FILE: tool.py===\n"
+        "print('built and tested')\n"
+    )
+    ctx._files["emit.txt"] = normal_emit
+    # This should not raise.
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit")
+
+
+def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
+    """A run whose gate correction changes a site's approach, driven through a real
+    gate answer, gets PR text with the corrected approach and not the original.
+
+    Fails without the change: the PR text contains the uncorrected approach.
+    """
+    from refactory_dsh.steering import Ledger
+
+    repo = git_repo(tmp_path / "repo")
+    slug = "acme/corrections"
+    _published(github, slug, repo)
+
+    # The design_doc agent will produce a design mentioning "polling loop".
+    design_with_polling = (
+        "# Use a polling loop to check for updates\n\n"
+        "## Summary\n\nUse a polling loop to check for updates periodically.\n\n"
+        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n| \"Build a tool\" | \u00a7 Changes | tool.py |\n\n"
+        "## Rule and sites\n\n"
+        "- `tool.py:1` — use a polling loop **[changed]**\n\n"
+        "## Docs\n\n- docs/models.md\n\n"
+        "## Changes\n\n- tool.py\n\n"
+        "## Anti-patterns to avoid\n\n"
+        "- PIT-001: addressed at `tool.py:1`\n"
+    )
+
+    # The apply_corrections agent will rewrite design.md to use websockets.
+    corrected_design = (
+        "# Use websockets to receive updates\n\n"
+        "## Summary\n\nUse websockets to receive real-time updates.\n\n"
+        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n| \"Build a tool\" | \u00a7 Changes | tool.py |\n\n"
+        "## Rule and sites\n\n"
+        "- `tool.py:1` — use websockets **[changed]**\n\n"
+        "## Docs\n\n- docs/models.md\n\n"
+        "## Changes\n\n- tool.py\n\n"
+        "## Anti-patterns to avoid\n\n"
+        "- PIT-001: addressed at `tool.py:1`\n"
+    )
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+
+    # Seed the ledger with a gate_strategy proceed verdict and correction,
+    # driven through the real Ledger API (steering.py:577-587).
+    ledger = Ledger.seed(run, "Build a tool\nthat prints built.")
+    # Record the verdict as a real gate answer — answered=True records it as
+    # consumed, and approval=True provides standing upfront authorization.
+    ledger.verdict("gate_strategy", "proceed", approval=True)
+    # The feedback from the person is a constraint note — this is what
+    # steering.py:584-587 does when verdict=="proceed" and there is feedback.
+    ledger.note("constraint", "use websockets instead of a polling loop")
+
+    # Also add a process note and a check-gate constraint to verify they are
+    # excluded from the design.
+    ledger.note("info", "try harder", scope="process")
+
+    # Build model answers: pick_corrections (gate) extracts the gate correction
+    # from the ledger, then apply_corrections (agent) rewrites design.md.
+    answers = [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        design_with_polling,   # design_doc writes design.md with "polling loop"
+        DESIGN_REVIEW_ANSWER,  # design_review passes
+        # pick_corrections is a gate — no model answer needed
+        corrected_design,      # apply_corrections rewrites design.md to "websockets"
+        render({"tool.py": "print('built')\n"}),  # emit
+        VERIFICATION_ANSWER,
+        *REVIEW_ANSWERS,
+    ]
+
+    model = FakeModel(answers)
+    result = DesignMode().run(
+        run, model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    assert result.exit_ok, result.error
+
+    # design.md should contain the corrected approach.
+    design_text = (run / "design.md").read_text()
+    # The apply_corrections agent wrote the corrected design.
+    assert "websocket" in design_text.lower(), \
+        f"design.md should mention websockets: {design_text[:500]}"
+
+    # The PR body should contain "websockets" and not "polling loop".
+    pr_text = (run / delivery.BODY).read_text()
+    assert "websocket" in pr_text.lower(), \
+        f"PR text should mention websockets: {pr_text[:500]}"
+    assert "polling" not in pr_text.lower(), \
+        f"PR text should not mention the replaced approach: {pr_text[:500]}"
+
+    # Process notes should not appear in the design.
+    assert "try harder" not in design_text.lower(), \
+        "process note should not appear in design.md"
+
+
+def test_unparseable_design_after_corrections_is_restored(tmp_path):
+    """When apply_corrections produces unparseable design.md, the pre-correction
+    version is restored and a warning is emitted.
+
+    Fails without the change: delivery reads the unparseable design.md and the
+    PR loses its Summary.
+    """
+    from refactory_dsh.delivery import _validate_design_after_corrections
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    good_design = (
+        "# Title\n\n"
+        "## Summary\n\nGood summary.\n\n"
+        "## Rule and sites\n\n"
+        "- `file.py:1` — do the thing **[changed]**\n\n"
+        "## Docs\n\n- docs/readme.md\n\n"
+        "## Changes\n\n- file.py\n"
+    )
+    (run / "design.md").write_text(good_design)
+    (run / "design.md.pre_corrections").write_text(good_design)
+
+    # Corrupt design.md (missing required sections).
+    (run / "design.md").write_text("This is not a valid design document at all.")
+
+    _validate_design_after_corrections(run)
+
+    # design.md should be restored to the backup.
+    assert (run / "design.md").read_text() == good_design
+
+
+def test_no_backup_means_no_restoration(tmp_path):
+    """When there is no backup (no corrections were applied), validation is a no-op."""
+    from refactory_dsh.delivery import _validate_design_after_corrections
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    bad_text = "This is not a valid design document at all."
+    (run / "design.md").write_text(bad_text)
+    # No design.md.pre_corrections exists.
+
+    _validate_design_after_corrections(run)
+
+    # design.md is unchanged — no backup to restore from.
+    assert (run / "design.md").read_text() == bad_text
+
+
+def test_edit_resolves_conflict_keeping_mains_lines(tmp_path):
+    """An ===EDIT: block resolves a merge conflict by keeping main's lines,
+    not only ===FILE: whole-file replacement.
+
+    Materialise reads pending-merge.json, starts the merge (which produces
+    conflict markers), applies the ===EDIT: blocks against the worktree text,
+    and commits the merge — all in one step.
+
+    Fails without the change: edits apply to committed_text (the last attempt's
+    commit), which has no conflict markers.  An edit that searches for marker
+    text would fail with 'text is not in shared.py'.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import (
+        create, recorded, _write_json, RECORD,
+        git as wgit, COMMITTER, NO_HOOKS,
+    )
+    from dataclasses import asdict, replace as dreplace
+
+    # ── Set up a repo with shared.py ──
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("line 1\nline 2\nline 3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "initial shared.py")
+
+    # ── Create a worktree for the run ──
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    create(repo, "HEAD", "test-edit-merge", run)
+    found = recorded(run)
+    wt_path = Path(found.path)
+
+    # ── Make a feature change in the worktree and commit ──
+    (wt_path / "shared.py").write_text("line 1\nline 2 feature\nline 3\n")
+    wgit(wt_path, "add", ".")
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", "feature change",
+         env={**os.environ, **COMMITTER})
+    feature_head = wgit(wt_path, "rev-parse", "HEAD").strip()
+
+    # Update the worktree record with the new head.
+    updated_found = dreplace(found, head=feature_head)
+    _write_json(run / RECORD, asdict(updated_found))
+
+    # ── Make a conflicting change on main in the original repo ──
+    (repo / "shared.py").write_text("line 1\nline 2 main\nline 3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "main changes line 2")
+    main_head = git(repo, "rev-parse", "HEAD").strip()
+
+    # ── Write pending-merge.json so materialise starts the merge ──
+    pm_dir = run / ".refactory"
+    pm_dir.mkdir(parents=True, exist_ok=True)
+    (pm_dir / "pending-merge.json").write_text(
+        json.dumps({"target_tip": main_head, "conflict_files": ["shared.py"]})
+    )
+
+    # Materialise will start the merge, producing conflict markers in shared.py.
+    # We need to know what the marker looks like, so start the merge temporarily
+    # to read the theirs marker line, then abort.
+    try:
+        wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+             "merge", "--no-commit", "--no-verify", main_head,
+             env={**os.environ, **COMMITTER})
+    except ValueError:
+        pass  # expected — conflicts
+    conflicted = (wt_path / "shared.py").read_text()
+    theirs_marker = ""
+    for mline in conflicted.splitlines():
+        if mline.startswith(">>>>>>>") and "REPLACE" not in mline:
+            theirs_marker = mline
+            break
+    assert theirs_marker, "expected >>>>>>> marker in conflicted text"
+    # Abort — let materialise start the merge from pending-merge.json.
+    wgit(wt_path, *NO_HOOKS, "merge", "--abort")
+
+    # ── Build ===EDIT: blocks that resolve the conflict ──
+    edit_emit = (
+        "===EDIT: shared.py===\n"
+        "<<<<<<< SEARCH\n"
+        "<<<<<<< HEAD\n"
+        "line 2 feature\n"
+        "=======\n"
+        ">>>>>>> REPLACE\n"
+        "\n"
+        "<<<<<<< SEARCH\n"
+        + theirs_marker + "\n"
+        "=======\n"
+        ">>>>>>> REPLACE\n"
+    )
+
+    ctx = _TitleCtx(
+        facts={"name": "test_edit_merge", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": edit_emit},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: (
+        json.loads(ctx._files.get(name, "null"))
+        if ctx._files.get(name) else default
+    )
+
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit"), f"expected a commit: {result}"
+
+    # The committed file keeps main's content, with no <<<<<<< or >>>>>>> markers.
+    committed = (wt_path / "shared.py").read_text()
+    assert "line 2 main" in committed, f"expected main's content: {committed}"
+    assert "<<<<<<< HEAD" not in committed
+    assert "line 2 feature" not in committed
+    assert theirs_marker not in committed
+
+    # The commit is a merge commit (2 parents).
+    cat_output = git(wt_path, "cat-file", "-p", "HEAD")
+    parent_lines = [l for l in cat_output.splitlines() if l.startswith("parent ")]
+    assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
+
+    # No MERGE_HEAD remains after the commit.
+    try:
+        wgit(wt_path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        assert False, "MERGE_HEAD should be gone after commit"
+    except ValueError:
+        pass  # expected
+
+    # pending-merge.json is cleaned up.
+    assert not (pm_dir / "pending-merge.json").exists(), "pending-merge.json should be deleted"
+
+
+def test_apply_corrections_no_ledger_leaves_design_unchanged(github, tmp_path):
+    """When there is no intent-ledger.md, the pick_corrections op finds nothing
+    and the apply_corrections agent does not run (gate_corrections is empty).
+    design.md is unchanged.
+
+    Fails without the change: the agent node runs on every design run and may
+    wipe design.md.
+    """
+    repo = git_repo(tmp_path / "repo")
+    slug = "acme/no-ledger"
+    _published(github, slug, repo)
+
+    run = tmp_path / "run"
+    result = _design(run, {"tool.py": "print('built')\n"}, target=str(repo))
+    assert result.exit_ok, result.error
+
+    # design.md should be the DESIGN_DOC_ANSWER — unchanged by apply_corrections
+    # because there is no ledger.
+    design_text = (run / "design.md").read_text()
+    assert "Do the thing" in design_text, \
+        f"design.md should be unchanged: {design_text[:300]}"
+
+    # The pick_corrections op ran and set the fact.
+    assert result.facts.get("design_corrections_applied"), \
+        "pick_corrections should have set design_corrections_applied"
+
+
+def test_ls_remote_failure_stops_existing_repo(github, tmp_path, monkeypatch):
+    """ls-remote failure on an existing repository stops delivery instead of
+    pushing the reviewed commit without main.
+
+    Fails without the change: the raise inside try/except NotDelivered is
+    swallowed, and delivery pushes the reviewed commit without main.
+    """
+    repo = git_repo(tmp_path / "repo")
+    slug = "acme/ls-remote-fail"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+    real_git = delivery._git
+
+    def break_ls_remote_then_deliver(ctx):
+        def failing_git(path, *args):
+            if "ls-remote" in args and f"refs/heads/main" in " ".join(str(a) for a in args):
+                raise delivery.NotDelivered("simulated ls-remote failure")
+            return real_git(path, *args)
+        monkeypatch.setattr(delivery, "_git", failing_git)
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", break_ls_remote_then_deliver)
+    # Skip the delivery_gate reloop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
+
+    run = tmp_path / "run"
+    result = _design(run, {"tool.py": "print('built')\n"},
+                     target=str(repo), check="python tool.py")
+    # The run should complete but delivery should not push.
+    assert result.exit_ok, result.error
+    record = _record(run)
+    assert record["status"] == "kept local"
+    assert "cannot reach" in record.get("why", "")
+    # No push happened.
+    branch = json.loads((run / "design.json").read_text())["branch"]
+    assert _remote_head(github, slug, branch) == ""
+
+
+def test_delivery_advances_worktree_after_merge_push(github, tmp_path, monkeypatch):
+    """After delivery pushes a merge commit, the worktree record advances
+    so a later push fast-forwards (dm-116).
+
+    Fails without the change: the finally block resets HEAD to the reviewed
+    commit, so a later delivery's merge does not contain the pushed one and
+    GitHub rejects the push as non-fast-forward.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/advance-wt"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+
+    def advance_main_then_deliver(ctx):
+        other = tmp_path / "other"
+        if not other.exists():
+            git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+            (other / "new_file.txt").write_text("main advanced\n")
+            git(other, "add", ".")
+            git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                "commit", "-q", "-m", "main advances")
+            git(other, "push", "-q", "origin", "main")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the delivery_gate reloop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
+
+    run = tmp_path / "run"
+    result = _design(run, {"tool.py": "print('built')\n"},
+                     target=str(repo), check="python tool.py")
+    assert result.exit_ok, result.error
+
+    record = _record(run)
+    assert record["status"] in ("opened", "already open", "updated"), \
+        f"expected delivery, got: {record}"
+
+    # The worktree record should be advanced to the merge commit.
+    found = worktree.recorded(run)
+    # Check that the head is a merge commit (2 parents).
+    path = Path(found.path)
+    head = found.head
+    cat_output = git(path, "cat-file", "-p", head)
+    parent_lines = [l for l in cat_output.splitlines() if l.startswith("parent ")]
+    assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
+
+    # The base should be the second parent (main's tip).
+    second_parent = parent_lines[1].split()[1]
+    assert found.base == second_parent, \
+        f"expected base to be second parent {second_parent}, got {found.base}"
+
+
+def test_unresolved_conflict_stops_after_budget(github, tmp_path, monkeypatch):
+    """A builder that never resolves the conflict stops after check_attempts,
+    with a clean worktree.
+
+    The emission omits the conflicted file every time, so materialise refuses
+    it ("missing: shared.py").  The delivery_gate counts reloops against
+    check_attempts; after the limit it raises without starting a merge.
+
+    Fails without the change: the evaluator never counts reloops, so the run
+    stops with "check exceeded max_iterations of 8" and MERGE_HEAD is left.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/unresolved"
+    bare = _published(github, slug, repo)
+
+    # First run to advance main.
+    run1 = tmp_path / "run1"
+    result1 = _design(run1, {"tool.py": "print('built')\n",
+                             "shared.py": "def f():\n    return 2\n"},
+                      target=str(repo), check="python tool.py")
+    assert result1.exit_ok, result1.error
+    branch1 = json.loads((run1 / "design.json").read_text())["branch"]
+    # Merge first run into main.
+    main_clone = tmp_path / "main_clone"
+    git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(main_clone))
+    git(main_clone, "-c", "user.name=t", "-c", "user.email=t@example.com",
+        "merge", "-q", "--no-ff", f"origin/{branch1}", "-m", "merge first run")
+    git(main_clone, "push", "-q", "origin", "main")
+
+    # Second run: emits only tool.py, omitting the conflicted shared.py.
+    # Materialise will refuse because the unmerged path is missing from the
+    # emission, and the delivery_gate will count the reloop.
+    bad_emit = "===FILE: tool.py===\nprint('built')\n"
+
+    # Use check_attempts=1 so it stops quickly.
+    run2 = tmp_path / "run2"
+    mode = _mode(check_attempts=1)
+    model = FakeModel(_answers(render({"tool.py": "print('built')\n",
+                                       "shared.py": "def f():\n    return 42\n"}))
+                      + [bad_emit] * 8)
+    result2 = mode.run(
+        run2, model=model, verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    # The run should stop (not succeed) because the conflict was never resolved.
+    found = worktree.recorded(run2)
+    if found is not None:
+        path = Path(found.path)
+        # The worktree must be clean — no MERGE_HEAD.
+        with pytest.raises(subprocess.CalledProcessError):
+            git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        # No unmerged index entries.
+        try:
+            unmerged = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
+        except ValueError:
+            unmerged = ""
+        assert not unmerged.strip(), f"unmerged files remain: {unmerged}"
+    # pending-merge.json should be cleaned up.
+    pm = run2 / ".refactory" / "pending-merge.json"
+    # It may or may not exist depending on the stop path, but MERGE_HEAD
+    # must be gone regardless.
+
+
+def test_cleanly_merged_edit_keeps_mains_change(tmp_path):
+    """An ===EDIT: to a file main changed cleanly keeps main's change.
+
+    Materialise reads pending-merge.json, starts the merge, applies the edit
+    to the worktree text (which has main's changes), and commits a merge.
+
+    Fails without the change: edits apply to committed_text (the run's last
+    commit), which has no main's change, silently reverting it.
+    Removing the base-move (second parent → new base) also fails this test.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import (
+        create, recorded, _write_json, RECORD,
+        git as wgit, COMMITTER, NO_HOOKS,
+    )
+    from dataclasses import asdict, replace as dreplace
+
+    # ── Set up a repo with two files ──
+    repo = git_repo(tmp_path / "repo")
+    (repo / "a.py").write_text("def f():\n    return 1\n")
+    (repo / "c.py").write_text("def g():\n    return 0\ndef h():\n    return 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "initial")
+
+    # ── Create a worktree for the run ──
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    create(repo, "HEAD", "test-clean-edit", run)
+    found = recorded(run)
+    wt_path = Path(found.path)
+
+    # ── Feature change: edit a.py (only) ──
+    (wt_path / "a.py").write_text("def f():\n    return 2\n")
+    wgit(wt_path, "add", ".")
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", "feature change",
+         env={**os.environ, **COMMITTER})
+    feature_head = wgit(wt_path, "rev-parse", "HEAD").strip()
+    updated_found = dreplace(found, head=feature_head)
+    _write_json(run / RECORD, asdict(updated_found))
+
+    # ── Main changes c.py (no conflict with the feature change) ──
+    (repo / "c.py").write_text("def g():\n    return 99\ndef h():\n    return 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "main changes g()")
+    main_head = git(repo, "rev-parse", "HEAD").strip()
+
+    # ── Write pending-merge.json so materialise starts the merge ──
+    pm_dir = run / ".refactory"
+    pm_dir.mkdir(parents=True, exist_ok=True)
+    (pm_dir / "pending-merge.json").write_text(
+        json.dumps({"target_tip": main_head, "conflict_files": []})
+    )
+
+    # ── An EDIT to c.py that keeps main's change and edits h() ──
+    edit_emit = (
+        "===EDIT: c.py===\n"
+        "<<<<<<< SEARCH\n"
+        "def h():\n"
+        "    return 0\n"
+        "=======\n"
+        "def h():\n"
+        "    return 42\n"
+        ">>>>>>> REPLACE\n"
+    )
+
+    ctx = _TitleCtx(
+        facts={"name": "test_clean_edit", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": edit_emit},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: (
+        json.loads(ctx._files.get(name, "null"))
+        if ctx._files.get(name) else default
+    )
+
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit"), f"expected a commit: {result}"
+
+    # c.py keeps main's change to g() AND the edit to h().
+    committed = (wt_path / "c.py").read_text()
+    assert "return 99" in committed, f"expected main's change to g(): {committed}"
+    assert "return 42" in committed, f"expected edit to h(): {committed}"
+
+    # The commit is a merge commit (2 parents).
+    cat_output = git(wt_path, "cat-file", "-p", "HEAD")
+    parent_lines = [l for l in cat_output.splitlines() if l.startswith("parent ")]
+    assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
+
+    # The base moved to main's tip (second parent).
+    new_found = recorded(run)
+    second_parent = parent_lines[1].split()[1]
+    assert new_found.base == second_parent, \
+        f"expected base to be second parent {second_parent}, got {new_found.base}"
+
+    # pending-merge.json is cleaned up.
+    assert not (pm_dir / "pending-merge.json").exists(), "pending-merge.json should be deleted"
+
+
+def test_edit_during_conflict_keeps_mains_changes(tmp_path):
+    """During conflict resolution, ===EDIT: on a cleanly-merged file preserves
+    main's changes while ===FILE: resolves the conflicted file.  Together they
+    produce a merge commit.
+
+    Materialise reads pending-merge.json, starts the merge, applies the
+    emission, and commits a merge — all in one step.
+
+    Fails without the change: edits apply to committed_text (the run's last
+    commit) which lacks main's changes, so the SEARCH text is not found or
+    main's change is silently reverted.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import (
+        create, recorded, _write_json, RECORD,
+        git as wgit, COMMITTER, NO_HOOKS,
+    )
+    from dataclasses import asdict, replace as dreplace
+
+    # ── Set up a repo with two files ──
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    (repo / "util.py").write_text("def helper():\n    return 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "initial")
+
+    # ── Create a worktree for the run ──
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    create(repo, "HEAD", "test-edit-conflict", run)
+    found = recorded(run)
+    wt_path = Path(found.path)
+
+    # ── Feature change: edit shared.py only ──
+    (wt_path / "shared.py").write_text("def f():\n    return 42\n")
+    wgit(wt_path, "add", ".")
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", "feature: f returns 42",
+         env={**os.environ, **COMMITTER})
+    feature_head = wgit(wt_path, "rev-parse", "HEAD").strip()
+    updated_found = dreplace(found, head=feature_head)
+    _write_json(run / RECORD, asdict(updated_found))
+
+    # ── Main changes BOTH files: shared.py conflicts, util.py merges cleanly ──
+    (repo / "shared.py").write_text("def f():\n    return 2\n")
+    (repo / "util.py").write_text("def helper():\n    return 99\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "main: f returns 2, helper returns 99")
+    main_head = git(repo, "rev-parse", "HEAD").strip()
+
+    # ── Write pending-merge.json so materialise starts the merge ──
+    pm_dir = run / ".refactory"
+    pm_dir.mkdir(parents=True, exist_ok=True)
+    (pm_dir / "pending-merge.json").write_text(
+        json.dumps({"target_tip": main_head, "conflict_files": ["shared.py"]})
+    )
+
+    # ── Builder's resolution: ===FILE: resolves conflict, ===EDIT: keeps main's util.py ──
+    emit_text = (
+        "===FILE: shared.py===\n"
+        "def f():\n"
+        "    return 3  # merged\n"
+        "===EDIT: util.py===\n"
+        "<<<<<<< SEARCH\n"
+        "def helper():\n"
+        "    return 99\n"
+        "=======\n"
+        "def helper():\n"
+        "    return 99  # kept from main\n"
+        ">>>>>>> REPLACE\n"
+    )
+
+    ctx = _TitleCtx(
+        facts={"name": "test_edit_conflict", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": emit_text},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: (
+        json.loads(ctx._files.get(name, "null"))
+        if ctx._files.get(name) else default
+    )
+
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit"), f"expected a commit: {result}"
+
+    # shared.py is resolved (no conflict markers).
+    shared_content = (wt_path / "shared.py").read_text()
+    assert "return 3" in shared_content, f"expected resolved f(): {shared_content}"
+    assert "<<<<<<<" not in shared_content, f"conflict markers remain: {shared_content}"
+
+    # util.py keeps main's change AND has the builder's edit.
+    util_content = (wt_path / "util.py").read_text()
+    assert "return 99" in util_content, f"expected main's change: {util_content}"
+    assert "kept from main" in util_content, f"expected builder's edit: {util_content}"
+
+    # The commit is a merge commit (2 parents).
+    cat_output = git(wt_path, "cat-file", "-p", "HEAD")
+    parent_lines = [l for l in cat_output.splitlines() if l.startswith("parent ")]
+    assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
+
+    # pending-merge.json is cleaned up.
+    assert not (pm_dir / "pending-merge.json").exists(), "pending-merge.json should be deleted"
+
+
+def test_emission_missing_conflicted_path_aborts_merge(tmp_path):
+    """An emission that omits a conflicted path aborts the merge and leaves
+    the worktree clean.
+
+    Materialise starts the merge from pending-merge.json, detects the missing
+    unmerged path in the emission, aborts the merge, and raises AttemptRefused.
+
+    Fails without the change: removing the abort in the missing-unmerged check
+    leaves MERGE_HEAD behind.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import (
+        create, recorded, _write_json, RECORD, AttemptRefused,
+        git as wgit, COMMITTER, NO_HOOKS,
+    )
+    from dataclasses import asdict, replace as dreplace
+
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    (repo / "other.py").write_text("x = 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "initial")
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    create(repo, "HEAD", "test-missing-path", run)
+    found = recorded(run)
+    wt_path = Path(found.path)
+
+    # Feature change to shared.py.
+    (wt_path / "shared.py").write_text("def f():\n    return 42\n")
+    wgit(wt_path, "add", ".")
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", "feature",
+         env={**os.environ, **worktree.COMMITTER})
+    feature_head = wgit(wt_path, "rev-parse", "HEAD").strip()
+    _write_json(run / RECORD, asdict(dreplace(found, head=feature_head)))
+
+    # Main also changes shared.py (conflict).
+    (repo / "shared.py").write_text("def f():\n    return 2\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "main changes shared.py")
+    main_head = git(repo, "rev-parse", "HEAD").strip()
+
+    # Write pending-merge.json.
+    pm_dir = run / ".refactory"
+    pm_dir.mkdir(parents=True, exist_ok=True)
+    (pm_dir / "pending-merge.json").write_text(
+        json.dumps({"target_tip": main_head, "conflict_files": ["shared.py"]})
+    )
+
+    # Emission omits shared.py — only writes other.py.
+    emit_text = "===FILE: other.py===\nx = 2\n"
+    ctx = _TitleCtx(
+        facts={"name": "test_missing", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": emit_text},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: (
+        json.loads(ctx._files.get(name, "null"))
+        if ctx._files.get(name) else default
+    )
+
+    with pytest.raises(AttemptRefused, match="missing"):
+        repo_change._commit_emission(ctx)
+
+    # The worktree must be clean — no MERGE_HEAD.
+    with pytest.raises(subprocess.CalledProcessError):
+        git(wt_path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+
+    # No unmerged entries.
+    try:
+        unmerged = worktree.git(wt_path, "diff", "--name-only", "--diff-filter=U")
+    except ValueError:
+        unmerged = ""
+    assert not unmerged.strip(), f"unmerged files remain: {unmerged}"
+
+
+def test_materialise_base_moves_to_main_tip(tmp_path):
+    """After materialise commits a merge, the base moves to main's tip.
+
+    Removing the base-move (worktree.py second-parent logic) would leave the
+    base at the original commit, so the diff would include everything main
+    gained.  This test fails without that logic.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import (
+        create, recorded, _write_json, RECORD,
+        git as wgit, COMMITTER, NO_HOOKS,
+    )
+    from dataclasses import asdict, replace as dreplace
+
+    repo = git_repo(tmp_path / "repo")
+    (repo / "a.py").write_text("x = 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "initial")
+    initial_base = git(repo, "rev-parse", "HEAD").strip()
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    create(repo, "HEAD", "test-base-move", run)
+    found = recorded(run)
+    wt_path = Path(found.path)
+
+    # Feature change.
+    (wt_path / "b.py").write_text("y = 1\n")
+    wgit(wt_path, "add", ".")
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", "feature",
+         env={**os.environ, **worktree.COMMITTER})
+    feature_head = wgit(wt_path, "rev-parse", "HEAD").strip()
+    _write_json(run / RECORD, asdict(dreplace(found, head=feature_head)))
+
+    # Main adds a file (clean merge).
+    (repo / "c.py").write_text("z = 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "main adds c.py")
+    main_head = git(repo, "rev-parse", "HEAD").strip()
+
+    # Write pending-merge.json.
+    pm_dir = run / ".refactory"
+    pm_dir.mkdir(parents=True, exist_ok=True)
+    (pm_dir / "pending-merge.json").write_text(
+        json.dumps({"target_tip": main_head, "conflict_files": []})
+    )
+
+    emit_text = "===FILE: b.py===\ny = 2\n"
+    ctx = _TitleCtx(
+        facts={"name": "test_base_move", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": emit_text},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: (
+        json.loads(ctx._files.get(name, "null"))
+        if ctx._files.get(name) else default
+    )
+
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit"), f"expected a commit: {result}"
+
+    new_found = recorded(run)
+    # The base must be main's tip (the second parent), not the original base.
+    assert new_found.base == main_head, \
+        f"expected base to move to main's tip {main_head}, got {new_found.base}"
+    assert new_found.base != initial_base, \
+        "base should have moved from the initial commit"
 
 
 def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):

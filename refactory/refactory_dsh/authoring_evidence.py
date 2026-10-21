@@ -21,9 +21,9 @@ _RESOURCE_EXIT_CODES: frozenset[int] = frozenset({
     128 + 25,  # SIGXFSZ — RLIMIT_FSIZE exceeded
 })
 
-EVIDENCE = "authoring-evidence.json"
+from refactory_dsh.invocations import EVIDENCE  # canonical in invocations
 AUDIT = "intent-audit.json"
-REVIEWERS = ("health_checker", "code_reviewer", "qa_director", "overwatch", "focused_qa")
+from refactory_dsh.invocations import REVIEWERS  # canonical in invocations
 INPUTS = ("brief.json", "strategy.json", "design.md", "implementation-plan.txt")
 # Longer inputs are cited by path and sha256: the evidence is inlined into every reviewer prompt.
 INLINE_LIMIT = 2048

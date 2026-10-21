@@ -140,6 +140,8 @@ def prepare(
             'project': str(project.resolve()), 'knobs': knobs or [], 'model_context': model_context,
             'resource_limits': resource_limits,
             'configuration_fingerprints': configuration_fingerprints(workdir, identifier, project)}))
+        from refactory_dsh import pin
+        pin.record_driver(workdir / '.refactory/run-config.json')
         return name, graphs
 
 
@@ -164,9 +166,15 @@ def command(
     script that the run it gets is the run it got before.
     """
     _, mode_name = identifier.split("/", 1)
+    _profile = "graph"
+    try:
+        from refactory_dsh import pin as _pin_mod
+        _profile = _pin_mod.driver_profile(workdir)
+    except Exception:
+        pass
     argv = [
         *dsh_command(),
-        "--profile", "graph", "run",
+        "--profile", _profile, "run",
         "--mode", name,
         "--task", TASK,
         "--budget", "1",
@@ -244,9 +252,25 @@ def run(
     workdir = Path(workdir).expanduser().resolve()
     # Pre-flight: both checks raise on failure before ownership() creates
     # the run directory, so a refused start leaves nothing behind.
-    require_build()
+    # On resume and respawn, use check_only so a stale build warns instead
+    # of rebuilding (the supervisor would respawn repeatedly on a failed build).
+    require_build(check_only=resume)
     from refactory_dsh import dsh_profile
-    dsh_profile.require()
+    _profile_name = 'graph'
+    _pin_checkout_for_check: Path | None = None
+    if resume and workdir:
+        try:
+            from refactory_dsh import pin as _pin_mod
+            _profile_name = _pin_mod.driver_profile(workdir)
+            if _profile_name.startswith('graph-pin-'):
+                import json as _json
+                _rc = _json.loads((Path(workdir) / '.refactory' / 'run-config.json').read_text())
+                _pco = _rc.get('driver', {}).get('pin_checkout')
+                if _pco:
+                    _pin_checkout_for_check = Path(_pco)
+        except Exception:
+            pass
+    dsh_profile.require(name=_profile_name, checkout=_pin_checkout_for_check)
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes or model_timeout_s is not None:
@@ -254,6 +278,14 @@ def run(
             import json
 
             saved = json.loads((workdir / '.refactory/run-config.json').read_text())
+            # ── pin: detect drift and re-exec under the pin ──
+            from refactory_dsh import pin as _pin
+            _drift = _pin.detect_drift(saved)
+            if _drift is not None:
+                _pin_checkout = _pin.resolve_pin(saved['driver'], run_dir=workdir)
+                if REPO_ROOT.resolve() != Path(_pin_checkout).resolve():
+                    _pin_py = str(_pin.pin_python(_pin_checkout))
+                    os.execv(_pin_py, [_pin_py, '-m', 'refactory_dsh.interactive', *sys.argv[1:]])
             if saved.get('mode') != identifier:
                 raise ValueError('saved run belongs to a different mode')
             # Resource allocation is the only override accepted by recovery.
@@ -271,6 +303,16 @@ def run(
                                                role_routes={}, node_routes={}).context()
             else:
                 model_context = {**model_context, 'permission_mode': model_context.get('permission_mode') or 'default'}
+            # When pinned, rewrite runtime_root and python_bin so workers
+            # use the pin's venv, not the original checkout's.
+            _driver_rec = saved.get('driver', {})
+            if model_context and _driver_rec.get('pin_checkout'):
+                _pin_co = _driver_rec['pin_checkout']
+                model_context = {
+                    **model_context,
+                    'runtime_root': _pin_co,
+                    'python_bin': str(Path(_pin_co) / '.venv' / 'bin'),
+                }
             resource_limits = effective_limits
         if source:
             from refactory_dsh.items import write_source
@@ -324,6 +366,8 @@ def run(
         env = dict(os.environ)
         from refactory_dsh.workers import environment
         env.update(environment(model_context))
+        if project:
+            env["REFACTORY_PROJECT"] = str(project)
         budget = None
         if resource_limits:
             from refactory_dsh.budgets import RunBudget

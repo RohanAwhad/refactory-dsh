@@ -7,7 +7,74 @@ import sys
 from typing import Any
 
 
+def _resolve_pin_python(workdir: Path) -> str | None:
+    """Read the driver's ``pin_checkout`` from run-config.json, return pin Python or ``None``."""
+    config_path = workdir / '.refactory' / 'run-config.json'
+    if not config_path.exists():
+        return None
+    try:
+        config = json.loads(config_path.read_text())
+        pin_co = config.get('driver', {}).get('pin_checkout')
+        if pin_co:
+            return str(Path(pin_co) / '.venv' / 'bin' / 'python')
+    except Exception:
+        pass
+    return None
+
+
+def _check_driver_mid_run(workdir: Path) -> str | None:
+    """Return an error message if the driver moved and no pin exists, else ``None``.
+
+    Called at worker dispatch time (brief R5): a process started mid-run after
+    the driver moved either uses the pin or refuses with a message naming the
+    run, the recorded commit and the command that pins it.
+    """
+    config_path = workdir / '.refactory' / 'run-config.json'
+    if not config_path.exists():
+        return None
+    try:
+        config = json.loads(config_path.read_text())
+        driver = config.get('driver')
+        if not driver:
+            return None
+        if driver.get('pin_checkout'):
+            return None  # already pinned; handled by _resolve_pin_python
+        commit = driver.get('commit')
+        checkout = driver.get('checkout')
+        if not commit or not checkout:
+            return None
+        import subprocess as _sp
+        result = _sp.run(
+            ['git', '-C', checkout, 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip() != commit:
+            return (
+                f'the driver moved since run {workdir} launched '
+                f'(recorded {commit[:12]}, now {result.stdout.strip()[:12]}). '
+                f'Pin with: refactory graph-control resume --run {workdir}'
+            )
+    except Exception:
+        pass
+    return None
+
+
 def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
+    # When pinned, override model_context so workers use the pin's paths
+    # for nested dispatch and DSH CLI resolution.
+    _config_path = workdir / '.refactory' / 'run-config.json'
+    if _config_path.exists() and spec.get('model_context'):
+        try:
+            _cfg = json.loads(_config_path.read_text())
+            _pin_co = _cfg.get('driver', {}).get('pin_checkout')
+            if _pin_co:
+                spec = {**spec, 'model_context': {
+                    **spec['model_context'],
+                    'runtime_root': _pin_co,
+                    'python_bin': str(Path(_pin_co) / '.venv' / 'bin'),
+                }}
+        except Exception:
+            pass
     from refactory_dsh.agent_delivery import begin, finish, _path
     from refactory_dsh.model import DshModelClient
     if spec.get('schema_version') != 1:
@@ -68,6 +135,45 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
 
 def main() -> int:
     try:
+        workdir = Path.cwd()
+        # ── mid-run driver check (brief R5) ──
+        # If the run is pinned, re-exec under the pin's Python so the
+        # worker loads the pinned code.  If not pinned but the driver
+        # moved, refuse with a diagnostic message.
+        _pin_py = _resolve_pin_python(workdir)
+        if _pin_py:
+            # Compare sys.prefix (the venv root) with the pin's venv, not
+            # os.path.realpath: uv venvs symlink to the shared interpreter,
+            # so realpath resolves both to the same binary and the switch
+            # never fires.  Re-exec with ``-m refactory_dsh.worker_node``
+            # so the pin's package is loaded, not sys.argv[0] (which under
+            # ``-m`` is the driver's worker_node.py file path).
+            _pin_venv = str(Path(_pin_py).parent.parent)
+            if sys.prefix != _pin_venv:
+                # Guard against infinite re-exec: if we already re-exec'd
+                # once and are still not on the pin, something is broken.
+                if os.environ.get('_REFACTORY_WORKER_REEXEC'):
+                    print(
+                        f'worker: re-exec did not land on the pin '
+                        f'(expected prefix {_pin_venv}, got {sys.prefix}); '
+                        f'the pin venv may be broken',
+                        file=sys.stderr,
+                    )
+                    return 1
+                if os.path.isfile(_pin_py):
+                    os.environ['_REFACTORY_WORKER_REEXEC'] = '1'
+                    os.execv(_pin_py, [_pin_py, '-m', 'refactory_dsh.worker_node', *sys.argv[1:]])
+                print(
+                    f'worker: pinned Python {_pin_py} not found; '
+                    f'run `refactory pin list` to inspect',
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            _drift_msg = _check_driver_mid_run(workdir)
+            if _drift_msg:
+                print(f'worker: {_drift_msg}', file=sys.stderr)
+                return 1
         path = Path(sys.argv[1])
         serialized = path.read_text()
         if path.parent.name == 'worker-specs':

@@ -215,3 +215,11 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 Read [Models](models.md) for managed credentials, resolved routing, worker receipts and unsupported backend capabilities. A random seed does not make provider responses deterministic. Candidate counts, elapsed time and tokens have separate limits; repeated trials and final holdout measurements consume the shared resource allocation. Token enforcement occurs at usage boundaries and can overshoot during an in-flight request.
 
 For samples and resume on authoring APIs, use the documented Python Create/Edit/Design entry points and their `--help`; those flags are not all aliases on `refactory ceo`. [Authoring guide](tutorials/03-author-with-a-model.md).
+
+
+## Pin management
+
+| Command | Description |
+|---|---|
+| `refactory pin list` | List all pins with commit (first 12 chars), creation time and driver checkout. |
+| `refactory pin prune` | Remove pins no run refers to. Also removes their `graph-pin-<commit12>` profiles from the person's DSH home. Never removes a pin that a live or resumable run refers to. |

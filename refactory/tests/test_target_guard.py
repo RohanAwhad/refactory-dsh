@@ -376,6 +376,7 @@ def test_a_design_run_whose_emit_edits_the_target_fails_before_materialise(targe
     model = _EditingModel([
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('built')\n"}), VERIFICATION_ANSWER, *REVIEW_ANSWERS,
     ], target)
     result = _without_worktree().run(
@@ -394,6 +395,7 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
         workdir, verdicts={"gate_strategy": "proceed"},
         model=_EditingModel([RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
                              DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                             DESIGN_DOC_ANSWER,
                              "All changes are already applied."], target),
         task={"name": NAME, "brief": "a tool", "check": "python tool.py"},
     )
@@ -402,7 +404,7 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
 
     redone = DesignMode.resume(workdir, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
                                                               VERIFICATION_ANSWER,
-                                                              *REVIEW_ANSWERS]))
+                                                              *REVIEW_ANSWERS, "VERDICT: PASS"]))
     assert redone.error is None
     assert (workdir / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
     assert (target / repo_change.ARTIFACTS / NAME / "tool.py").read_text() == "print('redone')\n"
