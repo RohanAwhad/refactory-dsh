@@ -128,8 +128,8 @@ def _mode_classes() -> list[tuple[str, type]]:
     discovered = registry.discover()
     results: dict[str, type] = {}
     for pack_name, pack in discovered.items():
-        for mode_name, mode_cls in pack.modes.items():
-            identifier = f"{pack_name}/{mode_name}"
+        for mode_cls in pack.modes:
+            identifier = f"{pack_name}/{mode_cls.name}"
             key = identifier.replace("/", "-")
             results[key] = mode_cls
 

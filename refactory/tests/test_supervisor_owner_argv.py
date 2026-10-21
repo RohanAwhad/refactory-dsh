@@ -135,7 +135,16 @@ def test_supervise_handles_none_child_detached(tmp_path):
     def mock_prepare(r, name, **kw):
         return r / 'graphs'
 
-    with patch.object(sv, '_start_child', return_value=None):
+    def mock_start_child_none(r):
+        """Simulate _start_child returning None: record start failure then return None."""
+        sv.record_start_failure(
+            r, os.getpid(), 1,
+            run_state.spine_status(r), run_state.spine_status(r),
+            reason='no owner_argv in run-config.json and no '
+                   'refactory.owner_module entry point')
+        return None
+
+    with patch.object(sv, '_start_child', side_effect=mock_start_child_none):
         with patch('refactory_dsh.recovery.prepare', side_effect=mock_prepare):
             result = sv.supervise(root, max_respawns=3)
 

@@ -149,7 +149,7 @@ def _build_owner_argv(root: Path) -> tuple[list[str] | None, str]:
     Primary: reads ``owner_argv`` from run-config.json (written by
     interactive.prepare() at run creation).  The stored argv is the fragment
     after the interpreter and without ``--workdir``, ``--headless`` or
-    ``--resume``: ``['-m', 'refactory_dsh.interactive', identifier]``.
+    ``--resume``, e.g. ``['-m', '<owner_module>', identifier]``.
     The supervisor appends the current ``root`` and the flags at call time,
     keeping its current-root behaviour and avoiding stale absolute paths.
 
