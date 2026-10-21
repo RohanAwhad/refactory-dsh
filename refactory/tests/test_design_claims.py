@@ -422,3 +422,127 @@ def test_fenced_code_blocks_not_checked(tmp_path):
     ))
     result = check_design_claims(ctx)
     assert result == "proceed"
+
+
+# ── integration tests through the graph ───────────────────────────────────
+
+
+def test_walker_gate_stop_prints_design_review_status(tmp_path, monkeypatch, capsys):
+    """design.main prints 'Design review: FAIL, 2 unresolved' to stderr when
+    the run stops at gate_strategy after two failing reviews.
+
+    Removing the ``node.kind == "gate" and node.gate_kind == "user"`` branch
+    in main() must make this test fail.
+    """
+    from refactory_dsh import design
+    from refactory_dsh.nn import RunResult
+
+    # Simulate a run that stopped at gate_strategy with two failing reviews.
+    canned = RunResult(
+        exit_ok=False,
+        error=(
+            "gate_strategy: ExecutionError: gate 'gate_strategy' is answered "
+            "by 'user' and this run has no verdict for it"
+        ),
+        facts={
+            "design_review_attempts_used": 2,
+            "design_review_findings": (
+                "- BLOCKING: path/file.py: finding_alpha\n"
+                "- BLOCKING: path/file.py: finding_beta"
+            ),
+            "design_review_status": "",
+        },
+    )
+    # Stub the model client constructor (it is evaluated before mode.run)
+    # and mode.run itself so the test exercises only main()'s stderr path.
+    import refactory_dsh.model as model_mod
+    monkeypatch.setattr(model_mod, "DshModelClient", lambda **kw: None)
+    monkeypatch.setattr(design.DesignMode, "run", lambda self, *a, **kw: canned)
+    monkeypatch.chdir(tmp_path)
+
+    rc = design.main([
+        "--name", "my_tool", "--brief", "a tool",
+        "--check", "true",
+        "--workdir", str(tmp_path / "run"),
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "Design review: FAIL" in captured.err
+    assert "2 unresolved" in captured.err
+    assert "finding_alpha" in captured.err
+    assert "finding_beta" in captured.err
+
+
+def test_claims_exhaustion_reaches_review_through_graph(tmp_path):
+    """Three design_doc answers with mismatching claims exhaust the claims
+    checker, which appends '## Unresolved design claims' to the review's
+    feedback. The design_review prompt must contain that heading.
+
+    Removing ``"design_review_feedback"`` from check_design_claims' produces
+    must make this test fail (the executor raises ExecutionError on an
+    undeclared fact write).
+    """
+    from refactory_dsh.design import DesignMode
+    from tests_support import (
+        FakeModel,
+        DESIGN_REVIEW_ANSWER,
+        PITFALLS_ANSWER,
+        RESEARCH_ANSWER,
+        REVIEW_ANSWERS,
+        VERIFICATION_ANSWER,
+        render,
+    )
+
+    # A contract-compliant design with a claim about a nonexistent file.
+    # The bare citation ``tool.py:1`` is NOT in subject-at-citation-quote
+    # form, so it is not checked.  The final line IS a claim and will fail.
+    _BAD_DESIGN = (
+        "# Do the thing\n\n"
+        "## Summary\n\nFix it properly.\n\n"
+        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "a tool" | \u00a7 Changes | test_tool.py |\n\n'
+        "## Rule and sites\n\n"
+        "- `tool.py:1` \u2014 **[changed]**\n\n"
+        "## Docs\n\n"
+        "- docs/models.md\n\n"
+        "## Changes\n\n"
+        "- tool.py\n\n"
+        "## Anti-patterns to avoid\n\n"
+        "- PIT-001: addressed at `tool.py:1`\n\n"
+        "`nonexistent_fn()` at `zzz_no_such_file_dm126.py:1`: `import os`\n"
+    )
+
+    answers = [
+        RESEARCH_ANSWER,                               # research_director
+        PITFALLS_ANSWER,                               # pitfalls_researcher
+        "perspectives",                                # strategy_director
+        "one plan",                                    # synthesize_strategy
+        _BAD_DESIGN,                                   # design_doc  (1st, reloop)
+        _BAD_DESIGN,                                   # design_doc  (2nd, reloop)
+        _BAD_DESIGN,                                   # design_doc  (3rd, exhaustion)
+        DESIGN_REVIEW_ANSWER,                          # design_review
+        render({"tool.py": "print('built')\n"}),       # emit
+        VERIFICATION_ANSWER,                           # verifier
+        *REVIEW_ANSWERS,                               # health, code, qa, overwatch
+    ]
+    model = FakeModel(answers)
+    result = DesignMode().run(
+        tmp_path / "run",
+        model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "my_tool", "brief": "a tool", "check": "python tool.py"},
+    )
+
+    # The exhaustion path must not crash.
+    if not result.exit_ok:
+        assert "check_design_claims" not in str(result.error), (
+            f"exhaustion path crashed: {result.error}"
+        )
+    # The design_review prompt received the unresolved claims.
+    assert any(
+        "## Unresolved design claims" in p for p in model.prompts
+    ), "design_review prompt should contain '## Unresolved design claims'"
