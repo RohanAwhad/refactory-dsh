@@ -1055,16 +1055,16 @@ describe('a fork with nothing to fan out to', () => {
     }
     const spine = new Spine(graph)
     spine.complete('a')
-    spine.verdict('gate', 'proceed')
-    // Skip b with person provenance
-    spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
+    // gate is now in cursor; skip it with person provenance.
+    // The routing rule in next() routes proceed for the person-skipped gate.
+    spine.skip('gate', { source: 'person', at: '2026-01-01T00:00:00Z' })
     // Redo the gate's upstream node (a), which calls invalidateNodes
     // with clearSkips=true for all descendants (gate, b).
     // planRedo refuses gates directly; redo a instead.
     spine.redo('a')
     const state = spine.state()
-    // After redo, provenance for b should be cleared
-    expect(prov(state).b).toBeUndefined()
+    // After redo, the gate's skip_provenance should be cleared
+    expect(prov(state).gate).toBeUndefined()
   })
 
   it('restore reads skip_provenance from checkpoint', () => {
