@@ -1,0 +1,133 @@
+{
+  "name": "sympy_pack-exact",
+  "nodes": {
+    "budget_check": {
+      "id": "budget_check",
+      "reads": [
+        "problems.json",
+        "state.json"
+      ],
+      "writes": [],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_packages.sympy_pack.ops:budget_check",
+      "gate_prompt": "reloop while an identity remains unattempted",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
+    "derive": {
+      "id": "derive",
+      "reads": [
+        "problems.json",
+        "state.json"
+      ],
+      "writes": [
+        "results.jsonl",
+        "state.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.sympy_pack.ops:check_identity",
+      "callable_name": "refactory_packages.sympy_pack.ops:check_identity",
+      "notes": "derive one closed form and check the conjectures for it exactly",
+      "_type": "FnNode"
+    },
+    "finish": {
+      "id": "finish",
+      "reads": [
+        "problems.json",
+        "results.jsonl",
+        "state.json"
+      ],
+      "writes": [
+        "result.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.sympy_pack.ops:finish",
+      "callable_name": "refactory_packages.sympy_pack.ops:finish",
+      "notes": "publish how many identities were established exactly",
+      "_type": "FnNode"
+    },
+    "task_input": {
+      "id": "task_input",
+      "reads": [],
+      "writes": [
+        "problems.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.sympy_pack.ops:load_problems",
+      "callable_name": "refactory_packages.sympy_pack.ops:load_problems",
+      "notes": "write the identities this run will attempt",
+      "_type": "FnNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "budget_check",
+      "target": "derive",
+      "condition": "reloop"
+    },
+    {
+      "source": "budget_check",
+      "target": "finish",
+      "condition": "proceed"
+    },
+    {
+      "source": "derive",
+      "target": "budget_check",
+      "condition": null
+    },
+    {
+      "source": "task_input",
+      "target": "derive",
+      "condition": null
+    }
+  ],
+  "start_node": "task_input",
+  "terminal": true,
+  "knob_values": {
+    "candidates": 1.0,
+    "problems": 3.0,
+    "route": "simplify"
+  },
+  "knob_specs": {
+    "candidates": {
+      "default": 1,
+      "kind": "int",
+      "lo": 1,
+      "hi": 4,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many conjectured closed forms are checked per identity",
+      "required": false
+    },
+    "problems": {
+      "default": 3,
+      "kind": "int",
+      "lo": 1,
+      "hi": 3,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many identities the run attempts",
+      "required": false
+    },
+    "route": {
+      "default": "simplify",
+      "kind": "enum",
+      "lo": null,
+      "hi": null,
+      "enum": [
+        "simplify",
+        "expand",
+        "cancel",
+        "together"
+      ],
+      "values": [],
+      "frozen": false,
+      "description": "how the residual is reduced before it is compared to zero",
+      "required": false
+    }
+  }
+}

@@ -42,5 +42,8 @@ worktree = "refactory_dsh.worktree:_worktree_state_bridge"
 [project.entry-points.'refactory.delivery_identity']
 authoring = "refactory_dsh.authoring_evidence:delivery_identity"
 
+[project.entry-points.'refactory.owner_module']
+interactive = "refactory_dsh.interactive"
+
 [tool.setuptools.package-data]
 refactory_dsh = ["*.mjs", "patches/*.yml", "data/*.json"]
