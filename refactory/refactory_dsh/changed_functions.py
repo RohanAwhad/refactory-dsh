@@ -28,6 +28,43 @@ _HUNK_HEADER = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
 
 _TS_EXTENSIONS = frozenset(('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'))
 
+#: A generated source file says so in its first lines ("Generated … Do not edit"), as
+#: ``gen_discovery`` writes ``generated-help.ts``. Nobody reviews its callers by hand.
+_GENERATED_MARK = re.compile(r'\bgenerated\b.*\bdo not edit\b', re.IGNORECASE)
+_GENERATED_HEAD_LINES = 5
+
+
+def is_test_path(path: str) -> bool:
+    """Whether *path* is a test file, by its directory or its name."""
+    name = Path(path).name
+    return ("/tests/" in path or "/test/" in path
+            or path.startswith("tests/") or path.startswith("test/")
+            or ".spec." in name or ".test." in name
+            or (name.startswith("test_") and name.endswith(".py"))
+            or name.endswith("_test.py"))
+
+
+def is_generated(source_root: Path, path: str) -> bool:
+    """Whether the file at *path* carries a generated-file mark in its first lines."""
+    try:
+        with open(source_root / path, encoding="utf-8", errors="replace") as handle:
+            head = [next(handle, "") for _ in range(_GENERATED_HEAD_LINES)]
+    except OSError:
+        return False
+    return any(_GENERATED_MARK.search(line) for line in head)
+
+
+def review_functions(entries: list[dict[str, Any]]) -> list[str]:
+    """The changed functions a reviewer answers repository questions for: product code only.
+
+    Tests and generated files are left out. Their callers are the test runner and the
+    generator, so a reviewer has no path:line to cite, and requiring one only ends runs
+    whose reviews passed.
+    """
+    return [entry["function"] for entry in entries
+            if isinstance(entry, dict) and "function" in entry
+            and not entry.get("test") and not entry.get("generated")]
+
 
 def _parse_diff(diff_text: str) -> dict[str, dict[str, list[int]]]:
     """Parse unified diff into per-file added/removed line numbers.
@@ -225,8 +262,8 @@ def _match_lines_to_spans(
 def changed_functions(diff_text: str, source_root: Path, base_ref: str) -> list[dict[str, Any]]:
     """Map diff hunk line ranges onto function spans.
 
-    Returns ``[{"function": "path::qualname", "file": "path", "line": N, "test": bool}, ...]``
-    for Python, and ``[{"function": "path:first-last", "file": "path", "line": N, "test": bool}, ...]``
+    Returns ``[{"function": "path::qualname", "file": "path", "line": N, "test": bool,
+    "generated": bool}, ...]`` for Python, and the same with ``"function": "path:first-last"``
     for TypeScript.
     """
     if not diff_text.strip():
@@ -239,6 +276,7 @@ def changed_functions(diff_text: str, source_root: Path, base_ref: str) -> list[
 
     for path, changes in per_file.items():
         ext = Path(path).suffix
+        generated = is_generated(source_root, path)
 
         if ext == '.py':
             # ── head-side: added lines ──
@@ -265,9 +303,9 @@ def changed_functions(diff_text: str, source_root: Path, base_ref: str) -> list[
                                 line = start
                                 break
                         is_test = (name.startswith("test_") or name.startswith("Test")
-                                   or "/tests/" in path or "/test/" in path
-                                   or path.startswith("tests/") or path.startswith("test/"))
-                        result.append({"function": key, "file": path, "line": line, "test": is_test})
+                                   or is_test_path(path))
+                        result.append({"function": key, "file": path, "line": line, "test": is_test,
+                                       "generated": generated})
 
             # ── base-side: removed lines ──
             if changes["removed"]:
@@ -291,9 +329,9 @@ def changed_functions(diff_text: str, source_root: Path, base_ref: str) -> list[
                                     line = start
                                     break
                             is_test = (name.startswith("test_") or name.startswith("Test")
-                                       or "/tests/" in path or "/test/" in path
-                                       or path.startswith("tests/") or path.startswith("test/"))
-                            result.append({"function": key, "file": path, "line": line, "test": is_test})
+                                       or is_test_path(path))
+                            result.append({"function": key, "file": path, "line": line, "test": is_test,
+                                           "generated": generated})
 
         elif ext in _TS_EXTENSIONS:
             # TypeScript: one entry per hunk range
@@ -302,22 +340,78 @@ def changed_functions(diff_text: str, source_root: Path, base_ref: str) -> list[
                 key = f"{path}:{first}-{last}"
                 if key not in seen:
                     seen.add(key)
-                    is_test = ("/tests/" in path or "/test/" in path
-                               or path.startswith("tests/") or path.startswith("test/")
-                               or ".spec." in path or ".test." in path)
-                    result.append({"function": key, "file": path, "line": first, "test": is_test})
+                    result.append({"function": key, "file": path, "line": first,
+                                   "test": is_test_path(path), "generated": generated})
 
     return result
 
 
 def format_changed_functions(entries: list[dict[str, Any]]) -> str:
-    """Format the changed-functions list as a human-readable string for prompt rendering."""
+    """Format, for the reviewers' prompts, the changed functions that need repository questions."""
     if not entries:
         return "(none)"
-    lines = []
-    for entry in entries:
-        lines.append(f"- {entry['function']} ({entry['file']}:{entry['line']})")
+    needed = set(review_functions(entries))
+    lines = [f"- {entry['function']} ({entry['file']}:{entry['line']})"
+             for entry in entries if entry["function"] in needed]
+    others = len(entries) - len(lines)
+    if others:
+        lines.append(f"({others} more changed in tests or generated files; "
+                     "they need no repository questions)")
     return "\n".join(lines)
+
+
+def _git(source_root: Path, *args: str) -> str | None:
+    """One git command's stdout in *source_root*, or None when it fails."""
+    try:
+        result = subprocess.run(["git", "-C", str(source_root), *args],
+                                capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def merged_upstream(source_root: Path, base_ref: str) -> str | None:
+    """The newest commit the run's branch merged in from outside its own history, or None.
+
+    A run merges its base branch in when the branch has moved (a builder resolving a
+    conflict, or delivery). Each such merge's other parent is history the run did not
+    write, so the newest one marks where the run's own changes begin.
+    """
+    merges = _git(source_root, "rev-list", "--first-parent", "--merges", f"{base_ref}..HEAD")
+    for merge in (merges or "").split():
+        parents = (_git(source_root, "rev-list", "--parents", "-n", "1", merge) or "").split()[2:]
+        for parent in parents:
+            if _git(source_root, "merge-base", "--is-ancestor", parent, base_ref) is None:
+                return parent
+    return None
+
+
+def _own_entries(entries: list[dict[str, Any]], upstream_entries: list[dict[str, Any]],
+                 ) -> list[dict[str, Any]]:
+    """The entries the run itself changed: also changed relative to the upstream it merged in.
+
+    A Python function is matched by name. A TypeScript hunk is kept when it overlaps a hunk
+    of the upstream diff in the same file; both diffs end at HEAD, so their added lines
+    share HEAD's numbering.
+    """
+    names = {entry["function"] for entry in upstream_entries}
+    ranges: dict[str, list[tuple[int, int]]] = {}
+    for entry in upstream_entries:
+        match = re.search(r':(\d+)-(\d+)$', entry["function"])
+        if match:
+            ranges.setdefault(entry["file"], []).append((int(match.group(1)), int(match.group(2))))
+    kept = []
+    for entry in entries:
+        match = re.search(r':(\d+)-(\d+)$', entry["function"])
+        if match is None:
+            if entry["function"] in names:
+                kept.append(entry)
+            continue
+        first, last = int(match.group(1)), int(match.group(2))
+        if any(first <= other_last and other_first <= last
+               for other_first, other_last in ranges.get(entry["file"], [])):
+            kept.append(entry)
+    return kept
 
 
 def compute_and_write(
@@ -325,8 +419,16 @@ def compute_and_write(
 ) -> str:
     """Compute changed functions and write ``changed-functions.json``.
 
+    Only the run's own changes count: when the branch merged its base in after the run
+    began, an entry must also be changed relative to that merged-in commit, so the base
+    branch's own work never becomes the run's to review.
+
     Returns the formatted string for the ``changed_functions`` fact.
     """
     entries = changed_functions(diff_text, source_root, base_ref) if diff_text.strip() else []
+    upstream = merged_upstream(source_root, base_ref) if entries else None
+    if upstream is not None:
+        upstream_diff = _git(source_root, "diff", upstream, "HEAD") or ""
+        entries = _own_entries(entries, changed_functions(upstream_diff, source_root, upstream))
     (workdir / "changed-functions.json").write_text(json.dumps(entries, indent=2) + "\n")
     return format_changed_functions(entries)
