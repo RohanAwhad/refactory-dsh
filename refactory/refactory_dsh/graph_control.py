@@ -108,9 +108,50 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         return _redeliver(root, saved, current_revision)
     if action == 'confirm-completion':
         return _confirm_completion(root)
+    if action == 'skip':
+        if not node:
+            raise ValueError('--node is required for skip')
+        graph_nodes = saved.get('graph', {}).get('nodes', {})
+        if node not in graph_nodes:
+            raise ValueError(f'unknown node {node!r}')
+        state = saved.get('state', {})
+        if node in (state.get('completed') or []):
+            raise ValueError(f'{node!r} already completed')
+        # Pre-validate: target must be a runtime_evidence producer.
+        decl_path = root / '.refactory/declarations.json'
+        if not decl_path.exists():
+            raise ValueError('declarations.json is missing; cannot validate skip target')
+        decl = json.loads(decl_path.read_text())
+        node_decl = decl.get(node, {})
+        produces = node_decl.get('produces', [])
+        if 'runtime_evidence' not in produces:
+            raise ValueError(
+                f'{node!r} does not produce runtime evidence; '
+                'graph-control skip is limited to check nodes'
+            )
+        identifier = uuid.uuid4().hex
+        invocation_data = None
+        invocation_path = root / '.refactory/invocation.json'
+        if invocation_path.exists():
+            try:
+                invocation_data = json.loads(invocation_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+        payload = {
+            'id': identifier, 'action': 'skip', 'target': node,
+            'source': 'person',
+            'at': datetime.now(timezone.utc).isoformat(),
+            'run_id': str(root),
+            'invocation': invocation_data.get('id') if invocation_data else None,
+        }
+        directory = root / '.refactory/graph-controls'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f'{identifier}.json').write_text(json.dumps(payload))
+        emit(root, 'control_requested', state='queued', summary='skip', node_id=node)
+        return payload
     if action not in ('pause', 'resume', 'stop', 'rerun', 'redeliver'):
         raise ValueError(f'unsupported graph control {action!r}; '
-                         f'supported: pause, resume, stop, rerun, redeliver, acknowledge, amend-command, withdraw, confirm-completion')
+                         f'supported: pause, resume, stop, rerun, redeliver, acknowledge, amend-command, withdraw, confirm-completion, skip')
     if action == 'rerun':
         if text and text.strip():
             graph_nodes = saved.get('graph', {}).get('nodes', {})
