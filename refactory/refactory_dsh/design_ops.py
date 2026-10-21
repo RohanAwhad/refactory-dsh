@@ -370,11 +370,6 @@ def gate_design_review(ctx: Any) -> str:
             )
             problems.extend(rq_problems)
 
-    # ── decide: proceed, reloop, or exhaust ──
-    allowed = int(ctx.knob("design_review_attempts", 2))
-    used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
-    ctx.set_fact("design_review_attempts_used", used)
-
     # ── reviewer re-run routing (before attempt increment) ──
     if problems:
         rq_problems_only = [p for p in problems if p.startswith("[repo-questions]")]
@@ -390,6 +385,11 @@ def gate_design_review(ctx: Any) -> str:
                 return Verdict("review_reloop", rq_report)
             # At the limit, let repo-questions problems join ordinary findings and
             # take the existing reloop or proceed-on-exhaustion path.
+
+    # ── decide: proceed, reloop, or exhaust ──
+    allowed = int(ctx.knob("design_review_attempts", 2))
+    used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
+    ctx.set_fact("design_review_attempts_used", used)
 
     if not problems:
         ctx.write_text("reviews/design-review-feedback.txt",

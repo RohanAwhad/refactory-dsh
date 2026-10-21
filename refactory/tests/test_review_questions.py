@@ -15,10 +15,12 @@ import pytest
 
 def _find_reviewer_gates() -> dict[str, list[str]]:
     """Discover reviewer gates by scanning registered modes for gate evaluators."""
-    from refactory_dsh.registry import modes
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.fast import DesignFastMode, CreateFastMode, EditFastMode
+    from refactory_dsh.create import CreateMode
 
     gate_evaluators = {}
-    for mode_cls in modes():
+    for mode_cls in (DesignMode, DesignFastMode, CreateFastMode, EditFastMode, CreateMode):
         try:
             mode = mode_cls()
             graph = mode.build()
