@@ -125,12 +125,13 @@ def test_proceed_with_note(tmp_path):
     ledger.verdict("gate_strategy", "proceed")
     ledger.note("constraint", "must use Python 3.12")
 
-    # Resume: starts from scratch with the ledger folded in.
-    model2 = _FakeModel(["redesigned content", "the emitted code"])
+    # Resume from the gate with the first run's facts, as a real --resume does.
+    model2 = _FakeModel(["the emitted code"])
     result2 = execute(graph, workdir, model=model2,
-                      task={"name": "test", "brief": "test", "check": "true"})
+                      task={"name": "test", "brief": "test", "check": "true"},
+                      start="gate_strategy", facts=dict(result.facts))
     assert result2.exit_ok, result2.error
-    # The note should appear in at least one agent's prompt (folded by for_run).
+    # The note should appear in the emit agent's prompt (folded by for_run).
     assert any("Python 3.12" in p for p in model2.prompts), (
         "the note did not reach the next agent's prompt"
     )
@@ -280,7 +281,12 @@ def test_rerun_archives_previous_invocation(tmp_path):
     from refactory_dsh import invocations
 
     workdir = tmp_path / "run"
-    state = {"nodes": {}, "graph": {}, "knobs": {}, "ports": {}}
+    state = {
+        "nodes": {},
+        "graph": {"start": "noop", "nodes": {"noop": {"id": "noop", "kind": "op", "call": "loop_ops:noop"}}},
+        "knobs": {},
+        "ports": [],
+    }
 
     # First preparation.
     invocations.prepare(
@@ -312,7 +318,12 @@ def test_walker_create_uses_shared_preparation(tmp_path):
     from refactory_dsh import invocations
 
     workdir = tmp_path / "run"
-    state = {"nodes": {}, "graph": {}, "knobs": {}, "ports": {}}
+    state = {
+        "nodes": {},
+        "graph": {"start": "noop", "nodes": {"noop": {"id": "noop", "kind": "op", "call": "loop_ops:noop"}}},
+        "knobs": {},
+        "ports": [],
+    }
 
     # A preparation seeds the ledger and writes invocation.json.
     invocations.prepare(
@@ -364,10 +375,11 @@ def test_halt_in_fork_branch(tmp_path):
     from refactory_dsh.nn.executor import execute
 
     workdir = tmp_path / "run"
-    # Seed ledger and add a halt verdict.
+    # Seed ledger and add a halt verdict as upfront approval (branch_a has no
+    # prior gate visit, so a scoped verdict would fail).
     steering.Ledger.seed(workdir, "test")
     ledger = steering.Ledger(workdir)
-    ledger.verdict("branch_a", "halt")
+    ledger.verdict("branch_a", "halt", approval=True)
 
     result = execute(graph, workdir)
     assert result.exit_ok is False

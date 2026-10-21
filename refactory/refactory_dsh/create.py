@@ -716,7 +716,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
             command=f"python -m refactory_dsh.create",
             resume_command=f"python -m refactory_dsh.create --resume {workdir}",
             fast=config.fast,
-            worker_backend=client.route().get("worker_backend", "dsh") if client and callable(getattr(client, "route", None)) else "dsh",
+            worker_backend=client.route().get("worker_backend", "") if client and callable(getattr(client, "route", None)) else "",
             project=project_root(),
         )
 

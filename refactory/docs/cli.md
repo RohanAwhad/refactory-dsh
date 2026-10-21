@@ -221,9 +221,9 @@ For samples and resume on authoring APIs, use the documented Python Create/Edit/
 The walker runs the same graphs in-process:
 
 ```
-python -m refactory_dsh.design --name <n> --brief <text> --check <cmd>
-python -m refactory_dsh.create --name <n> --brief <text> [--single | --task <ref>]
-python -m refactory_dsh.edit --mode <pkg>/<mode> --name <n> --brief <text>
+python -m refactory_dsh.design --name <n> --check <cmd>
+python -m refactory_dsh.create --name <n> [--single | --task <ref>]
+python -m refactory_dsh.edit --mode <pkg>/<mode> --name <n>
 ```
 
 ### Common flags

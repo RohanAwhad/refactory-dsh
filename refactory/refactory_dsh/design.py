@@ -772,7 +772,7 @@ def main(argv: list[str] | None = None) -> int:
                 command=f"python -m refactory_dsh.design",
                 resume_command=f"python -m refactory_dsh.design --resume {workdir}",
                 fast=args.fast,
-                worker_backend=client.route().get("worker_backend", "dsh") if callable(getattr(client, "route", None)) else "dsh",
+                worker_backend=client.route().get("worker_backend", "") if callable(getattr(client, "route", None)) else "",
                 project=project_root(),
             )
 

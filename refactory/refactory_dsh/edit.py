@@ -119,7 +119,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
             command="python -m refactory_dsh.edit",
             resume_command=f"python -m refactory_dsh.edit --resume {run_workdir}",
             fast=config.fast,
-            worker_backend=client.route().get("worker_backend", "dsh") if client and callable(getattr(client, "route", None)) else "dsh",
+            worker_backend=client.route().get("worker_backend", "") if client and callable(getattr(client, "route", None)) else "",
             project=project_root(),
         )
 
