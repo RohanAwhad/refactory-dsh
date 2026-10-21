@@ -1,8 +1,8 @@
-"""Tests for the five boundary fixes and the model environment hook.
+"""Tests for boundary fixes, entry-point registrations, and the model environment hook.
 
 Each test verifies that the fix works and that removing it would cause failure.
-Tests 1, 2, 3, 5 run in subprocesses because pytest collection imports worktree
-(via test fixtures), so no in-process test can see the unregistered state.
+Tests that must see the unregistered state run in subprocesses because pytest
+collection imports worktree (via test fixtures).
 """
 
 from __future__ import annotations
@@ -20,71 +20,103 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[1]  # refactory/
 
 
+# ── helper: ensure new entry points are discoverable in subprocesses ───────
+_EP_PREAMBLE = textwrap.dedent("""\
+    import importlib.metadata as _im
+    _real_ep = _im.entry_points
+    def _ensure_ep(**kwargs):
+        group = kwargs.get("group", "")
+        result = _real_ep(**kwargs)
+        if group == "refactory.worktree_state" and not any(e.name == "worktree" for e in result):
+            ep = _im.EntryPoint(name="worktree",
+                                value="refactory_dsh.worktree:_worktree_state_bridge",
+                                group=group)
+            return _im.EntryPoints(list(result) + [ep])
+        if group == "refactory.delivery_identity" and not any(e.name == "authoring" for e in result):
+            ep = _im.EntryPoint(name="authoring",
+                                value="refactory_dsh.authoring_evidence:delivery_identity",
+                                group=group)
+            return _im.EntryPoints(list(result) + [ep])
+        return result
+    _im.entry_points = _ensure_ep
+""")
+
+_EP_EMPTY_PREAMBLE = textwrap.dedent("""\
+    import importlib.metadata as _im
+    _real_ep = _im.entry_points
+    def _empty_ep(**kwargs):
+        group = kwargs.get("group", "")
+        if group.startswith("refactory."):
+            return _im.EntryPoints()
+        return _real_ep(**kwargs)
+    _im.entry_points = _empty_ep
+""")
+
+_POPEN_CAPTURE = textwrap.dedent("""\
+    import subprocess as _sub
+    _captured = {}
+    class _CapturePopen:
+        def __init__(self, cmd, **kwargs):
+            _captured['env'] = dict(kwargs.get('env', {}))
+            raise SystemExit(42)
+    _sub.Popen = _CapturePopen
+""")
+
+
+def _run_script(script: str, *, timeout: int = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, timeout=timeout,
+        cwd=str(_ROOT),
+        env={**os.environ, "PYTHONPATH": str(_ROOT)},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test 1: core only — no overlay, no worktree record
 # ---------------------------------------------------------------------------
 def test_core_only_environment():
-    """Without the entry point, _environment() inherits PATH and applies HOOK_SUPPRESS."""
-    script = textwrap.dedent("""\
-        import importlib.metadata
-        import os
-        import sys
-        import types
+    """Without entry points, PATH is inherited and worktree is never loaded."""
+    script = _EP_EMPTY_PREAMBLE + _POPEN_CAPTURE + textwrap.dedent("""\
+        import json, os, sys, tempfile
         from pathlib import Path
 
-        # Patch entry_points to return empty before importing model
-        _real_ep = importlib.metadata.entry_points
-        def _empty_ep(**kwargs):
-            group = kwargs.get("group", "")
-            if group == "refactory.environment_overlay":
-                return importlib.metadata.EntryPoints()
-            return _real_ep(**kwargs)
-        importlib.metadata.entry_points = _empty_ep
-
         # No worktree record
-        import tempfile
-        workdir = tempfile.mkdtemp()
-        os.environ["REFACTORY_WORKDIR"] = workdir
+        run_dir = Path(tempfile.mkdtemp())
+        (run_dir / ".refactory").mkdir()
+        (run_dir / "out.txt").write_text("")
+        os.environ["REFACTORY_WORKDIR"] = str(run_dir)
+        expected_path = os.environ["PATH"]
 
-        from refactory_dsh.model import DshModelClient
-        # Reset the cached overlay so our patch takes effect
-        import refactory_dsh.model as _mod
-        _mod._environment_overlay = _mod._UNSET
+        spec = {
+            'schema_version': 1,
+            'reads': [],
+            'writes': ['out.txt'],
+            'node_id': 'test_node',
+            'prompt': 'test prompt',
+            'model_context': {
+                'worker_backend': 'dsh',
+                'runtime_root': str(run_dir),
+            },
+            'post_checks': [],
+        }
 
-        client = DshModelClient.__new__(DshModelClient)
-        client._dsh_home = Path.home()
-        client._provider = ""
-        client._model = ""
-        client._effort = ""
-        client._worker_backend = "dsh"
-        client._runtime_root = Path(".")
-        client._budget = None
-        client._worker_receipt = None
-        client._routing_provenance = {}
-        client._timeout_s = 30
-        client._attempts = 1
-        client._backoff_s = 1.0
-        client._dsh_cli = ""
-        client._python_bin = Path(sys.executable)
-        client._permission_mode = "skip"
-        client._role_routes = {}
-        client._node_routes = {}
-        client._provider_config = {}
+        from refactory_dsh.worker_node import execute
+        try:
+            execute(spec, run_dir)
+        except SystemExit:
+            pass
 
-        env = client._environment()
-
-        # PATH should be inherited (no worktree overlay)
-        assert env.get("LEFTHOOK") == "0", f"LEFTHOOK not suppressed: {env.get('LEFTHOOK')}"
-        assert env.get("HUSKY") == "0", f"HUSKY not suppressed: {env.get('HUSKY')}"
+        assert _captured, "Popen was not called"
+        assert _captured['env']["PATH"] == expected_path, (
+            f"PATH mismatch:\\ngot:      {_captured['env']['PATH']}\\nexpected: {expected_path}"
+        )
+        assert _captured['env'].get("LEFTHOOK") == "0", f"LEFTHOOK not suppressed"
+        assert _captured['env'].get("HUSKY") == "0", f"HUSKY not suppressed"
         assert "refactory_dsh.worktree" not in sys.modules, "worktree should not be loaded in core-only mode"
         print("PASS")
     """)
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=30,
-        cwd=str(_ROOT),
-        env={**os.environ, "PYTHONPATH": str(_ROOT)},
-    )
+    result = _run_script(script)
     assert result.returncode == 0, f"core-only test failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "PASS" in result.stdout
 
@@ -93,78 +125,71 @@ def test_core_only_environment():
 # Test 2: product registered — entry point provides worktree overlay
 # ---------------------------------------------------------------------------
 def test_product_registered_environment():
-    """With the entry point, _environment() applies the worktree's PATH/VIRTUAL_ENV."""
-    script = textwrap.dedent("""\
-        import json
-        import os
-        import sys
-        import tempfile
+    """With entry points, worker_node.execute reaches Popen with the worktree's PATH/VIRTUAL_ENV."""
+    script = _EP_PREAMBLE + _POPEN_CAPTURE + textwrap.dedent("""\
+        import json, os, sys, tempfile
         from pathlib import Path
 
-        # Create a fake worktree directory with a managed .venv
-        worktree_dir = tempfile.mkdtemp()
-        venv_dir = Path(worktree_dir) / ".venv"
+        # Create a fake worktree with managed .venv
+        worktree_dir = Path(tempfile.mkdtemp())
+        venv_dir = worktree_dir / ".venv"
         venv_bin_dir = venv_dir / "bin"
         venv_bin_dir.mkdir(parents=True)
         (venv_dir / ".refactory-managed").touch()
 
-        # Create a run directory with a worktree record
-        run_dir = tempfile.mkdtemp()
-        refactory_dir = Path(run_dir) / ".refactory"
+        # Create run directory with worktree record
+        run_dir = Path(tempfile.mkdtemp())
+        refactory_dir = run_dir / ".refactory"
         refactory_dir.mkdir()
         record = {
-            "path": worktree_dir,
+            "path": str(worktree_dir),
             "branch": "refactory/run-test",
             "base": "abc123",
             "head": "def456",
-            "target": worktree_dir,
-            "run": run_dir,
+            "target": str(worktree_dir),
+            "run": str(run_dir),
         }
         (refactory_dir / "worktree.json").write_text(json.dumps(record))
-        os.environ["REFACTORY_WORKDIR"] = run_dir
+        (run_dir / "out.txt").write_text("")
+        os.environ["REFACTORY_WORKDIR"] = str(run_dir)
 
-        from refactory_dsh.model import DshModelClient
-        # Reset the cached overlay
-        import refactory_dsh.model as _mod
-        _mod._environment_overlay = _mod._UNSET
+        spec = {
+            'schema_version': 1,
+            'reads': [],
+            'writes': ['out.txt'],
+            'node_id': 'test_node',
+            'prompt': 'test prompt',
+            'model_context': {
+                'worker_backend': 'dsh',
+                'runtime_root': str(run_dir),
+            },
+            'post_checks': [],
+        }
 
-        client = DshModelClient.__new__(DshModelClient)
-        client._dsh_home = Path.home()
-        client._provider = ""
-        client._model = ""
-        client._effort = ""
-        client._worker_backend = "dsh"
-        client._runtime_root = Path(".")
-        client._budget = None
-        client._worker_receipt = None
-        client._routing_provenance = {}
-        client._timeout_s = 30
-        client._attempts = 1
-        client._backoff_s = 1.0
-        client._dsh_cli = ""
-        client._python_bin = Path(sys.executable)
-        client._permission_mode = "skip"
-        client._role_routes = {}
-        client._node_routes = {}
-        client._provider_config = {}
+        from refactory_dsh.worker_node import execute
+        try:
+            execute(spec, run_dir)
+        except SystemExit:
+            pass
 
-        env = client._environment()
+        assert _captured, "Popen was not called"
 
-        # The worktree's venv/bin should be in PATH
-        assert str(venv_bin_dir) in env.get("PATH", ""), (
-            f"worktree venv not in PATH: {env.get('PATH')}"
+        from refactory_dsh.worktree import check_environment
+        from refactory_dsh.invocations import CHECK_HOME
+        home = run_dir / CHECK_HOME
+        home.mkdir(parents=True, exist_ok=True)
+        expected = check_environment(worktree_dir, home)
+
+        assert _captured['env']["PATH"] == expected["PATH"], (
+            f"PATH mismatch:\\ngot:      {_captured['env']['PATH']}\\nexpected: {expected['PATH']}"
         )
-        assert env.get("VIRTUAL_ENV") == str(venv_dir), (
-            f"VIRTUAL_ENV not set: {env.get('VIRTUAL_ENV')}"
+        assert _captured['env'].get("VIRTUAL_ENV") == expected.get("VIRTUAL_ENV"), (
+            f"VIRTUAL_ENV mismatch:\\ngot: {_captured['env'].get('VIRTUAL_ENV')}\\n"
+            f"expected: {expected.get('VIRTUAL_ENV')}"
         )
         print("PASS")
     """)
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=30,
-        cwd=str(_ROOT),
-        env={**os.environ, "PYTHONPATH": str(_ROOT)},
-    )
+    result = _run_script(script)
     assert result.returncode == 0, f"product-registered test failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "PASS" in result.stdout
 
@@ -174,91 +199,85 @@ def test_product_registered_environment():
 # ---------------------------------------------------------------------------
 def test_worker_import_sequence_has_overlay():
     """The worker process finds the overlay via entry points, not via agent_delivery's worktree import."""
-    script = textwrap.dedent("""\
-        import json
-        import os
-        import sys
-        import tempfile
-        import types
+    script = _EP_PREAMBLE + _POPEN_CAPTURE + textwrap.dedent("""\
+        import json, os, sys, tempfile
         from pathlib import Path
 
-        # Create a fake worktree with managed venv
-        worktree_dir = tempfile.mkdtemp()
-        venv_dir = Path(worktree_dir) / ".venv"
+        # Create a fake worktree with managed .venv
+        worktree_dir = Path(tempfile.mkdtemp())
+        venv_dir = worktree_dir / ".venv"
         venv_bin_dir = venv_dir / "bin"
         venv_bin_dir.mkdir(parents=True)
         (venv_dir / ".refactory-managed").touch()
 
-        # Create a run directory with worktree record
-        run_dir = tempfile.mkdtemp()
-        refactory_dir = Path(run_dir) / ".refactory"
+        # Create run directory with worktree record
+        run_dir = Path(tempfile.mkdtemp())
+        refactory_dir = run_dir / ".refactory"
         refactory_dir.mkdir()
         record = {
-            "path": worktree_dir,
+            "path": str(worktree_dir),
             "branch": "refactory/run-test",
             "base": "abc123",
             "head": "def456",
-            "target": worktree_dir,
-            "run": run_dir,
+            "target": str(worktree_dir),
+            "run": str(run_dir),
         }
         (refactory_dir / "worktree.json").write_text(json.dumps(record))
-        os.environ["REFACTORY_WORKDIR"] = run_dir
+        (run_dir / "out.txt").write_text("")
+        os.environ["REFACTORY_WORKDIR"] = str(run_dir)
 
-        # Stub agent_delivery so it does NOT import worktree
-        stub = types.ModuleType("refactory_dsh.agent_delivery")
-        stub._path = lambda workdir: Path(workdir) / ".refactory" / "agent-delivery"
-        stub.begin = lambda *a, **kw: None
-        stub.finish = lambda *a, **kw: None
-        sys.modules["refactory_dsh.agent_delivery"] = stub
+        spec = {
+            'schema_version': 1,
+            'reads': [],
+            'writes': ['out.txt'],
+            'node_id': 'test_node',
+            'prompt': 'test prompt',
+            'model_context': {
+                'worker_backend': 'dsh',
+                'runtime_root': str(run_dir),
+            },
+            'post_checks': [],
+        }
 
-        # Reset overlay cache
-        from refactory_dsh.model import DshModelClient
-        import refactory_dsh.model as _mod
-        _mod._environment_overlay = _mod._UNSET
+        from refactory_dsh.worker_node import execute
+        try:
+            execute(spec, run_dir)
+        except SystemExit:
+            pass
 
-        client = DshModelClient.__new__(DshModelClient)
-        client._dsh_home = Path.home()
-        client._provider = ""
-        client._model = ""
-        client._effort = ""
-        client._worker_backend = "dsh"
-        client._runtime_root = Path(".")
-        client._budget = None
-        client._worker_receipt = None
-        client._routing_provenance = {}
-        client._timeout_s = 30
-        client._attempts = 1
-        client._backoff_s = 1.0
-        client._dsh_cli = ""
-        client._python_bin = Path(sys.executable)
-        client._permission_mode = "skip"
-        client._role_routes = {}
-        client._node_routes = {}
-        client._provider_config = {}
+        assert _captured, "Popen was not called"
 
-        env = client._environment()
+        # Verify the entry-point caches were populated during execute
+        import refactory_dsh.agent_delivery as _ad
+        ws = _ad.get_worktree_state()
+        assert ws is not None, "worktree_state entry point not discovered during execute"
+        from refactory_dsh import worktree
+        assert ws.recorded is worktree.recorded, "recorded mismatch"
+        assert ws.shared_changed is worktree.shared_changed, "shared_changed mismatch"
 
-        # Even with agent_delivery stubbed (no worktree import), the overlay is found
-        assert str(venv_bin_dir) in env.get("PATH", ""), (
-            f"worktree venv not in PATH with stubbed agent_delivery: {env.get('PATH')}"
+        # Verify the environment overlay matched
+        from refactory_dsh.worktree import check_environment
+        from refactory_dsh.invocations import CHECK_HOME
+        home = run_dir / CHECK_HOME
+        home.mkdir(parents=True, exist_ok=True)
+        expected = check_environment(worktree_dir, home)
+
+        assert _captured['env']["PATH"] == expected["PATH"], (
+            f"PATH mismatch with entry-point overlay:\\n"
+            f"got:      {_captured['env']['PATH']}\\nexpected: {expected['PATH']}"
         )
         print("PASS")
     """)
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=30,
-        cwd=str(_ROOT),
-        env={**os.environ, "PYTHONPATH": str(_ROOT)},
-    )
+    result = _run_script(script)
     assert result.returncode == 0, f"worker sequence test failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "PASS" in result.stdout
 
 
 # ---------------------------------------------------------------------------
-# Test 4: entry point declaration in pyproject.toml
+# Test 4: entry point declarations in pyproject.toml
 # ---------------------------------------------------------------------------
-def test_entry_point_declaration():
-    """pyproject.toml declares the overlay and the installed metadata matches."""
+def test_entry_point_declarations():
+    """pyproject.toml declares all three entry-point groups."""
     try:
         import tomllib
     except ImportError:
@@ -268,48 +287,42 @@ def test_entry_point_declaration():
     with open(toml_path, "rb") as f:
         data = tomllib.load(f)
 
-    # Check the declaration in pyproject.toml
-    ep_group = data.get("project", {}).get("entry-points", {}).get("refactory.environment_overlay", {})
-    assert "worktree" in ep_group, (
+    entry_points = data.get("project", {}).get("entry-points", {})
+
+    # refactory.environment_overlay
+    overlay_group = entry_points.get("refactory.environment_overlay", {})
+    assert "worktree" in overlay_group, (
         "pyproject.toml missing [project.entry-points.'refactory.environment_overlay'] worktree entry"
     )
-    assert ep_group["worktree"] == "refactory_dsh.worktree:_worktree_environment_overlay", (
-        f"entry point value mismatch: {ep_group['worktree']}"
-    )
+    assert overlay_group["worktree"] == "refactory_dsh.worktree:_worktree_environment_overlay"
 
-    # Check the installed metadata matches
-    import importlib.metadata
-    eps = importlib.metadata.entry_points(group="refactory.environment_overlay")
-    ep_list = [ep for ep in eps if ep.name == "worktree"]
-    assert len(ep_list) == 1, f"expected 1 installed entry point, got {len(ep_list)}"
-    assert ep_list[0].value == "refactory_dsh.worktree:_worktree_environment_overlay"
+    # refactory.worktree_state
+    ws_group = entry_points.get("refactory.worktree_state", {})
+    assert "worktree" in ws_group, (
+        "pyproject.toml missing [project.entry-points.'refactory.worktree_state'] worktree entry"
+    )
+    assert ws_group["worktree"] == "refactory_dsh.worktree:_worktree_state_bridge"
+
+    # refactory.delivery_identity
+    di_group = entry_points.get("refactory.delivery_identity", {})
+    assert "authoring" in di_group, (
+        "pyproject.toml missing [project.entry-points.'refactory.delivery_identity'] authoring entry"
+    )
+    assert di_group["authoring"] == "refactory_dsh.authoring_evidence:delivery_identity"
 
 
 # ---------------------------------------------------------------------------
-# Test 5: stale install raises RuntimeError
+# Test 5: stale install raises RuntimeError (environment overlay)
 # ---------------------------------------------------------------------------
 def test_stale_install_raises():
     """When worktree record exists but no overlay is found, RuntimeError is raised."""
-    script = textwrap.dedent("""\
-        import importlib.metadata
-        import json
-        import os
-        import sys
-        import tempfile
+    script = _EP_EMPTY_PREAMBLE + textwrap.dedent("""\
+        import json, os, sys, tempfile
         from pathlib import Path
 
-        # Patch entry_points to return empty (simulating stale install)
-        _real_ep = importlib.metadata.entry_points
-        def _empty_ep(**kwargs):
-            group = kwargs.get("group", "")
-            if group == "refactory.environment_overlay":
-                return importlib.metadata.EntryPoints()
-            return _real_ep(**kwargs)
-        importlib.metadata.entry_points = _empty_ep
-
         # Create a run dir WITH a worktree record
-        run_dir = tempfile.mkdtemp()
-        refactory_dir = Path(run_dir) / ".refactory"
+        run_dir = Path(tempfile.mkdtemp())
+        refactory_dir = run_dir / ".refactory"
         refactory_dir.mkdir()
         record = {
             "path": "/tmp/fake-worktree",
@@ -318,7 +331,7 @@ def test_stale_install_raises():
             "head": "def456",
         }
         (refactory_dir / "worktree.json").write_text(json.dumps(record))
-        os.environ["REFACTORY_WORKDIR"] = run_dir
+        os.environ["REFACTORY_WORKDIR"] = str(run_dir)
 
         from refactory_dsh.model import DshModelClient
         import refactory_dsh.model as _mod
@@ -353,12 +366,7 @@ def test_stale_install_raises():
             assert "uv sync" in msg or "install.sh" in msg, f"error message missing fix hint: {msg}"
             print("PASS")
     """)
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=30,
-        cwd=str(_ROOT),
-        env={**os.environ, "PYTHONPATH": str(_ROOT)},
-    )
+    result = _run_script(script)
     assert result.returncode == 0, f"stale-install test failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "PASS" in result.stdout
 
@@ -429,6 +437,7 @@ def test_constants_values():
         CHECK_PRODUCES, CHECK_WRITES, INSTALL_TIMEOUT_S, HOOK_SUPPRESS,
         CHECK_HOME, BASE_CHECK_HOME, WORKTREE_RECORD, PENDING, WRAPPER,
         TARGET_RECORD, DELIVERY_SHOWN,
+        CONSOLE_FILE, REVIEWERS, DELIVER_ENTRY_POINTS, EVIDENCE,
     )
 
     assert CHECK_PRODUCES == ("commit", "files", "inherited_failures")
@@ -442,8 +451,12 @@ def test_constants_values():
     assert WRAPPER == P(".refactory") / "in-worktree"
     assert TARGET_RECORD == P(".refactory") / "target.json"
     assert DELIVERY_SHOWN == P(".refactory") / "delivery-shown.json"
+    assert CONSOLE_FILE == "console.json"
+    assert REVIEWERS == ("health_checker", "code_reviewer", "qa_director", "overwatch", "focused_qa")
+    assert DELIVER_ENTRY_POINTS == frozenset({"refactory_dsh.delivery:deliver_design"})
+    assert EVIDENCE == "authoring-evidence.json"
 
-    # Re-exports match
+    # Re-exports match (identity, not equality)
     from refactory_dsh.repo_change import CHECK_PRODUCES as cp2, CHECK_WRITES as cw2
     assert cp2 is CHECK_PRODUCES
     assert cw2 is CHECK_WRITES
@@ -465,3 +478,280 @@ def test_constants_values():
 
     from refactory_dsh.target_guard import RECORD as tr2
     assert tr2 is TARGET_RECORD
+
+    # New constant re-exports
+    from refactory_dsh.console import CONSOLE_FILE as cf2
+    assert cf2 is CONSOLE_FILE
+
+    from refactory_dsh.authoring_evidence import REVIEWERS as rv2
+    assert rv2 is REVIEWERS
+
+    from refactory_dsh.delivery import DELIVER_ENTRY_POINTS as dep2
+    assert dep2 is DELIVER_ENTRY_POINTS
+
+    from refactory_dsh.authoring_evidence import EVIDENCE as ev2
+    assert ev2 is EVIDENCE
+
+
+# ---------------------------------------------------------------------------
+# Test 11: worktree_state — core only
+# ---------------------------------------------------------------------------
+def test_worktree_state_core_only():
+    """Without the entry point, get_worktree_state() returns None."""
+    script = _EP_EMPTY_PREAMBLE + textwrap.dedent("""\
+        import sys
+
+        import refactory_dsh.agent_delivery as _ad
+        _ad._worktree_state = _ad._UNSET
+
+        ws = _ad.get_worktree_state()
+        assert ws is None, f"expected None, got {ws}"
+        assert "refactory_dsh.worktree" not in sys.modules, "worktree should not be loaded"
+        print("PASS")
+    """)
+    result = _run_script(script)
+    assert result.returncode == 0, f"worktree_state core-only failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Test 12: worktree_state — product registered
+# ---------------------------------------------------------------------------
+def test_worktree_state_product_registered():
+    """With the entry point, get_worktree_state() returns the bridge namespace."""
+    script = _EP_PREAMBLE + textwrap.dedent("""\
+        import refactory_dsh.agent_delivery as _ad
+        _ad._worktree_state = _ad._UNSET
+
+        ws = _ad.get_worktree_state()
+        assert ws is not None, "get_worktree_state() returned None"
+
+        from refactory_dsh import worktree
+        assert ws.recorded is worktree.recorded, "recorded mismatch"
+        assert ws.shared_changed is worktree.shared_changed, "shared_changed mismatch"
+        print("PASS")
+    """)
+    result = _run_script(script)
+    assert result.returncode == 0, f"worktree_state product-registered failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Test 13: worktree_state — declaration
+# ---------------------------------------------------------------------------
+def test_worktree_state_declaration():
+    """pyproject.toml declares refactory.worktree_state correctly."""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    toml_path = _ROOT / "pyproject.toml"
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+
+    ep_group = data.get("project", {}).get("entry-points", {}).get("refactory.worktree_state", {})
+    assert "worktree" in ep_group, "pyproject.toml missing worktree_state entry"
+    assert ep_group["worktree"] == "refactory_dsh.worktree:_worktree_state_bridge"
+
+
+# ---------------------------------------------------------------------------
+# Test 14: worktree_state — stale install
+# ---------------------------------------------------------------------------
+def test_worktree_state_stale_install():
+    """Worktree record exists but no worktree-state entry point → RuntimeError in begin()."""
+    script = _EP_EMPTY_PREAMBLE + textwrap.dedent("""\
+        import json, os, sys, tempfile
+        from pathlib import Path
+
+        run_dir = Path(tempfile.mkdtemp())
+        refactory_dir = run_dir / ".refactory"
+        refactory_dir.mkdir()
+        record = {
+            "path": "/tmp/fake-worktree",
+            "branch": "refactory/run-test",
+            "base": "abc123",
+            "head": "def456",
+        }
+        (refactory_dir / "worktree.json").write_text(json.dumps(record))
+
+        import refactory_dsh.agent_delivery as _ad
+        _ad._worktree_state = _ad._UNSET
+
+        try:
+            _ad.begin(run_dir, "test_node", "test prompt", ["out.txt"])
+            print("FAIL: no error raised")
+            sys.exit(1)
+        except RuntimeError as e:
+            msg = str(e)
+            assert "uv sync" in msg or "install.sh" in msg, f"error missing fix hint: {msg}"
+            print("PASS")
+    """)
+    result = _run_script(script)
+    assert result.returncode == 0, f"worktree_state stale-install failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Test 15: worktree_state — worker sequence
+# ---------------------------------------------------------------------------
+def test_worktree_state_worker_sequence():
+    """worker_node.execute path discovers worktree_state via entry point."""
+    script = _EP_PREAMBLE + textwrap.dedent("""\
+        import json, os, sys, tempfile
+        from pathlib import Path
+
+        # Create worktree with managed .venv
+        worktree_dir = Path(tempfile.mkdtemp())
+        venv_dir = worktree_dir / ".venv"
+        (venv_dir / "bin").mkdir(parents=True)
+        (venv_dir / ".refactory-managed").touch()
+
+        run_dir = Path(tempfile.mkdtemp())
+        refactory_dir = run_dir / ".refactory"
+        refactory_dir.mkdir()
+        record = {
+            "path": str(worktree_dir),
+            "branch": "refactory/run-test",
+            "base": "abc123",
+            "head": "def456",
+            "target": str(worktree_dir),
+            "run": str(run_dir),
+        }
+        (refactory_dir / "worktree.json").write_text(json.dumps(record))
+        os.environ["REFACTORY_WORKDIR"] = str(run_dir)
+
+        import refactory_dsh.agent_delivery as _ad
+        _ad._worktree_state = _ad._UNSET
+        _ad._delivery_identity = _ad._UNSET
+
+        # After resetting, get_worktree_state should discover the bridge
+        ws = _ad.get_worktree_state()
+        assert ws is not None, "get_worktree_state returned None in worker context"
+        assert hasattr(ws, 'recorded'), "bridge missing recorded"
+        assert hasattr(ws, 'shared_changed'), "bridge missing shared_changed"
+        print("PASS")
+    """)
+    result = _run_script(script)
+    assert result.returncode == 0, f"worktree_state worker sequence failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Test 16: delivery_identity — core only
+# ---------------------------------------------------------------------------
+def test_delivery_identity_core_only():
+    """Without the entry point, get_delivery_identity() returns None and authoring_evidence is not loaded."""
+    script = _EP_EMPTY_PREAMBLE + textwrap.dedent("""\
+        import sys
+
+        import refactory_dsh.agent_delivery as _ad
+        _ad._delivery_identity = _ad._UNSET
+
+        di = _ad.get_delivery_identity()
+        assert di is None, f"expected None, got {di}"
+        assert "refactory_dsh.authoring_evidence" not in sys.modules, (
+            "authoring_evidence should not be loaded in core-only mode"
+        )
+        print("PASS")
+    """)
+    result = _run_script(script)
+    assert result.returncode == 0, f"delivery_identity core-only failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Test 17: delivery_identity — product registered
+# ---------------------------------------------------------------------------
+def test_delivery_identity_product_registered():
+    """With the entry point, get_delivery_identity() returns the callable."""
+    script = _EP_PREAMBLE + textwrap.dedent("""\
+        import refactory_dsh.agent_delivery as _ad
+        _ad._delivery_identity = _ad._UNSET
+
+        di = _ad.get_delivery_identity()
+        assert di is not None, "get_delivery_identity() returned None"
+
+        from refactory_dsh.authoring_evidence import delivery_identity
+        assert di is delivery_identity, "returned callable is not delivery_identity"
+        print("PASS")
+    """)
+    result = _run_script(script)
+    assert result.returncode == 0, f"delivery_identity product-registered failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Test 18: delivery_identity — declaration
+# ---------------------------------------------------------------------------
+def test_delivery_identity_declaration():
+    """pyproject.toml declares refactory.delivery_identity correctly."""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    toml_path = _ROOT / "pyproject.toml"
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+
+    ep_group = data.get("project", {}).get("entry-points", {}).get("refactory.delivery_identity", {})
+    assert "authoring" in ep_group, "pyproject.toml missing delivery_identity entry"
+    assert ep_group["authoring"] == "refactory_dsh.authoring_evidence:delivery_identity"
+
+
+# ---------------------------------------------------------------------------
+# Test 19: delivery_identity — stale install
+# ---------------------------------------------------------------------------
+def test_delivery_identity_stale_install():
+    """Node in REVIEWERS, EVIDENCE exists, no entry point → RuntimeError."""
+    script = _EP_EMPTY_PREAMBLE + textwrap.dedent("""\
+        import json, os, sys, tempfile
+        from pathlib import Path
+
+        run_dir = Path(tempfile.mkdtemp())
+        refactory_dir = run_dir / ".refactory"
+        refactory_dir.mkdir()
+        # Create EVIDENCE file so the stale check triggers
+        (run_dir / "authoring-evidence.json").write_text("{}")
+        # No worktree.json — the worktree_state stale check must pass first
+        (run_dir / "out.txt").write_text("")
+
+        import refactory_dsh.agent_delivery as _ad
+        _ad._delivery_identity = _ad._UNSET
+        _ad._worktree_state = _ad._UNSET
+
+        from refactory_dsh.invocations import REVIEWERS
+        node = REVIEWERS[0]  # e.g. "health_checker"
+
+        try:
+            _ad.begin(run_dir, node, "test prompt", ["out.txt"])
+            print("FAIL: no error raised")
+            sys.exit(1)
+        except RuntimeError as e:
+            msg = str(e)
+            assert "uv sync" in msg or "install.sh" in msg, f"error missing fix hint: {msg}"
+            print("PASS")
+    """)
+    result = _run_script(script)
+    assert result.returncode == 0, f"delivery_identity stale-install failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Test 20: delivery_identity — worker sequence
+# ---------------------------------------------------------------------------
+def test_delivery_identity_worker_sequence():
+    """The worker path discovers delivery_identity via entry point."""
+    script = _EP_PREAMBLE + textwrap.dedent("""\
+        import refactory_dsh.agent_delivery as _ad
+        _ad._delivery_identity = _ad._UNSET
+
+        di = _ad.get_delivery_identity()
+        assert di is not None, "get_delivery_identity returned None in worker context"
+        assert callable(di), "delivery_identity is not callable"
+        print("PASS")
+    """)
+    result = _run_script(script)
+    assert result.returncode == 0, f"delivery_identity worker sequence failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout

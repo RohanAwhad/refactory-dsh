@@ -612,6 +612,12 @@ def shared_changed(found: Worktree) -> bool:
     return True
 
 
+import types as _types
+_worktree_state_bridge = _types.SimpleNamespace(
+    recorded=recorded, shared_changed=shared_changed,
+)
+
+
 # ── attempts: each one a commit on the run's branch ─────────────────────────
 def _tracked_edits(path: Path) -> list[str]:
     """Tracked paths whose content differs from HEAD in the worktree at ``path``."""

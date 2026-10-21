@@ -39,8 +39,7 @@ from refactory_dsh.nn import PackageError
 from refactory_dsh.paths import project_root
 from refactory_dsh.steering import SteeringError
 
-#: What the console records about a run it started.
-CONSOLE_FILE = "console.json"
+from refactory_dsh.invocations import CONSOLE_FILE  # canonical in invocations
 
 #: Default place runs live, and the catalogue a GUI lists.
 RUNS_ROOT = Path(".factory/loop")
