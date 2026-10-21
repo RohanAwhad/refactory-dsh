@@ -57,6 +57,12 @@ node --import tsx/esm apps/cli/src/bin.ts --profile graph run \
 DSH runs every deterministic node itself. The CEO model is only there to call
 `wf_next`; the ops run in-process against the same Python the walker uses.
 
+> **Steering discovery.** The graph-startup plugin discovers the steer command
+> through the `refactory.steer` Python entry point, using `--python-bin`'s
+> python (defaults to `$VENV_BIN`, else `$REFACTORY_DSH_HOME/.venv/bin`, else
+> `<cwd>/.venv/bin`). For a direct launch from the checkout root, no extra
+> flags are needed; otherwise pass `--python-bin /path/to/.venv/bin`.
+
 The result is written where a reader can find it:
 
 ```bash

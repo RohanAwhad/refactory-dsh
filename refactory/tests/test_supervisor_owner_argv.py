@@ -222,6 +222,11 @@ def test_recovery_start_records_failure_for_no_owner(tmp_path):
         yield 0
 
     def fake_popen(argv, **kwargs):
+        # Assert the supervisor module is invoked, matching recovery.py:228.
+        m_idx = argv.index('-m')
+        assert argv[m_idx + 1] == 'refactory_dsh.supervisor', (
+            f"expected Popen to launch refactory_dsh.supervisor, got argv={argv}"
+        )
         # Run the supervisor in-process so we can assert its side effects.
         sv.supervise(root, max_respawns=0)
         m = MagicMock()

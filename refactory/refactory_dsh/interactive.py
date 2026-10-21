@@ -257,6 +257,20 @@ def run(
     # On resume and respawn, use check_only so a stale build warns instead
     # of rebuilding (the supervisor would respawn repeatedly on a failed build).
     require_build(check_only=resume)
+    from refactory_dsh.steer_probe import find_steer_module
+    if find_steer_module() is None:
+        if not resume:
+            raise RuntimeError(
+                f"no refactory.steer entry point is installed in {sys.executable}; "
+                "run `uv sync` to register it"
+            )
+        else:
+            import logging
+            logging.getLogger(__name__).warning(
+                "no refactory.steer entry point is installed in %s; "
+                "steering will be unavailable — run `uv sync`",
+                sys.executable,
+            )
     from refactory_dsh import dsh_profile
     _profile_name = 'graph'
     _pin_checkout_for_check: Path | None = None

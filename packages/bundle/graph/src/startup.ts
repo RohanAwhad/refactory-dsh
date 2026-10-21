@@ -8,6 +8,7 @@
  */
 
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Command } from 'commander'
@@ -84,6 +85,10 @@ export interface GraphStartupValues {
   agentCommand: string
   /** Shared review-scoped user-gate ledger bridge. */
   gateCommand: string
+  /** The steer command executable, or '' when no refactory.steer entry point is installed. */
+  steerCommand?: string
+  /** The steer command flags, or [] when no refactory.steer entry point is installed. */
+  steerArgs?: string[]
   /**
    * Whether the runner keeps a conversation with the person after the first turn.
    *
@@ -153,6 +158,37 @@ export function apply(ctx: Context): void {
     const workdir = String(options.workdir ?? join(tmpdir(), `dsh-run-${mode}-${Date.now()}`))
     const pythonBin = String(options.pythonBin)
 
+    // Discover the steer module from the refactory.steer entry point.
+    // Guard on existsSync to keep existing tests fast: /venv/bin doesn't exist.
+    let steerCommand = ''
+    let steerArgs: string[] = []
+    const pythonPath = `${pythonBin}/python`
+    if (existsSync(pythonPath)) {
+      const probe = spawnSync(pythonPath, ['-m', 'refactory_dsh.steer_probe'], {
+        encoding: 'utf8', timeout: 5000,
+      })
+      const steerModule = probe.status === 0 ? probe.stdout.trim() : ''
+      if (steerModule) {
+        steerCommand = pythonPath
+        steerArgs = ['-m', steerModule, 'steer', '--run']
+      } else {
+        // Report the probe's actual error when it failed (e.g. more-than-one RuntimeError).
+        const probeError = probe.status !== 0
+          ? (probe.stderr?.trim().split('\n').pop() || 'no refactory.steer entry point found')
+          : 'no refactory.steer entry point found'
+        console.warn(
+          'graphStartup: %s in %s; wf_steer will not be registered',
+          probeError,
+          pythonBin,
+        )
+      }
+    } else {
+      console.warn(
+        'graphStartup: python not found at %s; steer probe skipped',
+        pythonPath,
+      )
+    }
+
     const graph = loadGraph(mode, graphsDir)
     // A node command's cwd must exist before the first one spawns.
     mkdirSync(workdir, { recursive: true })
@@ -214,6 +250,8 @@ export function apply(ctx: Context): void {
       pythonBin,
       dataCommand: `${pythonBin}/python -m refactory_dsh.items`,
       agentCommand: `${pythonBin}/python -m refactory_dsh.agent_delivery`,
+      steerCommand,
+      steerArgs,
       gateCommand: `${pythonBin}/python -m refactory_dsh.steering`,
       chat: options.chat === true,
     } satisfies GraphStartupValues)
