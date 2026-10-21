@@ -1683,6 +1683,7 @@ export const PARAMETERS = {
     "type": "boolean"
   },
   "nodeRoutes": {
+    "additionalProperties": true,
     "description": "run: Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output. (console node_routes). Read help topic=run for defaults and constraints.",
     "type": "object"
   },
@@ -1735,6 +1736,7 @@ export const PARAMETERS = {
     "type": "boolean"
   },
   "roleRoutes": {
+    "additionalProperties": true,
     "description": "run: Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output. (console role_routes). Read help topic=run for defaults and constraints.",
     "type": "object"
   },

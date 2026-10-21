@@ -64,7 +64,7 @@ describe('verdict routing cases', () => {
       } else {
         const result = spine.verdict(c.gate, c.verdict)
         // The next node should be the expected target.
-        const nextNodes = result.status === 'running' ? result.nodes?.map(n => n.id) : []
+        const nextNodes = result.status === 'ready' ? result.nodes.map(n => n.id) : []
         expect(nextNodes).toContain(c.expect.target)
       }
     })
