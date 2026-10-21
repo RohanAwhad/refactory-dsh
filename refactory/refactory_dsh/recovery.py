@@ -216,7 +216,7 @@ def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
     # Record the supervisor's PID in the console's launch record so that
     # console.stop finds and signals it exactly as it does a launched run's.
     # The supervisor forwards signals to its child.
-    from refactory_dsh.console import CONSOLE_FILE
+    from refactory_dsh.invocations import CONSOLE_FILE
     console_path = root / CONSOLE_FILE
     try:
         existing = json.loads(console_path.read_text()) if console_path.exists() else {}

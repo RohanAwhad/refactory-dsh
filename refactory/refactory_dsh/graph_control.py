@@ -471,7 +471,7 @@ def _find_deliver_node(graph_nodes: dict[str, Any]) -> str | None:
     Checks ``callable_name`` first (set by lowering) and falls back to
     the ``command`` field for older checkpoints that lack the field.
     """
-    from refactory_dsh.delivery import DELIVER_ENTRY_POINTS
+    from refactory_dsh.invocations import DELIVER_ENTRY_POINTS
 
     for nid, ndata in graph_nodes.items():
         if not isinstance(ndata, dict):
