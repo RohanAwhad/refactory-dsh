@@ -5,6 +5,7 @@
       "id": "check",
       "reads": [],
       "writes": [
+        "changed-functions.json",
         "changes.diff",
         "feedback.txt",
         "test-guardedness.json"
@@ -60,6 +61,7 @@
         "emit.txt"
       ],
       "writes": [
+        "changed-functions.json",
         "changes.diff"
       ],
       "blocking": true,

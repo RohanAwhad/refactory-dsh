@@ -155,7 +155,11 @@ _SMOKE_MODES = frozenset({
 
 
 def _lower_mode_bytes(mode_cls: type, *, name: str, smoke_timeout_s: int | None = None) -> bytes:
-    """Lower a mode and return the graph.json bytes exactly as write_mode_graph writes them."""
+    """Lower a mode and return the graph.json bytes as write_mode_graph writes them.
+
+    A trailing newline is appended when absent so the bytes match the
+    committed snapshot files, which follow the text-file convention.
+    """
     import tempfile
     mode = mode_cls()
     state = mode.state_dict()
@@ -168,7 +172,10 @@ def _lower_mode_bytes(mode_cls: type, *, name: str, smoke_timeout_s: int | None 
             state["knobs"] = knobs
     with tempfile.TemporaryDirectory() as tmpdir:
         path, _workflow = lowering.write_mode_graph(state, Path(tmpdir), name=name)
-        return path.read_bytes()
+        data = path.read_bytes()
+        if not data.endswith(b'\n'):
+            data += b'\n'
+        return data
 
 
 def _snapshot_path(key: str, suffix: str = "") -> Path:
@@ -179,7 +186,8 @@ def _snapshot_path(key: str, suffix: str = "") -> Path:
 def regenerate_snapshots() -> None:
     """Regenerate all snapshot files from the current code.
 
-    Run this once after a deliberate lowering change::
+    Run this once after a deliberate lowering change.  The files follow the
+    text-file convention (trailing newline), matching ``_lower_mode_bytes``::
 
         python -c "from tests.test_lowering_smoke import regenerate_snapshots; regenerate_snapshots()"
     """
