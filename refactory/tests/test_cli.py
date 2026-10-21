@@ -184,9 +184,14 @@ def test_the_command_reference_matches_the_command_line():
         declared[verb] = set(_OPTION.findall(helped.stdout))
     named = set(re.findall(r"--[a-z][a-z0-9-]*", reference))
 
+    # Walker commands (python -m refactory_dsh.*) are documented in their own
+    # section and are not `refactory` CLI verbs, so exclude their flags.
+    walker_match = re.search(r"(?m)^## Walker.*?(?=^## |\Z)", reference, re.DOTALL)
+    walker_flags = set(re.findall(r"--[a-z][a-z0-9-]*", walker_match.group())) if walker_match else set()
+
     # argparse writes `-h, --help` on one line, which `_OPTION` skips; every verb
     # still accepts it, so the reference naming it is correct.
-    invented = sorted(named - set().union(*declared.values()) - {"--help"})
+    invented = sorted(named - set().union(*declared.values()) - {"--help"} - walker_flags)
     assert invented == [], f"the command reference invents options no verb accepts: {invented}"
 
     undocumented = {

@@ -221,18 +221,16 @@ For samples and resume on authoring APIs, use the documented Python Create/Edit/
 The walker runs the same graphs in-process:
 
 ```
-python -m refactory_dsh.design --name <n> --check <cmd>
-python -m refactory_dsh.create --name <n> [--single | --task <ref>]
+python -m refactory_dsh.design --name <n> --brief <text> --check <cmd>
+python -m refactory_dsh.create --name <n> --brief <text> [--single | --task <ref>]
 python -m refactory_dsh.edit --mode <pkg>/<mode> --name <n>
 ```
-
-Design and create also require a brief describing what to build; use each
-command's own `--help` for the full flag list.
 
 ### Common flags
 
 | flag | what it does |
 |---|---|
+| `--brief <text>` | what to build (required for design and create when not resuming) |
 | `--resume <dir>` | continue a stopped run; no other arguments needed |
 | `--verdict <gate>=<value>` | answer a user gate (repeatable) |
 | `--model <id>` | model id for this run |
