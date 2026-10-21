@@ -276,7 +276,7 @@ def _extract_identifiers(subject: str | None) -> list[str]:
     names: list[str] = []
     # Skip tokens that look like file paths (contain a file extension).
     token = subject.split('(')[0].strip() if '(' in subject else subject.strip()
-    if re.match(r'[\w/._-]+\.\w+$', token):
+    if re.match(r'[\w/._-]+\.(?:py|pyi|ts|tsx|js|jsx|mjs|cjs|md|txt|json|yaml|yml|toml|html|css|rs|go|rb|java|c|cpp|h|hpp)$', token):
         return []
     for m in _CALL_RE.finditer(subject):
         names.append(m.group(1))

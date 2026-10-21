@@ -35,6 +35,7 @@ PACKAGE = Package(
     name="default_pack",
     description="Create a package, revise one, or design an artifact — from a brief.",
     modes=(CreateMode, EditMode, DesignMode, CreateFastMode, EditFastMode, DesignFastMode),
-    ops=("refactory_dsh.create_ops", "refactory_dsh.design_ops", "refactory_dsh.fast_ops",
+    ops=("refactory_dsh.create_ops", "refactory_dsh.design_claims",
+         "refactory_dsh.design_ops", "refactory_dsh.fast_ops",
          "refactory_dsh.repo_change", "refactory_dsh.delivery"),
 )
