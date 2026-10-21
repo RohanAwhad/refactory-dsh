@@ -588,6 +588,26 @@ def wire_reviews(graph: Any) -> None:
     graph.nodes["report"] = replace(report, reads=(*report.reads, EVIDENCE, AUDIT))
 
 
+#: Re-runs a reviewer gets when missing repository questions are its only problem. The one
+#: re-run is targeted: its feedback names each missing function and answer. After it the
+#: gaps are advisory, because a run whose reviews found nothing blocking must not end on a
+#: reviewer's bookkeeping.
+REPO_QUESTION_RERUNS = 1
+ADVISORY_REPO_QUESTIONS = "advisory: repository questions still missing after one re-run:"
+
+
+def repo_question_rerun_due(ctx: Any, counter: str) -> bool:
+    """Count one repository-questions-only miss under the fact *counter*; True while a re-run is due."""
+    used = int(ctx.facts.get(counter, 0)) + 1
+    ctx.set_fact(counter, used)
+    return used <= REPO_QUESTION_RERUNS
+
+
+def advisory_repo_questions(problems: list[str]) -> str:
+    """The advisory note listing repository questions still missing after the re-run."""
+    return ADVISORY_REPO_QUESTIONS + "\n" + "\n".join(f"- {p}" for p in problems)
+
+
 def validate_repo_questions(
     record: Any, expected_functions: list[str], reviewer_name: str,
 ) -> list[str]:
@@ -626,11 +646,14 @@ def validate_repo_questions(
                 f"[repo-questions] {reviewer_name}: no entry for changed function '{orig_fn}'"
             )
 
-    # Check each entry has the three required answers with path:line evidence
+    # Check each required entry has the three answers with path:line evidence. An entry a
+    # reviewer adds for a function outside the list (a test, say) is not checked.
     for entry in record:
         if not isinstance(entry, dict):
             continue
         fn = str(entry.get("function", "?"))
+        if re.sub(r':\d+(-\d+)?$', '', fn).strip() not in normalised_expected and fn not in expected_functions:
+            continue
         for key in ("duplicates", "callers", "shared_state"):
             answer = str(entry.get(key, ""))
             if not answer:

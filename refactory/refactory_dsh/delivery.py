@@ -1748,6 +1748,15 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         unresolved = ctx.read_text("reviews/verification-unresolved.md").strip()
         if unresolved:
             verification += "\n- **Unresolved verification findings:**\n" + unresolved + "\n"
+    # Repository questions the reviewers still left unanswered after their one re-run.
+    if ctx.exists("reviews/qa-gate.txt"):
+        from refactory_dsh.authoring_evidence import ADVISORY_REPO_QUESTIONS
+
+        gate_text = ctx.read_text("reviews/qa-gate.txt")
+        if ADVISORY_REPO_QUESTIONS in gate_text:
+            missing = gate_text.split(ADVISORY_REPO_QUESTIONS, 1)[1].strip()
+            verification += ("\n- **Repository questions left unanswered (advisory):**\n"
+                             + missing + "\n")
     verification += _process_notes_section(ctx)
     sections.append(verification)
 
