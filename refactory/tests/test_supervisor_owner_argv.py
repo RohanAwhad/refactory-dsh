@@ -158,26 +158,33 @@ def test_supervise_handles_none_child_detached(tmp_path):
 
 
 def test_supervise_handles_none_child_inline(tmp_path):
-    """Inline supervisor returns last_exit_code when respawn _start_child returns None."""
+    """Inline supervisor exits cleanly when the respawn _start_child returns None.
+
+    Without the ``if child is None`` guard at the respawn site,
+    ``history_entry['child_pid'] = child.pid`` raises ``AttributeError``.
+    This test sets ``owner_pid`` to a dead process so
+    ``needs_supervision`` returns True and the respawn site is reached.
+    """
     root = _make_run_dir(tmp_path, mode='default_pack/design', status='executing')
 
-    call_count = 0
+    # Set owner_pid to a dead process so needs_supervision returns True.
+    dead = _dead_pid()
+    cp = json.loads((root / '.refactory/spine-checkpoint.json').read_text())
+    cp['owner_pid'] = dead
+    (root / '.refactory/spine-checkpoint.json').write_text(json.dumps(cp))
 
-    class FakeChild:
-        def __init__(self, pid, code):
-            self.pid = pid
-            self.returncode = code
-        def wait(self):
-            pass
-        def poll(self):
-            return self.returncode
+    call_count = 0
 
     def mock_start_child(r):
         nonlocal call_count
         call_count += 1
-        if call_count == 1:
-            return FakeChild(pid=10001, code=1)
-        return None  # second attempt fails
+        # Simulate no owner: every call returns None.
+        sv.record_start_failure(
+            r, os.getpid(), 1,
+            run_state.spine_status(r), run_state.spine_status(r),
+            reason='no owner_argv in run-config.json and no '
+                   'refactory.owner_module entry point')
+        return None
 
     def mock_prepare(r, name, **kw):
         return r / 'graphs'
@@ -186,9 +193,12 @@ def test_supervise_handles_none_child_inline(tmp_path):
         with patch('refactory_dsh.recovery.prepare', side_effect=mock_prepare):
             result = sv.supervise(root, first_exit_code=1, max_respawns=3)
 
-    # first_exit_code=1 means inline=True, the loop classifies exit 1 as
-    # needing supervision, tries respawn, gets None, returns last_exit_code (1).
+    # Inline returns last_exit_code; no crash (AttributeError would surface
+    # without the guard).
     assert result == 1
+    assert call_count >= 1, (
+        f'_start_child was called {call_count} time(s); '
+        'the respawn site was not reached — needs_supervision must return True')
 
 
 # ── T5: recovery.start → supervisor records start-failure ─────────────────
@@ -343,8 +353,11 @@ def test_supervise_resume_pending_none_child(tmp_path):
     """Resume-pending: _start_child → None preserves start-failure and exits.
 
     Without the ``if child is None`` guard at the resume-pending site, the
-    code clears start-failure.json via ``sf_path.unlink()``.  This test
-    fails when that guard is removed.
+    code falls through to ``sf_path.unlink()`` and clears start-failure.json.
+    Two assertions catch a removed guard:
+    (a) start-failure.json still exists (the unlink did not fire),
+    (b) _start_child was called exactly once (the guard returned before the
+        respawn site could call it again).
     """
     root = _make_run_dir(tmp_path, mode='default_pack/design', status='executing')
 
@@ -356,12 +369,15 @@ def test_supervise_resume_pending_none_child(tmp_path):
     }
     (root / '.refactory/resume-pending.json').write_text(json.dumps(pending))
 
+    call_count = 0
+
     def mock_start_child(r):
+        nonlocal call_count
+        call_count += 1
         sv.record_start_failure(
             r, os.getpid(), 1,
             run_state.spine_status(r), run_state.spine_status(r),
-            reason='no owner_argv in run-config.json and no '
-                   'refactory.owner_module entry point')
+            reason=f'no owner (call {call_count})')
         return None
 
     with (
@@ -372,11 +388,18 @@ def test_supervise_resume_pending_none_child(tmp_path):
 
     assert result == 1  # inline → last_exit_code
 
-    # The guard must prevent sf_path.unlink() from clearing start-failure.
+    # (a) The guard must prevent sf_path.unlink() from clearing start-failure.
     failure = run_state.read_start_failure(root)
     assert failure is not None, (
         'start-failure.json was cleared; the resume-pending None guard is missing')
-    assert 'no owner_argv' in failure['reason']
+    assert 'no owner (call 1)' in failure['reason'], (
+        f'start-failure.json was overwritten by a later _start_child call: '
+        f'got reason={failure["reason"]!r}')
+
+    # (b) The guard must exit immediately — _start_child called exactly once.
+    assert call_count == 1, (
+        f'Expected 1 _start_child call (resume-pending only), '
+        f'got {call_count} — the resume-pending None guard is missing')
 
 
 # ── T9: respawn path handles None child ───────────────────────────────────
@@ -385,9 +408,10 @@ def test_supervise_resume_pending_none_child(tmp_path):
 def test_supervise_respawn_none_child(tmp_path):
     """Respawn: _start_child → None exits cleanly without AttributeError.
 
-    Without the ``if child is None`` guard at the respawn site, the code
-    accesses ``child.pid`` and raises ``AttributeError``.  This test fails
-    when that guard is removed.
+    Without the ``if child is None`` guard at the respawn site,
+    ``history_entry['child_pid'] = child.pid`` raises ``AttributeError``
+    and the ``supervise()`` call crashes instead of returning 1.
+    This test fails when that guard is removed.
     """
     root = _make_run_dir(tmp_path, mode='default_pack/design', status='executing')
 
