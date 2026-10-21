@@ -296,20 +296,25 @@ class Ledger:
         Legacy records lack an explicit scope and cannot prove current approval.
         They remain visible in the ledger, but require the person to answer again.
         A mismatching pending answer expires so reverting a file cannot revive it.
+
+        Verdicts are lowercased. ``halt`` is always accepted at a user gate even
+        when it is not in ``labels``, because every user gate offers halt.
         """
         entries = self.entries()
         used = {self._fields(e).get("id") for e in entries if e["kind"] == "verdict-use"}
         latest = next((self._fields(e) for e in reversed(entries)
                        if e["kind"] == VERDICT_KIND and self._fields(e).get("gate") == gate), {})
-        value = latest.get("verdict", "")
+        value = (latest.get("verdict") or "").lower()
         if latest.get("scope") == "run" and latest.get("source") == "upfront":
-            if value not in labels:
+            if value not in [l.lower() for l in labels] and value != "halt":
                 raise SteeringError(f"upfront verdict {value!r} is not accepted by gate {gate!r}")
             return value
         decision = latest.get("id")
         if not decision or decision in used or latest.get("consumed") == "yes":
             return ""
-        valid = latest.get("scope") == review and value in labels
+        valid = latest.get("scope") == review and (
+            value in [l.lower() for l in labels] or value == "halt"
+        )
         self._decision_entry({"at": _now(), "kind": "verdict-use", "id": decision,
                               "gate": gate, "result": "used" if valid else "expired"})
         self._mark_consumed(decision)
@@ -652,14 +657,37 @@ def interactive(
     return annotate(workflow, ledger), ledger
 
 
+#: Maps a verdict label to the note kind ``console._steer`` should use when the
+#: person gives ``--verdict`` and ``--note`` together with no explicit ``--kind``.
+NOTE_KINDS: dict[str, str] = {"reloop": "correction", "proceed": "constraint"}
+
+
+def strip_steering(text: str) -> str:
+    """Remove the STEERING_START/STEERING_END block from a prompt string.
+
+    Strips trailing whitespace before the marker, as
+    :func:`prompt_with_ledger` does.
+    """
+    start = text.find(STEERING_START)
+    if start < 0:
+        return text
+    end = text.find(STEERING_END, start)
+    if end < 0:
+        return text
+    return text[:start].rstrip() + text[end + len(STEERING_END):]
+
+
 __all__ = [
     "CITATION",
     "KINDS",
     "LEDGER",
+    "NOTE_KINDS",
     "PLACEHOLDER",
     "BOOKKEEPING_KINDS",
     "SCOPES",
     "SOURCES",
+    "STEERING_START",
+    "STEERING_END",
     "VERDICT_KIND",
     "Ledger",
     "SteeringError",
@@ -670,6 +698,7 @@ __all__ = [
     "for_run",
     "interactive",
     "outputs_in",
+    "strip_steering",
 ]
 
 
@@ -691,8 +720,8 @@ def main() -> int:
         elif request["action"] == "answer":
             if review != request["review"]:
                 raise SteeringError(f"gate {gate!r} review inputs changed while awaiting the answer; ask again")
-            verdict = request["verdict"]
-            if verdict not in labels:
+            verdict = request["verdict"].lower()
+            if verdict not in [l.lower() for l in labels] and verdict != "halt":
                 raise SteeringError(f"gate {gate!r} does not accept {verdict!r}")
             result = ledger.verdict(gate, verdict, review=review, answered=True)
             # Record feedback as steering in the intent ledger.
