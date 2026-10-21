@@ -36,6 +36,89 @@ PLANNING_STEPS = ('research_director', 'pitfalls_researcher', 'strategy_director
 materialise_artifact = repo_change.materialise
 
 
+def noop(ctx: Any) -> dict[str, Any]:
+    """Terminal node: does nothing, returns an empty dict."""
+    return {}
+
+
+def pick_gate_corrections(ctx: Any) -> str:
+    """Gate evaluator: extract gate_strategy corrections from the intent ledger.
+
+    Returns ``"proceed"`` when corrections exist (route to apply_corrections),
+    or ``"skip"`` when there are none (route directly to emit, skipping the
+    agent entirely).
+
+    Reads the ledger only when it exists; a missing ledger means "no corrections".
+    Only constraint entries (not process-scoped) immediately following a
+    gate_strategy proceed verdict are gate corrections.  Process notes and
+    other gates' notes are excluded here, not by the agent prompt.
+    """
+    from refactory_dsh.steering import LEDGER
+
+    ledger_path = Path(ctx.workdir) / LEDGER
+    if not ledger_path.exists():
+        ctx.set_fact("gate_corrections", "")
+        ctx.set_fact("design_corrections_applied", "no corrections (no ledger)")
+        return "skip"
+
+    text = ledger_path.read_text()
+    corrections: list[str] = []
+
+    # Parse the ledger entries: look for verdict entries for gate_strategy
+    # with verdict=proceed, then the immediately following constraint entry.
+    # Split into sections by ## headers
+    sections = _re.split(r'^## ', text, flags=_re.MULTILINE)
+    entries: list[dict[str, str]] = []
+    for section in sections[1:]:  # skip the title
+        lines = section.strip().splitlines()
+        if not lines:
+            continue
+        header = lines[0]
+        body = "\n".join(lines[1:]).strip()
+        entries.append({"header": header, "body": body})
+
+    saw_proceed = False
+    for entry in entries:
+        header = entry["header"]
+        body = entry["body"]
+        # Check for verdict entries: "[timestamp] verdict" or "[timestamp] verdict-use"
+        if "verdict" in header.lower() and "verdict-use" not in header.lower():
+            # Parse the body for gate and verdict
+            gate_match = _re.search(r'^gate:\s*(.+)$', body, _re.MULTILINE)
+            verdict_match = _re.search(r'^verdict:\s*(.+)$', body, _re.MULTILINE)
+            if gate_match and verdict_match:
+                gate = gate_match.group(1).strip()
+                verdict = verdict_match.group(1).strip()
+                saw_proceed = (gate == "gate_strategy" and verdict == "proceed")
+                continue
+        # Check for constraint entries immediately after a gate_strategy proceed
+        if saw_proceed:
+            # Check if this is a constraint (not process-scoped)
+            is_constraint = "constraint" in header.lower() and "(process)" not in header.lower()
+            # Also check it's not a correction from another gate
+            is_correction = "correction" in header.lower()
+            if is_constraint or is_correction:
+                corrections.append(body)
+            saw_proceed = False
+        else:
+            saw_proceed = False
+
+    if not corrections:
+        ctx.set_fact("gate_corrections", "")
+        ctx.set_fact("design_corrections_applied", "no corrections found in ledger")
+        return "skip"
+
+    joined = "\n\n".join(f"- {c}" for c in corrections)
+    ctx.set_fact("gate_corrections", joined)
+
+    # Back up design.md before corrections are applied (gate 5c).
+    design_path = Path(ctx.workdir) / "design.md"
+    if design_path.exists():
+        (Path(ctx.workdir) / "design.md.pre_corrections").write_text(design_path.read_text())
+
+    return "proceed"
+
+
 def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None = None) -> dict[str, Any]:
     """Read the brief, and what the brief says counts as done.
 
@@ -101,6 +184,8 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
 
             print(f"refactory: warning: {readiness['warning']}", file=sys.stderr)
     ctx.write_json("brief.json", {"name": name, "brief": brief, "check": check})
+    # Write initial check-record.json so emit finds its input
+    ctx.write_json("check-record.json", {"status": "not_run", "validation": "(no check has run yet)"})
     for feedback in ("research-review.txt", "check.txt"):
         ctx.write_text(feedback, "not run: initial authoring pass; no prior feedback\n")
     ctx.write_text("reviews/design-review-feedback.txt",
@@ -119,11 +204,39 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         "pitfalls": "(no pitfalls analysis yet)",
         "pitfalls_review": "(no pitfalls review has run yet)",
     } if deliver else {}
+    # Write feedback-initial.json so a redo before QA re-fills
+    feedback_initial = {
+        "validation": "(no check has run yet)",
+        **UNREFUSED,
+    }
+    ctx.write_json("feedback-initial.json", feedback_initial)
+    # ── deliverable_kind: repository change vs artifact ──
+    has_target = bool(str(task.get("target") or ctx.knob("target", "") or "").strip())
+    has_refine = bool(str(task.get("refine") or ctx.knob("refine", "") or "").strip())
+    has_source_project = bool(str(task.get("source_project") or ctx.knob("source_project", "") or "").strip())
+    deliverable_kind = "repository_change" if (has_target or has_refine or has_source_project) else "artifact"
+    from refactory_dsh.authoring_evidence import (
+        REPO_CHANGE_REVIEW_INSTRUCTIONS,
+        ARTIFACT_REVIEW_INSTRUCTIONS,
+    )
+    review_instructions = (
+        REPO_CHANGE_REVIEW_INSTRUCTIONS if deliverable_kind == "repository_change"
+        else ARTIFACT_REVIEW_INSTRUCTIONS
+    )
+
+    claims_facts = {
+        "claims_check_feedback": "",
+        "claims_check_attempts_used": 0,
+        "design_review_status": "",
+    } if deliver else {}
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
             "research_review": "(no research review has run yet)", "research_scope": research_scope,
             "design_review_feedback": "(no design review has run yet)",
             "design_review_findings": "(no findings yet)",
+            "deliverable_kind": deliverable_kind,
+            "review_instructions": review_instructions,
             **pitfalls_facts,
+            **claims_facts,
             **UNREFUSED, **located, **planned}
 
 
@@ -324,6 +437,56 @@ def gate_design_review(ctx: Any) -> str:
         ctx.set_fact("pitfall_coverage",
                      "pitfalls check skipped: no pitfalls_researcher in this graph")
 
+    # ── mechanical check 5: finding coverage ──
+    from refactory_dsh import findings_coverage
+    problems.extend(findings_coverage.gate_problems(ctx))
+
+    # ── mechanical check 6: repository questions and brief-example trace ──
+    deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
+    if deliverable_kind_value == "repository_change" and design_text:
+        from refactory_dsh.authoring_evidence import check_review_questions
+        from refactory_dsh import design_contract
+
+        run_name = str(ctx.facts.get("name") or "")
+        parsed = design_contract.parse(design_text, run_name)
+        changed_fns = [
+            design_contract._extract_file_path(site["path"])
+            for site in parsed.rule_sites
+            if site["status"] == "changed"
+        ]
+        # Normalise and deduplicate
+        seen_fns: set[str] = set()
+        deduped_fns: list[str] = []
+        for fn in changed_fns:
+            fn_norm = _re.sub(r':\d+(-\d+)?$', '', fn).strip()
+            if fn_norm and fn_norm not in seen_fns:
+                seen_fns.add(fn_norm)
+                deduped_fns.append(fn_norm)
+        if deduped_fns:
+            target = str(ctx.facts.get("target") or "")
+            rq_problems = check_review_questions(
+                review_text, deduped_fns, "design_review",
+                require_brief_trace=True,
+                target=target,
+            )
+            problems.extend(rq_problems)
+
+    # ── reviewer re-run routing (before attempt increment) ──
+    if problems:
+        rq_problems_only = [p for p in problems if p.startswith("[repo-questions]")]
+        non_rq_problems = [p for p in problems if not p.startswith("[repo-questions]")]
+        if rq_problems_only and not non_rq_problems:
+            # Only repo-questions problems: re-run the reviewer without spending an attempt.
+            reruns_used = int(ctx.facts.get("design_review_reruns_used", 0)) + 1
+            ctx.set_fact("design_review_reruns_used", reruns_used)
+            if reruns_used <= 2:
+                rq_report = "\n".join(f"- {p}" for p in rq_problems_only)
+                ctx.write_text("reviews/design-review-feedback.txt", rq_report + "\n")
+                ctx.set_fact("design_review_feedback", rq_report)
+                return Verdict("review_reloop", rq_report)
+            # At the limit, let repo-questions problems join ordinary findings and
+            # take the existing reloop or proceed-on-exhaustion path.
+
     # ── decide: proceed, reloop, or exhaust ──
     allowed = int(ctx.knob("design_review_attempts", 2))
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
@@ -339,9 +502,18 @@ def gate_design_review(ctx: Any) -> str:
         if coverage:
             ctx.set_fact("design_review_findings",
                          ctx.facts["design_review_findings"] + "\n\n" + coverage)
+        ctx.set_fact("design_review_status", design_review_status(ctx.facts))
         return "proceed"
 
     report = "\n".join(f"- {p}" for p in problems)
+
+    # In the mixed case, send only non-repo-questions problems to design_doc
+    non_rq = [p for p in problems if not p.startswith("[repo-questions]")]
+    if non_rq and len(non_rq) < len(problems):
+        # Mixed case: write only non-rq problems as design_review_feedback for design_doc
+        non_rq_report = "\n".join(f"- {p}" for p in non_rq)
+        ctx.write_text("reviews/design-review-feedback.txt", non_rq_report + "\n")
+        ctx.set_fact("design_review_feedback", non_rq_report)
 
     if used >= allowed:
         # Exhausted: proceed to gate_strategy with findings shown.
@@ -351,6 +523,7 @@ def gate_design_review(ctx: Any) -> str:
         if coverage:
             ctx.set_fact("design_review_findings", report + "\n\n" + coverage)
         ctx.write_text("reviews/design-review-feedback.txt", report + "\n")
+        ctx.set_fact("design_review_status", design_review_status(ctx.facts))
         return "proceed"
 
     # Reloop to design_doc with the findings.
@@ -359,6 +532,32 @@ def gate_design_review(ctx: Any) -> str:
     ctx.set_fact("design_review_findings",
                  "(no findings yet)")
     return Verdict("reloop", report)
+
+
+def design_review_status(facts: dict) -> str:
+    """One-line status for the approval gate, from the run's facts.
+
+    Returns '' when no review has run, 'Design review: PASS' on pass,
+    or 'Design review: FAIL, N unresolved' plus one line per finding.
+    """
+    used = int(facts.get("design_review_attempts_used", 0))
+    if used == 0:
+        return ""
+    findings = str(facts.get("design_review_findings", ""))
+    if "(none: the design review" in findings:
+        return "Design review: PASS"
+    if findings == "(no findings yet)":
+        return ""
+    lines = [
+        ln for ln in findings.splitlines()
+        if ln.startswith("- ")
+        and not ln.startswith("- the review did not state 'VERDICT: PASS'")
+    ]
+    n = len(lines)
+    return (
+        f"Design review: FAIL, {n} unresolved\n"
+        + "\n".join(lines)
+    )
 
 
 def gate_pitfalls(ctx: Any) -> str:
@@ -425,6 +624,10 @@ def check_artifact(ctx: Any) -> str:
         detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
         ctx.write_text("check.txt", detail + "\n")
         ctx.set_fact("validation", detail)
+        ctx.write_json("check-record.json", {
+            "status": "refused", "validation": detail,
+            "attempt": int(ctx.facts.get("attempts_used", 0)),
+        })
         return Verdict("reloop", detail)
     command = str(ctx.facts["check"])
     result = repo_change.run_check(ctx, command, int(ctx.knob("check_timeout_s", 180)))
@@ -452,6 +655,9 @@ def check_artifact(ctx: Any) -> str:
             ctx.write_json("test-guardedness.json", guardedness)
     evidence.record(ctx, outcome)
 
+    # Clear base_unavailable at the start of each check attempt (R2).
+    ctx.set_fact("base_unavailable", "")
+
     if result.ok:
         # ── enforce test guardedness (R3, #384 item 1) ──
         unexempted = enforce_guardedness(ctx)
@@ -463,8 +669,16 @@ def check_artifact(ctx: Any) -> str:
                 "PR why each test pins existing behaviour."
             )
             ctx.write_text("check.txt", detail + "\n")
+            ctx.write_json("check-record.json", {
+                "status": "guarded", "validation": detail,
+                "attempt": int(ctx.facts.get("attempts_used", 0)),
+            })
             return repair(ctx, [detail])
         ctx.set_fact("validation", "(the check passed)")
+        ctx.write_json("check-record.json", {
+            "status": "pass", "validation": "(the check passed)",
+            "attempt": int(ctx.facts.get("attempts_used", 0)),
+        })
         return "proceed"
 
     # Name the specific resource limit when a file-size stop occurs.
@@ -484,10 +698,17 @@ def check_artifact(ctx: Any) -> str:
             guardedness=guardedness,
         )
         if filtered.base_environment_failure:
-            evidence.stop_unrepairable(
-                "unavailable",
-                f"the base check could not run: {filtered.base_environment_failure}",
-            )
+            if filtered.base_crashed:
+                # R2: a crash — continue without excusals, with the note.
+                note = (f"base comparison unavailable: {filtered.base_environment_failure}; "
+                        "the attempt's results stand without excusals")
+                ctx.set_fact("base_unavailable", note)
+            else:
+                # A deterministic failure — stop as today's base_environment_failure.
+                evidence.stop_unrepairable(
+                    'unavailable',
+                    f"the base check could not run: {filtered.base_environment_failure}",
+                )
 
         # Diagnose unbuilt packages from the worktree's own manifests.
         wt_path = Path(found.path)
@@ -508,6 +729,10 @@ def check_artifact(ctx: Any) -> str:
             outcome["inherited_failures"] = sorted(filtered.inherited)
             ctx.set_fact("inherited_failures", sorted(filtered.inherited))
             evidence.record(ctx, outcome)
+            ctx.write_json("check-record.json", {
+                "status": "pass", "validation": validation_msg,
+                "attempt": int(ctx.facts.get("attempts_used", 0)),
+            })
             # ── enforce test guardedness on excused pass too (R3) ──
             unexempted = enforce_guardedness(ctx)
             if unexempted:
@@ -518,6 +743,10 @@ def check_artifact(ctx: Any) -> str:
                     "PR why each test pins existing behaviour."
                 )
                 ctx.write_text("check.txt", detail + "\n")
+                ctx.write_json("check-record.json", {
+                    "status": "guarded", "validation": detail,
+                    "attempt": int(ctx.facts.get("attempts_used", 0)),
+                })
                 return repair(ctx, [detail])
             return "proceed"
         if filtered.new_failures and filtered.inherited:
@@ -539,6 +768,83 @@ def check_artifact(ctx: Any) -> str:
         # Otherwise prepend the diagnosis so the builder sees it.
         if unbuilt_msg:
             detail = unbuilt_msg + "\n\n" + detail
+
+    # Build digest of new failures
+    from refactory_dsh.check_digest import digest_check_output, format_digest
+    check_output = detail
+    digest = digest_check_output(check_output)
+    digest_text = format_digest(digest)
+    if digest_text.strip():
+        detail = digest_text + "\n\n" + detail[-2000:]
+
+    # R5: augment feedback with [left: ...] design constraints and broken guarantees.
+    from refactory_dsh import design_contract
+    run_name = str(ctx.facts.get("name") or "")
+    parsed = design_contract.parse(
+        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
+    )
+    left_lines: list[str] = []
+    for site in parsed.rule_sites:
+        if site.get("status") == "left" and site.get("reason"):
+            left_lines.append(
+                f"Design constraint: {site['path']} [left: {site['reason']}] "
+                "— do not change this; fix the tests or callers instead."
+            )
+
+    guarantee_lines: list[str] = []
+    if (found is not None and filtered is not None
+            and not filtered.base_environment_failure
+            and filtered.base_complete
+            and filtered.base_failures is not None):
+        attempt_output = "\n".join((result.stdout or "", result.stderr or "")).strip()
+        attempt_failures = base_check.parse_test_failures(attempt_output)
+        changed_files = set(base_check._all_changed_files(Path(found.path), found.base))
+        for failure in sorted(attempt_failures):
+            if failure not in filtered.base_failures:
+                test_file = base_check._test_file(failure)
+                if test_file and test_file not in changed_files:
+                    guarantee_lines.append(
+                        f"Broken guarantee: {failure} passes on the base but "
+                        "fails on this attempt — the attempt must not break it."
+                    )
+
+    if left_lines or guarantee_lines:
+        detail = "\n".join(left_lines + guarantee_lines) + "\n\n" + detail
+
+    # R6: store failure history and blocker result for convergence detection.
+    attempt_output_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
+    current_failures = sorted(base_check.parse_test_failures(attempt_output_r6))
+    history = list(ctx.facts.get("check_failures_history", []))
+    history.append(current_failures)
+    ctx.set_fact("check_failures_history", history)
+
+    # R6 correction 3: record the blocker result from the full check output,
+    # not the feedback text.  Convergence in repair() reads this.
+    check_command = str(ctx.facts.get("check") or "").strip()
+    blocker_result = base_check.excusal_blocker(
+        check_command, attempt_output_r6, set(current_failures)
+    ) if current_failures else "empty failure set"
+    blocker_history = list(ctx.facts.get("check_blocker_history", []))
+    blocker_history.append(blocker_result)
+    ctx.set_fact("check_blocker_history", blocker_history)
+
+    # Write base_unavailable note into check.txt as well (R2 correction 5).
+    base_note = ctx.facts.get("base_unavailable")
+    if base_note:
+        check_txt = ctx.read_text("check.txt") if ctx.exists("check.txt") else ""
+        if base_note not in check_txt:
+            ctx.write_text("check.txt", check_txt.rstrip() + "\n\n" + base_note + "\n")
+
+    # Record exactly what the builder will be given (feedback re-fill reads it).
+    ctx.write_json("check-record.json", {
+        "status": "fail",
+        "validation": detail[:4000],
+        "digest": digest_text,
+        "attempt": int(ctx.facts.get("attempts_used", 0)),
+        "command": command,
+        "runners": digest.to_dict().get("runners", []),
+        "raw_tail": digest.raw_tail[-500:],
+    })
 
     return repair(ctx, [detail])
 
@@ -701,6 +1007,20 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
             except (json.JSONDecodeError, OSError):
                 pass
 
+    from refactory_dsh.authoring_evidence import _check_skip_provenance
+    skip_prov = _check_skip_provenance(ctx.workdir)
+    check_skipped_info: dict[str, Any] | None = None
+    check_note = ""
+    if skip_prov is not None and skip_prov.get("source") == "person":
+        check_skipped_info = {
+            "source": skip_prov["source"],
+            "at": skip_prov["at"],
+            "via": "graph-control",
+            "node": skip_prov["node"],
+        }
+        check_note = (f"the check did not run (skipped by the person at {skip_prov['at']} "
+                      f"via graph-control on node {skip_prov['node']}; covers later attempts)")
+
     report_payload: dict[str, Any] = {
         "name": ctx.facts.get("name"),
         "artifact": ctx.facts.get("artifact"),
@@ -711,6 +1031,9 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
         "validation_evidence": ev,
         "intent_audit": audit,
     }
+    if check_skipped_info is not None:
+        report_payload["check_skipped"] = check_skipped_info
+        report_payload["check_note"] = check_note
     if planning_models:
         report_payload["planning_models"] = planning_models
     # Surface process notes with their followed/not-followed statement.

@@ -92,6 +92,11 @@ class CreateMode(Mode):
                 description="wall-clock seconds allowed for each full mode validation "
                             "pass, including its model calls; timeout fails creation",
             ),
+            "check_attempt_cap": Knob(
+                8, "int", lo=0,
+                description="hard cap on total check attempts including convergence grants; "
+                            "0 or a value at or below the regular attempts disables the extension",
+            ),
             "sample_knobs": Knob(
                 "", "str",
                 description="knob values a validation run should use, as a JSON array "
@@ -228,15 +233,18 @@ class CreateMode(Mode):
                 "including one that argues for the simplest thing that satisfies the "
                 "brief, and one that says what the acceptance criteria must be. Spawn "
                 "one subagent per perspective and have each write `strategy/<slug>.md` "
-                "under the run directory. Then write `strategy-plan.json` as an array of "
-                "`{\"perspective\", \"slug\", \"intent_items\"}` objects, where "
-                "`intent_items` lists the asks from the brief that perspective covers. "
-                "Every ask must be covered by at least one perspective; name the "
-                "uncovered ones rather than leaving them out.\n\n"
+                "under the run directory, with each finding as a heading "
+                "`### FND-<slug>-<n> \u2014 <the finding>`, numbered from 1 within the "
+                "file. Then write `strategy-plan.json` as an array of "
+                "`{\"perspective\", \"slug\", \"intent_items\", \"ids\"}` objects, "
+                "where `intent_items` lists the asks from the brief that perspective "
+                "covers and `ids` lists the `FND-<slug>-<n>` ids from that "
+                "perspective's file. Every ask must be covered by at least one "
+                "perspective; name the uncovered ones rather than leaving them out.\n\n"
                 "## Reference package\n{{reference}}\n"
             ),
             reads=("brief.json", "survey.json", "research-plan.json"),
-            writes=("strategy-plan.json",),
+            writes=("strategy-plan.json", "strategy/"),
             produces=("strategy_plan",),
             notes="choose the strategy perspectives and their intent coverage",
         ))
@@ -256,19 +264,26 @@ class CreateMode(Mode):
                 "unresolved. Then decide "
                 "the approach: consider at least two, say why the one you chose wins, "
                 "say what it will not do, name the existing mode it is closest to, and "
-                "describe the graph you intend to write.\n\n" + STRATEGY_SCHEMA
+                "describe the graph you intend to write.\n\n"
+                "The research detail files (`research/*.md`) and strategy detail "
+                "files (`strategy/*.md`) are available as reads. Each carries finding "
+                "ids (`FND-<slug>-<n>`). Include a `findings` field in the strategy "
+                "mapping every finding id to the node or knob that handles it, or "
+                "`[set-aside: reason]`.\n\n" + STRATEGY_SCHEMA
             ),
             reads=("brief.json", "survey.json", "research-plan.json",
-                   "strategy-plan.json", "strategy-review.txt"),
+                   "strategy-plan.json", "strategy-review.txt",
+                   "research/", "strategy/"),
             writes=("strategy.json",),
             produces=("strategy",),
             notes="compile the perspectives into one intent-faithful strategy",
         ))
         graph.add(Node(
             "review", "gate", evaluator=f"{OPS}:review_design",
-            reads=("strategy.json",),
+            reads=("strategy.json", "research/", "strategy/"),
             writes=("strategy-review.txt",),
-            produces=("design_review", "design_attempts_used"),
+            produces=("design_review", "design_attempts_used",
+                      "finding_coverage"),
             knobs=("design_attempts",),
             max_iterations=8,
             notes="check the intended graph before any code exists",
@@ -276,7 +291,7 @@ class CreateMode(Mode):
         # create-v2 puts a person here (`gate_strategy`), and it is the one v2 gate
         # this port keeps as-is: the strategy is a decision the person owns, and a
         # run that can approve its own strategy is not reviewed at all. A walker run
-        # stops at it; a headless DSH run refuses at the spine level.
+        # stops at it; a headless DSH run stops and prints the steer and resume commands.
         graph.add(Node(
             "gate_strategy", "gate", gate_kind="user",
             reads=("strategy.json",),
@@ -532,12 +547,14 @@ class CreateMode(Mode):
         graph.add(Node(
             "smoke", "gate", evaluator=f"{OPS}:gate_smoke", role="validation",
             resource_role="final_validation", max_iterations=12,
-            knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "attempts"),
+            knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "attempts", "check_attempt_cap"),
             writes=("smoke.json", "revision.json", "authoring-evidence.json", "validation.txt"),
             produces=("smoke_score", "smoke_ok", "smoke_model", "smoke_reason",
                       "before_score", "after_score", "regressed", "revision_note",
                       "runtime_evidence", "validation", "attempts_used",
-                      "check_attempts_used"),
+                      "check_attempts_used",
+                      "convergence_extras_used",
+                      "convergence_granted"),
             notes="run the new mode once, and compare a revision with the mode it "
                   "revises; a mode that cannot score is not finished",
         ))
@@ -615,7 +632,7 @@ class CreateConfig:
     #: it or a `task_ref`, `create` refuses before its first model call.
     single_shot: bool = False
     #: Verdicts for gates a person answers. `gate_strategy` is one, so a walker
-    #: run stops at it; a headless DSH run refuses at the spine level.
+    #: run stops at it; a headless DSH run stops and prints the steer and resume commands.
     verdicts: dict[str, str] = field(default_factory=dict)
     fast: bool = False
     repair_attempts: int = 1
@@ -886,6 +903,9 @@ def main(argv: list[str] | None = None) -> int:
             from refactory_dsh.run_preparation import print_gate_stop
             print_gate_stop(run.gate_stop, workdir, graph=(CreateFastMode if fast else CreateMode)().build())
             return 2
+        if run.halted:
+            print(json.dumps({"halted": True, "error": run.error}), file=sys.stderr)
+            return 2
         name = str(run.facts.get("name") or args.name)
         print(json.dumps({
             "resumed": str(workdir),
@@ -921,6 +941,17 @@ def main(argv: list[str] | None = None) -> int:
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
+    from refactory_dsh.nn.mode import RunResult
+    if isinstance(result, RunResult):
+        if result.gate_stop:
+            from refactory_dsh.run_preparation import print_gate_stop
+            from refactory_dsh.fast import CreateFastMode
+            print_gate_stop(result.gate_stop, Path(args.workdir or f".factory/create/{args.name}"),
+                            graph=(CreateFastMode if args.fast else CreateMode)().build())
+            return 2
+        if result.halted:
+            print(json.dumps({"halted": True, "error": result.error}), file=sys.stderr)
+            return 2
     print(json.dumps(result.describe(), indent=2, default=str))
     return 0
 

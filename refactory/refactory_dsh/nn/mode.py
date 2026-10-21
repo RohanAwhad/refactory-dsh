@@ -408,11 +408,6 @@ class Mode:
             "memory": copy.deepcopy(self._memory),
         }
 
-    @staticmethod
-    def _strip_steering_from_state(state: dict) -> dict:
-        """Strip the steering block from prompt_template values."""
-        return graph_identity(state)
-
     def load_state_dict(self, state: Mapping[str, Any], *, strict: bool = True) -> None:
         """Adopt ``state``. With ``strict``, anything unexpected is an error.
 
@@ -463,10 +458,6 @@ class Mode:
     def clone(self) -> "Mode":
         """A fresh instance holding a copy of this state."""
         return type(self)(state=copy.deepcopy(self.state_dict()))
-
-    def _base_graph_state_for_identity(self) -> dict[str, Any] | None:
-        """The base graph state before steering, for resume comparison."""
-        return getattr(self, "_base_graph_state", None)
 
     def describe(self) -> dict[str, Any]:
         """A summary for the optimizer's prompt: surface, structure, score."""

@@ -38,6 +38,7 @@ import { commandOf, isDeterministic, runDataCommand, runDeterministic, runWarnin
 import type { CommandFailure, CommandOutcome } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 import { validateBuild } from './build-stamp.ts'
+import { validateWorkspaceBuild } from './workspace-stamp.ts'
 import { presentCall, presentResult, presentationMeta } from './present.ts'
 
 export { Spine, validateGraph } from './spine.ts'
@@ -86,6 +87,13 @@ export interface Config {
    * `graph` is required, validated at mount, and one spine serves the process.
    */
   interactiveOpen: boolean
+  /**
+   * Whether a person is attached to this composition. True when the graph was
+   * started with `--chat` (terminal) or `interactiveOpen` (GUI CEO). A headless
+   * CEO with `personAttached === false` cannot write `source='user-relayed'` via
+   * `wf_steer`; the runtime silently downgrades to `'ceo'`.
+   */
+  personAttached?: boolean
   /**
    * The command that lowers a mode and prints its JSON payload, called as
    * `<openCommand> <openArgs...> <mode>` (with `--workdir <dir>` and one
@@ -185,6 +193,7 @@ export const Config = z.object({
   toolPrefix: z.string().default('wf'),
   maxIterations: z.natural().default(3),
   interactiveOpen: z.boolean().default(false),
+  personAttached: z.boolean().default(false),
   openCommand: z.string().default(''),
   openArgs: z.array(z.string()).default([]),
   executeCommands: z.boolean().default(false),
@@ -498,6 +507,25 @@ function payloadEnv(value: unknown): Record<string, string> | undefined {
   return out
 }
 
+/**
+ * Build the argv for {@code wf_open}, including the session's project when set.
+ *
+ * Exported so the project-propagation tests call the real logic instead of
+ * re-implementing it inline.
+ */
+export function buildWfOpenArgv(
+  openArgs: readonly string[],
+  sessionCwd: string | undefined,
+  mode: string,
+): string[] {
+  const argv = [...openArgs]
+  if (typeof sessionCwd === 'string' && sessionCwd !== '') {
+    argv.push('--project', sessionCwd)
+  }
+  argv.push(mode)
+  return argv
+}
+
 export function apply(ctx: Context, config: Config): void {
   // Detect stale builds early, before any graph is configured or opened.
   // A stale build is a developer-infrastructure error with no recovery path —
@@ -511,8 +539,19 @@ export function apply(ctx: Context, config: Config): void {
     process.stderr.write(`\n${err instanceof Error ? err.message : String(err)}\n\n`)
     process.exit(1)
   }
+  try {
+    validateWorkspaceBuild()
+  } catch (err) {
+    // Workspace stamp mismatch is a warning, not fatal: a stale workspace build
+    // must not kill a spine mount mid-run, during a resume, or at GUI boot.
+    // The per-package validateBuild() above remains fatal.
+    process.stderr.write(
+      `\nWARNING: ${err instanceof Error ? err.message : String(err)}\n\n`,
+    )
+  }
 
   const { toolPrefix, maxIterations, ceoDeny, interactiveOpen } = config
+  const effectivePersonAttached = interactiveOpen || config.personAttached
   // This is initialized before an explicit checkpoint restore at mount time.
   const materialised = new WeakMap<Spine, Materialised>()
 
@@ -1103,7 +1142,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /** Consume only controls addressed to this exact durable invocation. */
-  function applyControls(spine: Spine, workdir: string | undefined, env: Record<string, string>, dataCommand: string): void {
+  function applyControls(spine: Spine, workdir: string | undefined, env: Record<string, string>, dataCommand: string, _agentCommand?: string): void {
     if (workdir === undefined) return
     const directory = join(workdir, '.refactory', 'graph-controls')
     if (!existsSync(directory)) return
@@ -1177,7 +1216,12 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (plan.resetPass) materialised.delete(spine)
           receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
-        } else throw new Error('unsupported graph control')
+        } else if (request.action === 'skip') {
+          const target = String(request.target)
+          const provenance = { source: 'person' as const, at: String(request.at || new Date().toISOString()) }
+          spine.skip(target, provenance)
+          receipt.message = `Skipped ${target} (person).`
+        } else throw new Error('unsupported graph control; supported: pause, resume, stop, rerun, skip')
       } catch (error) {
         receipt.status = 'failed'
         receipt.message = error instanceof Error ? error.message : String(error)
@@ -1252,6 +1296,7 @@ export function apply(ctx: Context, config: Config): void {
     workdir: string | undefined,
     commandEnv: Record<string, string>,
     dataCommand: string,
+    agentCommand: string,
     warnings: string[],
   ): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown; ran?: RanStep | undefined }> {
     if (!config.executeCommands) return { next: spine.next() }
@@ -1363,7 +1408,7 @@ export function apply(ctx: Context, config: Config): void {
       // Its Task still owns setup-before-verify, exactly once for this item.
       const started = await beginItem()
       if (started.failure !== undefined) return started
-      applyControls(spine, workdir, commandEnv, dataCommand)
+      applyControls(spine, workdir, commandEnv, dataCommand, agentCommand)
       if (spine.isHalted() || spine.isPaused()) return {}
       if (JSON.stringify(spine.passOf()) !== JSON.stringify(pass)) return {}
       const data = spine.view(pass.node)
@@ -1379,7 +1424,7 @@ export function apply(ctx: Context, config: Config): void {
     }
 
     for (;;) {
-      applyControls(spine, workdir, commandEnv, dataCommand)
+      applyControls(spine, workdir, commandEnv, dataCommand, agentCommand)
       if (spine.isHalted() || spine.isPaused()) return { next: spine.next(), item, ran }
       const closed = await close()
       if (closed.failure !== undefined) return { next: spine.next(), failure: closed.failure, ran }
@@ -1387,7 +1432,7 @@ export function apply(ctx: Context, config: Config): void {
       if (state.status === 'done' || spine.isPaused()) return { next: state, item, ran }
       const started = await beginItem()
       if (started.failure !== undefined) return { next: state, failure: started.failure, ran }
-      applyControls(spine, workdir, commandEnv, dataCommand)
+      applyControls(spine, workdir, commandEnv, dataCommand, agentCommand)
       state = spine.next()
       if (spine.isHalted() || spine.isPaused()) return { next: state, item, ran }
       // Normalizing a standing skip can exhaust the next item immediately too.
@@ -1505,10 +1550,36 @@ export function apply(ctx: Context, config: Config): void {
     dataCommand: string,
     agentCommand: string,
   ): Promise<JsonValue> {
-    applyControls(spine, workdir, commandEnv, dataCommand)
+    applyControls(spine, workdir, commandEnv, dataCommand, agentCommand)
+    /** Drain pending skip receipts through the runtime bridge. */
+    function drainSkipReceipts(s: Spine, wd: string | undefined, env: Record<string, string>, cmd: string): void {
+      if (wd === undefined || cmd === '') return
+      const state = s.state()
+      const pending = state.pending_skip_receipts as Array<{ node: string; provenance: { source: string; at: string } }> | undefined
+      if (!pending || pending.length === 0) return
+      for (const entry of [...pending]) {
+        try {
+          runtimeBridge(cmd, wd, env, {
+            action: 'record-skip', node: entry.node, provenance: entry.provenance,
+          })
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          recordStatus(s, wd, 'failed', `record-skip for ${entry.node} failed: ${detail}`,
+            { node: entry.node, error: `record-skip failed: ${detail}` })
+          throw new Error(`record-skip for ${entry.node} failed: ${detail}`)
+        }
+      }
+      // Clear after successful drain: mutate pending_skip_receipts in place via the
+      // spine's internal queue (accessed through skip receipts being drained).
+      // We need to call state() again to clear — but since pendingSkipReceipts is
+      // exposed on the spine's state, we clear it by checkpoint/restore or by the
+      // spine clearing its internal array. For now, clear via a small accessor.
+      ;(s as any).pendingSkipReceipts = []
+    }
+    drainSkipReceipts(spine, workdir, commandEnv, agentCommand)
     let drained: Awaited<ReturnType<typeof drain>>
     const warnings: string[] = []
-    try { drained = await drain(spine, workdir, commandEnv, dataCommand, warnings) }
+    try { drained = await drain(spine, workdir, commandEnv, dataCommand, agentCommand, warnings) }
     catch (error) {
       recordStatus(spine, workdir, 'failed', error instanceof Error ? error.message : String(error))
       throw error
@@ -1541,6 +1612,7 @@ export function apply(ctx: Context, config: Config): void {
         ...unreported,
       })
     }
+    drainSkipReceipts(spine, workdir, commandEnv, agentCommand)
     if (next.status === 'ready' && !spine.isPaused() && agentCommand !== '' && workdir !== undefined) {
       const runKey = workdir
       for (const node of next.nodes) {
@@ -1580,7 +1652,29 @@ export function apply(ctx: Context, config: Config): void {
     // A user gate's question is shown as the CEO sees it here and as the card puts it.
     if (next.status === 'ready') {
       for (const node of next.nodes) {
-        if (node._type === 'GateNode' && node.gate_prompt !== undefined) node.gate_prompt = withFacts(node.gate_prompt, workdir)
+        if (node._type === 'GateNode' && node.gate_prompt !== undefined) {
+          node.gate_prompt = withFacts(node.gate_prompt, workdir)
+          // Append CEO-sourced ledger notes at the gate view, labelled as the CEO's.
+          if (config.steerCommand !== '' && workdir !== undefined) {
+            try {
+              const steerResult = spawnSync(config.steerCommand, [...config.steerArgs, workdir], {
+                encoding: 'utf8', timeout: config.commandTimeoutMs,
+              })
+              if (steerResult.status === 0) {
+                const ledger = JSON.parse(steerResult.stdout)
+                const entries = Array.isArray(ledger?.entries) ? ledger.entries : []
+                const ceoNotes = entries
+                  .filter((e: any) => e?.source === 'ceo' && typeof e?.text === 'string')
+                  .map((e: any) => e.text)
+                if (ceoNotes.length > 0) {
+                  const ceoNotesText = ceoNotes.join('\n\n')
+                  ;(node as any).ceo_notes = ceoNotesText
+                  node.gate_prompt += '\n\n--- CEO observations (not requirements) ---\n' + ceoNotesText
+                }
+              }
+            } catch { /* guard: do not block the gate */ }
+          }
+        }
       }
     }
     // A run that stopped short of its end says which nodes it never reached.
@@ -1649,8 +1743,8 @@ export function apply(ctx: Context, config: Config): void {
   async function askCurrentReview(
     gate: string, spine: Spine, view: NodeView, exec: ToolExec, workdir: string | undefined,
   ): Promise<UserGateResult> {
-    const { gateCommand, commandEnv, dataCommand } = requireRun(exec)
-    applyControls(spine, workdir, commandEnv, dataCommand)
+    const { gateCommand, commandEnv, dataCommand, agentCommand } = requireRun(exec)
+    applyControls(spine, workdir, commandEnv, dataCommand, agentCommand)
     if (spine.isPaused() || spine.isHalted()) return undefined
     const request = { gate, reads: view.reads ?? [], labels: spine.acceptedVerdicts(gate) }
     // The engine halts the run at any gate, with or without a `halt` edge, so the
@@ -1673,11 +1767,30 @@ export function apply(ctx: Context, config: Config): void {
     const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
     try {
       recordStatus(spine, workdir, 'waiting_user')
+      // Build the question text, appending CEO notes if available.
+      let questionText = withFacts(view.gate_prompt ?? '', workdir) || `Gate ${gate}`
+      if (config.steerCommand !== '' && workdir !== undefined) {
+        try {
+          const steerResult = spawnSync(config.steerCommand, [...config.steerArgs, workdir], {
+            encoding: 'utf8', timeout: config.commandTimeoutMs,
+          })
+          if (steerResult.status === 0) {
+            const ledger = JSON.parse(steerResult.stdout)
+            const entries = Array.isArray(ledger?.entries) ? ledger.entries : []
+            const ceoNotes = entries
+              .filter((e: any) => e?.source === 'ceo' && typeof e?.text === 'string')
+              .map((e: any) => e.text)
+            if (ceoNotes.length > 0) {
+              questionText += '\n\n--- CEO observations (not requirements) ---\n' + ceoNotes.join('\n\n')
+            }
+          }
+        } catch { /* guard: do not block the gate */ }
+      }
       const nativeAnswer = userQuestions.ask({
         questions: [{
           id: gate,
           header: 'Workflow gate',
-          question: withFacts(view.gate_prompt ?? '', workdir) || `Gate ${gate}`,
+          question: questionText,
           ...(labels.length === 0 ? {} : { options: labels.map(label => ({ label })) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
@@ -1687,7 +1800,7 @@ export function apply(ctx: Context, config: Config): void {
         if (workdir === undefined) return new Promise(() => {})
         while (!questionSignal.aborted) {
           await wait(500, undefined, { signal: questionSignal })
-          applyControls(spine, workdir, commandEnv, dataCommand)
+          applyControls(spine, workdir, commandEnv, dataCommand, agentCommand)
           if (spine.isPaused() || spine.isHalted() || JSON.stringify(spine.state()) !== stateBefore) return undefined
           if (gateCommand === '') continue
           const polled = runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'poll', review: prior?.review })
@@ -1795,9 +1908,16 @@ export function apply(ctx: Context, config: Config): void {
     + "Every change that produces a pull request must pass through the graph's review nodes. "
     + '"The change is small" is not a reason to skip them.'
     + '\n\n'
-    + 'Never recommend skipping a check gate. When a check cannot run, report what stopped it and what '
-    + 'would unblock it. Ask the person how to proceed. If the person skips, the run report and PR say '
-    + 'the check did not run.'
+    + 'Never claim, restate, or re-apply a person\'s verdict or approval in a ledger note '
+    + 'or any other message. A user gate is answered only by the person through the runtime; '
+    + 'a ledger note about a gate verdict is your observation, not an answer. '
+    + `Never use ${toolPrefix}_edit skip on a check node (a node that produces runtime evidence). `
+    + 'When a check cannot run, report what stopped it and what would unblock it. '
+    + 'When the person wants to skip the check, give them the exact command: '
+    + '`refactory graph-control skip --run <dir> --node <check_node>`. '
+    + 'When the owner has stopped, the person can resume with '
+    + '`refactory graph-control resume --run <dir> [--acknowledge-failure]`. '
+    + 'If the person skips, the run report and PR say the check did not run.'
   // A configured graph runs many nodes per call and names none of them under `ran`,
   // so the warnings they printed come on the result itself and the CEO is told so.
   const warningInstruction = interactiveOpen
@@ -1808,7 +1928,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction}${warningInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. When relaying the person's own words through ${toolPrefix}_steer, set source to 'user-relayed' so they become auditable requirements; your own observations default to 'ceo' and are context, not requirements. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode (unless the runtime runs it — it has a dispatch command), spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Before routing a user gate, read and summarise its \`reads\` files (listed in the node view returned by ${toolPrefix}_next) for the person — key decisions, scope, notable risks or non-goals — and link each file, so they see what they are deciding on before the question is put to them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction}${warningInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked.${effectivePersonAttached ? ` When relaying the person's own words through ${toolPrefix}_steer, set source to 'user-relayed' so they become auditable requirements; your own observations default to 'ceo' and are context, not requirements.` : ''} A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode (unless the runtime runs it — it has a dispatch command), spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Before routing a user gate, read and summarise its \`reads\` files (listed in the node view returned by ${toolPrefix}_next) for the person — key decisions, scope, notable risks or non-goals — and link each file, so they see what they are deciding on before the question is put to them. Fan out a director's plan with ${toolPrefix}_expand. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`
     + sacredRules,
   })
 
@@ -1850,7 +1970,7 @@ export function apply(ctx: Context, config: Config): void {
             + '`python -m refactory_dsh.console open`)',
           )
         }
-        const argv = [...config.openArgs, args.mode]
+        const argv = buildWfOpenArgv(config.openArgs, session.header?.cwd, args.mode)
         // The console refuses without a workdir, so an absent one is derived from
         // the session and the mode rather than dropped. The payload's `run` is
         // still the authority on where the run actually landed.
@@ -2151,7 +2271,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_edit`,
-    description: 'Edit the live graph: `pause` arms a stop BEFORE the named node (including before data setup); `unpause` releases only that boundary after the person asks to continue. A paused run stays stopped across wf_next calls; skip, redo and expansion require explicit unpause first. An armed boundary cannot be skipped. `skip` bypasses a due or future node through its unambiguous continuation, preserving concurrent peers; skipping an unopened fork/data node bypasses its body. Conditional-only gates and already-entered containers require explicit routing or finishing their current work. `unskip` restores a future skipped node. If you already dispatched a worker for skipped work, stop that owned worker explicitly; editing the spine does not cancel it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node.',
+    description: 'Edit the live graph: `pause` arms a stop BEFORE the named node (including before data setup); `unpause` releases only that boundary after the person asks to continue. A paused run stays stopped across wf_next calls; skip, redo and expansion require explicit unpause first. An armed boundary cannot be skipped. `skip` bypasses a due or future node through its unambiguous continuation, preserving concurrent peers; skipping an unopened fork/data node bypasses its body. Conditional-only gates and already-entered containers require explicit routing or finishing their current work. `unskip` restores a future skipped node. If you already dispatched a worker for skipped work, stop that owned worker explicitly; editing the spine does not cancel it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node. Do not use skip on a check node (a node that produces runtime evidence); only a person can skip the check via graph-control.',
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to edit.' },
       action: { type: 'string', required: true, enum: ['skip', 'unskip', 'set-prompt', 'append-prompt', 'pause', 'unpause'], description: 'The edit.' },
@@ -2176,7 +2296,7 @@ export function apply(ctx: Context, config: Config): void {
             action: 'invalidate', nodes, reason: `skip ${args.node}`,
           })
         }
-        spine.skip(args.node)
+        spine.skip(args.node, { source: 'ceo', at: new Date().toISOString() })
       } else if (args.action === 'unskip') spine.unskip(args.node)
       else {
         if (args.text === undefined || args.text.trim() === '') {
@@ -2281,7 +2401,7 @@ export function apply(ctx: Context, config: Config): void {
     const steerArgs = [...config.steerArgs]
     ctx.tools.register(defineTool({
       name: `${toolPrefix}_steer`,
-      description: `Read the run’s intent ledger, or append a note with optional kind (info, correction, constraint) and source. A write returns the updated ledger; an invalid or failed write is an error, never a read-only success. Read what was said about this run since you last looked, before deciding anything. Runs the run's steering command and returns its ledger payload unchanged: the origin, every entry (a note, a correction, a constraint), recorded gate verdicts, and the fidelity problems found. Read it before each \`${toolPrefix}_next\`; when it carries a correction, apply it to that node's prompt with \`${toolPrefix}_edit\` (\`set-prompt\`/\`append-prompt\`) and re-run the node with \`${toolPrefix}_redo\`. On a read, an unreadable or unavailable ledger is reported as \`status: 'unavailable'\`, never thrown, so it cannot stop the run. When relaying the person's own words, set source to 'user-relayed' so they become auditable requirements; your own observations default to 'ceo' and are context only.`,
+      description: `Read the run’s intent ledger, or append a note with optional kind (info, correction, constraint) and source. A write returns the updated ledger; an invalid or failed write is an error, never a read-only success. Read what was said about this run since you last looked, before deciding anything. Runs the run's steering command and returns its ledger payload unchanged: the origin, every entry (a note, a correction, a constraint), recorded gate verdicts, and the fidelity problems found. Read it before each \`${toolPrefix}_next\`; when it carries a correction, apply it to that node's prompt with \`${toolPrefix}_edit\` (\`set-prompt\`/\`append-prompt\`) and re-run the node with \`${toolPrefix}_redo\`. On a read, an unreadable or unavailable ledger is reported as \`status: 'unavailable'\`, never thrown, so it cannot stop the run.${effectivePersonAttached ? ` When relaying the person's own words, set source to 'user-relayed' so they become auditable requirements; your own observations default to 'ceo' and are context only.` : ''}`,
       parameters: {
         note: { type: 'string', description: 'Append a note, correction, or constraint to this run. Omit to read without writing.' },
         kind: { type: 'string', enum: ['info', 'correction', 'constraint'], description: 'The note kind; defaults to info. Requires note.' },
@@ -2307,7 +2427,11 @@ export function apply(ctx: Context, config: Config): void {
           return sync(json({ status: 'unavailable', error: 'this run has no work directory to read' }))
         }
         const argv = [...steerArgs, run.workdir]
-        if (args.note !== undefined) argv.push(`--note=${args.note}`, `--kind=${args.kind ?? 'info'}`, `--source=${args.source ?? 'ceo'}`)
+        let effectiveSource = args.source ?? 'ceo'
+        if (effectiveSource === 'user-relayed' && !effectivePersonAttached) {
+          effectiveSource = 'ceo'
+        }
+        if (args.note !== undefined) argv.push(`--note=${args.note}`, `--kind=${args.kind ?? 'info'}`, `--source=${effectiveSource}`)
         const result = spawnSync(command, argv, { encoding: 'utf8' })
         if (result.status === 0) {
           try {

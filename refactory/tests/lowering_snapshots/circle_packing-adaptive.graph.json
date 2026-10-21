@@ -1,0 +1,279 @@
+{
+  "name": "circle_packing-adaptive",
+  "nodes": {
+    "accept": {
+      "id": "accept",
+      "reads": [
+        "accepted_history.json",
+        "budget_state.json",
+        "candidate.json",
+        "eval_result.json",
+        "genealogy.json",
+        "population.json",
+        "rejection_history.json",
+        "selected_parent.json"
+      ],
+      "writes": [
+        "accepted_history.json",
+        "accepted_history.jsonl",
+        "best_solution.json",
+        "candidates.jsonl",
+        "evaluations.jsonl",
+        "genealogy.json",
+        "population.json",
+        "rejection_history.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.circle_packing.ops:accept_or_reject",
+      "callable_name": "refactory_packages.circle_packing.ops:accept_or_reject",
+      "notes": "keep the candidate when it beats its parent",
+      "_type": "FnNode"
+    },
+    "budget_check": {
+      "id": "budget_check",
+      "reads": [
+        "budget_state.json"
+      ],
+      "writes": [],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_packages.circle_packing.ops:budget_check",
+      "gate_prompt": "reloop while budget remains",
+      "max_iterations": 64,
+      "_type": "GateNode"
+    },
+    "eval": {
+      "id": "eval",
+      "reads": [
+        "budget_state.json",
+        "candidate.json",
+        "task.json"
+      ],
+      "writes": [
+        "budget.jsonl",
+        "budget_state.json",
+        "eval_result.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.circle_packing.ops:evaluate_candidate",
+      "callable_name": "refactory_packages.circle_packing.ops:evaluate_candidate",
+      "notes": "score the candidate with the task's rule",
+      "_type": "FnNode"
+    },
+    "exit": {
+      "id": "exit",
+      "reads": [
+        "budget_state.json",
+        "population.json"
+      ],
+      "writes": [
+        "best_score.json",
+        "best_solution.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.circle_packing.ops:finish",
+      "callable_name": "refactory_packages.circle_packing.ops:finish",
+      "notes": "publish the number the outer loop maximizes",
+      "_type": "FnNode"
+    },
+    "generate": {
+      "id": "generate",
+      "reads": [
+        "budget_state.json",
+        "selected_parent.json",
+        "task.json"
+      ],
+      "writes": [
+        "candidate.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.circle_packing.ops:generate",
+      "callable_name": "refactory_packages.circle_packing.ops:generate",
+      "notes": "draw the next candidate from the resolved generator settings",
+      "_type": "FnNode"
+    },
+    "seed_run": {
+      "id": "seed_run",
+      "reads": [
+        "task.json"
+      ],
+      "writes": [
+        "accepted_history.json",
+        "best_solution.json",
+        "genealogy.json",
+        "population.json",
+        "rejection_history.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.circle_packing.ops:seed_run",
+      "callable_name": "refactory_packages.circle_packing.ops:seed_run",
+      "notes": "seed the population with the task's own baseline heuristic",
+      "_type": "FnNode"
+    },
+    "select_parent": {
+      "id": "select_parent",
+      "reads": [
+        "population.json"
+      ],
+      "writes": [
+        "selected_parent.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.circle_packing.ops:select_parent",
+      "callable_name": "refactory_packages.circle_packing.ops:select_parent",
+      "notes": "choose the individual the next candidate comes from",
+      "_type": "FnNode"
+    },
+    "task_input": {
+      "id": "task_input",
+      "reads": [],
+      "writes": [
+        "budget_state.json",
+        "task.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.circle_packing.ops:task_input",
+      "callable_name": "refactory_packages.circle_packing.ops:task_input",
+      "notes": "write the instance and open the budget",
+      "_type": "FnNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "accept",
+      "target": "select_parent",
+      "condition": null
+    },
+    {
+      "source": "budget_check",
+      "target": "eval",
+      "condition": "reloop"
+    },
+    {
+      "source": "budget_check",
+      "target": "exit",
+      "condition": "proceed"
+    },
+    {
+      "source": "eval",
+      "target": "accept",
+      "condition": null
+    },
+    {
+      "source": "generate",
+      "target": "budget_check",
+      "condition": null
+    },
+    {
+      "source": "seed_run",
+      "target": "select_parent",
+      "condition": null
+    },
+    {
+      "source": "select_parent",
+      "target": "generate",
+      "condition": null
+    },
+    {
+      "source": "task_input",
+      "target": "seed_run",
+      "condition": null
+    }
+  ],
+  "start_node": "task_input",
+  "terminal": true,
+  "knob_values": {
+    "grid": 10.0,
+    "order": "desc",
+    "selector": "best",
+    "acceptance_mode": "strict",
+    "budget": 3.0,
+    "seed": 7.0
+  },
+  "knob_specs": {
+    "grid": {
+      "default": 10,
+      "kind": "enum",
+      "lo": null,
+      "hi": null,
+      "enum": [
+        6,
+        10,
+        14,
+        18,
+        24
+      ],
+      "values": [],
+      "frozen": false,
+      "description": "grid resolution the placements are drawn from",
+      "required": false
+    },
+    "order": {
+      "default": "desc",
+      "kind": "enum",
+      "lo": null,
+      "hi": null,
+      "enum": [
+        "desc",
+        "asc"
+      ],
+      "values": [],
+      "frozen": false,
+      "description": "whether the largest or the smallest circles are placed first",
+      "required": false
+    },
+    "selector": {
+      "default": "best",
+      "kind": "enum",
+      "lo": null,
+      "hi": null,
+      "enum": [
+        "best",
+        "tournament",
+        "uniform"
+      ],
+      "values": [],
+      "frozen": false,
+      "description": "how the parent for the next candidate is chosen",
+      "required": false
+    },
+    "acceptance_mode": {
+      "default": "strict",
+      "kind": "enum",
+      "lo": null,
+      "hi": null,
+      "enum": [
+        "strict",
+        "lenient",
+        "off"
+      ],
+      "values": [],
+      "frozen": false,
+      "description": "how much better than its parent a candidate must be",
+      "required": false
+    },
+    "budget": {
+      "default": 3,
+      "kind": "int",
+      "lo": 1,
+      "hi": 8,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many candidates the ladder may evaluate",
+      "required": false
+    },
+    "seed": {
+      "default": 7,
+      "kind": "int",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": true,
+      "description": "the generator's random seed; frozen so a run reproduces",
+      "required": false
+    }
+  }
+}

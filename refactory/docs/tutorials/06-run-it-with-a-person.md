@@ -212,7 +212,7 @@ then repeat adoption. This does not waive failed evaluations or an overfit warni
 
 - **Who answers a gate is part of the architecture**, not a convention: the IR
   carries it, the runtime enforces it, and a walker run stops (a headless DSH run
-  refuses at the spine level) rather than guessing.
+  stops and prints the commands) rather than guessing.
 - The decision history is durable. Interactive approval applies once to the
   reviewed inputs; another visit needs a new answer.
 - Steering is context; structure is the outer loop's job. During use the graph does

@@ -110,6 +110,7 @@ The native panel's **Graph controls** offers pause/resume/stop. The console expo
 uv run refactory graph-control pause --run /absolute/run
 uv run refactory graph-control resume --run /absolute/run
 uv run refactory graph-control stop --run /absolute/run
+uv run refactory graph-control skip --run /absolute/run --node check
 ```
 
 Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of the run's current owner process (from the console launch record, or from the spine checkpoint when the launch record is absent or stale, matching how `refactory status` determines `owner_alive`). Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
@@ -117,6 +118,45 @@ Process cancellation is separate: `refactory stop --run RUN_DIR` requests interr
 A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. A failed control stops being reported to the person once a later control on the same run succeeds, because the receipt file is overwritten with `status: applied`. The failure remains in the journal for audit; only the display is replaced by the later success. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins. `refactory status` lists the queued controls, so a person sees what a next owner would apply. Every graph-control confirmation includes the run's name.
 
 To change completed work, choose a completed node and prompt correction, press **Preview affected results**, inspect the invalidated nodes, then **Confirm correction and rerun**. The console equivalent is `graph-control preview --node NODE`, followed by `graph-control rerun --node NODE --text "CORRECTION" --revision REVISION` with the returned revision and the same `--run`. The owner refuses a stale preview. Prior evidence is archived and dependent results invalidated before execution; a note alone does not silently rewrite completed work. Unsafe replay plans, including unsettled concurrent work, are refused.
+
+## Resuming after the driver moved
+
+When a run's driver checkout moves to a new commit (or its fingerprinted files are
+edited) between launch and resume, the run creates a **pin**: a prepared git
+worktree of the original commit under `~/.refactory/pins/<commit>/checkout`. The
+pin has its own `uv sync`, `pnpm install` and `pnpm build`, and a DSH profile
+named `graph-pin-<commit12>` provisioned in the person's own `~/.dsh` — so
+credentials stay where they are and DSH_HOME is never changed.
+
+The resume path detects drift by comparing the recorded commit and configuration
+fingerprints against the current checkout.  Only fingerprints under the driver
+checkout (by path component, not string prefix) count as driver drift; the run's
+own graphs, `.factory/` artefacts, and project packages are not driver drift
+and are still validated normally — a changed run graph raises the same "prepared
+configuration … changed" refusal as before.
+
+When drift is found, the owner process re-execs under the pin's Python
+interpreter. After re-exec, `REPO_ROOT` resolves to the pin, so every
+path — `dsh_command()`, `venv_bin()`, the node commands — naturally points
+to the pin's code. The loop-breaking guard: if `REPO_ROOT` already equals
+the pin checkout, re-exec is skipped.
+
+A dirty driver (uncommitted changes to machinery paths at launch) records a
+unified diff. When the pin is created, `git apply` applies that diff to the pin's
+worktree, so the pin matches the exact state the run was launched with. A
+conflicting diff refuses with a message naming the commit and the conflict.
+
+Pins are shared: two runs at the same commit use the same pin. `refactory pin
+list` shows all pins; `refactory pin prune` removes those no live or resumable run
+refers to.
+
+## Which project a run uses
+
+`wf_open` passes `session.header.cwd` as `--project` to the open command, so a
+session opened in another directory runs with that directory as its project.
+`startup.ts` reads `REFACTORY_PROJECT` from the environment when set and falls
+back to `process.cwd()` only when absent, so the CLI's `--project` is no longer
+overridden.
 
 ## Recover a known boundary
 
@@ -155,7 +195,7 @@ It internally runs the interactive entry point with `--resume`.
 
 Recovery requires a recognized checkpoint, a stopped owner, matching prepared configuration and unchanged fingerprinted inputs/outputs. It refuses a dispatch whose outcome is unknown — a pending marker with no written receipt; a refused step whose receipt was written is not unknown. It also refuses a failed or unknown last-node outcome. In-flight external product sessions are not resumed. Python executor partial-fork recovery is also refused because successful sibling facts cannot yet be restored safely.
 
-A process killed by a signal during a check or environment install is retried once; if it dies again, the run reports it as an infrastructure failure naming the signal and halts without spending an attempt.
+A process killed by a signal during a check, environment install, generate or setup command is retried once; if it dies again, the run reports it as an infrastructure failure naming the command and the signal and halts without spending an attempt. This includes shell-wrapped signals (exit 134/135/139 from `./install.sh` or similar). When the base comparison is unavailable (a crash that cannot be rebuilt), the base environment is discarded so the next check gets a fresh start, the run continues without excusals, and reports this in `check.txt` and the PR's Verification section. A convergence extra-attempt is recorded in the run and the PR; convergence is judged from the recorded check output, not the feedback text.
 
 An emission that changes nothing is refused back to emit, including when materialise is replayed on an emit.txt the last attempt already holds. The refusal says the emission changed nothing, not that an edit's text is missing, and the branch holds one attempt per answer that changed something.
 
@@ -307,6 +347,40 @@ If the owner died during delivery, `graph-control resume` restarts it. If main
 has moved further since the last delivery attempt, use `redeliver` to merge the
 current main.
 
+### Automatic conflict resolution
+
+When delivery merges the target branch and an authored file conflicts, the run
+no longer pushes the reviewed commit behind main. Instead:
+
+1. Delivery records the conflict (which files, their base/ours/theirs content,
+   and what main changed) and raises `NotDelivered` — nothing is pushed.
+2. The `delivery_gate` evaluator reads the conflict facts and records them in
+   `pending-merge.json` (main's tip, the conflicted paths). It does **not**
+   start a merge — the worktree stays clean while the builder works. It
+   returns `Verdict("reloop")`.
+3. The run goes back to `emit`. The builder receives the conflict detail via
+   `{{validation}}` (base, ours, theirs, and what main changed for each file).
+4. Materialise reads `pending-merge.json`, starts `git merge --no-commit
+   <target_tip>`, resolves generated-file conflicts to theirs (main's side),
+   applies the emission, and either commits the merge or aborts it — all in
+   one deterministic step. An emission that leaves conflict markers or omits a
+   conflicted path is refused, and the merge is aborted.
+5. The check, the base comparison and the reviews run on the merged result
+   before delivery tries again.
+6. The loop is bounded by `check_attempts` (default 3). A run that cannot
+   resolve stops, naming the conflicting files. `graph-control redeliver`
+   restarts it.
+
+The merge exists only inside materialise (`_commit_emission`). A stop at any
+point — a crash at emit, a refused emission, budget exhaustion, or a person's
+stop — leaves the worktree clean with no MERGE_HEAD. After a crash between
+the merge commit and the record write, `require_current` adopts the existing
+merge commit rather than refusing.
+
+After delivery pushes a merge commit, it advances the worktree record (head and
+base) to the merge, so a later attempt builds on it and the next push
+fast-forwards. Delivery only ever pushes a head that contains main.
+
 `rerun` with `--text` on a node that takes no text (an op or a gate) is refused
 with `"this node takes no text; drop --text"`.
 
@@ -327,7 +401,12 @@ A check that could not run appears as "did not run" in the PR Verification
 section and in the run report, derived from `validation.status` in
 `authoring-evidence.json`. The CEO may ask the person how to proceed (naming
 what stopped the check and what would unblock it), but it never recommends
-skipping a check gate.
+skipping a check gate. A person who wants to skip the check uses
+`refactory graph-control skip --run <dir> --node <check_node>` from the CLI.
+The GUI panel does not offer a skip button; use the CLI command. A person's
+skip records `source: 'person'` provenance in the spine checkpoint and is
+accepted by `require_completion`. A CEO's `wf_edit` skip records
+`source: 'ceo'` and is refused.
 
 ### Forward-only invalidation
 

@@ -108,9 +108,50 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         return _redeliver(root, saved, current_revision)
     if action == 'confirm-completion':
         return _confirm_completion(root)
+    if action == 'skip':
+        if not node:
+            raise ValueError('--node is required for skip')
+        graph_nodes = saved.get('graph', {}).get('nodes', {})
+        if node not in graph_nodes:
+            raise ValueError(f'unknown node {node!r}')
+        state = saved.get('state', {})
+        if node in (state.get('completed') or []):
+            raise ValueError(f'{node!r} already completed')
+        # Pre-validate: target must be a runtime_evidence producer.
+        decl_path = root / '.refactory/declarations.json'
+        if not decl_path.exists():
+            raise ValueError('declarations.json is missing; cannot validate skip target')
+        decl = json.loads(decl_path.read_text())
+        node_decl = decl.get(node, {})
+        produces = node_decl.get('produces', [])
+        if 'runtime_evidence' not in produces:
+            raise ValueError(
+                f'{node!r} does not produce runtime evidence; '
+                'graph-control skip is limited to check nodes'
+            )
+        identifier = uuid.uuid4().hex
+        invocation_data = None
+        invocation_path = root / '.refactory/invocation.json'
+        if invocation_path.exists():
+            try:
+                invocation_data = json.loads(invocation_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+        payload = {
+            'id': identifier, 'action': 'skip', 'target': node,
+            'source': 'person',
+            'at': datetime.now(timezone.utc).isoformat(),
+            'run_id': str(root),
+            'invocation': invocation_data.get('id') if invocation_data else None,
+        }
+        directory = root / '.refactory/graph-controls'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f'{identifier}.json').write_text(json.dumps(payload))
+        emit(root, 'control_requested', state='queued', summary='skip', node_id=node)
+        return payload
     if action not in ('pause', 'resume', 'stop', 'rerun', 'redeliver'):
         raise ValueError(f'unsupported graph control {action!r}; '
-                         f'supported: pause, resume, stop, rerun, redeliver, acknowledge, amend-command, withdraw, confirm-completion')
+                         f'supported: pause, resume, stop, rerun, redeliver, acknowledge, amend-command, withdraw, confirm-completion, skip')
     if action == 'rerun':
         if text and text.strip():
             graph_nodes = saved.get('graph', {}).get('nodes', {})
@@ -486,13 +527,29 @@ def _find_deliver_node(graph_nodes: dict[str, Any]) -> str | None:
     return None
 
 
+def _find_delivery_gate_node(graph_nodes: dict[str, Any],
+                              graph_edges: list[dict[str, Any]],
+                              deliver_node_id: str) -> str | None:
+    """The delivery gate node's id: a GateNode immediately after the deliver node."""
+    for edge in graph_edges:
+        if not isinstance(edge, dict):
+            continue
+        if edge.get('source') == deliver_node_id:
+            target_id = edge.get('target', '')
+            target_node = graph_nodes.get(target_id)
+            if isinstance(target_node, dict) and target_node.get('_type') == 'GateNode':
+                return target_id
+    return None
+
+
 def _redeliver(root: Path, saved: dict[str, Any], current_revision: str) -> dict[str, Any]:
     """Merge current main, regenerate, re-check and push in one command.
 
     Works on runs that finished (``done``) or that failed at the deliver
-    node.  When the checkpoint is ``failed`` and the due node is the
-    deliver node, the checkpoint-bound acknowledgement is passed
-    automatically, as ``rerun --acknowledge-failure`` does.
+    node or the delivery gate.  When the checkpoint is ``failed`` and the
+    due node is the deliver node or delivery gate, the checkpoint-bound
+    acknowledgement is passed automatically, as ``rerun --acknowledge-failure``
+    does.
     """
     spine_status = read(root / '.refactory/spine-status.json').get('status', '')
     if spine_status not in OWNER_STOPPED:
@@ -504,12 +561,21 @@ def _redeliver(root: Path, saved: dict[str, Any], current_revision: str) -> dict
     if deliver_node_id is None:
         raise ValueError('this run has no deliver node')
 
-    # Handle failed-at-deliver: pass the acknowledgement automatically
+    # Also find the delivery gate (the GateNode immediately after deliver),
+    # so redeliver accepts runs that stopped at the gate (e.g. conflict
+    # resolution exhausted its budget).
+    graph_edges = saved.get('graph', {}).get('edges', [])
+    delivery_gate_id = _find_delivery_gate_node(graph_nodes, graph_edges, deliver_node_id)
+    delivery_node_ids = {deliver_node_id}
+    if delivery_gate_id:
+        delivery_node_ids.add(delivery_gate_id)
+
+    # Handle failed-at-deliver or failed-at-delivery-gate: pass the acknowledgement automatically
     acknowledge_failed = False
     if saved.get('status') == 'failed':
         state = saved.get('state') if isinstance(saved.get('state'), dict) else saved
         cursor = [n for n in (state.get('cursor') or []) if isinstance(n, str)]
-        if deliver_node_id in cursor:
+        if any(n in delivery_node_ids for n in cursor):
             acknowledge_failed = True
         else:
             due = ', '.join(cursor) if cursor else 'none'

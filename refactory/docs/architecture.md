@@ -324,21 +324,49 @@ intent-faithful plan, and design-v2 adds `design_doc` — the design document th
 code is written from. Between `design_doc` and `gate_strategy`, a **design review**
 step checks the document: a `design_review` agent reads the design, the brief and
 the code the design cites, and writes `reviews/design-review.md` listing open
-alternatives and unconfirmed claims as `BLOCKING:` findings. `gate_design_review`
+alternatives and unconfirmed claims as `BLOCKING:` findings. Between `design_doc`
+and `design_review`, a deterministic `check_design_claims` fn-gate verifies each
+claim in the subject-at-citation-quote format: that cited paths exist, quoted lines
+match within ±3 lines, and named identifiers from the claim's subject are present
+(Python via `ast`, TypeScript via word-boundary search). Mismatches reloop
+`design_doc` without spending a design-review attempt; on exhaustion the mismatches
+are appended to the review's feedback. `gate_design_review`
 reads that review using the same verdict and blocking-findings parsing as
 `gate_overwatch`, and adds two mechanical checks with no false positives: every
 `path:line` citation names an existing file with that many lines, and every
-quotation the design attributes to the brief appears verbatim in the brief. On
-failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
+quotation the design attributes to the brief appears verbatim in the brief. A fifth
+mechanical check validates per-changed-function repository questions (duplicates,
+callers, shared state) and the brief-example trace, for repository-change runs only.
+On failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
 proceeds to `gate_strategy` with the remaining findings shown — it never fails the
-run. A **person answers `gate_strategy`** at that point, because a
+run. A reviewer formatting miss re-runs `design_review` (via a `review_reloop` edge)
+without spending a `design_review_attempts` slot; the re-run counter is
+`design_review_reruns_used` (limit 2).
+
+The `deliverable_kind` fact, computed by `prepare_design`, distinguishes repository
+changes from artifacts. The `review_instructions` fact renders `REPO_CHANGE_REVIEW_INSTRUCTIONS`
+(composed from verification methods M2, M3, M11, M12) or `ARTIFACT_REVIEW_INSTRUCTIONS`
+into each reviewer's prompt via `{{review_instructions}}`. The `changed_functions` module
+maps diff hunk line ranges onto function spans via `ast` (Python) and hunk-range entries
+(TypeScript), and its output is rendered into prompts as `{{changed_functions}}`.
+
+For the post-build QA gate, `gate_qa` validates each of the three review files independently,
+naming the reviewer and function in any refusal. A `review_reloop` edge from `gate_qa` to
+`fork_qa` re-runs only the reviewers. The fast `gate_qa` validates `focused-qa.json`'s
+`repo_questions` key and strips `[repo-questions]`-prefixed problems from `failure_kind`'s
+word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
+PASS" or "Design review: FAIL, N unresolved" followed by the unresolved findings,
+carried by fact substitution to all template-rendered surfaces (terminal, GUI,
+headless refusal, `refactory status`). A **person answers `gate_strategy`** at that point, because a
 run that can approve its own plan is not reviewed at all, so a walker run stops at
-the gate and records the visit; a headless DSH run refuses at the spine level;
+the gate and records the visit; a headless DSH run stops and prints the steer and resume commands;
 the caller can supply the verdict up front via the ledger. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in
 parallel**, merge into one synthesis whose blocking findings the QA gate reads, and
-are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs between the check and the reviews, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. A QA or
+are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs between the check and the reviews, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. A **failure digest** is built from the check output per runner (pytest, vitest, node's test runner) and stored in `check-record.json`, which survives redo; the builder receives the digest rather than the raw output. A **builder probe** is available during emit: the builder can test named failing tests in a throwaway standalone clone before making its final emission. At the post-build gates, **per-correction audit** checks each gate correction item by item: for every correction in the ledger it records the site in the diff, the test that reaches that site (via mechanical hunk-level revert), and the evidence scope (via AST-based patch-target detection); see docs/hardening.md §25-27. A QA or
 overwatch reloop goes back to the emit step, not to the plan a person approved.
+
+**Finding coverage.** Each research and perspective file carries finding ids in the format `FND-<slug>-<n>` (e.g. `FND-api-surface-1`). `gate_design_review` checks that every finding id from `research/*.md` and `strategy/*.md` appears in the design's `## Research and perspective findings` section, either addressed at a valid site or § heading reference, or set aside with `[set-aside: <reason>]`. Coverage is checked against the detail files, not the summaries (`research-plan.json`, `strategy-plan.json`), so a finding a summary dropped is still required. All missing findings are blocking. Create mode's `review_design` gate runs the same check against the `findings` field of `strategy.json`; create's review raises when its attempts run out.
 
 All authoring review uses the original brief, approved design and explicit user steering
 as its acceptance baseline. User-approved non-goals remain valid; an author or
@@ -437,9 +465,9 @@ changed inputs expire an unused answer, and a later visit asks again even when t
 files are identical. Legacy unscoped answers remain history, not authorization.
 Explicit upfront `--approve` or `RunContext.verdicts` remains standing authorization
 from the caller. A ledger-backed upfront approval remains active when that same
-work directory is reopened; it has no separate invocation identifier. Without a
+work directory is resumed; it has no separate invocation identifier. Without a
 current scoped answer or standing authorization, a
-walker run **stops** at the gate; a headless DSH run refuses at the spine level.
+walker run **stops** at the gate; a headless DSH run stops and prints the steer and resume commands.
 
 **It is inert when unused.** An empty ledger renders the empty string and `annotate`
 returns the workflow it was given. A run nobody steered is the run it would have been,
@@ -669,15 +697,49 @@ registration (core-only install), the overlay is `None` and the block is
 skipped. A product registration is available only in processes whose
 installed distribution declares the entry point.
 
+### Product-supplied configuration
+
+Two additional patterns let core consume product-defined behaviour without
+naming product modules by string:
+
+1. **Node properties (lowering).** Lowering detects smoke nodes by
+   `SMOKE_PRODUCES.issubset(node.produces) and 'smoke_timeout_s' in node.knobs`
+   — a two-factor predicate matching the `_is_check_node` pattern
+   (`CHECK_PRODUCES` + `check_timeout_s`). A mode that wants the smoke
+   envelope declares these in its node. Core reads the properties; it never
+   matches a product module name. Product modes: `CreateMode` at
+   `create.py:37`, `EditMode` at `edit.py:31`.
+
+2. **Run-record fields (supervisor).** The supervisor reads `owner_argv`
+   from `run-config.json`, written by `interactive.prepare()` at
+   `interactive.py:139`. The stored argv omits `--workdir`; the supervisor
+   appends the current root at call time, keeping its current-root behaviour
+   and avoiding stale absolute paths. For backward compatibility with runs
+   created before this change, the supervisor discovers the owner module
+   from the `refactory.owner_module` entry point.  The supervisor fallback
+   is the only owner-module lookup; it takes the first entry point without
+   caching.
+
+**Behaviour changes:** Behaviour is unchanged on both runtimes
+(`python -m refactory_dsh.design` and `refactory ceo`). After pulling:
+`uv sync` is needed to register the new entry point
+(`refactory.owner_module`). Runs created before this change respawn through
+the `refactory.owner_module` entry point, so `uv sync` is required. No
+other manual action required. The `owner_argv` field in `run-config.json`
+is written automatically by `interactive.prepare()` on new runs. Existing
+in-progress runs use the entry-point fallback, which reproduces today's
+behaviour exactly.
+
 ### Entry-point groups
 
-Three groups register product behaviour that core discovers at call time:
+Four groups register product behaviour that core discovers at call time:
 
 | Group | pyproject.toml key | Discoverer | Degradation | Stale-install guard |
 |---|---|---|---|---|
 | `refactory.environment_overlay` | `worktree = "…worktree:_worktree_environment_overlay"` | `model.get_environment_overlay()` | `None` → skip overlay | Yes — `RuntimeError` when worktree record exists |
 | `refactory.worktree_state` | `worktree = "…worktree:_worktree_state_bridge"` | `agent_delivery.get_worktree_state()` | `None` → recorded returns None, skip shared_changed | Yes — `RuntimeError` when worktree record exists at workdir |
 | `refactory.delivery_identity` | `authoring = "…authoring_evidence:delivery_identity"` | `agent_delivery.get_delivery_identity()` | `None` + not reviewer or no EVIDENCE → skip enrichment | Conditional — `RuntimeError` when node in REVIEWERS AND EVIDENCE file exists |
+| `refactory.owner_module` | `interactive = "refactory_dsh.interactive"` | `supervisor._build_owner_argv()` | `None` → record start failure, supervisor exits cleanly | No — used only as fallback for old runs without `owner_argv` |
 
 Each discoverer follows the same pattern: a module-level sentinel, at-most-one
 `entry_points()` lookup, cache, and `None`. The stale-install guard fails
@@ -693,7 +755,7 @@ same entry-point discovery:
 | Worker | `worker_node.execute` → `model` | .venv/bin/python |
 | Interactive owner | `interactive.py` → `model` | .venv/bin/python |
 | Console | `console` → `model` | .venv/bin/python |
-| Supervisor child | spawns `-m refactory_dsh.interactive` (the interactive owner) → `model` | sys.executable |
+| Supervisor child | reads `owner_argv` from run-config.json (the interactive owner) → `model` | sys.executable |
 | FnNode ops | `python -m refactory_dsh.run` (startup.ts) → `model` | PATH python |
 | Evaluator model judge | `evaluators.py` → sandbox → `model` | sys.executable (PYTHONPATH=refactory/) |
 

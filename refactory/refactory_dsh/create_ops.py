@@ -320,7 +320,7 @@ def prepare(ctx: Any) -> dict[str, Any]:
     }
 
 
-def _plan(text: str) -> list[dict[str, str]]:
+def _plan(text: str) -> list[dict[str, Any]]:
     """The plan's entries, or an empty list when the answer is not a plan.
 
     Tolerant about the fences and prose around the array — a model that writes
@@ -337,13 +337,13 @@ def _plan(text: str) -> list[dict[str, str]]:
         return []
     if not isinstance(payload, list):
         return []
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, Any]] = []
     for item in payload:
         if not isinstance(item, dict):
             continue
         entries.append({
             key: str(item.get(key) or "").strip() for key in ("focus", "slug", "finding")
-        })
+        } | {"ids": item.get("ids") or []})
     return entries
 
 
@@ -370,7 +370,8 @@ def record_findings(ctx: Any) -> dict[str, Any]:
         path = f"research/{slug}.md"
         if ctx.exists(path) and ctx.read_text(path).strip():
             continue
-        ctx.write_text(path, f"# {entry['focus']}\n\n{entry['finding']}\n")
+        fnd_id = f"FND-{slug}-1"
+        ctx.write_text(path, f"### {fnd_id} \u2014 {entry['finding']}\n\n# {entry['focus']}\n\n{entry['finding']}\n")
         recorded.append(path)
     return {"findings_recorded": recorded}
 
@@ -426,6 +427,28 @@ def gate_research(ctx: Any) -> str:
                 ctx.exists(path) and ctx.read_text(path).strip()
             ):
                 problems.append(f"{label}: {path} is missing or empty")
+            elif slug and RESEARCH_SLUG.fullmatch(slug) and ctx.exists(path):
+                content = ctx.read_text(path)
+                from refactory_dsh.findings_coverage import definitions
+                defs = definitions(content)
+                if content.strip() and not defs:
+                    problems.append(
+                        f"{label}: {path} has no FND-<slug>-<n> finding ids"
+                    )
+                else:
+                    for fid, fslug, _fn, _line_text in defs:
+                        if fslug != slug:
+                            problems.append(
+                                f"{label}: {path} has id {fid} with slug "
+                                f"'{fslug}' but the file's slug is '{slug}'"
+                            )
+                    seen_fids: set[str] = set()
+                    for fid, _fslug, _fn, _line_text in defs:
+                        if fid in seen_fids:
+                            problems.append(
+                                f"{label}: {path} has duplicate id {fid}"
+                            )
+                        seen_fids.add(fid)
     used = int(ctx.facts.get("research_attempts_used", 0)) + 1
     report = "\n".join(f"- {problem}" for problem in problems)
     ctx.write_text("research-review.txt", report or "ok\n")
@@ -495,7 +518,8 @@ Write one JSON object and nothing else:
             "notes": "..."}],
  "edges": [{"source": "...", "target": "...", "condition": null}],
  "start": "<node id>",
- "score": "<which produced fact score() reads, and why that is the right number>"}
+ "score": "<which produced fact score() reads, and why that is the right number>",
+ "findings": {"FND-<slug>-<n>": "<node or knob that handles it, or [set-aside: reason]>"}}
 
 Rules:
 - At least two approaches in `considered`. One approach is not a choice.
@@ -539,7 +563,8 @@ Write one JSON array and nothing else, one object per direction:
 
 [{"focus": "<the question this direction answers>",
   "slug": "<a file-name-safe name for it>",
-  "finding": "<what the answer is, in one paragraph>"}]
+  "finding": "<what the answer is, in one paragraph>",
+  "ids": ["FND-<slug>-1", "FND-<slug>-2"]}]
 
 Rules:
 - Between three and five directions for a full design, or one to three for a scoped change. The research scope is a fact set by the prepare step.
@@ -547,6 +572,8 @@ Rules:
   where that direction's long form belongs.
 - `finding` states what the answer *is*. A direction nobody could answer says so in
   the finding ("not answered: <why>") rather than being dropped or invented.
+- Each finding in `research/<slug>.md` is a heading `### FND-<slug>-<n> \u2014 <the finding>`,
+  numbered from 1 within the file, and `ids` lists them.
 - A plan that says subagents are still working is not a plan: by the time you answer,
   the work is either done or it is not.
 """
@@ -623,6 +650,8 @@ def review_design(ctx: Any) -> str:
     raw = ctx.read_text("strategy.json")
     attempts_allowed = int(ctx.knob("design_attempts", 2))
     problems = _review(raw)
+    from refactory_dsh import findings_coverage
+    problems.extend(findings_coverage.gate_problems(ctx, document='strategy.json'))
     used = int(ctx.facts.get("design_attempts_used", 0)) + 1
     report = "\n".join(f"- {problem}" for problem in problems)
     ctx.write_text("strategy-review.txt", report or "ok\n")
@@ -1613,9 +1642,51 @@ def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
         ctx.set_fact("check_attempts_used", kind_used)
         kind_limit = int(ctx.knob("check_attempts", ctx.knob("attempts", 3)))
         if kind_used >= kind_limit:
-            raise ValueError(
-                f"check attempts exhausted after {kind_used} check failure(s): {feedback}"
-            )
+            # R6: rolling convergence — grant another check attempt each time
+            # the failure set is a non-empty strict subset of the previous
+            # one, with no new failures and the runner completed fully.
+            # Repeats at every attempt past the regular limit, up to
+            # check_attempt_cap total check attempts.  Replaces the old
+            # one-shot convergence_extra_attempts knob.
+            from refactory_dsh import base_check
+            history = list(ctx.facts.get("check_failures_history", []))
+            extras_used = int(ctx.facts.get("convergence_extras_used", 0))
+            cap = int(ctx.knob("check_attempt_cap", 8))
+            # 0 or a value at or below the regular attempts disables extension.
+            granted = False
+            if cap > kind_limit and kind_used < cap and len(history) >= 2:
+                current = set(history[-1])
+                previous = set(history[-2])
+                # R6 correction 3: judge from the recorded check output,
+                # not the feedback text.  The check_blocker_history fact
+                # records the excusal_blocker result computed from the full
+                # check output at each attempt.
+                blocker_history = list(ctx.facts.get("check_blocker_history", []))
+                if blocker_history:
+                    blocker = blocker_history[-1]
+                else:
+                    # Fallback: compute from feedback (first attempt).
+                    check_command = str(ctx.facts.get("check") or "").strip()
+                    blocker = base_check.excusal_blocker(
+                        check_command, feedback, current
+                    ) if current else "empty failure set"
+                all_prior = set().union(*(set(h) for h in history[:-1]))
+                if (current
+                        and current < previous
+                        and current <= all_prior
+                        and blocker is None):
+                    ctx.set_fact("convergence_extras_used", extras_used + 1)
+                    ctx.set_fact("convergence_granted", True)
+                    granted = True
+            if not granted:
+                if cap > kind_limit and kind_used >= cap:
+                    raise ValueError(
+                        f"check attempt cap ({cap}) reached after {kind_used} "
+                        f"check attempt(s): {feedback}"
+                    )
+                raise ValueError(
+                    f"check attempts exhausted after {kind_used} check failure(s): {feedback}"
+                )
     else:
         kind_used = int(ctx.facts.get("review_attempts_used", 0)) + 1
         ctx.set_fact("review_attempts_used", kind_used)
@@ -1626,7 +1697,9 @@ def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
             )
 
     overall_limit = int(ctx.knob("attempts", ctx.knob("check_attempts", 3)))
-    if used >= overall_limit:
+    # R6: apply the granted extra attempt to the overall cap too.
+    extras_granted = int(ctx.facts.get("convergence_extras_used", 0))
+    if used >= overall_limit + extras_granted:
         raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
     return Verdict("reloop", feedback)
 
@@ -2176,6 +2249,52 @@ def gate_qa(ctx: Any) -> str:
             note_text = "\n".join(scope_notes)
             if reason:
                 reason += "\n" + note_text
+    # ── per-changed-function entry validation (design mode only) ──
+    deliverable_kind_value = str(ctx.facts.get("deliverable_kind", ""))
+    if not reason and deliverable_kind_value == "repository_change":
+        from refactory_dsh.authoring_evidence import check_review_questions
+        import json as _json
+
+        changed_fns: list[str] = []
+        if ctx.exists("changed-functions.json"):
+            try:
+                cf_data = _json.loads(ctx.read_text("changed-functions.json"))
+                changed_fns = [entry["function"] for entry in cf_data
+                               if isinstance(entry, dict) and "function" in entry]
+            except (ValueError, KeyError):
+                pass
+
+        if changed_fns:
+            rq_problems: list[str] = []
+            _review_file_to_node = {
+                "reviews/health-check.md": "health_checker",
+                "reviews/code-review.md": "code_reviewer",
+                "reviews/qa.md": "qa_director",
+            }
+            for review in snapshot["reviews"]:
+                reviewer_name = _review_file_to_node.get(
+                    review["path"],
+                    review["path"].rsplit("/", 1)[-1].replace(".md", "").replace("-", "_"),
+                )
+                review_text_content = ctx.read_text(review["path"])
+                rq_problems.extend(
+                    check_review_questions(review_text_content, changed_fns, reviewer_name))
+            if rq_problems:
+                # Check re-run budget
+                reruns_used = int(ctx.facts.get("review_reruns_used", 0)) + 1
+                ctx.set_fact("review_reruns_used", reruns_used)
+                if reruns_used <= 2:
+                    rq_report = "\n".join(rq_problems)
+                    ctx.write_text("reviews/qa-gate.txt", rq_report + "\n")
+                    ctx.set_fact("qa_gate", rq_report)
+                    return Verdict("review_reloop", rq_report)
+                else:
+                    # At the limit, raise naming the node and function
+                    rq_report = "\n".join(rq_problems)
+                    raise ValueError(
+                        f"repository-question re-runs exhausted after {reruns_used} attempt(s): {rq_report}"
+                    )
+
     if reason:
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
         ctx.set_fact("qa_gate", reason)
@@ -2200,19 +2319,33 @@ def gate_overwatch(ctx: Any) -> str:
     if unavailable:
         evidence.stop_unrepairable("unavailable", unavailable[0])
 
-    # Compute three separate problem categories so the reason names each one.
+    # Compute four separate problem categories so the reason names each one.
     evidence_problems = evidence.current_problems(ctx, ("overwatch",))
     audit_problems_list = evidence.audit_problems(ctx)
+    correction_problems = evidence.correction_audit_problems(ctx)
     review_findings_raw = blocking_findings(text)
     review_findings, ow_scope_notes = scope_filter_findings(review_findings_raw, ctx.workdir)
     verdict = text.strip().splitlines()[-1].strip() if text.strip() else ""
 
-    if verdict == PASS_MARK and not evidence_problems and not audit_problems_list and not review_findings:
+    if (verdict == PASS_MARK and not evidence_problems and not audit_problems_list
+            and not review_findings and not correction_problems):
         ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
         ctx.set_fact("overwatch_review", "(overwatch passed)")
         ctx.write_text("validation.txt", "(overwatch passed)\n")
         ctx.set_fact("validation", "(overwatch passed)")
         return "proceed"
+
+    # ── Correction-audit path: route to repair, not back to overwatch ────
+    if (verdict == PASS_MARK and not review_findings
+            and not evidence_problems and not audit_problems_list
+            and correction_problems):
+        reason = ("correction audit: " + "; ".join(correction_problems)
+                  + "\n" + _excerpt(text, 2000))
+        ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
+        ctx.set_fact("overwatch_review", reason)
+        ctx.write_text("validation.txt", reason + "\n")
+        ctx.set_fact("validation", reason)
+        return repair(ctx, [reason], kind='review')
 
     # ── Audit-only path: code is not at fault ────────────────────────────
     # When VERDICT: PASS, no blocking findings and no evidence problems,
@@ -2235,6 +2368,8 @@ def gate_overwatch(ctx: Any) -> str:
         parts.append("evidence problems: " + "; ".join(evidence_problems))
     if audit_problems_list:
         parts.append("intent audit problems: " + "; ".join(audit_problems_list))
+    if correction_problems:
+        parts.append("correction audit: " + "; ".join(correction_problems))
     if review_findings:
         parts.append("blocking review findings: " + "; ".join(review_findings))
     if verdict != PASS_MARK:

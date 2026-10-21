@@ -1,0 +1,207 @@
+{
+  "name": "lean_pack-prover",
+  "nodes": {
+    "attempt": {
+      "id": "attempt",
+      "reads": [
+        "problem.json",
+        "verify.json"
+      ],
+      "writes": [
+        "attempt.json",
+        "project/Solution.lean"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.lean_pack.ops:write_solution",
+      "callable_name": "refactory_packages.lean_pack.ops:write_solution",
+      "notes": "write the next strategy's proof into the solution file",
+      "_type": "FnNode"
+    },
+    "finish": {
+      "id": "finish",
+      "reads": [
+        "problem.json",
+        "verify.json"
+      ],
+      "writes": [
+        "result.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.lean_pack.ops:finish",
+      "callable_name": "refactory_packages.lean_pack.ops:finish",
+      "notes": "publish the checker's verdict and the attempts it took",
+      "_type": "FnNode"
+    },
+    "repair_gate": {
+      "id": "repair_gate",
+      "reads": [
+        "problem.json",
+        "verify.json"
+      ],
+      "writes": [],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_packages.lean_pack.ops:retry_gate",
+      "gate_prompt": "reloop while an untried strategy remains",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
+    "scaffold": {
+      "id": "scaffold",
+      "reads": [
+        "problem.json"
+      ],
+      "writes": [
+        "project",
+        "statement_check.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.lean_pack.ops:scaffold_project",
+      "callable_name": "refactory_packages.lean_pack.ops:scaffold_project",
+      "notes": "write the lakefile and the statement, then check the statement alone",
+      "_type": "FnNode"
+    },
+    "task_input": {
+      "id": "task_input",
+      "reads": [],
+      "writes": [
+        "problem.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.lean_pack.ops:load_problem",
+      "callable_name": "refactory_packages.lean_pack.ops:load_problem",
+      "notes": "write the theorem to be proved and its proof strategies",
+      "_type": "FnNode"
+    },
+    "tool_check": {
+      "id": "tool_check",
+      "reads": [
+        "problem.json"
+      ],
+      "writes": [
+        "toolchain.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.lean_pack.ops:check_toolchain",
+      "callable_name": "refactory_packages.lean_pack.ops:check_toolchain",
+      "notes": "refuse the run here, with the install command, if Lean is absent",
+      "_type": "FnNode"
+    },
+    "verify": {
+      "id": "verify",
+      "reads": [
+        "attempt.json",
+        "problem.json",
+        "project/Solution.lean"
+      ],
+      "writes": [
+        "verify.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.lean_pack.ops:check_with_lean",
+      "callable_name": "refactory_packages.lean_pack.ops:check_with_lean",
+      "notes": "run the Lean proof checker; its verdict is the run's number",
+      "_type": "FnNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "attempt",
+      "target": "verify",
+      "condition": null
+    },
+    {
+      "source": "repair_gate",
+      "target": "attempt",
+      "condition": "reloop"
+    },
+    {
+      "source": "repair_gate",
+      "target": "finish",
+      "condition": "proceed"
+    },
+    {
+      "source": "scaffold",
+      "target": "attempt",
+      "condition": null
+    },
+    {
+      "source": "task_input",
+      "target": "tool_check",
+      "condition": null
+    },
+    {
+      "source": "tool_check",
+      "target": "scaffold",
+      "condition": null
+    },
+    {
+      "source": "verify",
+      "target": "repair_gate",
+      "condition": null
+    }
+  ],
+  "start_node": "task_input",
+  "terminal": true,
+  "knob_values": {
+    "library": "core",
+    "strategy": "omega",
+    "attempts": 4.0,
+    "timeout_s": 180.0
+  },
+  "knob_specs": {
+    "library": {
+      "default": "core",
+      "kind": "enum",
+      "lo": null,
+      "hi": null,
+      "enum": [
+        "core",
+        "mathlib"
+      ],
+      "values": [],
+      "frozen": false,
+      "description": "which library the theorem needs; core runs without mathlib",
+      "required": false
+    },
+    "strategy": {
+      "default": "omega",
+      "kind": "enum",
+      "lo": null,
+      "hi": null,
+      "enum": [
+        "omega",
+        "induction",
+        "simp",
+        "decide"
+      ],
+      "values": [],
+      "frozen": false,
+      "description": "which tactic block the first attempt writes",
+      "required": false
+    },
+    "attempts": {
+      "default": 4,
+      "kind": "int",
+      "lo": 1,
+      "hi": 4,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many strategies the retry gate may try before giving up",
+      "required": false
+    },
+    "timeout_s": {
+      "default": 180,
+      "kind": "int",
+      "lo": 10,
+      "hi": 600,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how long one Lean invocation may take before it is abandoned",
+      "required": false
+    }
+  }
+}

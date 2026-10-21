@@ -84,6 +84,12 @@ def format_status(payload: dict[str, Any]) -> str:
         for w in dict.fromkeys(warnings):
             lines.append(f"Warning: {w}")
 
+        drs = activity.get('design_review_status')
+        if isinstance(drs, str) and drs.strip():
+            lines.append("")
+            for drs_line in drs.splitlines():
+                lines.append(drs_line)
+
         if state in ('waiting_user', 'paused', 'died'):
             root = payload.get('root', payload.get('run_id', ''))
             if state == 'waiting_user':

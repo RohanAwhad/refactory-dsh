@@ -151,8 +151,6 @@ def tool_contract(ops, authored):
             spec = entry['parameters'][dest]
             chats[action]['arguments'][alias] = spec
             parameter = {key: spec[key] for key in ('type', 'items', 'enum') if key in spec}
-            if parameter.get('type') == 'object':
-                parameter.setdefault('additionalProperties', True)
             parameter['description'] = f"{action}: {spec['description'] or meta['purpose']} (console {dest}). Read help topic={name} for defaults and constraints."
             if alias in parameters:
                 previous = parameters[alias]

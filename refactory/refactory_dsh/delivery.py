@@ -47,9 +47,10 @@ SSH runs in batch mode, so a missing credential is a failure, not a wait.
 When the target branch has moved since the run started, delivery merges it into the
 run's branch with a merge commit before pushing. Conflicts in files the run's generate
 command produces are resolved by re-running the generate command; a conflict in any
-other file is not resolved automatically. The merged result is re-checked; if the check
-fails, the reviewed commit is delivered instead, and the pull request and delivery.json
-name the check failure.
+other (authored) file causes delivery to stop without pushing. It records the conflict
+and the run loops back to the builder via ``delivery_gate``, automatically.  On a failed
+merged check, an abandoned merge, or a crash, nothing is pushed either: the run stops
+or loops. Delivery only ever pushes a head that contains main.
 """
 
 from __future__ import annotations
@@ -125,13 +126,16 @@ class NotDelivered(Exception):
 
     ``pull_request`` is one GitHub already has for the branch, so the record keeps it,
     and ``pushed`` says where the branch went when it reached GitHub before delivery stopped.
+    ``merge`` carries the :class:`MergeResult` when the failure came from a merge step.
     """
 
-    def __init__(self, message: str, pull_request: str = "", pushed: str = "") -> None:
+    def __init__(self, message: str, pull_request: str = "", pushed: str = "",
+                 merge: MergeResult | None = None) -> None:
         super().__init__(message)
         self.pull_request = pull_request
         #: ``owner/repo:branch`` when the branch already reached GitHub before delivery stopped.
         self.pushed = pushed
+        self.merge = merge
 
 
 class _NotFound(NotDelivered):
@@ -153,6 +157,9 @@ class MergeResult:
     conflicts: list[str] = dataclasses.field(default_factory=list)  # authored-file paths that conflicted
     check_failed: str = ""            # failure reason when the merge-check failed, empty on success
     abandoned: str = ""               # reason the merge was abandoned (step + error)
+    conflict_detail: list[dict[str, str]] = dataclasses.field(default_factory=list)
+    target_tip: str = ""              # SHA of main's tip at the time of the merge attempt
+    infrastructure: bool = False      # R1: a signal crash in the merged check/generate
 
 
 def knobs() -> dict[str, Knob]:
@@ -798,8 +805,10 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
 
     # No worktree: nothing to write.
     if found is None:
-        return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
-                     title="", finish=[])
+        result = _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
+                       title="", finish=[])
+        result["delivery_conflict_files"] = []
+        return result
 
     # Verify the worktree's git link before recovery: a worktree whose .git was
     # repointed must be refused before git reset --hard runs in it.
@@ -810,13 +819,16 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
 
     # All paths with a worktree write the pull request text once.
     found = worktree.require_current(ctx.workdir)
+    _validate_design_after_corrections(Path(ctx.workdir))
     title = _write_pr_text(ctx, found)
 
     # ── action "none" (--no-pr, never planned) ──────────────────────────
     if approved.get("action") in (None, "none"):
         finish = _finish_commands(ctx, found, title)
-        return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
-                     title=title, finish=finish)
+        result = _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
+                       title=title, finish=finish)
+        result["delivery_conflict_files"] = []
+        return result
 
     # ── from here on, delivery was planned ──────────────────────────────
     if found.head != str(ctx.facts.get("commit")):
@@ -829,17 +841,28 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     repo_slug = now.get("repo") or approved.get("repo")
     finish = _finish_commands(ctx, found, title, repo_slug)
     if now["action"] == "none":
-        return _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish)
+        result = _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish)
+        result["delivery_conflict_files"] = []
+        return result
     if not matches(now, approved) or now.get("branch") != approved.get("branch"):
-        return _kept(ctx, approved, found, f"delivery would now be different from what the approval gate "
-                                           f"showed: it {now['summary']}",
-                     title=title, finish=finish)
+        result = _kept(ctx, approved, found, f"delivery would now be different from what the approval gate "
+                                             f"showed: it {now['summary']}",
+                       title=title, finish=finish)
+        result["delivery_conflict_files"] = []
+        return result
     try:
         outcome = _deliver(ctx, found, now, title=title)
     except NotDelivered as reason:
-        merge = getattr(reason, "merge", None)
-        return _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed,
-                     title=title, finish=finish, merge=merge)
+        merge = reason.merge
+        result = _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed,
+                       title=title, finish=finish, merge=merge)
+        if merge is not None and merge.conflicts:
+            result["delivery_conflict_files"] = merge.conflicts
+            result["delivery_conflict_detail"] = merge.conflict_detail
+            result["delivery_target_tip"] = merge.target_tip
+        else:
+            result["delivery_conflict_files"] = []
+        return result
     except Unverified as error:
         _record(ctx, {"status": "unverified", "pull_request": error.url, "head": found.head, "why": str(error),
                       "plan": approved.get("summary"), "at": datetime.now(timezone.utc).isoformat()})
@@ -847,14 +870,31 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                                  status="unverified")
         raise
     finally:
-        # Restore the worktree to the reviewed commit so a redo finds it where
-        # require_current expects it, even when _deliver left it at a merge commit.
+        # When delivery pushes a merge commit, advance the worktree record and
+        # the commit fact to it, so a later attempt (review reloop or builder
+        # rerun) builds on the merge, not the reviewed commit.  This prevents
+        # GitHub from rejecting the push as non-fast-forward (dm-116).
         path = Path(found.path)
         if path.is_dir():
             actual = worktree.git(path, "rev-parse", "HEAD").strip()
             if actual != found.head:
-                worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
-    return _delivered(ctx, approved, found, outcome, title=title)
+                # Check if the current HEAD is our merge commit.
+                try:
+                    parents_output = worktree.git(path, "rev-parse", f"{actual}^1", f"{actual}^2")
+                    parent_lines = [p.strip() for p in parents_output.strip().splitlines() if p.strip()]
+                    if len(parent_lines) >= 2 and parent_lines[0] == found.head:
+                        # This is our merge commit.  Advance the record.
+                        from dataclasses import replace as _replace, asdict as _asdict
+                        advanced = _replace(found, head=actual, base=parent_lines[1])
+                        worktree._write_json(Path(ctx.workdir) / worktree.RECORD, _asdict(advanced))
+                        ctx.set_fact("commit", actual)
+                    else:
+                        worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
+                except ValueError:
+                    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
+    result = _delivered(ctx, approved, found, outcome, title=title)
+    result["delivery_conflict_files"] = []
+    return result
 
 
 def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
@@ -869,21 +909,43 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
     check_timeout_s = float(ctx.knob("check_timeout_s", 180))
     merge = _merge_target(ctx, path, slug, into, generate, reviewed_commit,
                           check_timeout_s, str(planned["branch"]))
+    if merge.conflicts:
+        raise NotDelivered(
+            f"authored-file conflicts in {', '.join(merge.conflicts)}; "
+            "delivery does not push; the run loops back to the builder",
+            merge=merge,
+        )
     if merge.merge_commit:
-        check_failure = _check_merged(ctx, found, merge.merge_commit, reviewed_commit,
-                                      check_timeout_s)
+        check_failure, infra_flag = _check_merged(ctx, found, merge.merge_commit, reviewed_commit,
+                                                   check_timeout_s)
         if check_failure:
+            # R1: a signal crash in the merged-tree check stops as infrastructure.
+            if infra_flag:
+                raise ValueError(
+                    f"delivery stopped: infrastructure failure in merged-tree check: {check_failure}"
+                )
             merge = MergeResult(check_failed=check_failure)
-            target_guard.warn(f"the check failed on the merged result: {check_failure[:500]}; "
-                              "delivering the reviewed commit")
+    # R1: a signal crash in _merge_target's generate stops as infrastructure.
+    if merge.infrastructure:
+        raise ValueError(
+            f"delivery stopped: infrastructure failure in merge: {merge.abandoned}"
+        )
+    if merge.check_failed:
+        raise NotDelivered(
+            f"the check failed on the merged result: {merge.check_failed[:500]}; "
+            "delivery does not push",
+            merge=merge,
+        )
+    if merge.abandoned:
+        raise NotDelivered(
+            f"merge abandoned: {merge.abandoned[:500]}; delivery does not push",
+            merge=merge,
+        )
     push_head = merge.merge_commit or found.head
 
     # ── rewrite the PR body with merge information ────────────────────
     if merge.merge_commit or merge.conflicts or merge.check_failed or merge.abandoned:
         ctx.write_text(BODY, _body(ctx, found, merge=merge))
-
-    if merge.abandoned:
-        target_guard.warn(f"merge abandoned: {merge.abandoned[:500]}; delivering the reviewed commit")
 
     if planned["action"] == "refine":
         url = str(planned["pull_request"])
@@ -904,8 +966,8 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
     try:
         _push(path, slug, push_head, branch, default=str(planned["into"]))
     except NotDelivered as reason:
-        reason.merge = merge  # type: ignore[attr-defined]
-        raise NotDelivered(str(reason), str((existing or {}).get("url") or "")) from reason
+        raise NotDelivered(str(reason), str((existing or {}).get("url") or ""),
+                           merge=merge) from reason
     if existing is not None:
         status = "already open" if existing.get("headRefOid") == push_head else "updated"
         url = str(existing["url"])
@@ -1012,6 +1074,35 @@ def _is_ancestor(path: Path, maybe_ancestor: str, descendant: str) -> bool:
         return False
 
 
+def _capture_conflict_detail(
+    path: Path, conflicting: list[str], target_tip: str,
+) -> list[dict[str, str]]:
+    """Read base/ours/theirs stages and main's diff for each conflicting file.
+
+    Called from ``_merge_target`` immediately after ``conflicting`` is populated
+    and BEFORE any resolution or commit that would clear the merge index.
+    """
+    try:
+        merge_base = worktree.git(path, "merge-base", "HEAD", target_tip).strip()
+    except ValueError:
+        merge_base = ""
+    detail: list[dict[str, str]] = []
+    for cfile in conflicting:
+        entry: dict[str, str] = {"path": cfile, "base": "", "ours": "", "theirs": "", "main_diff": ""}
+        for stage, key in (("1", "base"), ("2", "ours"), ("3", "theirs")):
+            try:
+                entry[key] = worktree.git(path, "show", f":{stage}:{cfile}")
+            except ValueError:
+                pass  # missing stage (e.g. add/delete conflict)
+        if merge_base:
+            try:
+                entry["main_diff"] = worktree.git(path, "diff", f"{merge_base}..{target_tip}", "--", cfile)
+            except ValueError:
+                pass
+        detail.append(entry)
+    return detail
+
+
 def _abandon_merge(path: Path, reviewed_commit: str) -> None:
     """Best-effort: abort any in-progress merge and reset to the reviewed commit."""
     try:
@@ -1037,6 +1128,10 @@ def _regenerate_merge(ctx: Any, path: Path, generate: str, check_timeout_s: floa
     gen_result = _sbx.run_command(generate, workdir=path, timeout_s=check_timeout_s,
                                   env=_menv, home=_mhome, exact_env=True)
     if not gen_result.ok:
+        # R1: classify signal crashes in post-merge generate.
+        crashed_regen, sig_regen = _sbx.is_signal_crash(gen_result)
+        if crashed_regen:
+            return f"generate on the merged tree {sig_regen}  [infrastructure]"
         detail = (gen_result.stderr or gen_result.stdout or gen_result.problem() or "").strip()
         return f"generate failed on the merged tree: {detail[:500]}"
     _gen_changed = worktree.git(path, "diff", "--name-only").strip()
@@ -1053,18 +1148,28 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     """Merge the current tip of ``into`` into the run's branch, when it has moved.
 
     Conflicts in files the generate command produces are resolved by re-running the
-    generate command. A conflict in any other file is not resolved automatically:
-    delivery proceeds from the reviewed commit and names the conflicts.
+    generate command. A conflict in any other (authored) file causes delivery to
+    stop without pushing — the run loops back to the builder via ``delivery_gate``,
+    automatically. The builder resolves the conflicts; materialise commits a merge
+    with main's tip as the second parent.
 
     Every git step uses ``worktree.git`` with ``worktree.NO_HOOKS`` so hooks are
     suppressed and failures raise ``ValueError``.
     """
+    # Decide whether this is a new repository from the delivery plan.
+    is_new_repo = str((ctx.facts.get("delivery_plan") or {}).get("action", "")) == "create"
+
     # Find the current tip of the target branch on GitHub.
     try:
         listing = _git(path, "ls-remote", _url(slug), f"refs/heads/{into}")
-    except NotDelivered:
-        # The repository does not exist yet (new project) or is unreachable.
-        return MergeResult()
+    except NotDelivered as exc:
+        if is_new_repo:
+            # A new project whose branch has not been pushed yet — genuinely empty.
+            return MergeResult()
+        # For an existing repository, ls-remote failing is a stop.
+        raise NotDelivered(
+            f"cannot reach {slug} to check the target branch: {exc}"
+        ) from exc
     if not listing.strip():
         # The target branch does not exist on GitHub (first PR for a new project).
         return MergeResult()
@@ -1114,7 +1219,8 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
             regen_err = _regenerate_merge(ctx, path, generate, check_timeout_s, merge_env)
             if regen_err is not None:
                 _abandon_merge(path, reviewed_commit)
-                return MergeResult(abandoned=regen_err)
+                infra = "[infrastructure]" in (regen_err or "")
+                return MergeResult(abandoned=regen_err, infrastructure=infra)
         merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
         return MergeResult(merge_commit=merge_sha)
 
@@ -1130,10 +1236,14 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
         _abandon_merge(path, reviewed_commit)
         return MergeResult(abandoned="git merge failed: " + merge_error.strip()[:500])
 
+    # Capture conflict detail while unmerged entries are still in the index.
+    conflict_stages = _capture_conflict_detail(path, conflicting, target_tip)
+
     if not generate:
         # No generate command — all conflicts are authored-file conflicts.
         _abandon_merge(path, reviewed_commit)
-        return MergeResult(conflicts=conflicting)
+        return MergeResult(conflicts=conflicting, conflict_detail=conflict_stages,
+                           target_tip=target_tip)
 
     # ── Classify conflicts as generated or authored ──
     from refactory_dsh import sandbox
@@ -1155,7 +1265,9 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     if authored_conflicts:
         # At least one file could not be resolved — abandon the merge.
         _abandon_merge(path, reviewed_commit)
-        return MergeResult(conflicts=authored_conflicts)
+        authored_detail = [d for d in conflict_stages if d["path"] in authored_conflicts]
+        return MergeResult(conflicts=authored_conflicts, conflict_detail=authored_detail,
+                           target_tip=target_tip)
 
     # Stage to clear conflict markers so generate can run.
     try:
@@ -1171,9 +1283,15 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     gen_a = sandbox.run_command(generate, workdir=path, timeout_s=check_timeout_s,
                                 env=env, home=home, exact_env=True)
     if not gen_a.ok:
+        # R1: signal crash in generate stops the merge as infrastructure.
+        crashed_a, sig_a = sandbox.is_signal_crash(gen_a)
+        if crashed_a:
+            _abandon_merge(path, reviewed_commit)
+            return MergeResult(abandoned=f"generate (base side) {sig_a}", infrastructure=True)
         # Generate failed on the base side — classify all conflicting files as authored.
         _abandon_merge(path, reviewed_commit)
-        return MergeResult(conflicts=conflicting)
+        return MergeResult(conflicts=conflicting, conflict_detail=conflict_stages,
+                           target_tip=target_tip)
 
     content_a: dict[str, bytes] = {}
     for cfile in conflicting:
@@ -1192,7 +1310,8 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
             regen_err = _regenerate_merge(ctx, path, generate, check_timeout_s, merge_env)
             if regen_err is not None:
                 _abandon_merge(path, reviewed_commit)
-                return MergeResult(abandoned=regen_err)
+                infra2 = "[infrastructure]" in (regen_err or "")
+                return MergeResult(abandoned=regen_err, infrastructure=infra2)
         merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
         return MergeResult(merge_commit=merge_sha)
     except ValueError:
@@ -1222,9 +1341,15 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     gen_b = sandbox.run_command(generate, workdir=path, timeout_s=check_timeout_s,
                                 env=env, home=home, exact_env=True)
     if not gen_b.ok:
+        # R1: signal crash in generate stops the merge as infrastructure.
+        crashed_b, sig_b = sandbox.is_signal_crash(gen_b)
+        if crashed_b:
+            _abandon_merge(path, reviewed_commit)
+            return MergeResult(abandoned=f"generate (run side) {sig_b}", infrastructure=True)
         # Generate failed on the run side — classify all conflicting files as authored.
         _abandon_merge(path, reviewed_commit)
-        return MergeResult(conflicts=conflicting)
+        return MergeResult(conflicts=conflicting, conflict_detail=conflict_stages,
+                           target_tip=target_tip)
 
     content_b: dict[str, bytes] = {}
     for cfile in conflicting:
@@ -1239,7 +1364,9 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     if authored_conflicts:
         # At least one authored-file conflict — abandon the merge.
         worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
-        return MergeResult(conflicts=authored_conflicts)
+        authored_detail = [d for d in conflict_stages if d["path"] in authored_conflicts]
+        return MergeResult(conflicts=authored_conflicts, conflict_detail=authored_detail,
+                           target_tip=target_tip)
 
     # All conflicting files are generated — build the final merge commit.
     worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
@@ -1269,15 +1396,18 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
         regen_err = _regenerate_merge(ctx, path, generate, check_timeout_s, merge_env)
         if regen_err is not None:
             _abandon_merge(path, reviewed_commit)
-            return MergeResult(abandoned=regen_err)
+            infra3 = "[infrastructure]" in (regen_err or "")
+            return MergeResult(abandoned=regen_err, infrastructure=infra3)
 
     merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
     return MergeResult(merge_commit=merge_sha)
 
 
 def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
-                  reviewed_commit: str, check_timeout_s: float) -> str:
-    """Run the check on the merged result; return the failure reason, or empty on success.
+                  reviewed_commit: str, check_timeout_s: float) -> tuple[str, bool]:
+    """Run the check on the merged result; return (failure_reason, infrastructure_flag).
+
+    Returns ("", False) on success.
 
     The environment is built the same way as ``_check_in_worktree`` in ``repo_change.py``:
     HOME under the run directory, ``check_environment()`` for PATH, and
@@ -1311,35 +1441,49 @@ def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
     if reviewed_manifests != merge_manifests:
         from dataclasses import replace as _replace
         found_for_merge = _replace(found, head=merge_commit)
-        found_for_merge, env_problems, _ = worktree.ensure_environment(
+        found_for_merge, env_problems, inst_fail = worktree.ensure_environment(
             found_for_merge, ctx.workdir, budget, commit_lockfiles=False)
         if env_problems:
             problems.extend(env_problems)
+            # R1: signal crash in merged-tree install is infrastructure (structured).
+            if inst_fail is not None and isinstance(inst_fail.get("returncode"), int):
+                irc = inst_fail["returncode"]
+                if irc < 0 or irc in sandbox._AMBIGUOUS_SHELL_EXITS:
+                    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+                    sig_detail = next((p for p in env_problems if "killed by" in p.lower()), "")
+                    return f"merged-tree install {sig_detail or 'killed by signal'}", True
 
     env = worktree.check_environment(path, home)
 
     # Run generate+setup (amend=False: do not amend the merge commit).
-    _found_after, prep_problems, _ = repo_change.prepare_commands(
+    _found_after, prep_problems, prep_fail_merged = repo_change.prepare_commands(
         ctx, found, env, home, check_timeout_s, budget, amend=False)
     problems.extend(prep_problems)
 
     if problems:
+        # R1: signal crash in merged-tree generate/setup is infrastructure (structured).
+        if prep_fail_merged is not None and isinstance(prep_fail_merged.get("returncode"), int):
+            prc = prep_fail_merged["returncode"]
+            if prc < 0 or prc in sandbox._AMBIGUOUS_SHELL_EXITS:
+                worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+                sig_detail = next((p for p in prep_problems if "killed by" in p.lower()), "")
+                return f"merged-tree preparation {sig_detail or 'killed by signal'}", True
         worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
-        return "the worktree's environment could not be prepared: " + "; ".join(problems)
+        return "the worktree's environment could not be prepared: " + "; ".join(problems), False
 
     check = str(ctx.facts.get("check") or "").strip()
     if not check:
-        return ""
+        return "", False
 
     result = sandbox.run_command(check, workdir=path, timeout_s=check_timeout_s, budget=budget,
                                  env=env, home=home, exact_env=True)
     if result.ok:
-        return ""
+        return "", False
 
     # Check failed — reset to reviewed commit and report.
     worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
     failure = (result.stderr or result.stdout or result.problem() or "check failed").strip()
-    return failure[:2000]
+    return failure[:2000], False
 
 
 def _push(path: Path, slug: str, commit: str, branch: str, *, default: str, first: bool = False) -> None:
@@ -1477,7 +1621,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     elif merge is not None and merge.abandoned:
         merge_line = (f"- **Merge:** not merged; merge abandoned: {merge.abandoned[:200]}.\n")
     elif merge is not None and merge.check_failed:
-        merge_line = (f"- **Merge:** the reviewed commit was delivered; the check failed on "
+        merge_line = (f"- **Merge:** not merged; the check failed on "
                       f"the merged result: {merge.check_failed[:200]}.\n")
     # Command corrections
     command_corrections = ""
@@ -1519,10 +1663,19 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             return None
 
     ev_data = _read_evidence()
+    # Person-skipped check: read from the report's check_skipped field.
+    report_data = ctx.read_json("design.json", None) if ctx.exists("design.json") else None
+    check_skipped = report_data.get("check_skipped") if isinstance(report_data, dict) else None
     check_passed = (ev_data is not None
                     and isinstance(ev_data.get('validation'), dict)
                     and ev_data['validation'].get('status') == 'pass')
-    if check_passed:
+    if isinstance(check_skipped, dict) and check_skipped.get('source') == 'person':
+        check_line = (
+            f"- **Check:** `{check_cmd}` did not run "
+            f"(skipped by the person at {check_skipped.get('at', '?')} via graph-control; "
+            f"covers later attempts).\n"
+        )
+    elif check_passed:
         check_line = f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
     elif check_cmd:
         check_ran_and_failed = (ev_data is not None
@@ -1545,7 +1698,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         rows = audit_data.get('requirements', [])
         if not isinstance(rows, list) or len(rows) == 0:
             return False
-        return evidence.audit_problems(ctx) == []
+        return evidence.audit_problems(ctx) == [] and evidence.read_correction_audit(ctx) == []
 
     if ev_data is not None and check_passed and _audit_passed():
         reviews_line = ("- **Reviews:** the health check, code review, independent verification and QA found nothing blocking, "
@@ -1565,6 +1718,22 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         + "- **Merging:** the branch's commits are the run's attempts, "
         "each the base plus that attempt's files, committed by Refactory; the change is their sum."
     )
+    # R2: note when the base comparison was unavailable.
+    base_note = ctx.facts.get('base_unavailable')
+    if base_note:
+        verification += "\n- **Base comparison:** the base environment could not be prepared; the attempt's results stand without excusals."
+    # R6: note when convergence extra attempts were granted.
+    extras_count = int(ctx.facts.get('convergence_extras_used', 0))
+    if extras_count:
+        history = list(ctx.facts.get('check_failures_history', []))
+        # Show the failure count only at the granted (extra) attempts.
+        regular_limit = 3  # default
+        granted_counts = [str(len(h)) for h in history[regular_limit:]]
+        verification += (
+            f"\n- **Convergence:** {extras_count} extra attempt(s) granted "
+            f"because the run was converging (failure counts at granted attempts: "
+            f"{', '.join(granted_counts) if granted_counts else 'n/a'})."
+        )
     # Add planning model info if available.
     report_data = ctx.read_json("design.json", None) if ctx.exists("design.json") else None
     if isinstance(report_data, dict):
@@ -1586,6 +1755,95 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     sections.append(f"---\n\nWritten by a refactory design run once its reviews passed.\n\n"
                     f"```\n{stat}\n```")
     return "\n\n".join(sections) + "\n"
+
+
+# ── the delivery_gate evaluator ─────────────────────────────────────────────
+#: The file in the run directory that records a pending merge for crash recovery.
+PENDING_MERGE = Path(".refactory") / "pending-merge.json"
+
+
+def evaluate_delivery_conflicts(ctx: Any) -> "Verdict | str":
+    """Gate evaluator: reloop to emit on authored-file conflict, proceed otherwise.
+
+    When ``delivery_conflict_files`` is non-empty, this evaluator records the
+    conflict (main's tip, the conflicted paths, and the conflict detail) in
+    ``pending-merge.json`` so materialise can start the merge in one step.
+    The evaluator does NOT start the merge itself — the worktree stays clean
+    while the builder works.  Materialise runs ``git merge --no-commit``,
+    applies the emission, and either commits the merge or aborts it.
+
+    This ensures a stop at any point (emit crash, materialise refusal, budget
+    exhaustion) leaves the worktree clean with no MERGE_HEAD.
+    """
+    from refactory_dsh.nn import Verdict
+
+    # Abort any stale merge left by a crashed materialise before doing anything
+    # else.  This is the only place a stale MERGE_HEAD is cleaned up.
+    _abort_pending_merge(ctx)
+
+    conflict_files = ctx.facts.get("delivery_conflict_files") or []
+    if not conflict_files:
+        return "proceed"
+
+    detail = ctx.facts.get("delivery_conflict_detail") or []
+    target_tip = str(ctx.facts.get("delivery_target_tip") or "")
+    if not target_tip:
+        raise ValueError("delivery_gate: delivery_conflict_files set but delivery_target_tip missing")
+
+    # ── Bound the loop by check_attempts ──
+    allowed = int(ctx.knob("check_attempts", 3))
+    used = int(ctx.facts.get("delivery_conflict_reloops", 0)) + 1
+    ctx.set_fact("delivery_conflict_reloops", used)
+    if used > allowed:
+        raise ValueError(
+            f"delivery conflict resolution exhausted {allowed} attempts; "
+            f"conflicting files: {', '.join(conflict_files)}. "
+            f"To resume: graph-control redeliver --run <run_dir>"
+        )
+
+    # Record the pending merge for materialise.  The worktree stays clean —
+    # materialise starts the merge, applies the emission, and commits or
+    # aborts in one deterministic step.
+    worktree._write_json(Path(ctx.workdir) / PENDING_MERGE,
+                         {"target_tip": target_tip, "conflict_files": conflict_files})
+
+    # Build the description the builder receives via {{validation}}.
+    description_parts = [f"Merge conflict with main ({target_tip[:12]}). "
+                         f"Conflicting authored files: {', '.join(conflict_files)}.\n"
+                         f"During this merge, ===EDIT: blocks apply to the working tree "
+                         f"text (with conflict markers for conflicted files, with main's "
+                         f"changes for cleanly merged files), not the committed text. "
+                         f"Resolve every conflict so no <<<<<<< / >>>>>>> markers "
+                         f"remain.\n"]
+    for entry in detail:
+        description_parts.append(f"\n### {entry['path']}\n")
+        if entry.get("base"):
+            description_parts.append(f"**Base (common ancestor):**\n```\n{entry['base']}\n```\n")
+        if entry.get("ours"):
+            description_parts.append(f"**Ours (this run's version):**\n```\n{entry['ours']}\n```\n")
+        if entry.get("theirs"):
+            description_parts.append(f"**Theirs (main's version):**\n```\n{entry['theirs']}\n```\n")
+        if entry.get("main_diff"):
+            description_parts.append(f"**What main changed:**\n```diff\n{entry['main_diff']}\n```\n")
+
+    description = "\n".join(description_parts)
+    ctx.set_fact("validation", description)
+    return Verdict("reloop", description)
+
+
+def _abort_pending_merge(ctx: Any) -> None:
+    """Abort any pending merge and clean up the record, called on failure/stop."""
+    found = worktree.recorded(ctx.workdir)
+    if found is None:
+        return
+    path = Path(found.path)
+    try:
+        worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
+    except ValueError:
+        pass
+    pending = Path(ctx.workdir) / PENDING_MERGE
+    pending.unlink(missing_ok=True)
 
 
 def _process_notes_section(ctx: Any) -> str:
@@ -1617,6 +1875,28 @@ def _process_notes_section(ctx: Any) -> str:
         else:
             lines.append(f"  - `{nid}`: recorded; compliance not verified by audit")
     return "\n".join(lines)
+
+
+def _validate_design_after_corrections(workdir: Path) -> None:
+    """Post-validation: if design.md lost its contract after corrections, restore the backup.
+
+    ``pick_gate_corrections`` writes ``design.md.pre_corrections`` before routing
+    to ``apply_corrections``.  If the agent rewrote design.md in a way that loses
+    the required sections (``## Summary``, ``## Rule and sites``, etc.), this
+    restores the pre-correction version and warns.  When there is no backup
+    (no corrections were applied), this is a no-op.
+    """
+    from refactory_dsh import design_contract
+    design_path = workdir / "design.md"
+    backup_path = workdir / "design.md.pre_corrections"
+    if not design_path.exists() or not backup_path.exists():
+        return
+    text = design_path.read_text()
+    parsed = design_contract.parse(text)
+    if not parsed.has_contract:
+        backup_text = backup_path.read_text()
+        design_path.write_text(backup_text)
+        target_guard.warn("design.md was unparseable after corrections; restored the pre-correction version")
 
 
 def _write_pr_text(ctx: Any, found: worktree.Worktree) -> str:
@@ -1686,6 +1966,7 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
         record["title"] = title
         record["pr_text"] = BODY
     _record(ctx, record)
+    worktree.record_outcome(found, "succeeded")
     projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status=outcome["status"])
     delivered_head = (merge.merge_commit if merge and merge.merge_commit else found.head)
     return {"delivery_result": f"{outcome['status']}: {url}, at {delivered_head[:12]}", "pull_request": url}
@@ -1716,18 +1997,34 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
     if title:
         record["title"] = title
         record["pr_text"] = BODY
+    # Do not print "to finish: git push" when the merge failed, as that would push
+    # the reviewed commit without main — the exact problem this change fixes.
+    if merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
+        if title:
+            record["finish"] = []
+    elif title:
         record["finish"] = finish or []
     _record(ctx, record)
+    # A run with nothing to push is succeeded at report, as before.
+    # A run that delivers is succeeded only after its push (_delivered).
+    # A run looping back for conflict resolution is NOT succeeded yet.
     if found is not None:
+        if not (merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned)):
+            worktree.record_outcome(found, "succeeded")
         projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
                                  status="pushed, no pull request" if pushed and not pull_request else "kept local")
     # Build the human-readable ``where`` from the finish commands.
     finish_cmds = finish or []
+    if merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
+        finish_cmds = []
     gh_cmd = next((cmd for cmd in finish_cmds if cmd.startswith("gh pr create")), "")
     if pushed and gh_cmd:
         where = (f"; the branch {branch} is already on GitHub, as {pushed}; to finish: {gh_cmd}")
     elif finish_cmds:
         where = f"; to finish: {' && '.join(finish_cmds)}"
+    elif merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
+        # Say what actually stopped — no false "no GitHub repository" warning.
+        where = f"; the work is on branch {branch}"
     elif title and found is not None:
         body_path = str(Path(ctx.workdir).resolve() / BODY)
         where = (f"; there is no GitHub repository to open a pull request in;"

@@ -8,7 +8,7 @@
 worth a person's attention. ``approve`` is a **user gate** — `gate_kind = "user"` —
 so it carries no evaluator: a program must not be able to answer it. Under the CEO
 the gate is presented to the person and their verdict is routed; a walker run stops
-at it; a headless DSH run refuses at the spine level.
+at it; a headless DSH run stops and prints the commands.
 """
 
 from __future__ import annotations

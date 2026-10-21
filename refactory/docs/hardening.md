@@ -1,5 +1,74 @@
 # Hardening: what the audit found, and what holds it now
 
+## Failure digest, feedback re-fill and builder probe (dm-120, dm-121)
+
+### The failure digest
+
+Before this change, the builder received raw check output — up to 500 lines of
+stack traces, passing-test lines and source-map noise — or, after a redo, the
+literal `{{validation}}` placeholder unfilled.
+
+The **failure digest** (`check_digest.py`) parses check output per runner (pytest,
+vitest and node's test runner; unknown runners fall back to the raw tail).  Each
+failing test's id, assertion or error message and a short traceback are extracted,
+with ANSI codes, passing-test lines and source-map warnings stripped.  The digest
+is stored in `check-record.json`, which is a file (not a fact) and therefore
+survives a redo or rerun.
+
+### Feedback re-fill
+
+Each builder's emit node declares its feedback keys as a `Node.feedback_keys`
+field.  Before rendering, `agent_delivery.fill_feedback` — called at the three
+render sites (worker_node, nn/executor, agent_delivery.main) — checks whether any
+declared key is absent from the facts.  When one is:
+
+1. Re-derive from the producing gate's persisted file (`check-record.json`,
+   `validation.txt`, `reviews/qa-gate.txt`, `reviews/overwatch-gate.txt`,
+   `repair.txt`).
+2. Fall back to `feedback-initial.json` (prepare-time recorded values).
+3. Refuse only when both are missing.
+
+The re-fill is resolved through the `refactory.feedback_refill` entry-point group,
+following the same pattern as `refactory.environment_overlay`.  Core modules
+(`agent_delivery`, `worker_node`, `nn.executor`) import nothing from the product;
+they reach the refill logic only through the entry point.
+
+### The builder probe
+
+The emit prompt's "do not apply or test your change anywhere" exists because
+direct edits to the worktree bypass materialise and the check.  The builder probe
+gives a safe alternative:
+
+- **Standalone clone** (`git clone --no-local --depth 1`): not a linked worktree.
+  No `.git` registration.  `origin` removed after clone.
+- **Hooks off**: `core.hooksPath=/dev/null`, `LEFTHOOK=0`, `HUSKY=0`.
+- **Isolated HOME and DSH_HOME**: per-probe directories under `probe-<id>/`.
+- **PATH stripped**: the run worktree's `.venv/bin` and `node_modules/.bin` are
+  removed so tools resolve from the clone, not from the run's worktree.
+- **Deleted afterwards**: the probe directory is removed in a `finally` block.
+  Leaked probes are swept by `materialise` (owner PID check).
+- **Not an attempt**: no `commit_attempt`, no attempt counter increment.
+- **target_guard preserved**: the existing test at `test_design_worktree.py:667`
+  continues to pass.  The probe cleans up before `finish()`.
+
+#### Why each isolation guarantee exists
+
+| Guarantee | Reason |
+|---|---|
+| Standalone clone | dm-96: a PR's checks registered 59 worktrees in the target's .git |
+| Origin removed | A push from the probe could reach the shared .git |
+| Hooks off | pnpm and lefthook rewrite shared hooks (dm-96) |
+| Isolated HOME | Tool caches stay out of the worktree's diff |
+| PATH stripped | A missing tool from the clone must not resolve into the run's worktree |
+| Deleted afterwards | A tool timeout can SIGKILL the probe; materialise sweeps leaked dirs |
+
+#### What is not isolated
+
+Installs use the person's real HOME (`worktree.py:1229-1230`), as the check's
+installs do.  `~/.npmrc`, `~/.netrc`, uv configuration and keyrings are how most
+private indexes sign in.
+
+
 Every issue closed before this pass was re-read against the code and probed for its
 own acceptance criteria — by running them, not by grepping for identifiers. Five
 were not finished, four of those while being marked done. This records each one, the
@@ -726,6 +795,87 @@ asserts it exceeds 600 s with `check_timeout_s=1800`;
 `test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
 another name that declares the knob gets the envelope.
 
+## 24. Delivery conflict resolution loop (dm-102)
+
+When delivery merges the target branch and an authored file conflicts, the run
+loops back to the builder automatically instead of pushing behind main.
+
+**The loop.** `deliver → delivery_gate → emit → materialise`. When
+`delivery_conflict_files` is non-empty, the `delivery_gate` evaluator records
+the conflict (main's tip, the conflicted paths, and the conflict detail) in
+`pending-merge.json`, sets `validation` with the conflict description, and
+returns `reloop`. The worktree stays clean while the builder works.
+Materialise reads `pending-merge.json`, runs `git merge --no-commit
+<target_tip>`, resolves generated-file conflicts to theirs (main's side),
+applies the emission, and either commits the merge or aborts it — all in one
+deterministic step. Materialise refuses an emission that leaves conflict
+markers. When MERGE_HEAD is present, `git commit` creates a merge commit.
+The check, base comparison and reviews run on the merged result before
+delivery tries again.
+
+**The merge exists only inside materialise.** The delivery gate does not
+start a merge. It records what materialise needs, then the builder works on
+a clean worktree. Materialise's `_commit_emission` is the single place
+where `git merge --no-commit` runs, and its except/finally blocks abort it
+on any failure. A stop at any point — a crash at emit, a refused or empty
+emission, budget exhaustion, or a person's stop — leaves the worktree clean.
+
+**Safety invariants.**
+
+- *Nothing pushes without main.* `_deliver` raises `NotDelivered` on conflict,
+  check_failed or abandoned; `push_head` is never set to `found.head` as a
+  fallback. ls-remote failure on an existing repository raises instead of
+  falling through.
+- *Conflict-marker refusal.* `_commit_emission` scans each emitted file for
+  `<<<<<<<` / `>>>>>>>` (excluding `<<<<<<< SEARCH` / `>>>>>>> REPLACE`) and
+  raises `AttemptRefused` before committing.
+- *Every conflicted path in the emission.* During a merge, `_commit_emission`
+  refuses before writing unless every `--diff-filter=U` path appears in the
+  emission as ===FILE: or ===EDIT:.
+- *Worktree never left mid-merge.* The merge runs only inside
+  `_commit_emission`. On any failure (edit application, marker check, missing
+  path, commit failure), the except block aborts the merge and deletes
+  `pending-merge.json`. `_abort_pending_merge` at the top of the delivery_gate
+  evaluator cleans up any stale merge from a crashed materialise. After a
+  crash between the merge commit and the record write, `require_current`
+  adopts the existing merge commit.
+- *Loop bound.* `delivery_gate` counts reloops against `check_attempts`
+  (default 3). At the limit, it raises an error naming the conflicting files
+  without starting a merge. `graph-control redeliver` accepts a run stopped
+  there.
+- *Delivery advance (dm-116).* When delivery pushes a merge commit, the
+  finally block advances the worktree record (head = merge, base = main's
+  tip) so a later push fast-forwards.
+
+**Tests.**
+
+- `test_two_runs_conflict_reloop`: two runs editing the same function; the
+  second's delivery reloops and the pushed head is a merge commit containing
+  main; the merge's second parent is main's tip.
+- `test_merge_failure_leaves_worktree_clean`: materialise crashes during a
+  merge; no MERGE_HEAD remains.
+- `test_emission_with_conflict_markers_refused`: a file with markers is
+  refused; a normal SEARCH/REPLACE block succeeds.
+- `test_emission_missing_conflicted_path_aborts_merge`: an emission omitting
+  a conflicted path aborts the merge and leaves the worktree clean.
+- `test_materialise_base_moves_to_main_tip`: removing the base-move logic
+  fails this test.
+- `test_base_changed_authored_file_conflict`: delivery does not push on
+  authored-file conflict; conflict facts are set.
+- `test_merged_result_fails_check`: delivery does not push on failed merged
+  check; the worktree is not marked succeeded.
+- `test_edit_resolves_conflict_keeping_mains_lines`: an ===EDIT: block
+  resolves a merge conflict by keeping main's lines.
+- `test_ls_remote_failure_stops_existing_repo`: ls-remote failure on an
+  existing repository stops delivery instead of pushing without main.
+- `test_delivery_advances_worktree_after_merge_push`: after delivery pushes a
+  merge commit, the worktree record advances so a later push fast-forwards.
+- `test_apply_corrections_no_ledger_leaves_design_unchanged`: with no ledger,
+  the agent does not run and design.md is unchanged.
+- `test_unresolved_conflict_stops_after_budget`: a builder that never resolves
+  stops after check_attempts, with a clean worktree (no MERGE_HEAD, no
+  unmerged entries).
+
 ## 17. Goal completion requires a finished run (#347, C1)
 
 Goals were marked complete from runs that had failed before review. `spine.next()`
@@ -842,6 +992,82 @@ evidence. The CEO instructions explicitly forbid recommending skipping a check g
 and `test_run_report_checked_false_when_check_did_not_run`.
 
 ---
+
+### Signal-crash classification at preparation call sites (dm-105)
+
+`run_command` already retries once on direct signals (rc < 0) and on shell-wrapped
+SIGABRT/SIGBUS/SIGSEGV (exit 134/135/139). A new helper `is_signal_crash(result)`
+classifies what survives that retry: it returns `(True, signal_label)` when the
+return code is a direct signal or a shell-wrapped signal in `_AMBIGUOUS_SHELL_EXITS`.
+
+Every preparation call site — install (`worktree.ensure_environment`), generate and
+setup (`repo_change.prepare_commands`), and delivery's post-merge generate and
+merged-tree check (`delivery._regenerate_merge`, `_merge_target`, `_check_merged`)
+— calls `is_signal_crash` after `run_command` returns with `not result.ok`. When
+the crash persists, the call site normalises the `prep_failure` dict's `returncode`
+to a negative signal number so `check_failure_kind` returns `'uncertain'`
+(infrastructure), and the run stops without spending a code attempt. A shell-wrapped
+command whose child aborts and that exits 134 (as `./install.sh` did) is classified
+the same way: `run_command` retries once, and on the second crash `is_signal_crash`
+detects exit 134 in `_AMBIGUOUS_SHELL_EXITS`.
+
+In delivery, a signal crash in `_check_merged` or in `_merge_target`'s generate
+stops the run as infrastructure (raises ValueError) rather than continuing to push
+the reviewed commit. Crash detection uses the structured `infrastructure` flag on
+`MergeResult` and the second element of `_check_merged`'s return tuple, not text
+scanning for "killed by SIG".
+
+### Base comparison discard-and-rebuild on crash (dm-105)
+
+When any step of the base comparison — install, generate, setup or the check
+command itself — crashes (a signal that survives the retry), `run_base_check`
+discards `BASE_CHECK_HOME`, the base worktree and the cache file, and rebuilds
+from scratch. On double failure, the base environment is discarded again (HOME,
+worktree, cache) so the next check gets a fresh start, and the result is returned
+with `environment_failure` set but never cached. The run continues without
+excusals, and the "continued without excusals" note appears in `check.txt`, the
+evidence, and the PR's Verification section.
+
+A setup that leaves a marker in HOME before crashing makes the next check's
+setup exit 1 on reuse. This is exactly the b27a rerun failure. Discarding HOME
+after a double crash prevents it.
+
+Deterministic (non-crash) failures — a non-zero exit that repeats — are cached
+as before. The base is prepared at most twice per attempt, so the check node's
+time limit still holds.
+
+### Rolling convergence (dm-109)
+
+After the regular check attempts are spent, another check attempt is granted each
+time the attempt's parsed failure set is non-empty, a strict subset of the previous
+attempt's set, contains no failure that was not in an earlier attempt, and the
+runner completed fully (excusal_blocker returns None on the recorded check output,
+not the feedback text).  The extension stops the first time the set does not
+strictly shrink.  Hard cap: at most 8 check attempts in total (counting the regular
+ones), controlled by the `check_attempt_cap` knob (default 8, declared on design,
+design_fast, create, edit and their fast variants).  Setting it to 0 or to a value
+at or below the regular check attempts disables the extension.  An empty failure set
+is not progress.  The overall `attempts` cap does not refuse an attempt this rule
+granted: granted attempts are counted separately via `convergence_extras_used`.
+The count of granted attempts and the failure count at each granted attempt are
+recorded in the run and the PR's Verification section.
+
+Runner completion is judged from the `check_blocker_history` fact, which records
+the excusal_blocker result computed from the full check output at each attempt.
+This avoids false refusals when the feedback text (gate_qa's stderr/stdout)
+contains warning lines that excusal_blocker would misinterpret.
+
+### Repair feedback augmentation (dm-109)
+
+When a check fails, the builder's feedback includes: (a) the design's `[left: ...]`
+sites with their reasons, telling the builder not to change them but to fix the
+tests or callers instead; (b) broken guarantees — tests that fail on the attempt,
+are absent from the base's failure set, live in files the attempt did not change,
+and the base completed fully.
+
+In fast modes, the [left] sites and broken guarantees are stored in the
+`focused-check.json` payload's `robustness_notes` field by `focused_check`, and
+prepended to the builder's feedback by `gate_qa`.
 
 ## 15. Independent verification step (dm-84, #400)
 
@@ -974,6 +1200,87 @@ refuse when a new package appears (not only when an existing one changed).
 `test_reloop_register_does_not_refuse_itself`,
 `test_edit_whose_source_changed_refuses_at_register`.
 
+## 25. CEO gate verdicts and check skips (#363, dm-113, dm-115)
+
+**Gate verdicts.** A user gate is answered only by a person. The
+mechanical defense: `wf_verdict` throws when a verdict argument is
+passed for a user gate (index.ts, the holding test at
+plugin.spec.ts:116). The CEO's system prompt says it never claims,
+restates, or re-applies a person's verdict; this is defense-in-depth.
+A headless CEO (`graphStartup.chat === false`) cannot write
+`source='user-relayed'` via `wf_steer`; the runtime silently
+downgrades to `'ceo'`. A CEO note about a gate verdict is recorded
+as the CEO's observation, not an answer, and is shown to the person
+at the gate labelled as the CEO's.
+
+**Check skips.** Only a person can skip the check, through
+`refactory graph-control skip --node <check_node>`. The source
+`'person'` is hard-coded in `applyControls`, not read from the
+control file. Skip provenance is stored in the spine checkpoint's
+`state.skip_provenance` map — the single source of truth.
+`require_completion` accepts a person-sourced skip and refuses a
+CEO-sourced skip, naming the source. The CEO's `wf_edit skip`
+records `source: 'ceo'` and is refused by `planSkip` for
+conditional-only gates (the normal check shape) and by
+`require_completion` for any shape.
+
+Residual: an external-backend worker can write a graph-control file,
+the same residual as #429's confirm-completion.
+
+---
+
+## 24. One note is one ledger entry — heading escape (dm-132)
+
+**The invariant.** One note is always one entry. The recorded source travels with the
+text: a CEO note stays a CEO note, and a user-relayed note stays user-relayed. No
+ledger writer can produce more than one entry from one note.
+
+**The attack vector.** A note body containing `## [...] verdict` or `## [...] correction`
+at the start of a line is parsed as a separate entry by `parse_entries`, because the
+parser starts a new entry at any line beginning with `## [`. A CEO note with a forged
+verdict block becomes a separate verdict entry that `take_verdict` returns through the
+upfront shortcut. A forged correction block becomes a user-relayed requirement.
+
+**The escape scheme.** Lossless backslash byte-stuffing via `splitlines(keepends=True)`.
+On write, every body line whose content (after stripping the trailing line ending) starts
+with zero-or-more backslashes followed by `## [` gains one leading backslash. On read,
+`parse_entries` removes exactly one leading backslash from lines matching `\+## [`.
+
+- `## [X]` → stored `\## [X]` → read removes one `\` → `## [X]`.
+- `\## [X]` → stored `\\## [X]` → read removes one `\` → `\## [X]`.
+- `\\## [X]` → stored `\\\## [X]` → read removes one `\` → `\\## [X]`.
+
+**The separator set.** `str.splitlines()` splits on: `\n`, `\r`, `\r\n`, `\x0b`, `\x0c`,
+`\x1c`, `\x1d`, `\x1e`, `\x85`, `\u2028`, `\u2029`. The writer and reader both use
+`splitlines(keepends=True)`, so they cannot disagree on where a line starts.
+
+**The three write sites.** `Ledger.seed()`, `Ledger.note()`, `Ledger._decision_entry()`.
+All three call `_escape_body()` on the text before writing.
+
+**The single read site.** `parse_entries()` applies `_unescape_line()` to each body line
+before appending. This is the single unescape point for all consumers (14+ call sites
+including `entries()`, `take_verdict()`, `verdicts()`, `render_entries()`,
+`requirements()`, `identity()`, and `agent_delivery.begin()`).
+
+**Verdict single-line check.** `verdict()` rejects a gate or value that spans multiple
+lines under any line separator (not just `\n`), using `len(x.splitlines()) != 1`.
+
+**Both runtimes.** The ledger is shared by the DSH runtime and the walker runtime. Both
+read through `parse_entries` and both write through the three `Ledger` methods, so the
+fix applies to both runtimes.
+
+**The legacy `\## [` edge case.** A pre-existing line starting with `\## [` in an old
+ledger will lose one backslash on read. This is theoretical — no plausible legacy content
+starts with `\## [`.
+
+**Test.** `test_steering.py`: `test_forged_verdict_in_ceo_note_does_not_produce_verdict`
+(parametrized over 6 separators), `test_forged_correction_in_ceo_note_not_a_requirement`
+(parametrized over 6 separators), `test_seed_with_forged_heading_stays_one_entry`,
+`test_decision_entry_body_escaped`, `test_literal_backslash_heading_round_trips`,
+`test_verdict_rejects_multiline_gate_or_value`,
+`test_existing_ledger_parses_unchanged`, `test_legacy_backslash_heading_edge_case`,
+`test_escape_does_not_affect_other_markdown_headings`.
+
 ---
 
 Two things that were on this list have moved off it, which is the point of keeping it:
@@ -984,3 +1291,232 @@ Two things that were on this list have moved off it, which is the point of keepi
   where it is not, so a CI machine without it is honest rather than green by omission.
 - **SRF's own optimizer is no longer unused.** `map_elites` is ported, counted
   separately from the thirteen modes, and asserted by name (§8).
+
+
+## 25. Per-correction audit (#431)
+
+**How it works.** `correction_audit_problems()` in `authoring_evidence.py` runs
+at every post-build gate (`gate_overwatch` in full modes, `gate_qa` in fast
+modes). For each correction or constraint in the ledger it reads the overwatch's
+`intent-audit.json`, finds the clause-level `sites` arrays, and checks three
+things for every clause:
+
+1. **Site in diff.** The cited `file:line` must fall inside a hunk of the
+   run's `git diff base..HEAD`. A `not_in_diff` result is a failure.
+2. **Test reachability via site revert.** `compute_site_reverts` (§27) reverts
+   only the overlapping hunks, runs the named test, and records whether it
+   fails. A test that still passes after the revert does not reach the site.
+   A code site with an empty `tests` list fails the clause.
+3. **Evidence scope.** `patch_scope` (§26) checks whether the named test
+   patches the project's own modules on the tested path. A test that does
+   is `local`, not `connected`.
+
+**Fail closed.** Any status other than a known catch (`fail`) is a failure,
+never a pass. This includes `not_in_diff`, `unavailable`, `collection_error`,
+`import_only` (without a caught sibling) and `pass` (the test did not catch
+the revert).
+
+A clause that fails any check is BLOCKING. The message names the correction id,
+the clause, the site and the test.
+
+**Withdrawn corrections.** A correction whose audit row has `status == "excluded"`
+with a `user_change` pointing to a later ledger entry is skipped — it was
+withdrawn. This reuses the existing exclusion validation path.
+
+**Evidence forms.** Not every clause has a code site:
+- **prohibition:** requires a `pattern` field; code confirms the pattern is
+  absent from the `+` lines of the diff. Missing `pattern` fails the clause.
+- **doc:** requires a `path` field naming a changed documentation file
+  (`.md`, `.rst`, `.txt`, or under `docs/`). A path to a non-doc file fails.
+- **design:** requires a non-empty `heading` field that exists in the current
+  `design.md`. Missing or unknown heading fails the clause.
+- **test:** cites a code site plus the test; the revert runs against the code
+  site, not the test file. A site inside a test file is not a code site.
+
+A clause whose `sites` is not a list fails with "sites must be a list".
+
+**New-file sites.** A site in a file the base lacks (`new_file` result) or a
+site whose revert fails only with an import error on a name the reverted hunks
+define (`import_only` result) passes only when the same clause has a sibling
+site in an existing file whose revert fails its test.
+
+**Test.** `test_correction_audit.py::test_correction_audit_unbuilt_blocks`,
+`test_correction_audit_no_base_does_not_block`.
+
+## 26. Evidence scope enforcement (#431)
+
+**How it works.** `patch_scope.py` checks each named test for patches of the
+project's own modules on the tested path. It checks the specific test function
+plus the fixtures it requests (including conftest fixtures), not the whole file.
+
+Scope definitions (from `code_reviewer.md` category 8, quoted as written):
+- **local**: a unit test exists that tests the stated outcome in isolation
+- **connected**: a test exists that calls a real entry point crossing a module
+  boundary, mocking only external I/O
+- **assembled**: a smoke test or startup check verifies end-to-end behavior
+- **artifact**: the artifact exists and has correct content
+
+This repository's rules:
+- a test that patches the project's own modules on the tested path is local,
+  not connected;
+- assembled means driving a mode's `run()` with no project-module patch on the
+  path;
+- artifact means reading the delivered output.
+
+**Allowlist.** Targets that are always allowed: clocks (`time.time`,
+`datetime.datetime.now`, etc.), randomness (`random.*`, `Math.random`) and
+environment (`os.environ`, `process.env`).
+
+**Detection.** Python: `monkeypatch.setattr` (string and object forms),
+`monkeypatch.setenv`/`delenv` (allowed), `unittest.mock.patch`,
+`unittest.mock.patch.object`, `MagicMock` assignments. TypeScript: `vi.mock`,
+`vi.spyOn` with regex-based detection. Project modules are relative imports
+plus workspace package names.
+
+**Test.** `test_patch_scope.py` (11 tests covering each detection pattern).
+
+## 27. Site-revert checks (#431)
+
+**How it works.** `compute_site_reverts()` in `base_check.py` mechanically
+reverts each changed site to the base and runs the named test to check whether
+it catches the change.
+
+1. Get the diff hunks via `git diff -U0 base HEAD -- file`.
+2. Find hunks whose added-line range overlaps the site's line range.
+3. For pure-deletion hunks, the site line is the hunk position or the next line.
+4. Build a reverse patch of only the overlapping hunks.
+5. Apply with `git apply --reverse --unidiff-zero` (the `--unidiff-zero` flag
+   handles pure-addition hunks).
+6. Run the named test with `pytest <file>::<name>` or `vitest run <file> -t
+   <name>`, in the attempt's worktree under `worktree.check_environment`.
+7. Classify the result:
+   - `fail` → the test assertion fails, the site is caught ✓
+   - `pass` → the test still passes, the site is NOT caught ✗
+   - `collection_error` → import/collection error, not a catch
+   - `import_only` → fails only due to import of a name the reverted hunk
+     defines, not a catch
+   - `unavailable` → timed out, signalled, test-file site, no tests ran
+8. Restore the file with `git checkout HEAD -- <file>` in a `finally` block.
+
+**Test-file exclusion.** A site inside a test file (`test_*.py`, `*_test.py`,
+`*.spec.ts`, or under a `tests/` directory) is not a code site.
+
+**Cache.** Results are cached per `(HEAD, path:line, test_name)` in
+`.refactory/site-revert-cache.json`, a dedicated file separate from
+`base-check.json`.
+
+**Time cap.** Total revert time is capped below the gate's DSH timeout (240 s
+default). Past the cap, remaining pairs are reported as `unavailable`.
+
+**Blocking rule.** Missing or unavailable revert results are BLOCKING. The only
+exemptions are:
+1. A `## Site revert exemptions` section in `design.md`.
+2. An explicit no-base record (`{"no_base": true}`) — modes without a base skip
+   diff and revert checks.
+
+**Test.** `test_correction_audit.py`.
+
+## Pin integrity
+
+### Repository guard
+
+The `repo_guard` pytest plugin (loaded via `conftest.py`) snapshots the
+repository's worktree list, hooks and git config at session start and compares
+at session end. Any change attributed to the test session fails the suite.
+
+Pin tests use temporary git repositories created with `git init` in `tmp_path`.
+No test creates a worktree in the real repository under test, so the guard never
+fires for pin operations.
+
+### Hooks isolation during pin preparation
+
+A pin's `pnpm install` runs prepare scripts (such as `lefthook install`) that
+can rewrite the driver's shared hooks. Pin creation isolates hooks:
+
+1. `extensions.worktreeConfig` is enabled on the driver (the same extension
+   run worktrees already enable, and the canary checks already expect).
+2. `core.hooksPath` is set to `<gitdir>/hooks.isolated` as a per-worktree
+   config on the pin (the same path `worktree._isolate_hooks` uses for run
+   worktrees), so hooks write to the pin's own git dir, not the driver's
+   shared hooks.
+3. The `LEFTHOOK=0` and `HUSKY=0` environment variables are set during
+   `pnpm install` and `pnpm build`.
+
+### Dirty driver pinning
+
+When a driver has uncommitted changes to machinery paths at launch, the unified
+diff is recorded in the driver record (`dirty_diff`). When a pin is created,
+`git apply` applies that diff to the pin's worktree. If the diff conflicts with
+the pin's commit (the checkout has moved and the changes overlap), pin creation
+refuses with a `RuntimeError` naming the commit and the conflicting paths.
+
+### File lock for concurrent pin creation
+
+`create_pin()` acquires an exclusive `flock` on
+`<refactory_home>/pins/<key>.lock` before preparing a pin. Concurrent callers
+block until the first one finishes, then find the prepared pin and return it.
+A rebuild (`require_build`) is also refused when a live run uses the checkout:
+the run is registered on its driver at launch, and `_refuse_if_live_runs`
+checks every registered run's owner lock before allowing a build.
+
+### In-place pin preparation
+
+The pin is prepared directly at its final path (`<refactory_home>/pins/<key>/`),
+guarded by an exclusive file lock (`<key>.lock`). The `pin.json` file is the
+readiness marker: it is written only after all preparation steps (worktree
+creation, hooks isolation, dirty diff application, `uv sync`, `pnpm install`,
+`pnpm build`, and profile provisioning) succeed. A failure at any point removes
+the pin directory and propagates the error. Concurrent callers block on the lock
+and, after the first one finishes, find the prepared pin via `pin.json` and
+return it immediately.
+
+### Worker dispatch under a pin
+
+The dispatched worker (`worker_node.py`) compares `sys.prefix` (the venv root)
+with the pin's venv, not `os.path.realpath(sys.executable)`.  A uv venv's Python
+is a symlink to the shared uv interpreter, so `realpath` resolves both the
+driver's and the pin's binaries to the same target and the re-exec would never
+fire.  When the prefixes differ, the worker re-execs with
+`[pin_py, '-m', 'refactory_dsh.worker_node', *sys.argv[1:]]` so the pin's
+package is loaded rather than the driver's `worker_node.py` file path that
+`sys.argv[0]` holds under `-m` dispatch.
+
+A re-exec loop guard prevents infinite re-execs when the pin's venv is broken:
+the environment variable `_REFACTORY_WORKER_REEXEC` is set before `os.execv`.
+If the re-exec'd process still finds itself on the wrong venv, it fails with
+a diagnostic message naming both interpreters instead of re-exec'ing again.
+
+### Drift scope
+
+`detect_drift` counts only fingerprint paths under the driver checkout as
+driver drift, using `Path.is_relative_to` on resolved paths so a sibling
+directory like `<checkout>-runs/` is never counted.  Paths under `.factory/`
+inside the checkout (the run's own graphs and artefacts) are also excluded
+from driver drift.
+
+Changes to non-driver paths — the run's own `graphs/` directory, project
+packages — are not driver drift and do not trigger pinning.  Recovery's
+`prepare()` and the supervisor's `prepare()` calls still refuse those changes
+with "prepared configuration … changed; dependent results need explicit
+invalidation" even when the driver has moved and a pin is being created.
+The `skip_driver_paths` parameter tells `prepare()` which fingerprint paths
+to skip (the driver's); all others are still validated.
+
+### Stale-build handling on resume
+
+`interactive.run()` passes `check_only=True` to `require_build()` on resume
+and respawn.  A stale build on a resume child warns to stderr instead of
+attempting a rebuild.  Where a rebuild is attempted (a fresh launch with no live
+runs), a failed `pnpm run build` is caught and logged as a warning rather than
+stopping the launch.
+
+### Supervisor drift detection
+
+The supervisor loop calls `recovery.prepare()` at two sites: the resume-pending
+path (where a person explicitly resumes) and the transient-exit respawn path.
+Both sites detect drift before `prepare()` and, when the driver has moved,
+resolve the pin and pass `skip_driver_paths=` the driver checkout to
+`prepare()`.  This skips only the driver's fingerprints; non-driver
+fingerprints (the run's graphs, project packages) are still validated and
+raise the "prepared configuration … changed" refusal as on main.  The
+re-exec'd owner child validates against the pin's files after re-exec.

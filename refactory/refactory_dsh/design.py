@@ -63,6 +63,11 @@ class DesignMode(Mode):
                 180, "int", lo=10, hi=1800,
                 description="how long the brief's check may run",
             ),
+            "check_attempt_cap": Knob(
+                8, "int", lo=0,
+                description="hard cap on total check attempts including convergence grants; "
+                            "0 or a value at or below check_attempts disables the extension",
+            ),
             "design_review_attempts": Knob(
                 2, "int", lo=1, hi=4,
                 description="how many times the design review may reloop before proceeding "
@@ -72,6 +77,11 @@ class DesignMode(Mode):
                 2, "int", lo=1, hi=5,
                 description="how many times the pitfalls step may be retried when its "
                             "output is invalid",
+            ),
+            "claims_check_attempts": Knob(
+                2, "int", lo=1, hi=4,
+                description="how many times the claims checker may reloop before "
+                            "passing mismatches to the review",
             ),
             # As in create: the walker passes these in the run's task, and a run on
             # DSH carries them as knobs.
@@ -90,11 +100,14 @@ class DesignMode(Mode):
             "prepare", "op", call=f"{OPS}:prepare_design",
             knobs=("name", "brief", "check", *repo_change.knob_names(), *delivery.knobs()),
             writes=("brief.json", "research-review.txt", "check.txt", "delivery.md",
-                    "reviews/design-review-feedback.txt", "pitfalls-review.txt"),
+                    "reviews/design-review-feedback.txt", "pitfalls-review.txt",
+                    "check-record.json", "feedback-initial.json"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
+                      "deliverable_kind", "review_instructions",
                       *repo_change.produces(), "delivery", "delivery_plan",
-                      "has_pitfalls_step", "pitfalls", "pitfalls_review"),
+                      "has_pitfalls_step", "pitfalls", "pitfalls_review",
+                      "claims_check_feedback", "claims_check_attempts_used", "design_review_status"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -205,13 +218,17 @@ class DesignMode(Mode):
                 "and five perspectives on how this artifact could be built — including "
                 "the simplest thing that could pass the check, and one that says what "
                 "the check will not catch. Spawn one subagent per perspective and have "
-                "it write `strategy/<slug>.md` under the run directory. Then write "
+                "it write `strategy/<slug>.md` under the run directory, with each "
+                "finding as a heading `### FND-<slug>-<n> \u2014 <the finding>`, numbered "
+                "from 1 within the file. Then write "
                 "`strategy-plan.json` as an array of `{\"perspective\", \"slug\", "
-                "\"intent_items\"}` objects, where `intent_items` lists the asks from "
-                "the brief that perspective covers. Every ask must be covered."
+                "\"intent_items\", \"ids\"}` objects, where `intent_items` lists the "
+                "asks from the brief that perspective covers and `ids` lists the "
+                "`FND-<slug>-<n>` ids from that perspective's file. Every ask must "
+                "be covered."
             ),
             reads=("brief.json", "research-plan.json", "pitfalls.json"),
-            writes=("strategy-plan.json",),
+            writes=("strategy-plan.json", "strategy/"),
             produces=("strategy_plan",),
             notes="choose the perspectives and record what each one covers",
         ))
@@ -234,8 +251,12 @@ class DesignMode(Mode):
                 "establish that the output means what the user requested. For exchange "
                 "formats, plan acceptance by an established consuming application or "
                 "independent format reader, not just a parser the artifact author writes."
+                "\n\nThe research detail files (`research/*.md`) and strategy detail "
+                "files (`strategy/*.md`) are available as reads. Each carries finding "
+                "ids (`FND-<slug>-<n>`). Carry every finding id forward into the plan."
             ),
-            reads=("brief.json", "research-plan.json", "strategy-plan.json", "pitfalls.json"),
+            reads=("brief.json", "research-plan.json", "strategy-plan.json", "pitfalls.json",
+                   "research/", "strategy/"),
             writes=("strategy.json",),
             produces=("strategy",),
             notes="compile the perspectives into one plan",
@@ -267,6 +288,13 @@ class DesignMode(Mode):
                 "When claiming what the brief says, quote the brief's words verbatim. "
                 "The document holds only the final result — no 'Wait—', 'Actually', "
                 "'Let me reconsider' or other working-out.\n\n"
+                "For claims about existing code, use the subject-at-citation-quote form: "
+                "`name()` at `path/to/file.py:42`: `def name(self):`. The subject "
+                "(the backtick span before `at`) names the function, attribute or class "
+                "the claim is about; the quote (the backtick span after `:`) is the line "
+                "content at that position. This form is mechanically checked before the "
+                "design review runs. Bare citations without a quoted line (for files "
+                "being added, or site markers) are fine as-is.\n\n"
                 + design_contract.prompt_contract()
                 + "\n\n"
                 "9. `## Anti-patterns to avoid` (when the research produced pitfalls) — "
@@ -274,13 +302,33 @@ class DesignMode(Mode):
                 "naming the site (a backticked `path:line` from Rule and sites) or the "
                 "section (§ heading name) that handles it, or set it aside with "
                 "`[set-aside: <reason>]`. A high-risk pitfall that is missing or set "
-                "aside without a reason fails the contract.\n"
+                "aside without a reason fails the contract.\n\n"
+                "10. `## Research and perspective findings` \u2014 for each finding id "
+                "(FND-<slug>-<n>) from research/*.md and strategy/*.md, either address "
+                "it at a valid site (backticked `path:line` from Rule and sites) or "
+                "\u00a7 heading reference, or set it aside with `[set-aside: <reason>]`. "
+                "A finding id that is neither addressed nor set aside is blocking. "
+                "Read the detail files directly \u2014 a finding the summary dropped "
+                "is still required.\n"
+                "\n\n## Claims check feedback\n{{claims_check_feedback}}"
             ),
             reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt",
-                   "pitfalls.json"),
+                   "pitfalls.json", "research/", "strategy/"),
             writes=("design.md",),
             produces=("design",),
             notes="write the design document the code is written from",
+        ))
+        graph.add(Node(
+            "check_design_claims", "gate",
+            evaluator="refactory_dsh.design_claims:check_design_claims",
+            reads=("design.md",),
+            writes=("reviews/design-review-feedback.txt",),
+            produces=("claims_check_attempts_used", "claims_check_feedback",
+                      "design_review_feedback"),
+            knobs=("claims_check_attempts",),
+            max_iterations=4,
+            notes="deterministic check: cited paths exist, quoted lines match, "
+                  "named identifiers are present; reloop to design_doc on mismatch",
         ))
         # design-v2 puts the person's approval on the design document, after the plan
         # exists and before any code does.
@@ -332,6 +380,10 @@ class DesignMode(Mode):
                 "or whose named test does not exercise the ask.\n"
                 "- An ask in the brief that has no corresponding row in the Ask mapping table.\n\n"
                 "List each finding as a line starting with `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem.\n\n"
+                "{{review_instructions}}\n\n"
+                "Trace the brief's own example through the code in time order, naming the route a "
+                "real run takes for every runtime that runs it. Write the trace in a section headed "
+                "`## Brief example trace`, with path:line citations for each step.\n\n"
                 "End with a line that is exactly `VERDICT: PASS` when there are "
                 "no blocking findings, or `VERDICT: FAIL` when there are any."
             ),
@@ -345,12 +397,13 @@ class DesignMode(Mode):
             "gate_design_review", "gate",
             evaluator=f"{OPS}:gate_design_review",
             reads=("reviews/design-review.md", "design.md", "brief.json",
-                   "pitfalls.json"),
+                   "pitfalls.json", "research/", "strategy/"),
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
-                      "design_review_findings", "pitfall_coverage"),
+                      "design_review_findings", "pitfall_coverage",
+                      "finding_coverage", "design_review_reruns_used", "design_review_status"),
             knobs=("design_review_attempts",),
-            max_iterations=4,
+            max_iterations=6,
             notes="proceed on PASS with no findings; reloop to design_doc otherwise; "
                   "never fail the run",
         ))
@@ -362,6 +415,7 @@ class DesignMode(Mode):
             # (the spine's question card, the panel, the CEO's view), so the card itself
             # names the repository a run would create, and who can see it.
             notes=(
+                "{{design_review_status}}\n\n"
                 "Approve the design before the artifact is written? It is in design.md "
                 "in the run directory. Then, {{delivery}}; delivery.md there says more. "
                 "Answer proceed to build and deliver it that way, or reloop to have the "
@@ -384,22 +438,33 @@ class DesignMode(Mode):
                 "but emit.txt: do not apply or test your change anywhere — the target, the "
                 "run's worktree or a copy — because materialise and the check do that after "
                 "you answer and send you the result. Then return a short completion message.\n"
+                "{{probe_instruction}}\n"
             ),
-            reads=("brief.json", "design.md", "check.txt"),
+            reads=("brief.json", "design.md", "check.txt", "check-record.json"),
             writes=(repo_change.EMIT_FILE,),
             produces=("emit",),
+            feedback_keys=("validation", "qa_gate", "overwatch_review"),
             notes="write the artifact's files",
         ))
-        graph.add(repo_change.materialise_node())
+        graph.add(repo_change.materialise_node(
+            writes=("changes.diff", "changed-functions.json"),
+            produces=("artifact", "files", "commit", "change", "emission_refused",
+                      "changed_functions"),
+        ))
         graph.add(Node(
             "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=("check.txt", "validation.txt", "authoring-evidence.json", *repo_change.CHECK_WRITES),
+            writes=("check.txt", "validation.txt", "authoring-evidence.json", "check-record.json", *repo_change.CHECK_WRITES),
             produces=("validation", "check_attempts_used", "review_attempts_used",
                       "attempts_used", "runtime_evidence",
+                      "base_unavailable",
+                      "check_failures_history",
+                      "check_blocker_history",
+                      "convergence_extras_used",
+                      "convergence_granted",
                       *repo_change.CHECK_PRODUCES),
-            knobs=("check_attempts", "check_timeout_s"),
+            knobs=("check_attempts", "check_timeout_s", "check_attempt_cap"),
             max_iterations=8,
             notes="run the brief's check, in a sandbox",
         ))
@@ -420,27 +485,17 @@ class DesignMode(Mode):
                 + "You are the health checker. Run the artifact the way a user would: run "
                 "targeted checks for uncovered requirements. Reuse the canonical acceptance "
                 "receipt for the check already executed. Record every command and "
-                "its exact output in `reviews/health-check.md`. For visual deliverables, "
-                "render actual representative output and inspect it at a useful size; "
-                "record the renderer and image path. Text existing in SVG/XML does not "
-                "prove it is visible or readable. If rendering or visual inspection is "
-                "unavailable, say so and leave the visual requirement unverified. "
-                "For exchange-format files, use an established consuming application "
-                "or independent format reader to open representative actual output and "
-                "inspect imported units, structure, geometry and required semantics. "
-                "Record normal loading, audit findings and recovery/repair separately. "
-                "Your own tag parser, or rendering a paired format, does not establish "
-                "interoperability. If a required consumer check cannot run, name that "
-                "unverified requirement rather than reporting a pass. Preserve the "
-                "current artifact and evidence, name the missing validation dependency, "
-                "and give the CEO or person the exact action needed to unblock it. "
-                "Rewriting the artifact or repeating the same probe cannot supply an "
-                "unavailable tool; do not prescribe those as a remedy. "
+                "its exact output in `reviews/health-check.md`. "
                 "Anything that fails or is "
                 "missing is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A "
-                "check you did not run is not a check that passed."
+                "check you did not run is not a check that passed.\n"
+                "{{review_instructions}}\n"
+                "Changed functions:\n{{changed_functions}}\n\n"
+                "Read reviews/verification.md. For each verifier finding that concerns a "
+                "changed function, address it in that function's repo_questions entry.\n"
             ),
-            reads=("brief.json", "design.md"),
+            reads=("brief.json", "design.md", "changed-functions.json",
+                   "reviews/verification.md"),
             writes=("reviews/health-check.md",),
             produces=("health_check",),
             notes="run the artifact and record what happened, command by command",
@@ -468,9 +523,17 @@ class DesignMode(Mode):
                 "A matching number elsewhere in prose is not evidence for the requested "
                 "field. Record findings in "
                 "`reviews/code-review.md`. A defect that would stop the artifact working "
-                "is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
+                "is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
+                "{{review_instructions}}\n"
+                "Changed functions:\n{{changed_functions}}\n\n"
+                "Read reviews/verification.md. For each verifier finding that concerns a "
+                "changed function, address it in that function's repo_questions entry.\n\n"
+                "When a false claim about design.md is found, report it against the code file "
+                "that relies on the claim, not against design.md, because BLOCKING: design.md "
+                "is downgraded by scope_filter_findings.\n"
             ),
-            reads=("brief.json", "design.md", "emit.txt", "pitfalls.json"),
+            reads=("brief.json", "design.md", "emit.txt", "pitfalls.json",
+                   "changed-functions.json", "reviews/verification.md"),
             writes=("reviews/code-review.md",),
             produces=("code_review",),
             notes="review the emitted files against the design",
@@ -491,13 +554,16 @@ class DesignMode(Mode):
                 "the exit code. Include conflicting nearby numbers, unsupported counts, "
                 "and alternative sign/unit encodings when the interface parses them. "
                 "Accepted output must match the request; unsupported input must fail "
-                "clearly without silently substituting a valid case. For visual output, "
-                "exercise small and large dimensions and inspect rendered labels and "
-                "bounds; distinguish geometry correctness from presentation quality. Write "
+                "clearly without silently substituting a valid case. Write "
                 "`reviews/qa.md` with each check and its exact result. Anything that "
-                "breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
+                "breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
+                "{{review_instructions}}\n"
+                "Changed functions:\n{{changed_functions}}\n\n"
+                "Read reviews/verification.md. For each verifier finding that concerns a "
+                "changed function, address it in that function's repo_questions entry.\n"
             ),
-            reads=("brief.json", "design.md", "strategy.json"),
+            reads=("brief.json", "design.md", "strategy.json",
+                   "changed-functions.json", "reviews/verification.md"),
             writes=("reviews/qa.md",),
             produces=("qa_review",),
             notes="attack the artifact against the brief",
@@ -515,9 +581,10 @@ class DesignMode(Mode):
         graph.add(Node(
             "gate_qa", "gate", evaluator="refactory_dsh.create_ops:gate_qa",
             reads=("reviews/qa-synthesized.md", "reviews/health-check.md",
-                   "reviews/code-review.md", "reviews/qa.md"),
+                   "reviews/code-review.md", "reviews/qa.md",
+                   "changed-functions.json"),
             writes=("reviews/qa-gate.txt",),
-            produces=("qa_gate",),
+            produces=("qa_gate", "review_reruns_used"),
             max_iterations=4,
             notes="proceed only when every review ran and none is blocking",
         ))
@@ -575,13 +642,51 @@ class DesignMode(Mode):
         # After the report, so only a run whose reviews passed and whose sign-offs held
         # reaches anything outside it (#350).
         graph.add(Node(
+            "pick_corrections", "gate", evaluator=f"{OPS}:pick_gate_corrections",
+            produces=("gate_corrections", "design_corrections_applied"),
+            max_iterations=2,
+            notes="deterministically extract gate_strategy corrections from the ledger; "
+                  "skip the agent when there are none",
+        ))
+        graph.add(Node(
+            "apply_corrections", "agent",
+            prompt_template=(
+                "Read `design.md` from the run directory.\n\n"
+                "The following gate corrections were given when the design was approved:\n\n"
+                "{{gate_corrections}}\n\n"
+                "Update `design.md`: revise the ## Summary, the "
+                "heading (H1), and the description text in each site entry in ## Rule and sites to "
+                "reflect the corrections. "
+                "Do not change the ## Docs section, the ## Changes section, the "
+                "## Anti-patterns to avoid section, or the document's overall structure. Write the "
+                "updated `design.md`. Return a short message listing what was changed."
+            ),
+            reads=("design.md",),
+            writes=("design.md",),
+            produces=("design_corrections_applied",),
+            notes="revise design.md with gate-strategy corrections before the builder runs",
+        ))
+        graph.add(Node(
             "deliver", "op", call="refactory_dsh.delivery:deliver_design",
             resource_role="final_validation",
             knobs=("check_timeout_s",),
             reads=("design.json", "delivery.md"),
             writes=("delivery.json", "pull-request.md", "design.json"),
-            produces=("delivery_result", "pull_request"),
+            produces=("delivery_result", "pull_request", "delivery_conflict_files",
+                      "delivery_conflict_detail", "delivery_target_tip", "commit"),
             notes="push the run's branch and open its pull request, as the approval gate said",
+        ))
+        graph.add(Node(
+            "delivery_gate", "gate",
+            evaluator="refactory_dsh.delivery:evaluate_delivery_conflicts",
+            max_iterations=8,
+            knobs=("check_attempts",),
+            produces=("validation", "delivery_conflict_reloops"),
+            notes="on authored-file conflict reloop to emit; otherwise proceed to done",
+        ))
+        graph.add(Node(
+            "done", "op", call="refactory_dsh.design_ops:noop",
+            notes="terminal node after delivery succeeds",
         ))
 
         graph.connect("prepare", "research_director")
@@ -594,12 +699,18 @@ class DesignMode(Mode):
         graph.connect("gate_pitfalls", "strategy_director", condition="proceed")
         graph.connect("strategy_director", "synthesize_strategy")
         graph.connect("synthesize_strategy", "design_doc")
-        graph.connect("design_doc", "design_review")
+        graph.connect("design_doc", "check_design_claims")
+        graph.connect("check_design_claims", "design_review", condition="proceed")
+        graph.connect("check_design_claims", "design_doc", condition="reloop")
         graph.connect("design_review", "gate_design_review")
         graph.connect("gate_design_review", "design_doc", condition="reloop")
+        graph.connect("gate_design_review", "design_review", condition="review_reloop")
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
-        graph.connect("gate_strategy", "emit", condition="proceed")
+        graph.connect("gate_strategy", "pick_corrections", condition="proceed")
+        graph.connect("pick_corrections", "apply_corrections", condition="proceed")
+        graph.connect("pick_corrections", "emit", condition="skip")
+        graph.connect("apply_corrections", "emit")
         graph.connect("emit", "materialise")
         graph.connect("materialise", "check")
         graph.connect("check", "emit", condition="reloop")
@@ -608,12 +719,16 @@ class DesignMode(Mode):
         graph.connect("join_qa", "synthesize_qa")
         graph.connect("synthesize_qa", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
+        graph.connect("gate_qa", "fork_qa", condition="review_reloop")
         graph.connect("gate_qa", "overwatch", condition="proceed")
         graph.connect("overwatch", "gate_overwatch")
         graph.connect("gate_overwatch", "emit", condition="reloop")
         graph.connect("gate_overwatch", "overwatch", condition="audit")
         graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("report", "deliver")
+        graph.connect("deliver", "delivery_gate")
+        graph.connect("delivery_gate", "emit", condition="reloop")
+        graph.connect("delivery_gate", "done", condition="proceed")
         from refactory_dsh.verification import wire_verification
         wire_verification(graph)
         from refactory_dsh.authoring_evidence import wire_reviews
@@ -729,6 +844,17 @@ def main(argv: list[str] | None = None) -> int:
             "facts": {key: value for key, value in run.facts.items() if key in
                       ("name", "files", "artifact", "check", "validation")},
         }, indent=2, default=str))
+        if not run.exit_ok:
+            try:
+                resume_mode = DesignFastMode() if args.fast else DesignMode()
+                node = resume_mode.graph().nodes.get(str(run.error or "").split(":", 1)[0])
+                if node is not None and node.kind == "gate" and node.gate_kind == "user":
+                    from refactory_dsh.design_ops import design_review_status
+                    drs = design_review_status(run.facts or {})
+                    if drs:
+                        print(drs, file=sys.stderr)
+            except Exception:
+                pass
         return 0 if run.exit_ok else 2
 
     from refactory_dsh.fast import DesignFastMode
@@ -810,6 +936,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if not result.exit_ok:
         print(json.dumps({"error": result.error}), file=sys.stderr)
+        # dm-127: show design review status when stopped at a user gate.
+        try:
+            node = mode.graph().nodes.get(str(result.error or "").split(":", 1)[0])
+            if node is not None and node.kind == "gate" and node.gate_kind == "user":
+                from refactory_dsh.design_ops import design_review_status
+                drs = design_review_status(result.facts or {})
+                if drs:
+                    print(drs, file=sys.stderr)
+        except Exception:
+            pass
         return 2
     print(json.dumps({
         "artifact": str(result.facts.get("artifact")),

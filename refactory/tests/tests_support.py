@@ -282,6 +282,13 @@ def strategy_answer(name: str) -> str:
         ],
         "start": "start",
         "score": "the fact 'best', produced by finish",
+        "findings": {
+            "FND-api-surface-1": "start node handles the API surface",
+            "FND-existing-modes-1": "step node handles existing modes",
+            "FND-acceptance-1": "check node handles acceptance criteria",
+            "FND-simplest-1": "step node handles simplest perspective",
+            "FND-criteria-1": "check node handles criteria perspective",
+        },
     })
 
 
@@ -306,16 +313,19 @@ RESEARCH_ANSWER = json.dumps([
         "focus": "which API surface the package builds against",
         "slug": "api-surface",
         "finding": "the mode API in the checkout: nn.Mode, nn.Graph, ctx.knob/read_json/write_json",
+        "ids": ["FND-api-surface-1"],
     },
     {
         "focus": "what already exists that this resembles",
         "slug": "existing-modes",
         "finding": "circle_packing/adaptive is the closest existing mode and is not this",
+        "ids": ["FND-existing-modes-1"],
     },
     {
         "focus": "the acceptance criteria the brief asks for",
         "slug": "acceptance",
         "finding": "the mode must count to a target and score how close it landed",
+        "ids": ["FND-acceptance-1"],
     },
 ])
 PERSPECTIVES_ANSWER = "perspectives: the simplest thing that works, and the criteria"
@@ -334,7 +344,17 @@ REVIEW_ANSWERS = [
 #: design_doc in graph order.
 DESIGN_REVIEW_ANSWER = (
     "No open alternatives found. All citations confirmed. "
-    "All brief references verified.\n\nVERDICT: PASS"
+    "All brief references verified.\n\n"
+    "## Repository questions\n\n"
+    "```json\n"
+    '[{"function":"tool.py", "duplicates":"absent: searched the repository for tool.py", '
+    '"callers":"runner.py:10 calls tool.py:1", '
+    '"shared_state":"absent: searched tool.py for shared state"}]\n'
+    "```\n\n"
+    "## Brief example trace\n\n"
+    "The brief's example runs through runner.py:5 → tool.py:1 "
+    "in both the walker and DSH runtimes.\n\n"
+    "VERDICT: PASS"
 )
 
 #: The verifier's answer: a passing verification with no blocking findings.
@@ -355,6 +375,12 @@ DESIGN_DOC_ANSWER = (
     "- docs/models.md\n\n"
     "## Changes\n\n"
     "- tool.py\n\n"
+    "## Research and perspective findings\n\n"
+    "- FND-api-surface-1: addressed at `tool.py:1`\n"
+    "- FND-existing-modes-1: addressed at § Changes\n"
+    "- FND-acceptance-1: addressed at `tool.py:1`\n"
+    "- FND-simplest-1: addressed at `tool.py:1`\n"
+    "- FND-criteria-1: addressed at § Changes\n\n"
     "## Anti-patterns to avoid\n\n"
     "- PIT-001: addressed at `tool.py:1`\n"
 )
@@ -409,6 +435,31 @@ class FakeModel:
         # model's text answer to writes[0] (pitfalls.json), but pitfalls.md
         # (writes[1]) must also exist for delivery to succeed.  Write it as a
         # side-effect, matching the intent-audit fixture below.
+        # Scripted strategy fixtures: write strategy/*.md files for V6 compliance.
+        if answer and "strategy director" in prompt.lower() and workdir is not None:
+            from pathlib import Path
+
+            root = Path(workdir)
+            for slug, text in [("simplest", "the simplest thing"),
+                               ("criteria", "the criteria check")]:
+                sfile = root / "strategy" / f"{slug}.md"
+                sfile.parent.mkdir(parents=True, exist_ok=True)
+                sfile.write_text(
+                    f"### FND-{slug}-1 — {text}\n\n# {slug}\n\nDetails.\n"
+                )
+        # Scripted research/extra.md: opt-in, used only by the dropped-finding test.
+        if (answer and "research director" in prompt.lower()
+                and workdir is not None
+                and getattr(self, '_write_extra_research', False)):
+            from pathlib import Path
+
+            root = Path(workdir)
+            extra = root / "research" / "extra.md"
+            extra.parent.mkdir(parents=True, exist_ok=True)
+            extra.write_text(
+                "### FND-extra-1 — extra finding text\n\n"
+                "# Extra\n\nSomething important.\n"
+            )
         if answer and "pitfalls researcher" in prompt and workdir is not None:
             from pathlib import Path
 
@@ -432,11 +483,79 @@ class FakeModel:
                                      "detail": "scripted fixture inspected the executed result"}]}
                 if item.get("kind") in ("correction", "constraint"):
                     text = item.get("text", "")
-                    row["clauses"] = [{"clause": text,
-                                       "evidence": [{"path": "authoring-evidence.json",
-                                                      "detail": "full constraint verified"}]}]
+                    sites = getattr(self, '_correction_sites', {}).get(item["id"], [])
+                    clause = {"clause": text,
+                              "evidence": [{"path": "authoring-evidence.json",
+                                            "detail": "full constraint verified"}],
+                              "sites": sites}
+                    # A test whose correction is about the design itself can give
+                    # its site-less clauses an evidence form, e.g. {"kind": "design",
+                    # "heading": "Summary"}.
+                    if not sites:
+                        clause.update(getattr(self, "_siteless_clause", {}))
+                    row["clauses"] = [clause]
                 audit_rows.append(row)
             (root / "intent-audit.json").write_text(json.dumps({"requirements": audit_rows}))
+        # Scripted repo_questions: when the run directory has changed-functions.json,
+        # auto-generate a valid repo_questions record for reviewer answers only.
+        # Only inject into prompts that reference "Changed functions:" (reviewer prompts),
+        # never into emit, verifier, strategy or other non-reviewer answers.
+        if answer and workdir is not None and "Changed functions:" in prompt:
+            from pathlib import Path
+
+            root = Path(workdir)
+            cf_path = root / "changed-functions.json"
+            if cf_path.is_file():
+                try:
+                    cf_data = json.loads(cf_path.read_text())
+                    if isinstance(cf_data, list) and cf_data:
+                        # Build a valid record from the computed list
+                        rq_entries = []
+                        for entry in cf_data:
+                            if isinstance(entry, dict) and "function" in entry:
+                                fn = entry["function"]
+                                file_path = entry.get("file", "unknown.py")
+                                line = entry.get("line", 1)
+                                rq_entries.append({
+                                    "function": fn,
+                                    "duplicates": f"absent: searched the repository for {fn}",
+                                    "callers": f"{file_path}:{line} is called from main",
+                                    "shared_state": f"absent: searched {fn} for shared state",
+                                })
+                        if rq_entries:
+                            rq_json = json.dumps(rq_entries)
+                            # For JSON answers (focused-qa.json): inject repo_questions key.
+                            # Check this BEFORE the markdown path: a focused_qa answer is
+                            # valid JSON that does not contain "repo_questions" as text, so
+                            # the markdown guard would match first and then skip because the
+                            # prompt mentions focused-qa.json, leaving the elif unreachable.
+                            if ("Write focused-qa.json" in prompt or "focused-qa.json" in prompt) and answer.strip().startswith("{"):
+                                try:
+                                    qa_obj = json.loads(answer)
+                                    if isinstance(qa_obj, dict) and "repo_questions" not in qa_obj:
+                                        qa_obj["repo_questions"] = rq_entries
+                                        answer = json.dumps(qa_obj)
+                                except (json.JSONDecodeError, ValueError):
+                                    pass
+                            # For markdown answers (reviews/*.md): append if not already present
+                            elif "## Repository questions" not in answer and "repo_questions" not in answer:
+                                answer = answer.rstrip()
+                                # Insert before VERDICT line if present
+                                if "\nVERDICT:" in answer:
+                                    parts = answer.rsplit("\nVERDICT:", 1)
+                                    answer = (
+                                        parts[0] + "\n\n"
+                                        "## Repository questions\n\n"
+                                        "```json\n" + rq_json + "\n```\n\n"
+                                        "VERDICT:" + parts[1]
+                                    )
+                                else:
+                                    answer += (
+                                        "\n\n## Repository questions\n\n"
+                                        "```json\n" + rq_json + "\n```\n"
+                                    )
+                except (json.JSONDecodeError, OSError):
+                    pass
         return answer
 
 

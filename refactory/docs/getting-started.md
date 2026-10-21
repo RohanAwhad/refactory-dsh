@@ -20,6 +20,29 @@ The repository must be accessible to your GitHub account. `uv` manages the Pytho
 > worktree, a contributor's branch) will refuse and name the command that
 > relinks the profile. Run `install.sh` from the checkout you want to use, or
 > run the named `dsh plugin --profile graph add` command it prints.
+>
+> **Pinned runs.** When a run is resumed after the driver moved to a new
+> commit, a pin is created: a `graph-pin-<commit12>` profile in your own
+> `~/.dsh`, pointing to a prepared worktree of the original commit. Your
+> credentials stay in `~/.dsh` (DSH_HOME is unchanged). `refactory pin list`
+> shows active pins; `refactory pin prune` removes unused ones.
+
+### Builds and restarts
+
+A workspace-wide build stamp covers all TypeScript packages the runtime loads.
+At launch, `require_build()` compares the stamp against the current source. When
+the build is stale:
+
+- **CLI** (`refactory ceo`, `refactory optimize`): the launcher automatically runs
+  `pnpm run build` before starting the run, unless a live run uses the same
+  checkout — in that case it warns and continues on the existing build.  When the
+  rebuild itself fails (e.g. a syntax error in a TS source), the launch continues
+  with a warning naming the stale packages and the command to rebuild manually.
+- **GUI** (`refactory ui`): a stale build logs a warning naming the stale packages
+  and the command to rebuild (`pnpm run build`).  The GUI does not rebuild `lib/`
+  underneath itself.
+
+After every `git pull`, run `./install.sh` and restart any running GUI.
 
 ## 2. Try a search without a model
 

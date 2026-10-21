@@ -256,3 +256,10 @@ python -m refactory_dsh.design --resume <dir>
 `halt` at any user gate ends the run. A reloop verdict's note becomes a correction
 in the intent ledger. An up-front `--verdict gate_strategy=proceed` is persisted
 as a run-scoped ledger entry and survives a resume.
+
+## Pin management
+
+| Command | Description |
+|---|---|
+| `refactory pin list` | List all pins with commit (first 12 chars), creation time and driver checkout. |
+| `refactory pin prune` | Remove pins no run refers to. Also removes their `graph-pin-<commit12>` profiles from the person's DSH home. Never removes a pin that a live or resumable run refers to. |

@@ -1,0 +1,102 @@
+{
+  "name": "java_build_pack-build",
+  "nodes": {
+    "finish": {
+      "id": "finish",
+      "reads": [
+        "build.sh"
+      ],
+      "writes": [
+        "build_record.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.java_build_pack.ops:finish",
+      "callable_name": "refactory_packages.java_build_pack.ops:finish",
+      "notes": "record the build script this run produced",
+      "_type": "FnNode"
+    },
+    "items": {
+      "id": "items",
+      "reads": [],
+      "writes": [
+        "current_item.json"
+      ],
+      "blocking": true,
+      "task_ref": "refactory_packages.java_build_pack.tasks:JavaBuildTask",
+      "source_path": null,
+      "source_format": null,
+      "inline_items": [],
+      "subgraph_entry": "read_item",
+      "subgraph_exit": "write_build",
+      "parallelism": 1,
+      "split": "all",
+      "shuffle": false,
+      "shuffle_seed": null,
+      "limit": null,
+      "max_items": 500,
+      "_type": "DataNode"
+    },
+    "read_item": {
+      "id": "read_item",
+      "reads": [
+        "current_item.json"
+      ],
+      "writes": [
+        "item.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.java_build_pack.ops:read_item",
+      "callable_name": "refactory_packages.java_build_pack.ops:read_item",
+      "notes": "publish the current item's entry point for the build prompt",
+      "_type": "FnNode"
+    },
+    "write_build": {
+      "id": "write_build",
+      "reads": [
+        "item.json"
+      ],
+      "writes": [
+        "build.sh"
+      ],
+      "blocking": true,
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "Write `build.sh` in this directory for the Java item `{{item_id}}`.\n\nThe sources are already copied to `src/`. Its entry point is:\n- main class: `{{main_class}}`\n- arguments: `{{main_args}}`\n\n`build.sh` must be a POSIX shell script that:\n1. compiles every `.java` file under `src/` with `javac --release {{source_release}}` into `out/`;\n2. runs the entry point with `java -cp out` and the arguments above;\n3. prints nothing of its own and exits non-zero when either step fails, because the\n   program's stdout is what the build is judged on.\n\nA person runs it as `sh build.sh` from this directory, and it must work for any Java\nsource tree with this layout, not only for the one in front of you.\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "items",
+      "target": "finish",
+      "condition": null
+    },
+    {
+      "source": "read_item",
+      "target": "write_build",
+      "condition": null
+    }
+  ],
+  "start_node": "items",
+  "terminal": true,
+  "knob_values": {
+    "source_release": 17.0
+  },
+  "knob_specs": {
+    "source_release": {
+      "default": 17,
+      "kind": "int",
+      "lo": 8,
+      "hi": 24,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "the Java release javac targets; the build agent writes it into the `--release` flag of the script it produces",
+      "required": false
+    }
+  }
+}

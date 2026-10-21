@@ -140,6 +140,7 @@ class RunContext:
         self.iteration = 0
         self.node_id = ""
         self._declared: tuple[str, ...] = ()
+        self._declared_reads: tuple[str, ...] = ()
         self._declared_facts: tuple[str, ...] = ()
         self._produced: set[str] = set()
         self.writes_made: list[str] = []
@@ -214,6 +215,11 @@ class RunContext:
     def _internal_fact(self, name: str, value: Any) -> None:
         """A fact the run itself records, not one a node claims to produce."""
         self.facts[name] = value
+
+    @property
+    def declared_reads(self) -> tuple[str, ...]:
+        """The current node's declared reads, for gate discovery."""
+        return self._declared_reads
 
     def _check_produces(self) -> None:
         if not self.enforce_writes:
@@ -533,6 +539,7 @@ class Executor:
                     # before it.
                     self.ctx.node_id = node.id
                     self.ctx._declared = node.writes  # noqa: SLF001
+                    self.ctx._declared_reads = node.reads  # noqa: SLF001
                     self.ctx._declared_facts = node.produces  # noqa: SLF001
                     self.ctx._produced = set()  # noqa: SLF001
                     self.ctx.write_json(CURRENT_ITEM, item)
@@ -568,6 +575,7 @@ class Executor:
             self.ctx.iteration = len(self.steps)
             self.ctx.node_id = current
             self.ctx._declared = node.writes  # noqa: SLF001 - the run owns the context
+            self.ctx._declared_reads = node.reads  # noqa: SLF001
             self.ctx._declared_facts = node.produces  # noqa: SLF001
             self.ctx._produced = set()  # noqa: SLF001
             step_started = time.time()
@@ -677,6 +685,7 @@ class Executor:
             self.ctx.iteration = len(self.steps)
             self.ctx.node_id = current
             self.ctx._declared = node.writes  # noqa: SLF001 - the run owns the context
+            self.ctx._declared_reads = node.reads  # noqa: SLF001
             self.ctx._declared_facts = node.produces  # noqa: SLF001
             self.ctx._produced = set()  # noqa: SLF001
             started = time.time()
@@ -756,11 +765,21 @@ class Executor:
     def _visit_agent(self, node: Node) -> None:
         if self.ctx.model is None:
             raise ExecutionError(f"agent node {node.id!r} needs a model client")
-        from refactory_dsh.agent_delivery import begin, finish
+        from refactory_dsh.agent_delivery import begin, finish, fill_feedback
 
         client = self.ctx.model
         if callable(getattr(client, "for_node", None)):
             client = client.for_node(node.id, role=node.role)
+        # Re-fill feedback keys before rendering — a failure to re-derive
+        # a declared key refuses the dispatch (dm-120).
+        values = {**self.ctx.knobs, **self.ctx.facts}
+        values, refilled_keys = fill_feedback(
+            self.ctx.workdir, node.id, values,
+            feedback_keys=node.feedback_keys if node.feedback_keys else None,
+        )
+        if refilled_keys:
+            for k in refilled_keys:
+                self.ctx._internal_fact(k, values[k])
         delivery = begin(self.ctx.workdir, node.id, render(node.prompt_template, self.ctx), list(node.writes),
                          reads=list(node.reads),
                          model_context=client.context() if callable(getattr(client, "context", None)) else None)

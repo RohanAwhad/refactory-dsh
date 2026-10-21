@@ -251,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
             from refactory_dsh.run_preparation import print_gate_stop
             print_gate_stop(run.gate_stop, workdir, graph=(EditFastMode if fast else EditMode)().build())
             return 2
+        if run.halted:
+            print(json.dumps({"halted": True, "error": run.error}), file=sys.stderr)
+            return 2
         print(json.dumps({
             "resumed": str(workdir), "exit_ok": run.exit_ok, "error": run.error,
             "facts": {key: value for key, value in run.facts.items() if key in
@@ -281,6 +284,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        return 2
+    if result.get("gate_stop"):
+        from refactory_dsh.run_preparation import print_gate_stop
+        from refactory_dsh.fast import EditFastMode
+        print_gate_stop(result["gate_stop"], Path(args.workdir or f".factory/edit/{args.name}"),
+                        graph=(EditFastMode if args.fast else EditMode)().build())
+        return 2
+    if result.get("halted"):
+        print(json.dumps({"halted": True, "error": result.get("error")}), file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2, default=str))
     return 0

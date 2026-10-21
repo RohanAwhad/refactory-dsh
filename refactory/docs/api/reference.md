@@ -26,7 +26,7 @@ The mode library: the ``nn`` of the harness world.
 | class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '', required: 'bool' = False) -> None` |
 | class | `Memory` | `(namespace: 'str', kind: 'str' = 'log', retention: 'str' = 'run', description: 'str' = '') -> None` |
 | class | `Mode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
-| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0, resource_role: 'str \| None' = None) -> None` |
+| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0, resource_role: 'str \| None' = None, feedback_keys: 'tuple[str, ...]' = ()) -> None` |
 | class | `Package` | `(name: 'str', description: 'str' = '', version: 'str' = '0.1.0', modes: "tuple[type['Mode'], ...]" = (), ops: 'tuple[str, ...]' = (), extends: 'str' = '', requires: 'tuple[str, ...]' = (), trust: 'str' = 'trusted', origin: 'str' = '') -> None` |
 | class | `Port` | `(name: 'str', path: 'str', media_type: 'str' = 'text/markdown', description: 'str' = '') -> None` |
 
@@ -52,7 +52,7 @@ The structure of a mode: nodes, edges, and their canonical serialization.
 | class | `Edge` | `(source: 'str', target: 'str', condition: 'str \| None' = None) -> None` |
 | class | `Graph` | `(*, auto_start: 'bool' = True) -> 'None'` |
 | class | `GraphError` | `` |
-| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0, resource_role: 'str \| None' = None) -> None` |
+| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0, resource_role: 'str \| None' = None, feedback_keys: 'tuple[str, ...]' = ()) -> None` |
 
 - **`Edge`** — One connection between two nodes, and the verdict that selects it.
 - **`Graph`** — A mutable graph. Edits mutate it; serialization canonicalizes it.
@@ -574,6 +574,7 @@ Running code we did not write.
 | function | `ast_check` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, include_contracts: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `is_secret` | `(name: 'str') -> 'bool'` |
+| function | `is_signal_crash` | `(result: 'SandboxResult') -> 'tuple[bool, str]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `missing_init` | `(root: 'Path') -> 'str'` |
 | function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None, require_ready: 'bool' = True) -> 'dict[str, Any]'` |
@@ -591,6 +592,7 @@ Running code we did not write.
 - **`ast_check`** — Everything wrong with a package that can be seen without importing it.
 - **`describe_package`** — A package's manifest and mode ids, read without importing it here.
 - **`is_secret`** — Whether an environment name looks like a credential, which a sandboxed run never sees.
+- **`is_signal_crash`** — Whether a sandbox result is a signal crash that survived run_command's retry.
 - **`main`** — ``python -m refactory_dsh.sandbox --ast <pkg> | --smoke <pkg>/<mode>``.
 - **`missing_init`** — Why a package root has no `__init__.py`, and what it holds instead.
 - **`model_readiness`** — Check the model path after the same scrub/HOME rewrite as real smoke.
@@ -673,11 +675,13 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 
 | kind | name | signature |
 |---|---|---|
+| function | `apply_emission` | `(answer: 'str', found: 'worktree.Worktree', workdir: 'Path', *, from_worktree: 'bool' = False) -> 'tuple[dict[Path, str], tuple[Path, ...], str, list[str]]'` |
 | function | `knob_names` | `() -> 'tuple[str, ...]'` |
 | function | `knobs` | `() -> 'dict[str, Knob]'` |
 | function | `locate` | `(ctx: 'Any', name: 'str', task: 'dict[str, Any]', *, in_worktree: 'bool \| None' = None, needs_worktree: 'tuple[str, ...]' = (), output_only: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise` | `(ctx: 'Any', *, source: 'Path \| None' = None, files: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise_node` | `(**fields: 'Any') -> 'Node'` |
+| function | `prepare_check_environment` | `(found: 'worktree.Worktree', facts: 'dict[str, Any]', *, amend: 'bool', commit_lockfiles: 'bool', run: 'Path', home: 'Path', timeout: 'float', budget: 'Any' = None) -> 'tuple[worktree.Worktree, dict[str, str], list[str], dict[str, Any] \| None]'` |
 | function | `prepare_commands` | `(ctx: 'Any', found: 'worktree.Worktree', env: 'dict[str, str]', home: 'Path', timeout: 'float', budget: 'Any', *, amend: 'bool' = True) -> 'tuple[worktree.Worktree, list[str], dict[str, Any] \| None]'` |
 | function | `produces` | `() -> 'tuple[str, ...]'` |
 | function | `refuse_truncated` | `(path: 'Path', text: 'str') -> 'None'` |
@@ -686,11 +690,13 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 | function | `run_check` | `(ctx: 'Any', command: 'str', timeout: 'float') -> 'Any'` |
 | function | `wants_worktree` | `(ctx: 'Any') -> 'bool'` |
 
+- **`apply_emission`** — Parse emit.txt and resolve edits against the run worktree, read-only.
 - **`knob_names`** — The knobs `knobs` declares, for the prepare node's ``knobs``.
 - **`knobs`** — The knobs that say where a run works.
 - **`locate`** — Where the run works, as facts for the mode's prepare op to return.
 - **`materialise`** — Make the emitted files the run's artifact: a commit in its worktree, when it has one.
 - **`materialise_node`** — The op that applies ``emit.txt`` as the run's next attempt (`materialise`).
+- **`prepare_check_environment`** — Install dependencies, build check environment, run generate/setup.
 - **`prepare_commands`** — Run the run's generate command, then its setup command, in a prepared worktree.
 - **`produces`** — The facts `locate` returns, for the prepare node's ``produces``.
 - **`refuse_truncated`** — Refuse text copied from a read that the read tool cut short, before it is written anywhere.

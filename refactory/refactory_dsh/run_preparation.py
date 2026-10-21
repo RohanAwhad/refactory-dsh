@@ -51,11 +51,13 @@ def prepare_run(
             from refactory_dsh.dsh_profile import model_home, profile_dir
 
             headless_dir = profile_dir("headless", home=model_home())
-            # Only raise when the headless directory exists but is incomplete.
-            # When it does not exist at all the error will surface at the first
-            # DshModelClient.complete() call, which is the right place for a
-            # fresh install that has not provisioned the headless profile yet.
-            if headless_dir.is_dir() and not (headless_dir / "package.json").exists():
+            # Refuse when the profile directory does not exist or is incomplete.
+            if not headless_dir.exists():
+                raise ValueError(
+                    f"the DSH headless profile at {headless_dir} does not exist; "
+                    "run `dsh profile create headless` and add the graph bundle"
+                )
+            elif headless_dir.is_dir() and not (headless_dir / "package.json").exists():
                 raise ValueError(
                     f"the DSH headless profile at {headless_dir} has no "
                     "package.json; run `dsh profile create headless` and add "
