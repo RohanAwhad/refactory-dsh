@@ -235,6 +235,9 @@ class FilteredCheckResult:
     inherited_detail: str
     base_environment_failure: str | None
     guardedness: dict | None
+    base_failures: set[str] | None = None
+    base_complete: bool = False
+    base_crashed: bool = False
 
 
 # ── three-condition excusal ──────────────────────────────────────────────
@@ -467,19 +470,29 @@ def _changed_files_in_test_dirs(path: Path, base: str, test_files: list[str]) ->
 def _read_cache(run: Path, key: str) -> BaseCheckResult | None:
     data = _read_json(run / CACHE_FILE)
     if data.get("cache_key") == key:
-        return BaseCheckResult(
+        result = BaseCheckResult(
             ok=data["ok"],
             failures=set(data.get("failures", [])),
             output=data.get("output", ""),
             exit_code=data.get("exit_code", 1),
             environment_failure=data.get("environment_failure"),
         )
+        # Attach base_complete as a transient attribute for filter_check (R5).
+        result._base_complete = data.get("base_complete", False)  # type: ignore[attr-defined]
+        return result
     return None
 
 
 def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
+    # Never cache a crash result — R2: later checks get a fresh attempt.
+    # Deterministic (non-crash) environment failures ARE cached so filter_check
+    # and the next attempt do not re-prepare the base (v5 correction 2).
+    if getattr(result, '_crashed', False):
+        return  # pragma: no cover — guarded by run_base_check
     cache_dir = run / CACHE_FILE.parent
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # Compute completeness for R5/R6.
+    base_complete = getattr(result, '_base_complete', False)
     data = {
         "cache_key": key,
         "ok": result.ok,
@@ -487,12 +500,20 @@ def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
         "output": result.output[-10000:],
         "exit_code": result.exit_code,
         "environment_failure": result.environment_failure,
+        "base_complete": base_complete,
     }
     (run / CACHE_FILE).write_text(json.dumps(data, indent=2) + "\n")
 
 
 def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
-    """Run the check on the unchanged base in a separate worktree, caching the result."""
+    """Run the check on the unchanged base in a separate worktree, caching the result.
+
+    When any step crashes (a signal that survives ``run_command``'s retry),
+    the base's HOME, worktree and cache are discarded and rebuilt from scratch
+    (R2).  On double failure the result is returned with ``environment_failure``
+    set but never cached, so later checks get a fresh attempt.  Deterministic
+    (non-crash) failures are cached as before.
+    """
     found = worktree.recorded(ctx.workdir)
     if found is None:
         return BaseCheckResult(ok=True, failures=set(), output="", exit_code=0)
@@ -505,50 +526,99 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     if cached is not None:
         return cached
 
-    # Create and prepare the base worktree on demand
-    try:
-        base_path, base_found = _ensure_base_worktree(ctx)
-    except ValueError as exc:
-        result = BaseCheckResult(
-            ok=False, failures=set(), output="", exit_code=-1,
-            environment_failure=str(exc),
+    def _try_base() -> tuple[BaseCheckResult, bool]:
+        """Attempt to prepare the base worktree and run the check.
+
+        Returns ``(result, is_crash)``.  ``is_crash`` is True when a signal
+        killed a preparation step and the base environment should be rebuilt.
+        """
+        try:
+            base_path, base_found = _ensure_base_worktree(ctx)
+        except ValueError as exc:
+            err_str = str(exc)
+            # Classify: use structured result from ensure_environment.
+            # prep_fail returned by ensure_environment carries returncode.
+            is_crash = any(tok in err_str for tok in ("killed by SIG", "killed by signal"))
+            r = BaseCheckResult(
+                ok=False, failures=set(), output=err_str, exit_code=-1,
+                environment_failure=err_str,
+            )
+            r._crashed = is_crash  # type: ignore[attr-defined]
+            return r, is_crash
+
+        home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        home.mkdir(parents=True, exist_ok=True)
+        budget_inner = getattr(ctx, "budget", None)
+        env = worktree.check_environment(base_path, home)
+
+        from refactory_dsh.repo_change import prepare_commands as _prep
+
+        _, problems, prep_fail = _prep(
+            ctx, base_found, env, home, timeout, budget_inner, amend=False)
+        if problems:
+            # Check if any problem is a signal crash.
+            is_crash = False
+            if prep_fail is not None and isinstance(prep_fail.get("returncode"), int):
+                prc = prep_fail["returncode"]
+                is_crash = prc < 0 or prc in sandbox._AMBIGUOUS_SHELL_EXITS
+            detail = "on the base: " + "\n".join(problems)
+            r = BaseCheckResult(
+                ok=False, failures=set(), output=detail, exit_code=-1,
+                environment_failure=detail,
+            )
+            r._crashed = is_crash  # type: ignore[attr-defined]
+            return r, is_crash
+
+        check_result = sandbox.run_command(
+            command, workdir=base_path, timeout_s=timeout,
+            budget=budget_inner, env=env, home=home, exact_env=True,
         )
-        _write_cache(ctx.workdir, key, result)
-        return result
+        crashed_chk, sig_chk = sandbox.is_signal_crash(check_result)
+        if crashed_chk:
+            r = BaseCheckResult(
+                ok=False, failures=set(), output=f"base check command {sig_chk}",
+                exit_code=-1, environment_failure=f"base check command {sig_chk}",
+            )
+            r._crashed = True  # type: ignore[attr-defined]
+            return r, True
 
-    home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
-    home.mkdir(parents=True, exist_ok=True)
-    budget = getattr(ctx, "budget", None)
-    env = worktree.check_environment(base_path, home)
-
-    # Generate, then setup, exactly as the attempt's check prepares its worktree
-    # (repo_change.prepare_commands), without amending anything on the base.
-    from refactory_dsh.repo_change import prepare_commands
-
-    _, problems, _ = prepare_commands(ctx, base_found, env, home, timeout, budget, amend=False)
-    if problems:
-        detail = "on the base: " + "\n".join(problems)
+        output = "\n".join(
+            (check_result.stdout or "", check_result.stderr or "")
+        ).strip()
+        failures = parse_test_failures(output)
         result = BaseCheckResult(
-            ok=False, failures=set(), output=detail, exit_code=-1,
-            environment_failure=detail,
+            ok=check_result.ok, failures=failures,
+            output=output, exit_code=check_result.returncode or 0,
         )
-        _write_cache(ctx.workdir, key, result)
-        return result
+        # Compute completeness for R5.
+        blocker = excusal_blocker(command, output, failures) if failures else None
+        result._base_complete = (blocker is None) if failures else check_result.ok  # type: ignore[attr-defined]
+        return result, False
 
-    # Run the check command on the base
-    check_result = sandbox.run_command(
-        command, workdir=base_path, timeout_s=timeout,
-        budget=budget, env=env, home=home, exact_env=True,
-    )
-    output = "\n".join(
-        (check_result.stdout or "", check_result.stderr or "")
-    ).strip()
-    failures = parse_test_failures(output)
+    result, is_crash = _try_base()
+    if is_crash:
+        # Discard and rebuild from scratch — R2.
+        home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        shutil.rmtree(home, ignore_errors=True)
+        if found is not None:
+            run_id = Path(found.path).name.removeprefix("run-")
+            remove_base_worktree(Path(found.target), run_id)
+        (ctx.workdir / CACHE_FILE).unlink(missing_ok=True)
+        result, is_crash = _try_base()
+        if is_crash or result.environment_failure:
+            # Double crash or deterministic failure after rebuild.
+            # Discard HOME and the base worktree so the NEXT check gets a
+            # fresh start too (R2: never reuse a base environment whose
+            # preparation crashed — the b27a rerun failure).
+            home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+            shutil.rmtree(home, ignore_errors=True)
+            if found is not None:
+                run_id = Path(found.path).name.removeprefix("run-")
+                remove_base_worktree(Path(found.target), run_id)
+            (ctx.workdir / CACHE_FILE).unlink(missing_ok=True)
+            result._crashed = is_crash  # type: ignore[attr-defined]
+            return result
 
-    result = BaseCheckResult(
-        ok=check_result.ok, failures=failures,
-        output=output, exit_code=check_result.returncode or 0,
-    )
     _write_cache(ctx.workdir, key, result)
     return result
 
@@ -723,6 +793,9 @@ def filter_check(
             new_failure_detail="", inherited_detail="",
             base_environment_failure=base_result.environment_failure,
             guardedness=guardedness,
+            base_failures=None,
+            base_complete=False,
+            base_crashed=getattr(base_result, '_crashed', False),
         )
 
     # Parse the attempt's failures
@@ -767,6 +840,9 @@ def filter_check(
         ]
         new_failure_detail = "\n".join(new_lines) if new_lines else attempt_output
 
+    # Populate base_failures and base_complete for R5 (broken guarantees).
+    base_complete = getattr(base_result, '_base_complete', False)
+
     return FilteredCheckResult(
         all_excused=comparison.all_excused,
         inherited=comparison.inherited,
@@ -775,4 +851,6 @@ def filter_check(
         inherited_detail=inherited_detail,
         base_environment_failure=None,
         guardedness=guardedness,
+        base_failures=base_result.failures,
+        base_complete=base_complete,
     )

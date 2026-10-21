@@ -127,6 +127,46 @@ def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
         ctx.set_fact("review_repairs_used", kind_used + 1)
 
     if used >= limit:
+        # R6: rolling convergence — grant another check attempt each time
+        # the failure set is a non-empty strict subset of the previous one.
+        # Repeats at every attempt past the regular limit, up to
+        # check_attempt_cap total check attempts (counting regular ones).
+        if kind == "check":
+            from refactory_dsh import base_check as _bc
+            history = list(ctx.facts.get("check_failures_history", []))
+            extras_used = int(ctx.facts.get("convergence_extras_used", 0))
+            cap = int(ctx.knob("check_attempt_cap", 8))
+            kind_used = int(ctx.facts.get("check_repairs_used", 0))
+            # 0 or a value at or below the regular limit disables extension.
+            if cap > limit and kind_used < cap and len(history) >= 2:
+                current = set(history[-1])
+                previous = set(history[-2])
+                # R6 correction 3: judge from the recorded check output.
+                blocker_history = list(ctx.facts.get("check_blocker_history", []))
+                if blocker_history:
+                    blocker = blocker_history[-1]
+                else:
+                    check_command = str(ctx.facts.get("check") or "").strip()
+                    blocker = _bc.excusal_blocker(
+                        check_command, feedback, current
+                    ) if current else "empty failure set"
+                all_prior = set().union(*(set(h) for h in history[:-1]))
+                if (current
+                        and current < previous
+                        and current <= all_prior
+                        and blocker is None):
+                    ctx.set_fact("convergence_extras_used", extras_used + 1)
+                    ctx.set_fact("convergence_granted", True)
+                    ctx.set_fact("repairs_used", used + 1)
+                    ctx.write_json("fast-report.json", _report(ctx, "repairing", findings))
+                    return Verdict("reloop", feedback)
+            if cap > limit and kind_used >= cap:
+                ctx.write_json("fast-report.json", _report(ctx, "unresolved", findings))
+                raise ValueError(
+                    f"check attempt cap ({cap}) reached after {kind_used} "
+                    f"repair(s) (check failure): {feedback}"
+                )
+
         ctx.write_json("fast-report.json", _report(ctx, "unresolved", findings))
         label = "check" if kind == "check" else "review"
         raise ValueError(
@@ -173,6 +213,10 @@ def validate_package(ctx: Any) -> str:
 
 
 def focused_check(ctx: Any) -> dict[str, Any]:
+    # R2: clear base_unavailable at the start of each attempt so the PR
+    # reflects the final attempt's base comparison.
+    ctx.set_fact("base_unavailable", "")
+
     output = str(ctx.facts.get("artifact") or ctx.facts.get("package_path") or "")
     if not output:
         raise ValueError("focused QA needs the materialised output path")
@@ -274,10 +318,17 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                 guardedness=guardedness,
             )
             if filtered.base_environment_failure:
-                evidence.stop_unrepairable(
-                    "unavailable",
-                    f"the base check could not run: {filtered.base_environment_failure}",
-                )
+                if filtered.base_crashed:
+                    # R2: a crash — continue without excusals, with the note.
+                    note = (f"base comparison unavailable: {filtered.base_environment_failure}; "
+                            "the attempt's results stand without excusals")
+                    ctx.set_fact("base_unavailable", note)
+                else:
+                    # A deterministic failure — stop as today's base_environment_failure.
+                    evidence.stop_unrepairable(
+                        'unavailable',
+                        f"the base check could not run: {filtered.base_environment_failure}",
+                    )
 
             # Diagnose unbuilt packages from the worktree's own manifests.
             wt_path = Path(found.path)
@@ -325,6 +376,63 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                 # the builder's feedback.
                 if unbuilt_msg:
                     payload["unbuilt_diagnosis"] = unbuilt_msg
+                # R5: augment feedback with [left] sites and broken guarantees.
+                from refactory_dsh import design_contract as _dc
+                _run_name = str(ctx.facts.get("name") or "")
+                _parsed = _dc.parse(
+                    ctx.read_text("design.md") if ctx.exists("design.md") else "", _run_name
+                )
+                _left_lines: list[str] = []
+                for _site in _parsed.rule_sites:
+                    if _site.get("status") == "left" and _site.get("reason"):
+                        _left_lines.append(
+                            f"Design constraint: {_site['path']} [left: {_site['reason']}] "
+                            "— do not change this; fix the tests or callers instead."
+                        )
+                _guarantee_lines: list[str] = []
+                if (filtered is not None
+                        and not filtered.base_environment_failure
+                        and filtered.base_complete
+                        and filtered.base_failures is not None):
+                    from refactory_dsh import base_check as _bc
+                    _attempt_output = "\n".join((result.stdout or "", result.stderr or "")).strip()
+                    _attempt_failures = _bc.parse_test_failures(_attempt_output)
+                    _changed_files = set(_bc._all_changed_files(Path(found.path), found.base))
+                    for _failure in sorted(_attempt_failures):
+                        if _failure not in filtered.base_failures:
+                            _tf = _bc._test_file(_failure)
+                            if _tf and _tf not in _changed_files:
+                                _guarantee_lines.append(
+                                    f"Broken guarantee: {_failure} passes on the base but "
+                                    "fails on this attempt — the attempt must not break it."
+                                )
+                if _left_lines or _guarantee_lines:
+                    _notes_text = "\n".join(_left_lines + _guarantee_lines)
+                    payload["robustness_notes"] = _notes_text
+
+                # R6: store failure history and blocker for convergence detection.
+                _attempt_out_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
+                _cur_failures = sorted(base_check.parse_test_failures(_attempt_out_r6))
+                _hist = list(ctx.facts.get("check_failures_history", []))
+                _hist.append(_cur_failures)
+                ctx.set_fact("check_failures_history", _hist)
+
+                # R6 correction 3: record blocker from the full check output.
+                _check_cmd = str(ctx.facts.get("check") or "").strip()
+                _blocker = base_check.excusal_blocker(
+                    _check_cmd, _attempt_out_r6, set(_cur_failures)
+                ) if _cur_failures else "empty failure set"
+                _blk_hist = list(ctx.facts.get("check_blocker_history", []))
+                _blk_hist.append(_blocker)
+                ctx.set_fact("check_blocker_history", _blk_hist)
+
+                # Write base_unavailable note into check.txt (R2 correction 5).
+                _base_note = ctx.facts.get("base_unavailable")
+                if _base_note:
+                    _check_txt = ctx.read_text("check.txt") if ctx.exists("check.txt") else ""
+                    if _base_note not in _check_txt:
+                        ctx.write_text("check.txt", _check_txt.rstrip() + "\n\n" + _base_note + "\n")
+
                 ctx.write_json("focused-check.json", payload)
     if ctx.facts.get("package_path"):
         problems = evidence.current_problems(ctx)
@@ -380,6 +488,11 @@ def gate_qa(ctx: Any) -> str:
         findings.append(f"requested runtime check failed (exit {check.get('returncode')}): {check_output}")
     findings.extend(evidence.current_problems(ctx, ("focused_qa",)))
     findings.extend(evidence.audit_problems(ctx))
+    # Prepend robustness notes ([left] sites, broken guarantees) so the builder
+    # sees them first — they were stored in the payload by focused_check (R5).
+    robustness_notes = check.get("robustness_notes", "")
+    if robustness_notes:
+        findings.insert(0, robustness_notes)
     # Prepend unbuilt-package diagnosis so the builder sees it first.
     unbuilt_diag = check.get("unbuilt_diagnosis", "")
     if unbuilt_diag:
@@ -387,13 +500,20 @@ def gate_qa(ctx: Any) -> str:
     if findings:
         # Classify only refactory's own text; check stderr/stdout is target text
         # and must not be word-scanned (correction 1: gate_qa classifies target text).
+        # robustness_notes contain target test IDs and must not be classified
+        # (a test ID with "credentials" would incorrectly stop the run as
+        # unavailable — the b30b regression).
         if check_failed:
             refactory_findings = [
                 f for f in findings
-                if not f.startswith("requested runtime check failed")
+                if (not f.startswith("requested runtime check failed")
+                    and f != robustness_notes)
             ]
         else:
-            refactory_findings = findings
+            refactory_findings = [
+                f for f in findings
+                if f != robustness_notes
+            ]
         if refactory_findings:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
@@ -455,7 +575,14 @@ def gate_verification(ctx: Any) -> str:
         else:
             check_output = check_data.get("stderr") or check_data.get("stdout") or ""
             detail = f"requested runtime check failed (exit {check_data.get('returncode')}): {check_output}"
-        return _repair(ctx, [detail.strip()], kind="check")
+        findings = [detail.strip()]
+        # R5: prepend robustness_notes ([left] sites and broken guarantees)
+        # so the builder sees them first.  Kept out of anything failure_kind
+        # classifies — _repair's feedback is never word-scanned.
+        robustness_notes = check_data.get("robustness_notes", "")
+        if robustness_notes:
+            findings.insert(0, robustness_notes)
+        return _repair(ctx, findings, kind="check")
 
     # 2. Guardedness block → _repair (spends a repair_attempts slot).
     if check_data.get("guardedness_blocked"):

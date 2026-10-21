@@ -434,6 +434,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ))
     except Exception as exc:
         checks.append(("harness pin vs serving dsh", False, str(exc)))
+    if getattr(args, "run", None):
+        try:
+            run_path = Path(args.run).expanduser().resolve()
+            rc_path = run_path / ".refactory" / "run-config.json"
+            if not rc_path.exists():
+                checks.append(("run driver", False, f"no run-config.json at {rc_path}"))
+            else:
+                rc_data = json.loads(rc_path.read_text())
+                drv = rc_data.get("driver", {})
+                checks.append(("run driver commit", True, drv.get("commit", "unknown")[:12]))
+                checks.append(("run driver profile", True, drv.get("profile", "graph")))
+                pin_co = drv.get("pin_checkout")
+                checks.append(("run pinned", True if pin_co else None,
+                                str(pin_co or "no pin — driver has not moved")))
+                if pin_co and not Path(pin_co).is_dir():
+                    checks.append(("pin checkout exists", False, f"{pin_co} is missing"))
+                elif pin_co:
+                    checks.append(("pin checkout exists", True, str(pin_co)))
+        except Exception as exc:
+            checks.append(("run driver", False, str(exc)))
     try:
         from refactory_dsh import registry
 
@@ -668,6 +688,15 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="check local prerequisites and sandbox credential configuration (no model request)")
     doctor.add_argument("--provider", default="", help="provider route to check (default: DSH settings)")
     doctor.add_argument("--model", default="", help="model selection to report (default: DSH settings)")
+    doctor.add_argument("--run", type=str, default=None, metavar="DIR",
+                        help="check a specific run's driver pin state")
+
+    # ── pin management ──
+    pin_group = sub.add_parser("pin", help="manage driver pins")
+    pin_sub = pin_group.add_subparsers(dest="pin_action")
+    pin_sub.add_parser("list", help="list all pins with commit, creation time and driver checkout")
+    pin_sub.add_parser("prune", help="remove pins no run refers to")
+
     return parser
 
 
@@ -753,9 +782,40 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ui(args)
     if args.verb == "doctor":
         return cmd_doctor(args)
+    if args.verb == "pin":
+        return _cmd_pin(args)
     if args.verb == "package":  # handled before argparse; kept for completeness
         return _forward("refactory_dsh.registry", [])
     parser.error(f"unknown verb {args.verb!r}")  # pragma: no cover - argparse rejects first
+    return 2
+
+
+def _cmd_pin(args: argparse.Namespace) -> int:
+    """Manage driver pins: list and prune."""
+    from refactory_dsh import pin
+
+    action = getattr(args, "pin_action", None)
+    if action == "list":
+        pins = pin.list_pins()
+        if not pins:
+            print("no pins")
+            return 0
+        for entry in pins:
+            commit = entry.get("commit", "?")[:12]
+            created = entry.get("created", "?")
+            driver = entry.get("driver_checkout", "?")
+            runs = entry.get("runs", [])
+            print(f"  {commit}  created {created}  driver {driver}  runs {len(runs)}")
+        return 0
+    if action == "prune":
+        pruned = pin.prune_pins()
+        if pruned:
+            for sha in pruned:
+                print(f"  pruned {sha[:12]}")
+        else:
+            print("nothing to prune")
+        return 0
+    print("usage: refactory pin {list,prune}", file=sys.stderr)
     return 2
 
 

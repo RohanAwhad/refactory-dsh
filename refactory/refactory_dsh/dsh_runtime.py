@@ -84,14 +84,28 @@ def run_on_dsh(
     selected_home = dsh_profile.model_home(context.get("dsh_home") if context else None)
     if context:
         context = {**context, "dsh_home": str(selected_home)}
-    problem = dsh_profile.requirement(home=selected_home)
+    _dsh_profile_name = "graph"
+    _dsh_pin_checkout: Path | None = None
+    try:
+        _run_config_path = workdir / ".refactory" / "run-config.json"
+        if _run_config_path.exists():
+            import refactory_dsh.pin as _pin_mod
+            _dsh_profile_name = _pin_mod.driver_profile(workdir)
+            if _dsh_profile_name.startswith("graph-pin-"):
+                _rc_data = json.loads(_run_config_path.read_text())
+                _pco = _rc_data.get("driver", {}).get("pin_checkout")
+                if _pco:
+                    _dsh_pin_checkout = Path(_pco)
+    except Exception:
+        pass
+    problem = dsh_profile.requirement(name=_dsh_profile_name, home=selected_home, checkout=_dsh_pin_checkout)
     if problem is not None:
         # Checked here rather than left to the child: DSH's own error is about a
         # missing profile, which reads as a packaging bug. The profile is machine
         # state, and this is the one place that knows the command that creates it.
         return DshRun(facts={}, workdir=workdir, returncode=2, stderr=problem)
 
-    require_build(root=Path(context["runtime_root"]) if context else None)
+    require_build(root=Path(context["runtime_root"]) if context else None, check_only=True)
 
     graphs = workdir / "graphs"
     # The steering layer, on the runtime that ships. A run a person steered has a
@@ -114,7 +128,7 @@ def run_on_dsh(
 
     command = [
         *dsh_command(root=Path(context["runtime_root"]) if context else None, cli=context.get("dsh_cli") if context else None),
-        "--profile", "graph", "run",
+        "--profile", _dsh_profile_name, "run",
         "--mode", name,
         "--task", TASK,
         "--budget", "1",

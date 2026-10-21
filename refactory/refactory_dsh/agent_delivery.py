@@ -7,6 +7,7 @@ Artifact bytes and the model's final response are retained separately, unchanged
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import sys
 import uuid
@@ -14,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from refactory_dsh import target_guard, worktree
+from refactory_dsh import target_guard
+from refactory_dsh.invocations import EVIDENCE, REVIEWERS, WORKTREE_RECORD
 
 ROOT = Path('.refactory/agent-delivery')
 
@@ -83,6 +85,46 @@ def fill_feedback(workdir: Path, node: str, values: dict[str, Any], *,
 CONTRACT_START = '<!-- refactory worker execution -->'
 CONTRACT_END = '<!-- end refactory worker execution -->'
 
+_UNSET: object = object()
+_worktree_state: Any | None | object = _UNSET
+_delivery_identity: Any | None | object = _UNSET
+
+
+def get_worktree_state() -> Any | None:
+    """Return the registered worktree-state namespace, discovering it via entry points on first call."""
+    global _worktree_state
+    if _worktree_state is _UNSET:
+        eps = importlib.metadata.entry_points(group='refactory.worktree_state')
+        if len(eps) > 1:
+            raise RuntimeError(
+                f"expected at most one 'refactory.worktree_state' entry point, "
+                f"got {len(eps)}: {[ep.name for ep in eps]}"
+            )
+        if eps:
+            ep = next(iter(eps))
+            _worktree_state = ep.load()
+        else:
+            _worktree_state = None
+    return _worktree_state
+
+
+def get_delivery_identity() -> Any | None:
+    """Return the registered delivery-identity callable, discovering it via entry points on first call."""
+    global _delivery_identity
+    if _delivery_identity is _UNSET:
+        eps = importlib.metadata.entry_points(group='refactory.delivery_identity')
+        if len(eps) > 1:
+            raise RuntimeError(
+                f"expected at most one 'refactory.delivery_identity' entry point, "
+                f"got {len(eps)}: {[ep.name for ep in eps]}"
+            )
+        if eps:
+            ep = next(iter(eps))
+            _delivery_identity = ep.load()
+        else:
+            _delivery_identity = None
+    return _delivery_identity
+
 
 def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
                         writes: list[str], model_context: dict[str, Any] | None,
@@ -100,10 +142,14 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
     }
     if context.get('runtime_root'):
         execution['runtime_root'] = str(context['runtime_root'])
-    from refactory_dsh.authoring_evidence import REVIEWERS, delivery_identity
-
+    di = get_delivery_identity()
+    if di is None and node in REVIEWERS and (workdir / EVIDENCE).exists():
+        raise RuntimeError(
+            "the delivery-identity entry point is not installed but this node "
+            "needs authoring evidence; re-run `uv sync` or `./install.sh`"
+        )
     if node in REVIEWERS:
-        authoring = delivery_identity(workdir)
+        authoring = di(workdir) if di else None
         if authoring is not None:
             execution['authoring'] = authoring
     if set_aside:
@@ -258,6 +304,12 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     from refactory_dsh.steering import Ledger, parse_entries, prompt_with_ledger
 
     workdir = Path(workdir).resolve()
+    ws = get_worktree_state()
+    if ws is None and (workdir / WORKTREE_RECORD).exists():
+        raise RuntimeError(
+            "the worktree record exists but no worktree-state entry point is installed; "
+            "re-run `uv sync` or `./install.sh`"
+        )
     pending = _pending(workdir, node)
     previous = None
     if reuse and pending.exists():
@@ -324,6 +376,12 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     cannot establish success. No model text is stripped or reformatted.
     """
     workdir = Path(workdir).resolve()
+    ws = get_worktree_state()
+    if ws is None and (workdir / WORKTREE_RECORD).exists():
+        raise RuntimeError(
+            "the worktree record exists but no worktree-state entry point is installed; "
+            "re-run `uv sync` or `./install.sh`"
+        )
     pending = _pending(workdir, node)
     if not pending.exists():
         raise ValueError(f'agent {node!r} was not dispatched; no delivery snapshot exists')
@@ -389,8 +447,8 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     # Check whether the git configuration or hooks the run's worktree shares
     # with its target changed during this step (#347).  Beside the existing
     # target-guard bracket.
-    wt_found = worktree.recorded(workdir)
-    if wt_found is not None and worktree.shared_changed(wt_found):
+    wt_found = ws.recorded(workdir) if ws else None
+    if wt_found is not None and ws.shared_changed(wt_found):
         wt_msg = (f"the git configuration or hooks the run's worktree shares "
                   f"with {wt_found.target} changed during {node}; check them "
                   f"before your next commit there")
@@ -497,7 +555,6 @@ def main() -> int:
             invalidate(workdir, nodes, reason)
             result = {'requested': nodes}
         elif request['action'] == 'reviewers':
-            from refactory_dsh.authoring_evidence import REVIEWERS
             result = {'reviewers': list(REVIEWERS)}
         elif request['action'] == 'pending-prompt':
             node = request['node']
