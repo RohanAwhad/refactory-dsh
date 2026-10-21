@@ -210,31 +210,58 @@ def test_console_status_shows_failed_for_no_owner(tmp_path):
 
 
 def test_prepare_writes_owner_argv(tmp_path):
-    """The owner_argv format matches what the supervisor expects."""
-    identifier = 'default_pack/design'
-    owner_argv = ['-m', 'refactory_dsh.interactive', identifier]
-    config = {
-        'mode': identifier,
-        'project': str(tmp_path),
-        'knobs': [],
-        'model_context': {},
-        'resource_limits': None,
-        'owner_argv': owner_argv,
-        'configuration_fingerprints': {},
-    }
-    config_path = tmp_path / '.refactory' / 'run-config.json'
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config))
+    """interactive.prepare() writes owner_argv to run-config.json.
 
-    loaded = json.loads(config_path.read_text())
-    assert loaded['owner_argv'] == owner_argv
-    assert loaded['owner_argv'] == ['-m', 'refactory_dsh.interactive', identifier]
-    # The supervisor will append --workdir, root, --headless, --resume
-    root = tmp_path
-    expected_full = [sys.executable] + owner_argv + [
-        '--workdir', str(root), '--headless', '--resume']
-    argv, _ = sv._build_owner_argv(root)
-    assert argv == expected_full
+    Calls the real prepare(), with heavy I/O dependencies mocked out, and
+    asserts that the resulting run-config.json contains the owner_argv the
+    supervisor expects.
+    """
+    from contextlib import contextmanager
+    from refactory_dsh import interactive
+    from refactory_dsh.design import DesignMode
+
+    identifier = 'default_pack/design'
+    workdir = tmp_path / 'run'
+    project = tmp_path / 'proj'
+    project.mkdir()
+
+    graphs_dir = tmp_path / 'graphs'
+    graphs_dir.mkdir(parents=True)
+
+    @contextmanager
+    def fake_ownership(wd):
+        Path(wd).mkdir(parents=True, exist_ok=True)
+        Path(wd).joinpath('.refactory').mkdir(parents=True, exist_ok=True)
+        yield 0
+
+    mock_client_cls = MagicMock()
+    mock_client_cls.return_value.context.return_value = {}
+
+    with (
+        patch.object(interactive, 'ownership', fake_ownership),
+        patch.object(interactive.registry, 'resolve',
+                     return_value=(MagicMock(), DesignMode)),
+        patch('refactory_dsh.invocations.prepare', return_value=graphs_dir),
+        patch('refactory_dsh.model.DshModelClient', mock_client_cls),
+        patch('refactory_dsh.recovery.configuration_fingerprints',
+              return_value={}),
+    ):
+        name, graphs = interactive.prepare(
+            identifier, workdir=workdir, project=project)
+
+    config_path = workdir / '.refactory' / 'run-config.json'
+    assert config_path.exists(), 'run-config.json was not written by prepare()'
+    config = json.loads(config_path.read_text())
+
+    assert 'owner_argv' in config, 'prepare() did not write owner_argv'
+    expected_argv = ['-m', 'refactory_dsh.interactive', identifier]
+    assert config['owner_argv'] == expected_argv
+
+    # The supervisor must be able to read it back and build the full command
+    full_argv, _ = sv._build_owner_argv(workdir)
+    expected_full = [sys.executable] + expected_argv + [
+        '--workdir', str(workdir), '--headless', '--resume']
+    assert full_argv == expected_full
 
 
 # ── T7: respawned command identical to today's ─────────────────────────────
