@@ -515,6 +515,12 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         activity['wait_reason'] = f'step {lf_node} is being retried'
     # Report command corrections from facts.json
     facts_data = _read_json(run_root / 'facts.json')
+    # dm-127: show design review status when a user gate is due.
+    if gates(run_root):
+        from refactory_dsh.design_ops import design_review_status as _drs
+        drs_text = _drs(facts_data)
+        if drs_text:
+            activity['design_review_status'] = drs_text
     command_history = facts_data.get('command_history', [])
     if isinstance(command_history, list) and command_history:
         activity['command_corrections'] = len(command_history)
