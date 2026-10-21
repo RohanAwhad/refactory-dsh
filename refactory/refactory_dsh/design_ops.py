@@ -202,6 +202,20 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         "pitfalls": "(no pitfalls analysis yet)",
         "pitfalls_review": "(no pitfalls review has run yet)",
     } if deliver else {}
+    # ── deliverable_kind: repository change vs artifact ──
+    has_target = bool(str(task.get("target") or ctx.knob("target", "") or "").strip())
+    has_refine = bool(str(task.get("refine") or ctx.knob("refine", "") or "").strip())
+    has_source_project = bool(str(task.get("source_project") or ctx.knob("source_project", "") or "").strip())
+    deliverable_kind = "repository_change" if (has_target or has_refine or has_source_project) else "artifact"
+    from refactory_dsh.authoring_evidence import (
+        REPO_CHANGE_REVIEW_INSTRUCTIONS,
+        ARTIFACT_REVIEW_INSTRUCTIONS,
+    )
+    review_instructions = (
+        REPO_CHANGE_REVIEW_INSTRUCTIONS if deliverable_kind == "repository_change"
+        else ARTIFACT_REVIEW_INSTRUCTIONS
+    )
+
     claims_facts = {
         "claims_check_feedback": "",
         "claims_check_attempts_used": 0,
@@ -211,6 +225,8 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
             "research_review": "(no research review has run yet)", "research_scope": research_scope,
             "design_review_feedback": "(no design review has run yet)",
             "design_review_findings": "(no findings yet)",
+            "deliverable_kind": deliverable_kind,
+            "review_instructions": review_instructions,
             **pitfalls_facts,
             **claims_facts,
             **UNREFUSED, **located, **planned}
@@ -413,6 +429,52 @@ def gate_design_review(ctx: Any) -> str:
         ctx.set_fact("pitfall_coverage",
                      "pitfalls check skipped: no pitfalls_researcher in this graph")
 
+    # ── mechanical check 5: repository questions and brief-example trace ──
+    deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
+    if deliverable_kind_value == "repository_change" and design_text:
+        from refactory_dsh.authoring_evidence import check_review_questions
+        from refactory_dsh import design_contract
+
+        run_name = str(ctx.facts.get("name") or "")
+        parsed = design_contract.parse(design_text, run_name)
+        changed_fns = [
+            design_contract._extract_file_path(site["path"])
+            for site in parsed.rule_sites
+            if site["status"] == "changed"
+        ]
+        # Normalise and deduplicate
+        seen_fns: set[str] = set()
+        deduped_fns: list[str] = []
+        for fn in changed_fns:
+            fn_norm = _re.sub(r':\d+(-\d+)?$', '', fn).strip()
+            if fn_norm and fn_norm not in seen_fns:
+                seen_fns.add(fn_norm)
+                deduped_fns.append(fn_norm)
+        if deduped_fns:
+            target = str(ctx.facts.get("target") or "")
+            rq_problems = check_review_questions(
+                review_text, deduped_fns, "design_review",
+                require_brief_trace=True,
+                target=target,
+            )
+            problems.extend(rq_problems)
+
+    # ── reviewer re-run routing (before attempt increment) ──
+    if problems:
+        rq_problems_only = [p for p in problems if p.startswith("[repo-questions]")]
+        non_rq_problems = [p for p in problems if not p.startswith("[repo-questions]")]
+        if rq_problems_only and not non_rq_problems:
+            # Only repo-questions problems: re-run the reviewer without spending an attempt.
+            reruns_used = int(ctx.facts.get("design_review_reruns_used", 0)) + 1
+            ctx.set_fact("design_review_reruns_used", reruns_used)
+            if reruns_used <= 2:
+                rq_report = "\n".join(f"- {p}" for p in rq_problems_only)
+                ctx.write_text("reviews/design-review-feedback.txt", rq_report + "\n")
+                ctx.set_fact("design_review_feedback", rq_report)
+                return Verdict("review_reloop", rq_report)
+            # At the limit, let repo-questions problems join ordinary findings and
+            # take the existing reloop or proceed-on-exhaustion path.
+
     # ── decide: proceed, reloop, or exhaust ──
     allowed = int(ctx.knob("design_review_attempts", 2))
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
@@ -432,6 +494,14 @@ def gate_design_review(ctx: Any) -> str:
         return "proceed"
 
     report = "\n".join(f"- {p}" for p in problems)
+
+    # In the mixed case, send only non-repo-questions problems to design_doc
+    non_rq = [p for p in problems if not p.startswith("[repo-questions]")]
+    if non_rq and len(non_rq) < len(problems):
+        # Mixed case: write only non-rq problems as design_review_feedback for design_doc
+        non_rq_report = "\n".join(f"- {p}" for p in non_rq)
+        ctx.write_text("reviews/design-review-feedback.txt", non_rq_report + "\n")
+        ctx.set_fact("design_review_feedback", non_rq_report)
 
     if used >= allowed:
         # Exhausted: proceed to gate_strategy with findings shown.

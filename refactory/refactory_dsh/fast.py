@@ -78,7 +78,7 @@ QA_PROMPT = (
 ARTIFACT_QA = "\nThe change: {{change}}\n"
 
 
-def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
+def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
     graph.add(Node(
         "focused_check", "op", call=f"{OPS}:focused_check", role="validation" if artifact else "ceo",
         resource_role="final_validation",
@@ -97,33 +97,67 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
     ))
     from refactory_dsh.authoring_evidence import REVIEW_CONTEXT, AUDIT_INSTRUCTIONS
 
+    # Build focused_qa prompt: add {{review_instructions}} and repo_questions schema
+    # only for design modes (design=True). create_fast/edit_fast never produce the fact.
+    qa_prompt = QA_PROMPT
+    if design:
+        # Insert repo_questions into JSON schema description
+        qa_prompt = qa_prompt.replace(
+            '"not_run":["checks outside this focused scope"]}',
+            '"not_run":["checks outside this focused scope"], '
+            '"repo_questions":[{"function":"<exactly as listed under Changed functions, '
+            'e.g. pkg/mod.py::Class.method>", "duplicates":"...", '
+            '"callers":"...", "shared_state":"..."}]}',
+        )
+    focused_qa_prompt = (
+        qa_prompt + (ARTIFACT_QA if artifact else "")
+        + ("{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\n"
+           if design else "")
+        + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS
+    )
+
+    focused_qa_reads = (
+        ("brief.json", "focused-check.json", "authoring-evidence.json")
+        + (("test-guardedness.json",) if artifact else ())
+        + (("changed-functions.json", "reviews/verification.md") if design else ())
+    )
+
     graph.add(Node(
         "focused_qa", "agent", role="code_reviewer",
-        prompt_template=QA_PROMPT + (ARTIFACT_QA if artifact else "") + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS,
+        prompt_template=focused_qa_prompt,
         resource_role="final_validation",
-        reads=("brief.json", "focused-check.json", "authoring-evidence.json")
-              + (("test-guardedness.json",) if artifact else ()),
+        reads=focused_qa_reads,
         writes=("focused-qa.json", "intent-audit.json"),
         produces=("focused_qa",), notes="one light focused QA stage; no reviewer fan-out",
     ))
+
+    gate_qa_reads = (
+        ("focused-qa.json", "focused-check.json", "focused-source.json",
+         "authoring-evidence.json", "intent-audit.json")
+        + (("changed-functions.json",) if design else ())
+    )
+    gate_qa_produces = (
+        ("repair_feedback", "repairs_used", "check_repairs_used",
+         "review_repairs_used", "qa_passed")
+        + (("review_reruns_used",) if design else ())
+    )
+
     graph.add(Node(
         "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
         resource_role="final_validation",
-        knobs=("repair_attempts", "check_attempt_cap"), reads=("focused-qa.json", "focused-check.json", "focused-source.json",
-                                          "authoring-evidence.json", "intent-audit.json"),
+        knobs=("repair_attempts", "check_attempt_cap"), reads=gate_qa_reads,
         writes=("fast-report.json", "repair.txt",
                 "site-revert-results.json", "correction-audit.json"),
-        produces=("repair_feedback", "repairs_used", "check_repairs_used",
-                  "review_repairs_used", "qa_passed",
-                  "check_failures_history",
-                  "check_blocker_history",
-                  "convergence_extras_used",
-                  "convergence_granted"), max_iterations=12,
+        produces=gate_qa_produces + ("check_failures_history", "check_blocker_history",
+                                     "convergence_extras_used", "convergence_granted"),
+        max_iterations=12,
         notes="repair only within the shared bound; unresolved findings are failure",
     ))
     graph.connect("focused_check", "focused_qa")
     graph.connect("focused_qa", "gate_qa")
     graph.connect("gate_qa", "emit", condition="reloop")
+    if design:
+        graph.connect("gate_qa", "focused_qa", condition="review_reloop")
 
 
 class CreateFastMode(CreateMode):
@@ -196,7 +230,7 @@ class CreateFastMode(CreateMode):
                                     "check_blocker_history",
                                     "convergence_extras_used",
                                     "convergence_granted")))
-        _qa_nodes(graph, artifact=False)
+        _qa_nodes(graph, artifact=False, design=False)
         graph.add(replace(full.nodes["register"], resource_role="work"))
         graph.add(replace(full.nodes["smoke"], evaluator="refactory_dsh.create_ops:gate_smoke",
                           knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "repair_attempts", "check_attempt_cap"),
@@ -272,6 +306,7 @@ class DesignFastMode(DesignMode):
                     "reviews/design-review-feedback.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
+                      "deliverable_kind", "review_instructions",
                       "source_project", "source_files", "repair_feedback", "repairs_used",
                       *repo_change.produces()),
             notes="read the artifact brief, and say where the run works",
@@ -303,6 +338,9 @@ class DesignFastMode(DesignMode):
         graph.add(repo_change.materialise_node(
             call=f"{OPS}:materialise_artifact", resource_role="work",
             reads=("emit.txt", "source-manifest.json"),
+            writes=("changes.diff", "changed-functions.json"),
+            produces=("artifact", "files", "commit", "change", "emission_refused",
+                      "changed_functions"),
             notes="commit the emitted files on the run's branch, or write the artifact directory: "
                   "a copy of source_project, when there is one",
         ))
@@ -312,7 +350,7 @@ class DesignFastMode(DesignMode):
             produces=("repair_feedback", "repairs_used"), max_iterations=4,
             notes="send an emission materialise could not apply back to emit, within the repair bound",
         ))
-        _qa_nodes(graph, artifact=True)
+        _qa_nodes(graph, artifact=True, design=True)
         from refactory_dsh.verification import wire_verification
         wire_verification(graph, fast=True)
         graph.add(Node(

@@ -334,10 +334,27 @@ are appended to the review's feedback. `gate_design_review`
 reads that review using the same verdict and blocking-findings parsing as
 `gate_overwatch`, and adds two mechanical checks with no false positives: every
 `path:line` citation names an existing file with that many lines, and every
-quotation the design attributes to the brief appears verbatim in the brief. On
-failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
+quotation the design attributes to the brief appears verbatim in the brief. A fifth
+mechanical check validates per-changed-function repository questions (duplicates,
+callers, shared state) and the brief-example trace, for repository-change runs only.
+On failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
 proceeds to `gate_strategy` with the remaining findings shown — it never fails the
-run. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
+run. A reviewer formatting miss re-runs `design_review` (via a `review_reloop` edge)
+without spending a `design_review_attempts` slot; the re-run counter is
+`design_review_reruns_used` (limit 2).
+
+The `deliverable_kind` fact, computed by `prepare_design`, distinguishes repository
+changes from artifacts. The `review_instructions` fact renders `REPO_CHANGE_REVIEW_INSTRUCTIONS`
+(composed from verification methods M2, M3, M11, M12) or `ARTIFACT_REVIEW_INSTRUCTIONS`
+into each reviewer's prompt via `{{review_instructions}}`. The `changed_functions` module
+maps diff hunk line ranges onto function spans via `ast` (Python) and hunk-range entries
+(TypeScript), and its output is rendered into prompts as `{{changed_functions}}`.
+
+For the post-build QA gate, `gate_qa` validates each of the three review files independently,
+naming the reviewer and function in any refusal. A `review_reloop` edge from `gate_qa` to
+`fork_qa` re-runs only the reviewers. The fast `gate_qa` validates `focused-qa.json`'s
+`repo_questions` key and strips `[repo-questions]`-prefixed problems from `failure_kind`'s
+word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
 PASS" or "Design review: FAIL, N unresolved" followed by the unresolved findings,
 carried by fact substitution to all template-rendered surfaces (terminal, GUI,
 headless refusal, `refactory status`). A **person answers `gate_strategy`** at that point, because a

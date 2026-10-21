@@ -334,7 +334,17 @@ REVIEW_ANSWERS = [
 #: design_doc in graph order.
 DESIGN_REVIEW_ANSWER = (
     "No open alternatives found. All citations confirmed. "
-    "All brief references verified.\n\nVERDICT: PASS"
+    "All brief references verified.\n\n"
+    "## Repository questions\n\n"
+    "```json\n"
+    '[{"function":"tool.py", "duplicates":"absent: searched the repository for tool.py", '
+    '"callers":"runner.py:10 calls tool.py:1", '
+    '"shared_state":"absent: searched tool.py for shared state"}]\n'
+    "```\n\n"
+    "## Brief example trace\n\n"
+    "The brief's example runs through runner.py:5 → tool.py:1 "
+    "in both the walker and DSH runtimes.\n\n"
+    "VERDICT: PASS"
 )
 
 #: The verifier's answer: a passing verification with no blocking findings.
@@ -445,6 +455,66 @@ class FakeModel:
                     row["clauses"] = [clause]
                 audit_rows.append(row)
             (root / "intent-audit.json").write_text(json.dumps({"requirements": audit_rows}))
+        # Scripted repo_questions: when the run directory has changed-functions.json,
+        # auto-generate a valid repo_questions record for reviewer answers only.
+        # Only inject into prompts that reference "Changed functions:" (reviewer prompts),
+        # never into emit, verifier, strategy or other non-reviewer answers.
+        if answer and workdir is not None and "Changed functions:" in prompt:
+            from pathlib import Path
+
+            root = Path(workdir)
+            cf_path = root / "changed-functions.json"
+            if cf_path.is_file():
+                try:
+                    cf_data = json.loads(cf_path.read_text())
+                    if isinstance(cf_data, list) and cf_data:
+                        # Build a valid record from the computed list
+                        rq_entries = []
+                        for entry in cf_data:
+                            if isinstance(entry, dict) and "function" in entry:
+                                fn = entry["function"]
+                                file_path = entry.get("file", "unknown.py")
+                                line = entry.get("line", 1)
+                                rq_entries.append({
+                                    "function": fn,
+                                    "duplicates": f"absent: searched the repository for {fn}",
+                                    "callers": f"{file_path}:{line} is called from main",
+                                    "shared_state": f"absent: searched {fn} for shared state",
+                                })
+                        if rq_entries:
+                            rq_json = json.dumps(rq_entries)
+                            # For JSON answers (focused-qa.json): inject repo_questions key.
+                            # Check this BEFORE the markdown path: a focused_qa answer is
+                            # valid JSON that does not contain "repo_questions" as text, so
+                            # the markdown guard would match first and then skip because the
+                            # prompt mentions focused-qa.json, leaving the elif unreachable.
+                            if ("Write focused-qa.json" in prompt or "focused-qa.json" in prompt) and answer.strip().startswith("{"):
+                                try:
+                                    qa_obj = json.loads(answer)
+                                    if isinstance(qa_obj, dict) and "repo_questions" not in qa_obj:
+                                        qa_obj["repo_questions"] = rq_entries
+                                        answer = json.dumps(qa_obj)
+                                except (json.JSONDecodeError, ValueError):
+                                    pass
+                            # For markdown answers (reviews/*.md): append if not already present
+                            elif "## Repository questions" not in answer and "repo_questions" not in answer:
+                                answer = answer.rstrip()
+                                # Insert before VERDICT line if present
+                                if "\nVERDICT:" in answer:
+                                    parts = answer.rsplit("\nVERDICT:", 1)
+                                    answer = (
+                                        parts[0] + "\n\n"
+                                        "## Repository questions\n\n"
+                                        "```json\n" + rq_json + "\n```\n\n"
+                                        "VERDICT:" + parts[1]
+                                    )
+                                else:
+                                    answer += (
+                                        "\n\n## Repository questions\n\n"
+                                        "```json\n" + rq_json + "\n```\n"
+                                    )
+                except (json.JSONDecodeError, OSError):
+                    pass
         return answer
 
 
