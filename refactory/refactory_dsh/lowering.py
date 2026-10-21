@@ -97,6 +97,8 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 "inline_items": [dict(item) for item in node.inline_items],
                 "limit": node.limit,
             }
+        if node.feedback_keys:
+            entry["feedback_keys"] = list(node.feedback_keys)
         declarations[node_id] = entry
     return declarations
 

@@ -282,6 +282,13 @@ def strategy_answer(name: str) -> str:
         ],
         "start": "start",
         "score": "the fact 'best', produced by finish",
+        "findings": {
+            "FND-api-surface-1": "start node handles the API surface",
+            "FND-existing-modes-1": "step node handles existing modes",
+            "FND-acceptance-1": "check node handles acceptance criteria",
+            "FND-simplest-1": "step node handles simplest perspective",
+            "FND-criteria-1": "check node handles criteria perspective",
+        },
     })
 
 
@@ -306,16 +313,19 @@ RESEARCH_ANSWER = json.dumps([
         "focus": "which API surface the package builds against",
         "slug": "api-surface",
         "finding": "the mode API in the checkout: nn.Mode, nn.Graph, ctx.knob/read_json/write_json",
+        "ids": ["FND-api-surface-1"],
     },
     {
         "focus": "what already exists that this resembles",
         "slug": "existing-modes",
         "finding": "circle_packing/adaptive is the closest existing mode and is not this",
+        "ids": ["FND-existing-modes-1"],
     },
     {
         "focus": "the acceptance criteria the brief asks for",
         "slug": "acceptance",
         "finding": "the mode must count to a target and score how close it landed",
+        "ids": ["FND-acceptance-1"],
     },
 ])
 PERSPECTIVES_ANSWER = "perspectives: the simplest thing that works, and the criteria"
@@ -365,6 +375,12 @@ DESIGN_DOC_ANSWER = (
     "- docs/models.md\n\n"
     "## Changes\n\n"
     "- tool.py\n\n"
+    "## Research and perspective findings\n\n"
+    "- FND-api-surface-1: addressed at `tool.py:1`\n"
+    "- FND-existing-modes-1: addressed at § Changes\n"
+    "- FND-acceptance-1: addressed at `tool.py:1`\n"
+    "- FND-simplest-1: addressed at `tool.py:1`\n"
+    "- FND-criteria-1: addressed at § Changes\n\n"
     "## Anti-patterns to avoid\n\n"
     "- PIT-001: addressed at `tool.py:1`\n"
 )
@@ -419,6 +435,31 @@ class FakeModel:
         # model's text answer to writes[0] (pitfalls.json), but pitfalls.md
         # (writes[1]) must also exist for delivery to succeed.  Write it as a
         # side-effect, matching the intent-audit fixture below.
+        # Scripted strategy fixtures: write strategy/*.md files for V6 compliance.
+        if answer and "strategy director" in prompt.lower() and workdir is not None:
+            from pathlib import Path
+
+            root = Path(workdir)
+            for slug, text in [("simplest", "the simplest thing"),
+                               ("criteria", "the criteria check")]:
+                sfile = root / "strategy" / f"{slug}.md"
+                sfile.parent.mkdir(parents=True, exist_ok=True)
+                sfile.write_text(
+                    f"### FND-{slug}-1 — {text}\n\n# {slug}\n\nDetails.\n"
+                )
+        # Scripted research/extra.md: opt-in, used only by the dropped-finding test.
+        if (answer and "research director" in prompt.lower()
+                and workdir is not None
+                and getattr(self, '_write_extra_research', False)):
+            from pathlib import Path
+
+            root = Path(workdir)
+            extra = root / "research" / "extra.md"
+            extra.parent.mkdir(parents=True, exist_ok=True)
+            extra.write_text(
+                "### FND-extra-1 — extra finding text\n\n"
+                "# Extra\n\nSomething important.\n"
+            )
         if answer and "pitfalls researcher" in prompt and workdir is not None:
             from pathlib import Path
 

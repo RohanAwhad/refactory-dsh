@@ -19,6 +19,69 @@ from refactory_dsh import target_guard
 from refactory_dsh.invocations import EVIDENCE, REVIEWERS, WORKTREE_RECORD
 
 ROOT = Path('.refactory/agent-delivery')
+
+# ── feedback re-fill ──────────────────────────────────────────────────────────
+
+
+def fill_feedback(workdir: Path, node: str, values: dict[str, Any], *,
+                  feedback_keys: tuple[str, ...] | list[str] | None = None,
+                  ) -> tuple[dict[str, Any], list[str]]:
+    """Re-derive missing feedback keys from persisted files before rendering.
+
+    Core function that resolves the ``refactory.feedback_refill`` entry-point
+    group.  Called at the three render sites (worker_node, nn/executor,
+    agent_delivery.main) before ``render()``.
+
+    Parameters
+    ----------
+    workdir : Path
+        The run directory.
+    node : str
+        The node id, used to read ``declarations.json[node]["feedback_keys"]``
+        when *feedback_keys* is ``None``.
+    values : dict
+        The ``{**knobs, **facts}`` dict that ``render`` will use.
+    feedback_keys : tuple or list or None
+        When a tuple or list, used as the key list directly.  When ``None``,
+        reads the node's keys from ``declarations.json`` (for the worker route
+        and agent_delivery.main).
+    """
+    if feedback_keys is None:
+        # Read from declarations.json
+        decl_path = Path(workdir) / ".refactory" / "declarations.json"
+        if decl_path.is_file():
+            try:
+                import json as _json_mod
+                decls = _json_mod.loads(decl_path.read_text())
+                node_decl = decls.get(node) or {}
+                feedback_keys = tuple(node_decl.get("feedback_keys") or ())
+            except (OSError, ValueError, KeyError):
+                feedback_keys = ()
+        else:
+            feedback_keys = ()
+
+    if not feedback_keys:
+        return values, []
+
+    # Check if all keys are filled
+    missing = [k for k in feedback_keys if not values.get(k)]
+    if not missing:
+        return values, []
+
+    # Resolve the entry point
+    import importlib.metadata
+    eps = importlib.metadata.entry_points(group='refactory.feedback_refill')
+    if not eps:
+        # No entry point installed — refuse with "re-run uv sync"
+        raise RuntimeError(
+            "feedback keys are unfilled but no refactory.feedback_refill entry point is "
+            "installed; re-run `uv sync` or `./install.sh`"
+        )
+
+    ep = list(eps)[0]
+    refill_fn = ep.load()
+    return refill_fn(Path(workdir), feedback_keys, values)
+
 CONTRACT_START = '<!-- refactory worker execution -->'
 CONTRACT_END = '<!-- end refactory worker execution -->'
 
@@ -467,6 +530,11 @@ def main() -> int:
             from refactory_dsh.nn.executor import RunContext, render
             prompt = request['prompt']
             context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
+            # Re-fill feedback keys before rendering — a failure to re-derive
+            # a declared key refuses the dispatch (dm-120).
+            values = {**context.knobs, **context.facts}
+            values, refilled_keys = fill_feedback(workdir, request['node'], values)
+            context = RunContext(workdir, knobs=context.knobs, facts={**context.facts, **{k: values[k] for k in (refilled_keys or [])}})
             rendered = render(prompt, context)
             # Detect unresolved template keys from the template itself (not
             # substituted values).  Record as a warning, not a refusal: the
@@ -480,9 +548,8 @@ def main() -> int:
             st_end = scan_prompt.find(STEERING_END, st_start) if st_start >= 0 else -1
             if st_start >= 0 and st_end >= st_start:
                 scan_prompt = scan_prompt[:st_start] + scan_prompt[st_end + len(STEERING_END):]
-            values = {**context.knobs, **context.facts}
             template_keys = _re.findall(r'\{\{\s*([A-Za-z_]\w*)\s*\}\}', scan_prompt)
-            unresolved = [k for k in template_keys if k.strip() not in values]
+            unresolved = [k for k in template_keys if k.strip() not in values and k not in (refilled_keys or [])]
             result = begin(workdir, request['node'], rendered, request['writes'], reuse=True,
                            reads=request.get('reads'))
             # The bridge reads the prompt; the target snapshot is this module's own state.

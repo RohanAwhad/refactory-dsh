@@ -2388,6 +2388,14 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
         "- tool.py\n"
     )
     tricky_design += (
+        "\n## Research and perspective findings\n\n"
+        "- FND-api-surface-1: addressed at `tool.py:1`\n"
+        "- FND-existing-modes-1: addressed at § Changes\n"
+        "- FND-acceptance-1: addressed at `tool.py:1`\n"
+        "- FND-simplest-1: addressed at `tool.py:1`\n"
+        "- FND-criteria-1: addressed at § Changes\n"
+    )
+    tricky_design += (
         "\n## Anti-patterns to avoid\n\n"
         "- PIT-001: addressed at `tool.py:1`\n"
     )
@@ -3412,6 +3420,12 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
         "- `tool.py:1` — use a polling loop **[changed]**\n\n"
         "## Docs\n\n- docs/models.md\n\n"
         "## Changes\n\n- tool.py\n\n"
+        "## Research and perspective findings\n\n"
+        "- FND-api-surface-1: addressed at `tool.py:1`\n"
+        "- FND-existing-modes-1: addressed at \u00a7 Changes\n"
+        "- FND-acceptance-1: addressed at `tool.py:1`\n"
+        "- FND-simplest-1: addressed at `tool.py:1`\n"
+        "- FND-criteria-1: addressed at \u00a7 Changes\n\n"
         "## Anti-patterns to avoid\n\n"
         "- PIT-001: addressed at `tool.py:1`\n"
     )
@@ -3426,6 +3440,12 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
         "- `tool.py:1` — use websockets **[changed]**\n\n"
         "## Docs\n\n- docs/models.md\n\n"
         "## Changes\n\n- tool.py\n\n"
+        "## Research and perspective findings\n\n"
+        "- FND-api-surface-1: addressed at `tool.py:1`\n"
+        "- FND-existing-modes-1: addressed at \u00a7 Changes\n"
+        "- FND-acceptance-1: addressed at `tool.py:1`\n"
+        "- FND-simplest-1: addressed at `tool.py:1`\n"
+        "- FND-criteria-1: addressed at \u00a7 Changes\n\n"
         "## Anti-patterns to avoid\n\n"
         "- PIT-001: addressed at `tool.py:1`\n"
     )
