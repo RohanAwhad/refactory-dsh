@@ -55,6 +55,7 @@ _NODE_FIELDS = frozenset(
         "source_format",
         "inline_items",
         "limit",
+        "feedback_keys",
     }
 )
 
@@ -116,6 +117,7 @@ class Node:
     #: Resource phase is independent of worker routing. Unset preserves the
     #: enclosing phase, except the legacy validation role enters validation.
     resource_role: str | None = None
+    feedback_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in NODE_KINDS:
@@ -203,6 +205,7 @@ class Node:
             **({"inline_items": [dict(item) for item in self.inline_items]}
                if self.inline_items else {}),
             **({"limit": self.limit} if self.limit else {}),
+            **({"feedback_keys": list(self.feedback_keys)} if self.feedback_keys else {}),
         }
 
     @classmethod
@@ -239,6 +242,7 @@ class Node:
             source_format=str(state.get("source_format", "")),
             inline_items=tuple(state.get("inline_items") or ()),
             limit=int(state.get("limit", 0)),
+            feedback_keys=tuple(state.get("feedback_keys") or ()),
         )
 
     def with_field(self, field_name: str, value: Any) -> "Node":
@@ -246,7 +250,7 @@ class Node:
         if field_name not in _NODE_FIELDS:
             raise GraphError(f"node {self.id!r} has no field {field_name!r}")
         if field_name in ("knobs", "reads", "writes", "produces", "tools", "targets",
-                          "sources", "inline_items") and isinstance(value, list):
+                          "sources", "inline_items", "feedback_keys") and isinstance(value, list):
             value = tuple(value)
         return replace(self, **{field_name: value})
 

@@ -27,6 +27,16 @@ from typing import Any
 from refactory_dsh import sandbox, worktree
 from refactory_dsh.worktree import _json as _read_json, NO_HOOKS, _isolate_hooks
 
+# ── ANSI stripping ───────────────────────────────────────────────────────
+
+_ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text."""
+    return _ANSI_ESCAPE.sub('', text)
+
+
 # ── parse test failures ──────────────────────────────────────────────────
 
 _PYTEST_FAILED = re.compile(r"^FAILED\s+([\w/.:\[\]-]+(?:::[\w\[\]-]+)+)", re.MULTILINE)
@@ -46,7 +56,9 @@ def parse_test_failures(output: str) -> set[str]:
     """Extract individual test identifiers from check output.
 
     Returns empty set when no recognisable test names are found (conservative fallback).
+    ANSI codes are stripped before matching so coloured lines are not missed.
     """
+    output = strip_ansi(output)
     found: set[str] = set()
     for m in _PYTEST_FAILED.finditer(output):
         found.add(m.group(1).strip())

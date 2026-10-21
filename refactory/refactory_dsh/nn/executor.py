@@ -670,11 +670,21 @@ class Executor:
     def _visit_agent(self, node: Node) -> None:
         if self.ctx.model is None:
             raise ExecutionError(f"agent node {node.id!r} needs a model client")
-        from refactory_dsh.agent_delivery import begin, finish
+        from refactory_dsh.agent_delivery import begin, finish, fill_feedback
 
         client = self.ctx.model
         if callable(getattr(client, "for_node", None)):
             client = client.for_node(node.id, role=node.role)
+        # Re-fill feedback keys before rendering — a failure to re-derive
+        # a declared key refuses the dispatch (dm-120).
+        values = {**self.ctx.knobs, **self.ctx.facts}
+        values, refilled_keys = fill_feedback(
+            self.ctx.workdir, node.id, values,
+            feedback_keys=node.feedback_keys if node.feedback_keys else None,
+        )
+        if refilled_keys:
+            for k in refilled_keys:
+                self.ctx._internal_fact(k, values[k])
         delivery = begin(self.ctx.workdir, node.id, render(node.prompt_template, self.ctx), list(node.writes),
                          reads=list(node.reads),
                          model_context=client.context() if callable(getattr(client, "context", None)) else None)
