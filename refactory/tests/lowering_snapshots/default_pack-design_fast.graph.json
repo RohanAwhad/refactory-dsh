@@ -5,6 +5,7 @@
       "id": "emit",
       "reads": [
         "brief.json",
+        "check-record.json",
         "implementation-plan.txt",
         "repair.txt",
         "source-manifest.json"
@@ -16,7 +17,7 @@
       "resource_role": "work",
       "role": "builder",
       "model": "",
-      "prompt_template": "Current stage: emit the changed files into emit.txt.\nBuild artifact {{name}}. Brief: {{brief}}\nImplementation plan: {{implementation_plan}}\nRequired check, run from {{check_root}}: {{check}}\nRepair feedback: {{repair_feedback}}\nImplement the smallest complete change. Read the relevant project files to make the change. The block contract below is complete: do not read framework internals, worker receipts, graph configuration or prior acceptance histories to rediscover it. Do not delegate or launch research, reviewer agents or an optimizer.\n{{emit_scope}}\nWrite those blocks into emit.txt, with no prose outside them. Write nothing but emit.txt: do not apply or test your change anywhere \u2014 the target, the run's worktree or a copy \u2014 because materialise and the check do that after you answer and send you the result. The runtime runs the requested check and one focused QA review next. Preserve all requested behavior. After writing emit.txt, return a short completion message. Do not invoke downstream graph operations yourself.",
+      "prompt_template": "Current stage: emit the changed files into emit.txt.\nBuild artifact {{name}}. Brief: {{brief}}\nImplementation plan: {{implementation_plan}}\nRequired check, run from {{check_root}}: {{check}}\nRepair feedback: {{repair_feedback}}\nImplement the smallest complete change. Read the relevant project files to make the change. The block contract below is complete: do not read framework internals, worker receipts, graph configuration or prior acceptance histories to rediscover it. Do not delegate or launch research, reviewer agents or an optimizer.\n{{emit_scope}}\nWrite those blocks into emit.txt, with no prose outside them. Write nothing but emit.txt: do not apply or test your change anywhere \u2014 the target, the run's worktree or a copy \u2014 because materialise and the check do that after you answer and send you the result. The runtime runs the requested check and one focused QA review next. Preserve all requested behavior. After writing emit.txt, return a short completion message. Do not invoke downstream graph operations yourself.\n{{probe_instruction}}\n",
       "tools": [],
       "timeout": null,
       "max_iterations": 1,
@@ -32,6 +33,7 @@
         "authoring-evidence.json",
         "changed-functions.json",
         "changes.diff",
+        "check-record.json",
         "check.txt",
         "focused-check.json",
         "focused-source.json",
@@ -114,6 +116,7 @@
     "gate_verification": {
       "id": "gate_verification",
       "reads": [
+        "check-record.json",
         "check.txt",
         "focused-check.json",
         "reviews/verification.md"
@@ -155,7 +158,9 @@
       "reads": [],
       "writes": [
         "brief.json",
+        "check-record.json",
         "check.txt",
+        "feedback-initial.json",
         "repair.txt",
         "research-review.txt",
         "reviews/design-review-feedback.txt",

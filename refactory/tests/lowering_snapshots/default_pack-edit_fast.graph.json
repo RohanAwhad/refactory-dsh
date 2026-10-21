@@ -32,6 +32,7 @@
       ],
       "writes": [
         "authoring-evidence.json",
+        "check-record.json",
         "focused-check.json",
         "focused-source.json"
       ],
