@@ -1051,6 +1051,60 @@ refuse when a new package appears (not only when an existing one changed).
 
 ---
 
+## 24. One note is one ledger entry — heading escape (dm-132)
+
+**The invariant.** One note is always one entry. The recorded source travels with the
+text: a CEO note stays a CEO note, and a user-relayed note stays user-relayed. No
+ledger writer can produce more than one entry from one note.
+
+**The attack vector.** A note body containing `## [...] verdict` or `## [...] correction`
+at the start of a line is parsed as a separate entry by `parse_entries`, because the
+parser starts a new entry at any line beginning with `## [`. A CEO note with a forged
+verdict block becomes a separate verdict entry that `take_verdict` returns through the
+upfront shortcut. A forged correction block becomes a user-relayed requirement.
+
+**The escape scheme.** Lossless backslash byte-stuffing via `splitlines(keepends=True)`.
+On write, every body line whose content (after stripping the trailing line ending) starts
+with zero-or-more backslashes followed by `## [` gains one leading backslash. On read,
+`parse_entries` removes exactly one leading backslash from lines matching `\+## [`.
+
+- `## [X]` → stored `\## [X]` → read removes one `\` → `## [X]`.
+- `\## [X]` → stored `\\## [X]` → read removes one `\` → `\## [X]`.
+- `\\## [X]` → stored `\\\## [X]` → read removes one `\` → `\\## [X]`.
+
+**The separator set.** `str.splitlines()` splits on: `\n`, `\r`, `\r\n`, `\x0b`, `\x0c`,
+`\x1c`, `\x1d`, `\x1e`, `\x85`, `\u2028`, `\u2029`. The writer and reader both use
+`splitlines(keepends=True)`, so they cannot disagree on where a line starts.
+
+**The three write sites.** `Ledger.seed()`, `Ledger.note()`, `Ledger._decision_entry()`.
+All three call `_escape_body()` on the text before writing.
+
+**The single read site.** `parse_entries()` applies `_unescape_line()` to each body line
+before appending. This is the single unescape point for all consumers (14+ call sites
+including `entries()`, `take_verdict()`, `verdicts()`, `render_entries()`,
+`requirements()`, `identity()`, and `agent_delivery.begin()`).
+
+**Verdict single-line check.** `verdict()` rejects a gate or value that spans multiple
+lines under any line separator (not just `\n`), using `len(x.splitlines()) != 1`.
+
+**Both runtimes.** The ledger is shared by the DSH runtime and the walker runtime. Both
+read through `parse_entries` and both write through the three `Ledger` methods, so the
+fix applies to both runtimes.
+
+**The legacy `\## [` edge case.** A pre-existing line starting with `\## [` in an old
+ledger will lose one backslash on read. This is theoretical — no plausible legacy content
+starts with `\## [`.
+
+**Test.** `test_steering.py`: `test_forged_verdict_in_ceo_note_does_not_produce_verdict`
+(parametrized over 6 separators), `test_forged_correction_in_ceo_note_not_a_requirement`
+(parametrized over 6 separators), `test_seed_with_forged_heading_stays_one_entry`,
+`test_decision_entry_body_escaped`, `test_literal_backslash_heading_round_trips`,
+`test_verdict_rejects_multiline_gate_or_value`,
+`test_existing_ledger_parses_unchanged`, `test_legacy_backslash_heading_edge_case`,
+`test_escape_does_not_affect_other_markdown_headings`.
+
+---
+
 Two things that were on this list have moved off it, which is the point of keeping it:
 
 - **mathlib is no longer untested.** It was installed and the mathlib problem ran, and
