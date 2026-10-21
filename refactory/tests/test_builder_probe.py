@@ -266,10 +266,15 @@ def test_probe_repeated_emission_refused(tmp_path):
               "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t.com"})
     new_head = _git(repo, "rev-parse", "HEAD")
 
-    # Update the worktree record
+    # Update the worktree record (both slot and worktree.json so recorded() sees the new head)
     _write_json(run / ".refactory" / "slot" / "run-test.json", {
         "target": str(repo), "path": str(repo), "branch": found.branch,
-        "base": found.base, "head": new_head,
+        "base": found.base, "head": new_head, "run": str(run),
+    })
+    from refactory_dsh.invocations import WORKTREE_RECORD
+    _write_json(run / WORKTREE_RECORD, {
+        "target": str(repo), "path": str(repo), "branch": found.branch,
+        "base": found.base, "head": new_head, "run": str(run),
     })
     # Write the emission record
     _write_json(run / repo_change.EMISSION, {

@@ -273,6 +273,7 @@ def prepared_clone(
             branch=probe_branch,
             base=clone_base,
             head=clone_head,
+            run=str(workdir),
         )
         slot_dir = workdir / ".refactory" / "slot"
         slot_dir.mkdir(parents=True, exist_ok=True)
