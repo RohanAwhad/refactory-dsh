@@ -294,17 +294,29 @@ def prepared_clone(
         from refactory_dsh.run import _read_facts
         facts = _read_facts(workdir)
 
-        clone_found, env, problems, prep_fail = prepare_check_environment(
-            clone_found, facts,
-            amend=False, commit_lockfiles=False,
-            run=workdir, home=home_dir, timeout=remaining,
-        )
+        # Point REFACTORY_HOME inside the probe directory so that
+        # ensure_environment writes its slot/run-probe-*.json record
+        # there instead of the shared ~/.refactory.  Restored in finally.
+        saved_refactory_home = os.environ.get("REFACTORY_HOME")
+        os.environ["REFACTORY_HOME"] = str(dsh_home_dir)
+        try:
+            clone_found, env, problems, prep_fail = prepare_check_environment(
+                clone_found, facts,
+                amend=False, commit_lockfiles=False,
+                run=workdir, home=home_dir, timeout=remaining,
+            )
+        finally:
+            if saved_refactory_home is not None:
+                os.environ["REFACTORY_HOME"] = saved_refactory_home
+            else:
+                os.environ.pop("REFACTORY_HOME", None)
         if problems:
             raise ValueError(f"probe environment preparation failed: {'; '.join(problems)}")
 
         # Strip run worktree paths and set probe-specific env vars
         env = _strip_worktree_path(env, found.path)
         env["DSH_HOME"] = str(dsh_home_dir)
+        env["REFACTORY_HOME"] = str(dsh_home_dir)
         env["LEFTHOOK"] = "0"
         env["HUSKY"] = "0"
 
@@ -316,9 +328,21 @@ def prepared_clone(
         # Clean up: remove probe directory
         if probe_dir.is_dir():
             shutil.rmtree(probe_dir, ignore_errors=True)
-        # Clean up slot record
+        # Clean up slot record in the run's .refactory
         slot_path = workdir / ".refactory" / "slot" / f"run-probe-{probe_id}.json"
         slot_path.unlink(missing_ok=True)
+        # Clean up any leaked record in the shared REFACTORY_HOME.
+        # ensure_environment writes slot(target)/run-probe-<id>.json into
+        # REFACTORY_HOME; if REFACTORY_HOME was not redirected (or the
+        # redirect was restored), this record leaks.
+        try:
+            from refactory_dsh.paths import refactory_home as _rh
+            _shared_slot = worktree.slot(Path(found.target)) if found is not None else None  # type: ignore[possibly-undefined]
+            if _shared_slot is not None:
+                _leaked = _shared_slot / f"run-probe-{probe_id}.json"
+                _leaked.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 class _RepeatedEmission(Exception):

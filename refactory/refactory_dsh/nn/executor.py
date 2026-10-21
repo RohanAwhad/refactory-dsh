@@ -684,7 +684,7 @@ class Executor:
         )
         if refilled_keys:
             for k in refilled_keys:
-                self.ctx.set_fact(k, values[k])
+                self.ctx._internal_fact(k, values[k])
         delivery = begin(self.ctx.workdir, node.id, render(node.prompt_template, self.ctx), list(node.writes),
                          reads=list(node.reads),
                          model_context=client.context() if callable(getattr(client, "context", None)) else None)

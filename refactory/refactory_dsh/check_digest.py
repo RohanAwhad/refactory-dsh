@@ -293,6 +293,29 @@ def format_digest(digest: CheckDigest) -> str:
     return "\n".join(parts)
 
 
+def _strip_pytest_positional_paths(step: str) -> str:
+    """Remove positional path arguments from a pytest command, keeping flags.
+
+    ``pytest -q tests`` becomes ``pytest -q`` so that only the appended test
+    IDs run, instead of the whole directory.
+    """
+    tokens = shlex.split(step)
+    # Find the pytest executable token
+    kept: list[str] = []
+    past_cmd = False
+    for tok in tokens:
+        if not past_cmd:
+            kept.append(tok)
+            if "pytest" in tok:
+                past_cmd = True
+            continue
+        # After the command name, keep flags (start with -) and drop bare paths
+        if tok.startswith("-"):
+            kept.append(tok)
+        # else: a positional path like "tests" or "refactory/tests" — drop it
+    return shlex.join(kept)
+
+
 def build_probe_command(check_command: str, test_ids: list[str]) -> tuple[str, str | None]:
     """Build a targeted command per runner from the check command and failing test IDs.
 
@@ -321,17 +344,21 @@ def build_probe_command(check_command: str, test_ids: list[str]) -> tuple[str, s
 
     steps = _steps(check_command)
     targeted_parts: list[str] = []
+    found_recognized = False
     for step in steps:
         step = step.strip()
         if not step:
             continue
         # Detect runner for this step
         if "pytest" in step or "python -m pytest" in step:
+            found_recognized = True
             if not pytest_ids:
                 continue  # skip steps with no failures
-            # Replace positional paths with test IDs
-            targeted_parts.append(f"{step} {' '.join(shlex.quote(tid) for tid in pytest_ids)}")
+            # Strip positional paths and append only the named test IDs
+            base = _strip_pytest_positional_paths(step)
+            targeted_parts.append(f"{base} {' '.join(shlex.quote(tid) for tid in pytest_ids)}")
         elif "vitest" in step:
+            found_recognized = True
             if not vitest_ids:
                 continue
             # Map vitest ids to file filters plus -t patterns
@@ -347,12 +374,22 @@ def build_probe_command(check_command: str, test_ids: list[str]) -> tuple[str, s
             pattern_args = " ".join(f"-t {shlex.quote(p)}" for p in sorted(patterns))
             targeted_parts.append(f"{step} {file_args} {pattern_args}".strip())
         elif "pnpm test" in step:
-            return "", "targeting pnpm test is deferred to the fail-fast run"
+            # Treat pnpm test as a JS test step: skip when no vitest ids, refuse
+            # only when a vitest id targets it and we cannot decompose the command.
+            found_recognized = True
+            if vitest_ids:
+                return "", "targeting pnpm test with vitest IDs is deferred to the fail-fast run"
+            # No vitest ids target this step — skip it silently
+            continue
         elif "node " in step and ("--test" in step or "node_modules" not in step):
+            found_recognized = True
             return "", "targeting node's test runner is not supported"
         else:
             # Keep build steps and other non-test steps
             targeted_parts.append(step)
+
+    if not found_recognized:
+        return "", "no recognised test runner in the check command"
 
     if not targeted_parts:
         return "", "no targetable test steps found in the check command"

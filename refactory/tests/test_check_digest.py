@@ -95,10 +95,11 @@ def test_digest_from_pytest_output(tmp_path, monkeypatch):
     from refactory_dsh import create_ops
     monkeypatch.setattr(create_ops, "repair", lambda ctx, details: Verdict("reloop", details[0]))
 
-    ctx = nn.RunContext(tmp_path / "run", facts={"check": "python -m pytest", "name": "test", "brief": "test"},
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / ".refactory").mkdir(exist_ok=True)
+    ctx = nn.RunContext(run_dir, facts={"check": "python -m pytest", "name": "test", "brief": "test"},
                         knobs={"check_timeout_s": 60, "attempts": 3})
-    (tmp_path / "run").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "run" / ".refactory").mkdir()
     ctx._declared = ("check.txt", "validation.txt", "authoring-evidence.json", "check-record.json",
                      "test-guardedness.json")
     ctx._declared_facts = ("validation", "check_attempts_used", "review_attempts_used",
@@ -238,10 +239,57 @@ def test_build_probe_command_node_refused():
     assert refusal is not None
 
 
-def test_build_probe_command_pnpm_refused():
-    """build_probe_command refuses pnpm test."""
+def test_build_probe_command_pnpm_skipped_for_pytest_ids():
+    """build_probe_command skips pnpm test when only pytest IDs are targeted."""
     cmd, refusal = build_probe_command(
-        "pnpm test", ["tests/test_foo.py::test_bar"]
+        "pnpm test && .venv/bin/python -m pytest -q refactory/tests",
+        ["refactory/tests/test_foo.py::test_bar"],
+    )
+    assert refusal is None
+    assert "test_foo.py::test_bar" in cmd
+    assert "pnpm test" not in cmd
+
+
+def test_build_probe_command_pnpm_refused_with_vitest_ids():
+    """build_probe_command refuses pnpm test when vitest IDs are targeted."""
+    cmd, refusal = build_probe_command(
+        "pnpm test", ["src/foo.test.ts > suite > test_add"]
     )
     assert cmd == ""
     assert "pnpm test" in refusal
+
+
+def test_build_probe_command_pytest_drops_positional_paths():
+    """build_probe_command drops positional paths from pytest, running only named tests."""
+    cmd, refusal = build_probe_command(
+        ".venv/bin/python -m pytest -q tests",
+        ["tests/test_foo.py::test_bar", "tests/test_foo.py::test_baz"],
+    )
+    assert refusal is None
+    # The positional "tests" path must not appear as a bare word that would
+    # cause the whole directory to run.
+    import shlex
+    tokens = shlex.split(cmd)
+    # After the pytest executable, only flags and the two test IDs should remain.
+    assert "tests/test_foo.py::test_bar" in tokens
+    assert "tests/test_foo.py::test_baz" in tokens
+    # "tests" alone (the positional path) must be gone.
+    pytest_idx = None
+    for i, t in enumerate(tokens):
+        if "pytest" in t:
+            pytest_idx = i
+            break
+    # Every token after the pytest command should be a flag or a test ID
+    if pytest_idx is not None:
+        for t in tokens[pytest_idx + 1:]:
+            assert t.startswith("-") or "::" in t, \
+                f"unexpected positional path in targeted command: {t!r}"
+
+
+def test_build_probe_command_unrecognised_refused():
+    """build_probe_command refuses an unrecognised runner."""
+    cmd, refusal = build_probe_command(
+        "make check", ["tests/test_foo.py::test_bar"]
+    )
+    assert cmd == ""
+    assert "no recognised" in refusal

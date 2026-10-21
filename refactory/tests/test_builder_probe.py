@@ -315,6 +315,48 @@ def test_probe_candidate_fidelity(tmp_path):
 
 # ── worker-route integration tests ───────────────────────────────────────────
 
+def test_probe_no_leaked_record(tmp_path):
+    """After a probe, no slot/run-probe-*.json record remains in REFACTORY_HOME."""
+    run, repo, found = _make_probe_run(tmp_path)
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint('probe')\n")
+
+    result = run_probe(run, "emit.txt", ["test_nonexistent::test_foo"], timeout=30)
+    # After cleanup, no run-probe-* records should exist anywhere
+    slot_dir = run / ".refactory" / "slot"
+    if slot_dir.is_dir():
+        leaked = [f for f in slot_dir.iterdir() if f.name.startswith("run-probe-")]
+        assert not leaked, f"leaked slot record(s): {[f.name for f in leaked]}"
+    # Also check the shared REFACTORY_HOME
+    from refactory_dsh.paths import refactory_home
+    shared_slot = worktree.slot(Path(str(repo)))
+    if shared_slot.is_dir():
+        leaked = [f for f in shared_slot.iterdir() if f.name.startswith("run-probe-")]
+        assert not leaked, f"leaked shared slot record(s): {[f.name for f in leaked]}"
+
+
+def test_probe_origin_removed(tmp_path):
+    """A candidate's push must not reach the target: origin is removed from the clone."""
+    run, repo, found = _make_probe_run(tmp_path)
+    emission = "===FILE: tool.py===\nprint('origin test')\n"
+    (run / "emit.txt").write_text(emission)
+
+    with prepared_clone(run, emission="emit.txt", deadline=60) as (clone_root, env, clone_found):
+        # origin must have been removed
+        result = subprocess.run(
+            ["git", "-C", str(clone_root), "remote"],
+            capture_output=True, text=True,
+        )
+        remotes = result.stdout.strip().splitlines()
+        assert "origin" not in remotes, "origin must be removed from the probe clone"
+
+        # A push attempt must fail (no remote)
+        push_result = subprocess.run(
+            ["git", "-C", str(clone_root), "push", "origin", "HEAD"],
+            capture_output=True, text=True,
+        )
+        assert push_result.returncode != 0, "push to origin must fail"
+
+
 def test_probe_via_worker_node_execute_design(tmp_path, monkeypatch):
     """A real probe from the scripted builder inside worker_node.execute,
     for design mode, with REFACTORY_WORKDIR and the worktree PATH set.
@@ -450,3 +492,81 @@ def test_probe_via_worker_node_execute_design_fast(tmp_path, monkeypatch):
 
     assert receipt["status"] == "delivered"
     assert captured_prompt, "the model should have been called"
+
+
+# ── tests that pin the core ──────────────────────────────────────────────────
+
+def test_lowering_feedback_keys_round_trip(tmp_path):
+    """A real workers.lower_workflow spec with feedback_keys must still carry
+    the keys so fill_feedback can read them from declarations.json.
+    """
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.lowering import write_declarations
+
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / ".refactory").mkdir(parents=True)
+
+    mode = DesignMode()
+    write_declarations(mode.state_dict(), run)
+
+    import json as _json
+    decls = _json.loads((run / ".refactory" / "declarations.json").read_text())
+    # The emit node must carry its feedback_keys
+    assert "feedback_keys" in decls.get("emit", {}), \
+        "lowering must include feedback_keys in declarations.json"
+    assert decls["emit"]["feedback_keys"] == ["validation", "qa_gate", "overwatch_review"]
+
+
+def test_check_artifact_sends_digest(tmp_path, monkeypatch):
+    """check_artifact sends a digest (not raw output) as the repair detail.
+
+    The digest starts with a recognisable header when there are test failures.
+    """
+    from refactory_dsh import design_ops, repo_change, nn, base_check, authoring_evidence, create_ops
+    from refactory_dsh.sandbox import SandboxResult
+    from refactory_dsh.nn import Verdict
+
+    pytest_output = (
+        "============================= FAILURES =============================\n"
+        "_________________________ test_foo _________________________\n"
+        "    def test_foo():\n"
+        ">       assert 1 == 2\n"
+        "E       AssertionError: assert 1 == 2\n"
+        "\n"
+        "    File tests/test_foo.py:3\n"
+        "============================= short test summary info =============================\n"
+        "FAILED tests/test_foo.py::test_foo - AssertionError: assert 1 == 2\n"
+        "1 failed in 0.1s\n"
+    )
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: None)
+    fake_result = SandboxResult(ok=False, returncode=1, elapsed_s=1.0,
+                                 stdout=pytest_output, stderr="")
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, cmd, timeout: fake_result)
+    monkeypatch.setattr(base_check, "compute_test_guardedness", lambda *a, **k: None)
+    monkeypatch.setattr(authoring_evidence, "record", lambda *a, **k: None)
+    monkeypatch.setattr(authoring_evidence, "stop_unrepairable", lambda *a, **k: None)
+
+    repair_details = []
+    monkeypatch.setattr(create_ops, "repair",
+                        lambda ctx, details: (repair_details.extend(details), Verdict("reloop", details[0]))[1])
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / ".refactory").mkdir(exist_ok=True)
+    ctx = nn.RunContext(run_dir, facts={"check": "python -m pytest", "name": "test", "brief": "test"},
+                        knobs={"check_timeout_s": 60, "attempts": 3})
+    ctx._declared = ("check.txt", "validation.txt", "authoring-evidence.json", "check-record.json",
+                     "test-guardedness.json")
+    ctx._declared_facts = ("validation", "check_attempts_used", "review_attempts_used",
+                          "attempts_used", "runtime_evidence", "inherited_failures")
+    ctx.enforce_writes = False
+
+    result = design_ops.check_artifact(ctx)
+    assert isinstance(result, Verdict)
+    assert repair_details, "repair should have been called with a detail"
+    detail = repair_details[0]
+    # The detail must start with the digest, not raw output
+    assert "Failing tests" in detail, \
+        "check_artifact must send a digest (not raw output) as the repair detail"
+    assert "test_foo" in detail
