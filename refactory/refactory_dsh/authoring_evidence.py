@@ -727,6 +727,8 @@ def check_review_questions(
                         "'## Brief example trace' section with path:line evidence and runtime names"
                     )
 
+    return problems
+
 
 def correction_audit_problems(ctx: Any) -> list[str]:
     """Compute per-correction audit: check sites, reverts and scope.
