@@ -397,8 +397,18 @@ def run(
                         print(f"  {line}", file=sys.stderr)
                 print(f"  Answer it with one of {verdicts_str} (add --note \"...\" to say why):", file=sys.stderr)
                 print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
+                # Read the resume command from run-config.json when available.
+                resume_cmd = f"refactory graph-control resume --run {workdir}"
+                config_path = workdir / ".refactory/run-config.json"
+                if config_path.exists():
+                    try:
+                        import json as _json
+                        _cfg = _json.loads(config_path.read_text())
+                        resume_cmd = _cfg.get("resume_command", resume_cmd)
+                    except (OSError, ValueError):
+                        pass
                 print(f"  Then continue the run:", file=sys.stderr)
-                print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
+                print(f"    {resume_cmd}", file=sys.stderr)
         except (OSError, ValueError, KeyError, TypeError):
             pass  # gate diagnostic; do not mask the run's exit code
         # A run that stopped short of its end names the nodes it never reached;

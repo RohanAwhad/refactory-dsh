@@ -86,12 +86,14 @@ A mode: a Python class whose architecture and parameters are serializable.
 | kind | name | signature |
 |---|---|---|
 | class | `Mode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
-| class | `RunResult` | `(facts: 'dict[str, Any]' = <factory>, iterations: 'int' = 0, duration_s: 'float' = 0.0, exit_ok: 'bool' = True, error: 'str \| None' = None, workdir: 'Path \| None' = None, score: 'float' = 0.0, model_calls: 'int' = 0) -> None` |
+| class | `RunResult` | `(facts: 'dict[str, Any]' = <factory>, iterations: 'int' = 0, duration_s: 'float' = 0.0, exit_ok: 'bool' = True, error: 'str \| None' = None, workdir: 'Path \| None' = None, score: 'float' = 0.0, model_calls: 'int' = 0, gate_stop: 'str \| None' = None, halted: 'bool' = False) -> None` |
 | class | `StateError` | `` |
+| function | `graph_identity` | `(state: 'dict') -> 'dict'` |
 
 - **`Mode`** — Base class for a mode. Subclasses declare knobs, build, score.
 - **`RunResult`** — What one inner run produced: the facts, the score, and how the run went.
 - **`StateError`** — A state dict is not a valid state for this mode.
+- **`graph_identity`** — Strip the steering block from all ``prompt_template`` values for comparison.
 
 
 <a id="refactory_dsh-nn-declarations"></a>
@@ -290,6 +292,7 @@ Steering a run while *using* it: the intent ledger, and the transform that adds 
 | function | `for_run` | `(workflow: 'Any', workdir: 'Path') -> 'Any'` |
 | function | `interactive` | `(state: 'dict[str, Any]', workdir: 'Path', *, request: 'str' = '', name: 'str' = '', description: 'str' = '') -> 'tuple[Any, Ledger]'` |
 | function | `outputs_in` | `(run_root: 'Path') -> 'dict[str, str]'` |
+| function | `strip_steering` | `(text: 'str') -> 'str'` |
 
 - **`Ledger`** — The run's record of what was asked for, and everything said since.
 - **`SteeringError`** — The steering layer cannot be built or trusted. Always names what is wrong.
@@ -300,6 +303,7 @@ Steering a run while *using* it: the intent ledger, and the transform that adds 
 - **`for_run`** — Fold the run directory's ledger into a workflow about to run.
 - **`interactive`** — Lower a mode for a person to *use*, with the steering layer attached.
 - **`outputs_in`** — What each agent node wrote, read back so the citation chain can be checked.
+- **`strip_steering`** — Remove the STEERING_START/STEERING_END block from a prompt string.
 
 
 <a id="refactory_dsh-strategies"></a>

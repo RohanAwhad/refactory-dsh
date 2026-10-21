@@ -276,14 +276,14 @@ export const CHAT = {
         "type": "integer"
       },
       "brief": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--brief"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "dataNode": {
@@ -334,14 +334,14 @@ export const CHAT = {
         "type": "string"
       },
       "name": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--name"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "provider": {
@@ -434,10 +434,7 @@ export const CHAT = {
       "sample"
     ],
     "purpose": "Create a reusable mode package from a brief; declare task or singleShot. For user gates prefer wf_open default_pack/create; headless approvals require explicit authorization.",
-    "required": [
-      "name",
-      "brief"
-    ],
+    "required": [],
     "verb": "create"
   },
   "design": {
@@ -479,14 +476,14 @@ export const CHAT = {
         "type": "string"
       },
       "brief": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--brief"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "check": {
@@ -523,14 +520,14 @@ export const CHAT = {
         "type": "string"
       },
       "name": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--name"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "noPr": {
@@ -659,11 +656,7 @@ export const CHAT = {
       "resume"
     ],
     "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-    "required": [
-      "name",
-      "brief",
-      "check"
-    ],
+    "required": [],
     "verb": "design"
   },
   "docs": {
@@ -781,25 +774,25 @@ export const CHAT = {
         "type": "integer"
       },
       "brief": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--brief"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "mode": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--mode"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "model": {
@@ -814,14 +807,14 @@ export const CHAT = {
         "type": "string"
       },
       "name": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--name"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "provider": {
@@ -886,11 +879,7 @@ export const CHAT = {
       "sample"
     ],
     "purpose": "Revise a reusable mode package and validate it before QA and final intent audit. allow_regression skips original execution/comparison; revised validation remains mandatory. Prefer wf_open default_pack/edit when a person is present.",
-    "required": [
-      "mode",
-      "name",
-      "brief"
-    ],
+    "required": [],
     "verb": "edit"
   },
   "help": {
@@ -1103,7 +1092,7 @@ export const CHAT = {
     "arguments": {
       "approve": {
         "default": [],
-        "description": "answer a gate a person owns, as <gate>=<value> (repeatable); a headless run refuses a user gate it was not told the answer to",
+        "description": "answer a gate a person owns, as <gate>=<value> (repeatable); a walker run stops at a user gate and prints the steer command; answer it, then resume",
         "flags": [
           "--verdict"
         ],
@@ -1161,6 +1150,17 @@ export const CHAT = {
         "required": false,
         "type": "string"
       },
+      "nodeRoutes": {
+        "default": null,
+        "description": "",
+        "flags": [
+          "--node-routes"
+        ],
+        "nargs": null,
+        "positional": false,
+        "required": false,
+        "type": "object"
+      },
       "provider": {
         "default": "",
         "description": "provider route for this run's model",
@@ -1171,6 +1171,17 @@ export const CHAT = {
         "positional": false,
         "required": false,
         "type": "string"
+      },
+      "roleRoutes": {
+        "default": null,
+        "description": "",
+        "flags": [
+          "--role-routes"
+        ],
+        "nargs": null,
+        "positional": false,
+        "required": false,
+        "type": "object"
       }
     },
     "fields": {
@@ -1179,7 +1190,9 @@ export const CHAT = {
       "knobs": "knob",
       "mode": "mode",
       "model": "model",
-      "provider": "provider"
+      "nodeRoutes": "node_routes",
+      "provider": "provider",
+      "roleRoutes": "role_routes"
     },
     "order": [
       "mode",
@@ -1187,7 +1200,9 @@ export const CHAT = {
       "provider",
       "model",
       "approve",
-      "knobs"
+      "knobs",
+      "roleRoutes",
+      "nodeRoutes"
     ],
     "purpose": "Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output.",
     "required": [
@@ -1562,7 +1577,7 @@ export const PARAMETERS = {
     "type": "boolean"
   },
   "approve": {
-    "description": "create: answer a gate a person owns, as <gate>=<value> (repeatable); gate_strategy is one, so a headless create is told the answer (console verdict). Read help topic=create for defaults and constraints. design: answer a gate a person owns, as <gate>=<value> (repeatable) (console verdict). Read help topic=design for defaults and constraints. edit: answer a gate a person owns, as <gate>=<value> (repeatable) (console verdict). Read help topic=edit for defaults and constraints. run: answer a gate a person owns, as <gate>=<value> (repeatable); a headless run refuses a user gate it was not told the answer to (console verdict). Read help topic=run for defaults and constraints.",
+    "description": "create: answer a gate a person owns, as <gate>=<value> (repeatable); gate_strategy is one, so a headless create is told the answer (console verdict). Read help topic=create for defaults and constraints. design: answer a gate a person owns, as <gate>=<value> (repeatable) (console verdict). Read help topic=design for defaults and constraints. edit: answer a gate a person owns, as <gate>=<value> (repeatable) (console verdict). Read help topic=edit for defaults and constraints. run: answer a gate a person owns, as <gate>=<value> (repeatable); a walker run stops at a user gate and prints the steer command; answer it, then resume (console verdict). Read help topic=run for defaults and constraints.",
     "items": {
       "type": "string"
     },
@@ -1667,6 +1682,10 @@ export const PARAMETERS = {
     "description": "design: write the artifact under .factory/artifacts instead of a worktree (console no_worktree). Read help topic=design for defaults and constraints.",
     "type": "boolean"
   },
+  "nodeRoutes": {
+    "description": "run: Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output. (console node_routes). Read help topic=run for defaults and constraints.",
+    "type": "object"
+  },
   "note": {
     "description": "steer: something said while it runs (console note). Read help topic=steer for defaults and constraints.",
     "type": "string"
@@ -1714,6 +1733,10 @@ export const PARAMETERS = {
   "reviewComments": {
     "description": "design: with --refine: add the pull request's reviews and comments to the steering (console review_comments). Read help topic=design for defaults and constraints.",
     "type": "boolean"
+  },
+  "roleRoutes": {
+    "description": "run: Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output. (console role_routes). Read help topic=run for defaults and constraints.",
+    "type": "object"
   },
   "run": {
     "description": "adopt: a run directory or run id (console run). Read help topic=adopt for defaults and constraints. artifacts: a run directory or run id (console run). Read help topic=artifacts for defaults and constraints. best: a run directory or run id (console run). Read help topic=best for defaults and constraints. candidate: a run directory or run id (console run). Read help topic=candidate for defaults and constraints. comparison: a run directory or run id (console run). Read help topic=comparison for defaults and constraints. leaderboard: a run directory or run id (console run). Read help topic=leaderboard for defaults and constraints. status: a run directory or run id (console run). Read help topic=status for defaults and constraints. steer: a run directory or run id (console run). Read help topic=steer for defaults and constraints. stop: a run directory or run id (console run). Read help topic=stop for defaults and constraints.",
@@ -1785,4 +1808,4 @@ export const PARAMETERS = {
   }
 } as const
 export const OPERATING_GUIDE = "# CEO operating guide\n\nRefactory runs explicit graphs. The runtime owns node order, branches, checks,\nevidence, user gates and recovery. Drive the selected graph; do not reproduce its\nworkers in conversation or mark work complete from prose alone.\n\nStart with `refactory` action `help`. Read `help` with `topic` equal to a mode ID\nor operation for its live arguments, defaults, constraints, examples and interface\nroutes. `modes` lists installed packages, including packages added since build.\nCoverage warnings mean guidance may be missing or stale. Read `docs` with `query`\nfor search, or `page`, optional `section`, `offset` and `limit` for bounded reads.\nUse the returned IDs and continuation offsets. Help and docs carry schema, build\nand documentation identities. These APIs read shipped product docs; no shell,\nsource-code search or web access is needed for product discovery.\n\nCreate and Edit produce reusable mode packages. Design produces a software\nartifact. Canonical validation precedes QA and final intent review. Fast variants retain\nfocused QA and bounded repair. Edit allow_regression skips original execution and\ncomparison, while revised validation remains mandatory. Run uses a mode\nonce; Optimize (`start`) searches a scored mode. Read the mode's ports, required\ninputs and user gates before choosing. When a person is present, use `wf_open`\nwith the mode, knobs, intent and a fresh absolute workdir. Continue with the\nworkflow tools. The runtime asks user gates; never invent their verdicts.\nHeadless approvals require an explicit user-approved answer and `headless: true`.\n\nFor optimization, inspect `strategies` and `profiles`; `profile-resolve` previews\nsettings and the contract. `start` returns a durable run ID. Read incremental\n`status` using its offset, then candidates, artifacts and winner evidence. A run\ncan outlive a chat. A stopped, failed or unmeasured run is not success. Recovery\nrequires a known saved boundary; use the documented CLI or panel recovery route.\n\n`workers` explains effective worker routing and provenance. New runs load\n`refactory.workers.json` at the project root. Explicit profile/launch settings\nwin; node overrides beat role overrides, which beat the run route. This file\nselects graph workers, not this CEO's conversational model. Backend changes are\nconfigured through the file, CLI or panel. Native authentication stays in its\nexisting stores. New worker permissions default to `skip`; token caps are unset\nunless requested, and native workers do not support whole-tree token caps.\n\nUse `runtime` for configured credential readiness, which is not authentication\nproof. Follow explicit task and fixture constraints without asking again. Keep\nbuild/docs identity with evidence, and distinguish a generated receipt from\nchecks that establish the requested output.\n\n## Delegation and review discipline\n\nYou are an orchestrator. Delegate all technical work \u2014 writing code, fixing\nbugs, running checks, performing research \u2014 to the graph's agent nodes via\nsubagents. Review their output. When an agent fails, retry with better\ninstructions (wf_edit set-prompt/append-prompt, then wf_redo) or stop. Never\ntake over the agent's work yourself.\n\nEvery change that produces a pull request must pass through the graph's review\nnodes. \"The change\nis small\" or \"the code is already correct\" is not a reason to skip them.\n\nNever recommend skipping a check gate. When a check cannot run (sandbox limit,\nmissing tool, infrastructure stop), report what stopped it and what would\nunblock it (authoring_evidence.stop_unrepairable names the cause). Ask the\nperson how to proceed. If the person skips, the run report and PR say the check\ndid not run.\n" as const
-export const BUILD_ID = "7bf6786d21ad4a9d17e25711a28c7f6535fa65de121844f792333eacb06cbba6" as const
+export const BUILD_ID = "8bb472d9886a4bb23cebcd2b9d62df320ed984ed447c97568691fc7994f601a0" as const

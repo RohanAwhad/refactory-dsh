@@ -38,21 +38,25 @@ def prepare_run(
 
     Returns the installed graphs directory.
     """
-    from refactory_dsh.paths import require_build
-
     # 1. Install and profile check — before invocations.prepare moves anything,
     #    so a failure leaves nothing archived without rollback.
-    require_build()
-    if worker_backend == "dsh":
-        from refactory_dsh.dsh_profile import model_home, profile_dir
+    #    DSH has its own checks at interactive.py run() (~253-255); they run on
+    #    both launch and resume, so moving them here would drop the resume check.
+    #    The walker needs its own check here.
+    if runtime == "walker":
+        from refactory_dsh.paths import require_build
 
-        headless_dir = profile_dir("headless", home=model_home())
-        if not (headless_dir / "package.json").exists():
-            raise ValueError(
-                f"the DSH headless profile does not exist at {headless_dir}; "
-                "create it with `dsh profile create headless` and add the "
-                "graph bundle"
-            )
+        require_build()
+        if worker_backend == "dsh":
+            from refactory_dsh.dsh_profile import model_home, profile_dir
+
+            headless_dir = profile_dir("headless", home=model_home())
+            if not (headless_dir / "package.json").exists():
+                raise ValueError(
+                    f"the DSH headless profile does not exist at {headless_dir}; "
+                    "create it with `dsh profile create headless` and add the "
+                    "graph bundle"
+                )
 
     # 2. Archive and stage.
     from refactory_dsh import invocations

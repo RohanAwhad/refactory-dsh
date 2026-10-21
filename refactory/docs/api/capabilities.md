@@ -488,10 +488,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "resume",
       "sample"
     ],
-    "required": [
-      "name",
-      "brief"
-    ]
+    "required": []
   },
   "description": "create a package of modes from a brief (model-driven)",
   "doc": "refactory/docs/cli.md",
@@ -523,14 +520,14 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "integer"
     },
     "brief": {
-      "default": null,
+      "default": "",
       "description": "",
       "flags": [
         "--brief"
       ],
       "nargs": null,
       "positional": false,
-      "required": true,
+      "required": false,
       "type": "string"
     },
     "data_node": {
@@ -581,14 +578,14 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     },
     "name": {
-      "default": null,
+      "default": "",
       "description": "",
       "flags": [
         "--name"
       ],
       "nargs": null,
       "positional": false,
-      "required": true,
+      "required": false,
       "type": "string"
     },
     "provider": {
@@ -676,7 +673,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Create a reusable mode package from a brief; declare task or singleShot. For user gates prefer wf_open default_pack/create; headless approvals require explicit authorization.",
-  "reviewed_schema": "22d7d037bc452851ddc7afb71aaf473264ad47bd223797acd5963e54461a30b0"
+  "reviewed_schema": "392bb3377f80dc6b560c3662f78581d47992bc348e6e46c7f8cdd456c8efad96"
 }
 ```
 
@@ -725,11 +722,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "model",
       "resume"
     ],
-    "required": [
-      "name",
-      "brief",
-      "check"
-    ]
+    "required": []
   },
   "description": "design and check a software artifact (model-driven)",
   "doc": "refactory/docs/cli.md",
@@ -791,14 +784,14 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     },
     "brief": {
-      "default": null,
+      "default": "",
       "description": "",
       "flags": [
         "--brief"
       ],
       "nargs": null,
       "positional": false,
-      "required": true,
+      "required": false,
       "type": "string"
     },
     "check": {
@@ -835,14 +828,14 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     },
     "name": {
-      "default": null,
+      "default": "",
       "description": "",
       "flags": [
         "--name"
       ],
       "nargs": null,
       "positional": false,
-      "required": true,
+      "required": false,
       "type": "string"
     },
     "no_pr": {
@@ -960,7 +953,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-  "reviewed_schema": "cf209301bbb3f9d4e7039a61172369fbb331bb7b7ff91387d7d27b7e9b68bd2a"
+  "reviewed_schema": "9865d7c964228209f020ece1e9b0d0db15b4b5866d22d1111b1fbfaf10fe5d83"
 }
 ```
 
@@ -1132,11 +1125,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "resume",
       "sample"
     ],
-    "required": [
-      "mode",
-      "name",
-      "brief"
-    ]
+    "required": []
   },
   "description": "revise a mode from a brief (model-driven)",
   "doc": "refactory/docs/cli.md",
@@ -1179,25 +1168,25 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "integer"
     },
     "brief": {
-      "default": null,
+      "default": "",
       "description": "",
       "flags": [
         "--brief"
       ],
       "nargs": null,
       "positional": false,
-      "required": true,
+      "required": false,
       "type": "string"
     },
     "mode": {
-      "default": null,
+      "default": "",
       "description": "",
       "flags": [
         "--mode"
       ],
       "nargs": null,
       "positional": false,
-      "required": true,
+      "required": false,
       "type": "string"
     },
     "model": {
@@ -1212,14 +1201,14 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     },
     "name": {
-      "default": null,
+      "default": "",
       "description": "",
       "flags": [
         "--name"
       ],
       "nargs": null,
       "positional": false,
-      "required": true,
+      "required": false,
       "type": "string"
     },
     "provider": {
@@ -1285,7 +1274,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Revise a reusable mode package and validate it before QA and final intent audit. allow_regression skips original execution/comparison; revised validation remains mandatory. Prefer wf_open default_pack/edit when a person is present.",
-  "reviewed_schema": "fb35ee05e06f1fd48592a8515767fbf8ae7aa6aa48b9815dab474e0251d9decc"
+  "reviewed_schema": "e21f29fdd1ffcb453ded9719de1a0b18d9b784ce46b60e6e44bc11605a43af46"
 }
 ```
 
@@ -2841,7 +2830,9 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "knobs": "knob",
       "mode": "mode",
       "model": "model",
-      "provider": "provider"
+      "nodeRoutes": "node_routes",
+      "provider": "provider",
+      "roleRoutes": "role_routes"
     },
     "order": [
       "mode",
@@ -2849,7 +2840,9 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "provider",
       "model",
       "approve",
-      "knobs"
+      "knobs",
+      "roleRoutes",
+      "nodeRoutes"
     ],
     "required": [
       "mode"
@@ -3105,7 +3098,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "verdict": {
       "default": [],
-      "description": "answer a gate a person owns, as <gate>=<value> (repeatable); a headless run refuses a user gate it was not told the answer to",
+      "description": "answer a gate a person owns, as <gate>=<value> (repeatable); a walker run stops at a user gate and prints the steer command; answer it, then resume",
       "flags": [
         "--verdict"
       ],
@@ -3141,7 +3134,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output.",
-  "reviewed_schema": "23b48615a063ca1be7468dbc4652affafbfdc7eb5751e97bcc9cdbb72fd46e97"
+  "reviewed_schema": "bc78064cf4257c5d2c56394f82879ae1592b9850466b12397b3bd25393a9356c"
 }
 ```
 
