@@ -342,3 +342,328 @@ def test_reviewer_gates_exist():
     gates = _find_reviewer_gates()
     # At minimum design and design_fast should have gates
     assert any("design" in name for name in gates), f"No design modes found: {gates}"
+
+
+# ── Integration tests: scripted mode.run() with FakeModel ──
+
+
+def test_design_mode_reviewer_miss_reloops_without_attempt(tmp_path, monkeypatch):
+    """(a) DesignMode: code_reviewer miss → review_reloop; code_reviewer twice; attempts_used unchanged."""
+    import sys
+    from refactory_dsh.design import DesignMode
+    from tests_support import (FakeModel, RESEARCH_ANSWER, PITFALLS_ANSWER,
+                               DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                               VERIFICATION_ANSWER, git_repo, render)
+
+    repo = git_repo(tmp_path / "repo")
+    tool = "def build():\n    print('built')\n"
+
+    # code_reviewer answer with repo_questions present but empty (missing changed function)
+    bad_code_review = (
+        "code review: the code matches the design.\n\n"
+        "## Repository questions\n\n"
+        "```json\n[]\n```"
+    )
+
+    answers = [
+        RESEARCH_ANSWER,                 # research_director
+        PITFALLS_ANSWER,                 # pitfalls_researcher
+        "perspectives",                  # strategy_director
+        "one plan",                      # synthesize_strategy
+        DESIGN_DOC_ANSWER,               # design_doc
+        DESIGN_REVIEW_ANSWER,            # design_review
+        # gate_strategy → proceed (via verdicts)
+        render({"tool.py": tool}),       # emit
+        VERIFICATION_ANSWER,             # verifier
+        # First reviewer pass:
+        "health: ok",                    # health_checker (FakeModel injects rq)
+        bad_code_review,                 # code_reviewer (bad rq → review_reloop)
+        "qa: ok",                        # qa_director (FakeModel injects rq)
+        # gate_qa → review_reloop → fork_qa
+        # Second reviewer pass (FakeModel auto-injects valid rq into all):
+        "health: ok",                    # health_checker
+        "code review: ok",              # code_reviewer
+        "qa: ok",                        # qa_director
+        # gate_qa → proceed
+        "VERDICT: PASS",                 # overwatch
+    ]
+
+    model = FakeModel(answers)
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["pr"]["value"] = False
+    mode.load_state_dict(state)
+
+    run = mode.run(
+        tmp_path / "run", model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "rq_tool", "brief": "a tool",
+              "check": f"{sys.executable} tool.py",
+              "target": str(repo)})
+
+    assert run.exit_ok, run.error
+
+    # code_reviewer prompt appears twice
+    code_reviewer_prompts = [p for p in model.prompts
+                             if "You are the code reviewer." in p]
+    assert len(code_reviewer_prompts) >= 2, (
+        f"code_reviewer ran {len(code_reviewer_prompts)} times, expected >= 2"
+    )
+
+    # The second code_reviewer prompt's qa_gate names code_reviewer and the function
+    assert "code_reviewer" in code_reviewer_prompts[1]
+    assert "tool.py" in code_reviewer_prompts[1]
+
+    # attempts_used unchanged — review_reloop does not spend a builder attempt
+    assert int(run.facts.get("attempts_used", 0)) == 0
+
+    # Code-change review instructions present (for test (e))
+    assert any("Code-change review instructions" in p for p in code_reviewer_prompts)
+
+
+def test_design_fast_reviewer_miss_reloops_focused_qa(tmp_path, monkeypatch):
+    """(b) DesignFastMode: focused_qa miss → review_reloop; repairs_used unchanged."""
+    import sys
+    from refactory_dsh.fast import DesignFastMode
+    from tests_support import FakeModel, VERIFICATION_ANSWER, git_repo, render
+
+    repo = git_repo(tmp_path / "repo")
+    tool = "def build():\n    print('built')\n"
+
+    PLAN = "Change only the requested file."
+    # bad_qa: valid JSON but empty repo_questions (missing changed function)
+    bad_qa = json.dumps({
+        "status": "pass",
+        "checks": [{"name": "runs", "command": "test",
+                     "status": "pass", "evidence": "exit 0"}],
+        "findings": [], "not_run": [],
+        "repo_questions": [],
+    })
+    # good_qa: valid JSON without repo_questions (FakeModel auto-injects from changed-functions.json)
+    good_qa = json.dumps({
+        "status": "pass",
+        "checks": [{"name": "runs", "command": "test",
+                     "status": "pass", "evidence": "exit 0"}],
+        "findings": [], "not_run": [],
+    })
+
+    model = FakeModel([
+        PLAN,                      # strategy
+        render({"tool.py": tool}), # emit
+        VERIFICATION_ANSWER,       # verifier
+        bad_qa,                    # focused_qa (1st — bad rq)
+        good_qa,                   # focused_qa (2nd — FakeModel injects valid rq)
+    ])
+
+    run = DesignFastMode().run(
+        tmp_path / "run", model=model,
+        task={"name": "rq_fast", "brief": "a tool",
+              "check": f"{sys.executable} tool.py",
+              "target": str(repo)})
+
+    assert run.exit_ok, run.error
+
+    # focused_qa prompt appears twice
+    qa_prompts = [p for p in model.prompts if "Write focused-qa.json" in p]
+    assert len(qa_prompts) >= 2, (
+        f"focused_qa ran {len(qa_prompts)} times, expected >= 2"
+    )
+
+    # repairs_used unchanged (review reloop does not spend repairs)
+    report = json.loads((tmp_path / "run/fast-report.json").read_text())
+    assert report["repairs_used"] == 0
+
+    # Code-change review instructions present (for test (e))
+    assert any("Code-change review instructions" in p for p in qa_prompts)
+
+
+def test_design_fast_gate_qa_exhaustion_names_node_and_function(tmp_path, monkeypatch):
+    """(c) gate_qa exhaustion: the run error names the node and the function."""
+    import sys
+    from refactory_dsh.fast import DesignFastMode
+    from tests_support import FakeModel, VERIFICATION_ANSWER, git_repo, render
+
+    repo = git_repo(tmp_path / "repo")
+    tool = "def build():\n    print('built')\n"
+
+    PLAN = "Change only the requested file."
+    # Always-bad focused_qa: empty repo_questions
+    bad_qa = json.dumps({
+        "status": "pass",
+        "checks": [{"name": "runs", "command": "test",
+                     "status": "pass", "evidence": "exit 0"}],
+        "findings": [], "not_run": [],
+        "repo_questions": [],
+    })
+
+    model = FakeModel([
+        PLAN,                      # strategy
+        render({"tool.py": tool}), # emit
+        VERIFICATION_ANSWER,       # verifier
+        bad_qa,                    # focused_qa (1st — reruns_used=1)
+        bad_qa,                    # focused_qa (2nd — reruns_used=2)
+        bad_qa,                    # focused_qa (3rd — reruns_used=3 > 2 → raise)
+    ])
+
+    run = DesignFastMode().run(
+        tmp_path / "run", model=model,
+        task={"name": "rq_exhaust", "brief": "a tool",
+              "check": f"{sys.executable} tool.py",
+              "target": str(repo)})
+
+    assert not run.exit_ok
+    # The error names the node (focused_qa) and the function (tool.py)
+    assert "repo-questions" in run.error.lower() or "re-runs exhausted" in run.error.lower()
+    assert "tool.py" in run.error
+
+
+def test_design_review_exhaustion_reaches_strategy_without_failing(tmp_path, monkeypatch):
+    """(d) design_review exhaustion reaches gate_strategy; the run does not fail."""
+    import sys
+    from refactory_dsh.design import DesignMode
+    from tests_support import (FakeModel, RESEARCH_ANSWER, PITFALLS_ANSWER,
+                               DESIGN_DOC_ANSWER, VERIFICATION_ANSWER,
+                               REVIEW_ANSWERS, git_repo, render)
+
+    repo = git_repo(tmp_path / "repo")
+    tool = "def build():\n    print('built')\n"
+
+    # design_review answer: PASS verdict but empty repo_questions (missing tool.py)
+    bad_design_review = (
+        "No open alternatives found.\n\n"
+        "## Repository questions\n\n"
+        "```json\n[]\n```\n\n"
+        "## Brief example trace\n\n"
+        "The brief's example runs through runner.py:5 \u2192 tool.py:1 "
+        "in both the walker and DSH runtimes.\n\n"
+        "VERDICT: PASS"
+    )
+
+    answers = [
+        RESEARCH_ANSWER,             # research_director
+        PITFALLS_ANSWER,             # pitfalls_researcher
+        "perspectives",              # strategy_director
+        "one plan",                  # synthesize_strategy
+        DESIGN_DOC_ANSWER,           # design_doc
+        bad_design_review,           # design_review (1st — reruns_used=1 → review_reloop)
+        bad_design_review,           # design_review (2nd — reruns_used=2 → review_reloop)
+        bad_design_review,           # design_review (3rd — exhausted → proceed)
+        # gate_strategy → proceed (via verdicts)
+        render({"tool.py": tool}),   # emit
+        VERIFICATION_ANSWER,         # verifier
+        # Reviewers (FakeModel auto-injects valid rq):
+        "health: ok",               # health_checker
+        "code review: ok",          # code_reviewer
+        "qa: ok",                    # qa_director
+        # gate_qa → proceed
+        "VERDICT: PASS",             # overwatch
+    ]
+
+    model = FakeModel(answers)
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["pr"]["value"] = False
+    state["knobs"]["design_review_attempts"]["value"] = 1
+    mode.load_state_dict(state)
+
+    run = mode.run(
+        tmp_path / "run", model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "rq_exhaust_dr", "brief": "a tool",
+              "check": f"{sys.executable} tool.py",
+              "target": str(repo)})
+
+    # The run does NOT fail — design_review exhaustion proceeds to gate_strategy
+    assert run.exit_ok, run.error
+
+    # design_review was called 3 times
+    dr_prompts = [p for p in model.prompts
+                  if "Read the design document from `design.md`" in p
+                  and "BLOCKING" in p and "open alternative" in p.lower()]
+    assert len(dr_prompts) >= 3, (
+        f"design_review ran {len(dr_prompts)} times, expected >= 3"
+    )
+
+
+def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path, monkeypatch):
+    """(e) repo-change and artifact runs render different reviewer instructions, in both modes."""
+    import sys
+    from refactory_dsh.fast import DesignFastMode
+    from refactory_dsh.design import DesignMode
+    from tests_support import (FakeModel, VERIFICATION_ANSWER, RESEARCH_ANSWER,
+                               PITFALLS_ANSWER, DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                               REVIEW_ANSWERS, git_repo, render)
+
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path / "project"))
+    repo = git_repo(tmp_path / "repo")
+    tool = "def build():\n    print('built')\n"
+
+    PLAN = "Change only the requested file."
+    QA = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "test",
+                     "status": "pass", "evidence": "exit 0"}],
+                     "findings": [], "not_run": []})
+
+    # ── DesignFastMode with target (repository change) ──
+    model_repo = FakeModel([PLAN, render({"tool.py": tool}), VERIFICATION_ANSWER, QA])
+    run_repo = DesignFastMode().run(
+        tmp_path / "run_fast_repo", model=model_repo,
+        task={"name": "fast_repo", "brief": "a tool",
+              "check": f"{sys.executable} tool.py", "target": str(repo)})
+    assert run_repo.exit_ok, run_repo.error
+    qa_repo = [p for p in model_repo.prompts if "Write focused-qa.json" in p]
+    assert any("Code-change review instructions" in p for p in qa_repo), \
+        "repo-change DesignFastMode should have code-change instructions"
+
+    # ── DesignFastMode without target (artifact) ──
+    model_art = FakeModel([PLAN, render({"tool.py": tool}), VERIFICATION_ANSWER, QA])
+    run_art = DesignFastMode().run(
+        tmp_path / "run_fast_art", model=model_art,
+        task={"name": "fast_art", "brief": "a tool",
+              "check": f"{sys.executable} tool.py"})
+    assert run_art.exit_ok, run_art.error
+    qa_art = [p for p in model_art.prompts if "Write focused-qa.json" in p]
+    assert any("Artifact review instructions" in p for p in qa_art), \
+        "artifact DesignFastMode should have artifact instructions"
+    assert not any("Code-change review instructions" in p for p in qa_art), \
+        "artifact DesignFastMode must NOT have code-change instructions"
+
+    # ── DesignMode with target (repository change) ──
+    repo2 = git_repo(tmp_path / "repo2")
+    mode_dm = DesignMode()
+    state = mode_dm.state_dict()
+    state["knobs"]["pr"]["value"] = False
+    mode_dm.load_state_dict(state)
+    model_dm_repo = FakeModel([
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        render({"tool.py": tool}), VERIFICATION_ANSWER, *REVIEW_ANSWERS])
+    run_dm_repo = mode_dm.run(
+        tmp_path / "run_dm_repo", model=model_dm_repo,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "dm_repo", "brief": "a tool",
+              "check": f"{sys.executable} tool.py", "target": str(repo2)})
+    assert run_dm_repo.exit_ok, run_dm_repo.error
+    cr_repo = [p for p in model_dm_repo.prompts if "You are the code reviewer." in p]
+    assert any("Code-change review instructions" in p for p in cr_repo), \
+        "repo-change DesignMode should have code-change instructions"
+
+    # ── DesignMode without target (artifact) ──
+    mode_dm2 = DesignMode()
+    state2 = mode_dm2.state_dict()
+    state2["knobs"]["pr"]["value"] = False
+    mode_dm2.load_state_dict(state2)
+    model_dm_art = FakeModel([
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        render({"tool.py": tool}), VERIFICATION_ANSWER, *REVIEW_ANSWERS])
+    run_dm_art = mode_dm2.run(
+        tmp_path / "run_dm_art", model=model_dm_art,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "dm_art", "brief": "a tool",
+              "check": f"{sys.executable} tool.py"})
+    assert run_dm_art.exit_ok, run_dm_art.error
+    cr_art = [p for p in model_dm_art.prompts if "You are the code reviewer." in p]
+    assert any("Artifact review instructions" in p for p in cr_art), \
+        "artifact DesignMode should have artifact instructions"
+    assert not any("Code-change review instructions" in p for p in cr_art), \
+        "artifact DesignMode must NOT have code-change instructions"

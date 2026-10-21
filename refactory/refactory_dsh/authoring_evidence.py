@@ -28,7 +28,7 @@ REPO_CHANGE_REVIEW_INSTRUCTIONS = (
     "This is a change to an existing repository. Read the diff file by file. For "
     "each changed function, trace the call path from each entry point the change "
     "touches. Verify the change is wired into the route a real run takes — not a "
-    "step only one runtime reaches, a gate the fast mode no longer passes through, "
+    "step only one runtime reaches, a gate another mode no longer passes through, "
     "or a check reading the wrong file. Check correctness, edge cases, missing "
     "tests, scope creep and stubs. Confirm each new or modified function is "
     "reachable from the runtime's actual execution path, naming that path.\n\n"
@@ -48,8 +48,8 @@ REPO_CHANGE_REVIEW_INSTRUCTIONS = (
     '"shares nothing". An entry with no path:line evidence and no absent: marker '
     "is incomplete.\n\n"
     "For every factual claim about existing code — whether it cites a file or not, "
-    'including premises like "X calls Y", "this runs on every route", "the walker '
-    'never does Z" — verify the claim at file:line. A false claim is BLOCKING.\n'
+    'including premises like "X calls Y", "this runs on every route", "module A '
+    'never calls B" — verify the claim at file:line. A false claim is BLOCKING.\n'
 )
 
 ARTIFACT_REVIEW_INSTRUCTIONS = (
