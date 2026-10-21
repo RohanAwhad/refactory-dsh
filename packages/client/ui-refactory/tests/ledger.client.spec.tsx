@@ -91,7 +91,7 @@ it.each(['button', 'Escape'])('closes with %s, restores trigger focus and resets
   expect(view.getAllByRole('listitem')).toHaveLength(history.entries.length)
 })
 
-const choices = { project: '/repo', modes: [MODE], packages: [PACKAGE], strategies: STRATEGIES }
+const choices = { project: '/repo', modes: [MODE], packages: [PACKAGE], strategies: STRATEGIES, projects: [] }
 it('preserves an unsaved note on failure, blocks double submission and clears only a confirmed draft', async () => {
   const { view, console } = mountBody({ choices: { kind: 'ready', value: choices }, watching: '/runs/live',
     frame: { kind: 'ready', value: FRAME }, steering: { kind: 'ready', value: STEERING }, dictionary: en })

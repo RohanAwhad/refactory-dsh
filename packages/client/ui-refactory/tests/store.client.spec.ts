@@ -5,12 +5,12 @@
 import { describe, expect, it } from 'vitest'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
 import { NO_SETTINGS, createRefactoryStore, knobValues } from '../src/client/store.ts'
-import { CANDIDATES, FRAME, GATED_STEERING, MODE, NO_STRATEGIES, PACKAGE, SINGLE, STEERING } from './fake-console.client.ts'
+import { CANDIDATES, FRAME, GATED_STEERING, MODE, NO_STRATEGIES, PACKAGE, PROJECT, SINGLE, STEERING } from './fake-console.client.ts'
 
 const TAB = 'tab-1' as TabId
 const OTHER = 'tab-2' as TabId
 
-const CHOICES = { project: '/repo', modes: [MODE], strategies: { ...NO_STRATEGIES, optimizers: [{ name: 'random', description: 'sample uniformly' }] }, packages: [PACKAGE] }
+const CHOICES = { project: '/repo', modes: [MODE], strategies: { ...NO_STRATEGIES, optimizers: [{ name: 'random', description: 'sample uniformly' }] }, packages: [PACKAGE], projects: [PROJECT] }
 
 function open() {
   const instance = createRefactoryStore().create()

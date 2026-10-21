@@ -55,6 +55,7 @@ import type {
   RefactoryPackageMode,
   RefactoryProfile,
   RefactoryProfileSpec,
+  RefactoryProject,
   RefactoryRunCounters,
   RefactoryRunEvent,
   RefactoryRunStatus,
@@ -315,6 +316,21 @@ export class RefactoryConsole extends TypertRemoteService {
   @Remote
   async workers(signal: AbortSignal): Promise<Record<string, unknown>> {
     return objectOf(await this.call({ verb: 'workers' }, signal), 'workers')
+  }
+
+  /**
+   * The registered projects, for the GUI's target picker.
+   * @param signal - caller cancellation.
+   * @returns the projects the registry knows.
+   */
+  @Remote
+  async projects(signal: AbortSignal): Promise<readonly RefactoryProject[]> {
+    const answer = await this.call({ verb: 'projects' }, signal)
+    return objectList(answer, 'project list').map(entry => ({
+      name: text(entry.name),
+      path: text(entry.path),
+      kind: text(entry.kind ?? 'existing'),
+    }))
   }
 
   @Remote

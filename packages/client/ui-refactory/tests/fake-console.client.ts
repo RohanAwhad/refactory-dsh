@@ -14,6 +14,7 @@ import type {
   RefactoryCandidateRow,
   RefactoryModeChoice,
   RefactoryPackageChoice,
+  RefactoryProject,
   RefactoryRunStatus,
   RefactorySingleRun,
   RefactoryStartReceipt,
@@ -44,6 +45,14 @@ export const PARAMETERS: RefactoryModeChoice['parameters'] = {
   },
 }
 
+/** A design-mode parameter set that includes the ``target`` knob. */
+export const DESIGN_PARAMETERS: RefactoryModeChoice['parameters'] = {
+  ...PARAMETERS,
+  target: {
+    value: '', kind: 'str', values: [], range: [null, null], frozen: true, description: 'the git repository to change',
+  },
+}
+
 /** One scored mode, as the catalogue describes it. */
 export const MODE: RefactoryModeChoice = {
   id: 'p/adaptive',
@@ -56,6 +65,20 @@ export const MODE: RefactoryModeChoice = {
   action: 'start',
   trust: 'trusted',
   parameters: PARAMETERS,
+}
+
+/** A design mode that declares ``target`` and shows the target picker. */
+export const DESIGN: RefactoryModeChoice = {
+  id: 'default_pack/design',
+  package: 'default_pack',
+  mode: 'design',
+  description: 'design and build an artifact',
+  startable: true,
+  enabled: true,
+  scored: false,
+  action: 'design',
+  trust: 'trusted',
+  parameters: DESIGN_PARAMETERS,
 }
 
 /** One authoring mode, whose `action` is the verb that runs it. */
@@ -194,11 +217,19 @@ export function failure<T>(code: string, message: string): RemoteResult<T> {
   return { ok: false, error: { code, message } as unknown as RemoteFailure }
 }
 
+/** One project, as the console lists them. */
+export const PROJECT: RefactoryProject = {
+  name: 'weather-cli',
+  path: '/projects/weather-cli',
+  kind: 'new',
+}
+
 /** The scripted Remote face and the mocks behind it. */
 export interface FakeConsole {
   readonly remote: RefactoryRemote
   readonly modes: Mock
   readonly project: Mock
+  readonly projects: Mock
   readonly strategies: Mock
   readonly packages: Mock
   readonly start: Mock
@@ -220,6 +251,7 @@ export function fakeConsole(): FakeConsole {
   const methods = {
     modes: vi.fn(async () => ok<readonly RefactoryModeChoice[]>([])),
     project: vi.fn(async () => ok('/repo')),
+    projects: vi.fn(async () => ok<readonly RefactoryProject[]>([])),
     strategies: vi.fn(async () => ok(NO_STRATEGIES)),
     packages: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
     start: vi.fn(async () => ok(RECEIPT)),

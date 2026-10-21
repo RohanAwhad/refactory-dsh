@@ -44,6 +44,7 @@ class FakeResult:
     stderr: str = ""
     elapsed_s: float = 0.0
     prep_failure: dict | None = None
+    cwd_outside: str | None = None
 
     def problem(self) -> str:
         return ""

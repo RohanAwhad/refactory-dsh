@@ -30,7 +30,7 @@ COPY_SCOPE = (
 
 
 def prepare_package(ctx: Any) -> dict[str, Any]:
-    prepared = create_ops.prepare(ctx)
+    prepared = create_ops.prepare_create(ctx)
     ctx.write_text("repair.txt", "(initial implementation; no repair requested)\n")
     ctx.write_text("validation.txt", "(structural admission not run)\n")
     return {**prepared, **FAST_UNREFUSED, "repair_feedback": "(initial implementation)", "repairs_used": 0}
@@ -154,11 +154,16 @@ def gate_emit(ctx: Any) -> str:
 
 def validate_package(ctx: Any) -> str:
     brief = ctx.read_json("brief.json", {})
+    # When the package is staged (prepare_create / prepare_package), the project for
+    # validation is the staging base, not the shared checkout.
+    staging_root = ctx.facts.get("package_root")
+    staging_project = Path(staging_root).parent.parent.parent if staging_root else None
     try:
         problems = create_ops.check_package(
             str(ctx.facts["name"]), requires_data_node=bool(brief.get("data_node")),
             requires_task_refs=tuple(brief.get("task_refs", ())),
             requires_input=create_ops.declared_inputs(ctx.knob("requires_input", "")),
+            project_override=staging_project,
         )
     except Exception as exc:
         problems = [f"{type(exc).__name__}: {exc}"]
@@ -192,6 +197,7 @@ def focused_check(ctx: Any) -> dict[str, Any]:
         payload.update(status="pass" if result.ok else "fail", returncode=result.returncode,
                        stdout=result.stdout, stderr=result.stderr, timed_out=result.timed_out,
                        elapsed_s=result.elapsed_s)
+        design_ops.apply_cwd_escaped(result, payload)
         if budget is not None:
             budget.checkpoint()
     # Bind the check and later QA verdict to these exact materialized files: in a worktree,
