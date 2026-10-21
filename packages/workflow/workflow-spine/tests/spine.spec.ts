@@ -997,8 +997,8 @@ describe('a fork with nothing to fan out to', () => {
     spine.skip('b')
     const state = spine.state()
     expect(prov(state)).toBeDefined()
-    expect(prov(state).b.source).toBe('ceo')
-    expect(typeof prov(state).b.at).toBe('string')
+    expect(prov(state).b!.source).toBe('ceo')
+    expect(typeof prov(state).b!.at).toBe('string')
   })
 
   it('planSkip with person source bypasses conditional-gate refusal', () => {
