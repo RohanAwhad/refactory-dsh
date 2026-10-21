@@ -74,6 +74,7 @@
     "refactory_dsh.create_ops",
     "refactory_dsh.delivery",
     "refactory_dsh.design",
+    "refactory_dsh.design_claims",
     "refactory_dsh.design_contract",
     "refactory_dsh.design_ops",
     "refactory_dsh.discovery",
