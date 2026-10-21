@@ -42,7 +42,7 @@ function buildSpine(gate: string, edges: RoutingCase['edges'], gateKind: string)
   // Add edge from _start to the gate.
   graphEdges.push({ source: '_start', target: gate, condition: undefined })
 
-  const graph = { name: 'test', nodes, edges: graphEdges, start: '_start' }
+  const graph = { name: 'test', nodes, edges: graphEdges, start_node: '_start' }
   return new Spine(graph as any)
 }
 

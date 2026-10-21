@@ -7,6 +7,7 @@ tool-refactory print that text instead of keeping a second formatter.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 

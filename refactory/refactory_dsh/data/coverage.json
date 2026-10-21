@@ -730,7 +730,10 @@
           "resume",
           "sample"
         ],
-        "required": []
+        "required": [
+          "name",
+          "brief"
+        ]
       },
       "doc": "refactory/docs/cli.md",
       "examples": [
@@ -789,7 +792,11 @@
           "model",
           "resume"
         ],
-        "required": []
+        "required": [
+          "name",
+          "brief",
+          "check"
+        ]
       },
       "doc": "refactory/docs/cli.md",
       "examples": [
@@ -890,7 +897,11 @@
           "resume",
           "sample"
         ],
-        "required": []
+        "required": [
+          "mode",
+          "name",
+          "brief"
+        ]
       },
       "doc": "refactory/docs/cli.md",
       "examples": [

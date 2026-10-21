@@ -488,7 +488,10 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "resume",
       "sample"
     ],
-    "required": []
+    "required": [
+      "name",
+      "brief"
+    ]
   },
   "description": "create a package of modes from a brief (model-driven)",
   "doc": "refactory/docs/cli.md",
@@ -722,7 +725,11 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "model",
       "resume"
     ],
-    "required": []
+    "required": [
+      "name",
+      "brief",
+      "check"
+    ]
   },
   "description": "design and check a software artifact (model-driven)",
   "doc": "refactory/docs/cli.md",
@@ -1125,7 +1132,11 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "resume",
       "sample"
     ],
-    "required": []
+    "required": [
+      "mode",
+      "name",
+      "brief"
+    ]
   },
   "description": "revise a mode from a brief (model-driven)",
   "doc": "refactory/docs/cli.md",
