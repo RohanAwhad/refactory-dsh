@@ -2273,19 +2273,33 @@ def gate_overwatch(ctx: Any) -> str:
     if unavailable:
         evidence.stop_unrepairable("unavailable", unavailable[0])
 
-    # Compute three separate problem categories so the reason names each one.
+    # Compute four separate problem categories so the reason names each one.
     evidence_problems = evidence.current_problems(ctx, ("overwatch",))
     audit_problems_list = evidence.audit_problems(ctx)
+    correction_problems = evidence.correction_audit_problems(ctx)
     review_findings_raw = blocking_findings(text)
     review_findings, ow_scope_notes = scope_filter_findings(review_findings_raw, ctx.workdir)
     verdict = text.strip().splitlines()[-1].strip() if text.strip() else ""
 
-    if verdict == PASS_MARK and not evidence_problems and not audit_problems_list and not review_findings:
+    if (verdict == PASS_MARK and not evidence_problems and not audit_problems_list
+            and not review_findings and not correction_problems):
         ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
         ctx.set_fact("overwatch_review", "(overwatch passed)")
         ctx.write_text("validation.txt", "(overwatch passed)\n")
         ctx.set_fact("validation", "(overwatch passed)")
         return "proceed"
+
+    # ── Correction-audit path: route to repair, not back to overwatch ────
+    if (verdict == PASS_MARK and not review_findings
+            and not evidence_problems and not audit_problems_list
+            and correction_problems):
+        reason = ("correction audit: " + "; ".join(correction_problems)
+                  + "\n" + _excerpt(text, 2000))
+        ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
+        ctx.set_fact("overwatch_review", reason)
+        ctx.write_text("validation.txt", reason + "\n")
+        ctx.set_fact("validation", reason)
+        return repair(ctx, [reason], kind='review')
 
     # ── Audit-only path: code is not at fault ────────────────────────────
     # When VERDICT: PASS, no blocking findings and no evidence problems,
@@ -2308,6 +2322,8 @@ def gate_overwatch(ctx: Any) -> str:
         parts.append("evidence problems: " + "; ".join(evidence_problems))
     if audit_problems_list:
         parts.append("intent audit problems: " + "; ".join(audit_problems_list))
+    if correction_problems:
+        parts.append("correction audit: " + "; ".join(correction_problems))
     if review_findings:
         parts.append("blocking review findings: " + "; ".join(review_findings))
     if verdict != PASS_MARK:

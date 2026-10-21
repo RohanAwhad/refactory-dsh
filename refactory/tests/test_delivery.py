@@ -587,6 +587,14 @@ def test_b24ar_backticked_markers_produce_site_what_changed(tmp_path):
     ("[new]", "changed", ""),
     ("`[new]`", "changed", ""),
     ("[new: added this]", "changed", "added this"),
+    # dm-119: a [left] site whose description mentions [changed] parses as left
+    ("design_contract.py:177-209 [left: parse() calls _find_marker for [changed] first]", "left", ""),
+    # Quote guard: marker right after a quote character is skipped
+    ("file.py:10 — '[changed]' is a valid marker", "unmarked", ""),
+    # Open-bracket guard: marker inside an open [left ...] is skipped
+    ("file.py:10 [left: mentions [changed] here] — reason", "left", ""),
+    # Both guards: inside [left:] and after a quote
+    ('file.py:10 [left: the old code used "[changed]" markers]', "left", ""),
 ])
 def test_marker_form_recognised(form, expected_status, expected_desc):
     """Every unambiguous marker form is recognised by the parser."""
@@ -3473,6 +3481,9 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     ]
 
     model = FakeModel(answers)
+    # The constraint is about the design, so the audit cites the corrected
+    # design's heading rather than a code site.
+    model._siteless_clause = {"kind": "design", "heading": "Summary"}
     result = DesignMode().run(
         run, model=model,
         verdicts={"gate_strategy": "proceed"},

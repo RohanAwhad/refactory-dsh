@@ -473,9 +473,17 @@ class FakeModel:
                                      "detail": "scripted fixture inspected the executed result"}]}
                 if item.get("kind") in ("correction", "constraint"):
                     text = item.get("text", "")
-                    row["clauses"] = [{"clause": text,
-                                       "evidence": [{"path": "authoring-evidence.json",
-                                                      "detail": "full constraint verified"}]}]
+                    sites = getattr(self, '_correction_sites', {}).get(item["id"], [])
+                    clause = {"clause": text,
+                              "evidence": [{"path": "authoring-evidence.json",
+                                            "detail": "full constraint verified"}],
+                              "sites": sites}
+                    # A test whose correction is about the design itself can give
+                    # its site-less clauses an evidence form, e.g. {"kind": "design",
+                    # "heading": "Summary"}.
+                    if not sites:
+                        clause.update(getattr(self, "_siteless_clause", {}))
+                    row["clauses"] = [clause]
                 audit_rows.append(row)
             (root / "intent-audit.json").write_text(json.dumps({"requirements": audit_rows}))
         return answer
