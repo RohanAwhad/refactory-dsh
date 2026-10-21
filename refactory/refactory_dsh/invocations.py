@@ -194,7 +194,7 @@ def prepare(
                     (workdir / relative).rename(destination)
                     moved.append(relative)
                 ledger_install = [Path(STEERING_LEDGER)] if (stage / STEERING_LEDGER).exists() else []
-            for relative in [Path('graphs'), Path(lowering.DECLARATIONS), INVOCATION, *fresh_metadata, *ledger_install]:
+                for relative in [Path('graphs'), Path(lowering.DECLARATIONS), INVOCATION, *fresh_metadata, *ledger_install]:
                     (stage / relative).rename(workdir / relative)
                     installed.append(relative)
             except Exception:

@@ -576,8 +576,16 @@ class Executor:
                 current, verdict = self._visit(node)
                 self.ctx._check_produces()  # noqa: SLF001
                 self._count_retry(node, current, verdict, retries, visits)
-            except (GateStop, HaltStop):
-                raise
+            except GateStop as exc:
+                error = str(exc)
+                self._record(exc.gate, error=error, outcome="refused")
+                current = None
+                break
+            except HaltStop as exc:
+                error = str(exc)
+                self._record(exc.gate, error=error, outcome="halted")
+                current = None
+                break
             except Exception as exc:  # a failing node ends the run, visibly
                 self.steps.append(
                     Step(node.id, node.kind, time.time() - step_started,
@@ -606,12 +614,6 @@ class Executor:
             if current is not None:
                 self._record(current)
 
-        except GateStop as exc:
-            error = str(exc)
-            self._record(exc.gate, error=error, outcome="refused")
-        except HaltStop as exc:
-            error = str(exc)
-            self._record(exc.gate, error=error, outcome="halted")
         if error is None:
             for step in self.steps:
                 if step.error:

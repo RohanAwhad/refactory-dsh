@@ -275,8 +275,8 @@ class CreateMode(Mode):
         ))
         # create-v2 puts a person here (`gate_strategy`), and it is the one v2 gate
         # this port keeps as-is: the strategy is a decision the person owns, and a
-        # run that can approve its own strategy is not reviewed at all. A headless
-        # run refuses it, exactly as it refuses any `user` gate.
+        # run that can approve its own strategy is not reviewed at all. A walker run
+        # stops at it; a headless DSH run refuses at the spine level.
         graph.add(Node(
             "gate_strategy", "gate", gate_kind="user",
             reads=("strategy.json",),
@@ -861,21 +861,34 @@ def main(argv: list[str] | None = None) -> int:
         timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
     )
     if args.resume:
-        # A resume re-runs the node that failed with the facts its predecessors
-        # produced. The knobs and the task come from the run's own record, so the
-        # command needs only the directory — nothing has to be remembered or retyped.
-        try:
-            from refactory_dsh.fast import CreateFastMode
+        workdir = Path(args.resume)
+        fast = args.fast
+        config_path = workdir / '.refactory/run-config.json'
+        if config_path.exists():
+            try:
+                run_config = json.loads(config_path.read_text())
+                fast = run_config.get('fast', fast)
+            except (json.JSONDecodeError, OSError):
+                pass
+        from refactory_dsh.run_ownership import ownership
 
-            run = (CreateFastMode if args.fast else CreateMode).resume(
-                Path(args.resume), model=client, max_steps=200, resource_limits=arguments(args),
-            )
+        try:
+            with ownership(workdir):
+                from refactory_dsh.fast import CreateFastMode
+
+                run = (CreateFastMode if fast else CreateMode).resume(
+                    workdir, model=client, max_steps=200, resource_limits=arguments(args),
+                )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
+        if run.gate_stop:
+            from refactory_dsh.run_preparation import print_gate_stop
+            print_gate_stop(run.gate_stop, workdir, graph=(CreateFastMode if fast else CreateMode)().build())
+            return 2
         name = str(run.facts.get("name") or args.name)
         print(json.dumps({
-            "resumed": str(Path(args.resume)),
+            "resumed": str(workdir),
             "name": name,
             "exit_ok": run.exit_ok,
             "error": run.error,

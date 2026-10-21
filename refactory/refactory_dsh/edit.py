@@ -101,25 +101,53 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     # answer to "may it regress" has to travel as the knob that step reads.
     state["knobs"]["allow_regression"]["value"] = bool(config.allow_regression)
     mode.load_state_dict(state)
-    run = mode.run(
-        run_workdir,
-        model=client,
-        task={
-            "name": config.name,
-            "brief": config.brief,
-            "extends": config.extends or config.mode,
-            "mode": config.mode,
-            # Persisted with the run, including across resume. The canonical smoke
-            # refuses if the source state changed during authoring.
-            "revision_of_state": source_state,
-            "intent": EditMode.intent,
-        },
-        max_steps=config.max_steps,
-        # The revision is the create-v2 graph, so it carries the same person's gate
-        # on the strategy; a headless run has to be given their answer.
-        verdicts=dict(config.verdicts),
-        resource_limits=config.resource_limits,
-    )
+    mode_name = "edit_fast" if config.fast else "edit"
+    from refactory_dsh.run_ownership import ownership
+
+    with ownership(run_workdir):
+        from refactory_dsh.run_preparation import prepare_run
+        from refactory_dsh import steering
+        from refactory_dsh.paths import project_root
+
+        prepare_run(
+            state, run_workdir,
+            invocation_name=f"default_pack-{mode_name}",
+            mode_id=f"default_pack/{mode_name}",
+            intent=config.brief,
+            transform=lambda workflow, stage_dir=None: steering.for_run(workflow, stage_dir or run_workdir),
+            runtime="walker",
+            command="python -m refactory_dsh.edit",
+            resume_command=f"python -m refactory_dsh.edit --resume {run_workdir}",
+            fast=config.fast,
+            worker_backend=client.route().get("worker_backend", "dsh") if client and callable(getattr(client, "route", None)) else "dsh",
+            project=project_root(),
+        )
+
+        # Persist up-front verdicts as run-scoped ledger entries.
+        ledger = steering.Ledger(run_workdir)
+        for gate, value in config.verdicts.items():
+            ledger.verdict(gate, value, approval=True)
+
+        run = mode.run(
+            run_workdir,
+            model=client,
+            task={
+                "name": config.name,
+                "brief": config.brief,
+                "extends": config.extends or config.mode,
+                "mode": config.mode,
+                # Persisted with the run, including across resume. The canonical smoke
+                # refuses if the source state changed during authoring.
+                "revision_of_state": source_state,
+                "intent": EditMode.intent,
+            },
+            max_steps=config.max_steps,
+            resource_limits=config.resource_limits,
+        )
+    if run.gate_stop:
+        return {"exit_ok": False, "error": run.error, "gate_stop": run.gate_stop}
+    if run.halted:
+        return {"exit_ok": False, "error": run.error, "halted": True}
     if not run.exit_ok:
         raise CreateError(f"revising {config.mode!r} failed: {run.error}")
 
@@ -194,21 +222,37 @@ def main(argv: list[str] | None = None) -> int:
     from refactory_dsh.paths import project_root
 
     if args.resume:
+        workdir = Path(args.resume)
+        fast = args.fast
+        config_path = workdir / '.refactory/run-config.json'
+        if config_path.exists():
+            try:
+                run_config = json.loads(config_path.read_text())
+                fast = run_config.get('fast', fast)
+            except (json.JSONDecodeError, OSError):
+                pass
         client = DshModelClient(
-            project=None if args.resume else project_root(),
+            project=None,
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         )
-        try:
-            from refactory_dsh.fast import EditFastMode
+        from refactory_dsh.run_ownership import ownership
 
-            run = (EditFastMode if args.fast else EditMode).resume(
-                Path(args.resume), model=client, resource_limits=arguments(args),
-            )
+        try:
+            with ownership(workdir):
+                from refactory_dsh.fast import EditFastMode
+
+                run = (EditFastMode if fast else EditMode).resume(
+                    workdir, model=client, resource_limits=arguments(args),
+                )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
+        if run.gate_stop:
+            from refactory_dsh.run_preparation import print_gate_stop
+            print_gate_stop(run.gate_stop, workdir, graph=(EditFastMode if fast else EditMode)().build())
+            return 2
         print(json.dumps({
-            "resumed": str(Path(args.resume)), "exit_ok": run.exit_ok, "error": run.error,
+            "resumed": str(workdir), "exit_ok": run.exit_ok, "error": run.error,
             "facts": {key: value for key, value in run.facts.items() if key in
                       ("name", "files", "package_path", "smoke_score", "before_score", "after_score")},
         }, indent=2, default=str))
