@@ -112,6 +112,12 @@ def _report(ctx: Any, status: str, findings: list[str]) -> dict[str, Any]:
     }
 
 
+def _advisories(ctx: Any) -> list[str]:
+    """The advisory notes gate_qa recorded, carried into the final report."""
+    findings = ctx.read_json("fast-report.json", {}).get("findings") or []
+    return [f for f in findings if str(f).startswith(evidence.ADVISORY_REPO_QUESTIONS)]
+
+
 def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
     used = int(ctx.facts.get("repairs_used", 0))
     limit = int(ctx.knob("repair_attempts", 1))
@@ -502,15 +508,14 @@ def gate_qa(ctx: Any) -> str:
     deliverable_kind_value = str(ctx.facts.get("deliverable_kind", ""))
     if isinstance(qa, dict) and deliverable_kind_value == "repository_change":
         from refactory_dsh.authoring_evidence import validate_repo_questions
+        from refactory_dsh.changed_functions import review_functions
         import json as _json
 
         changed_fns: list[str] = []
         if ctx.exists("changed-functions.json"):
             try:
-                cf_data = _json.loads(ctx.read_text("changed-functions.json"))
-                changed_fns = [entry["function"] for entry in cf_data
-                               if isinstance(entry, dict) and "function" in entry]
-            except (ValueError, KeyError):
+                changed_fns = review_functions(_json.loads(ctx.read_text("changed-functions.json")))
+            except ValueError:
                 pass
 
         if changed_fns:
@@ -523,27 +528,20 @@ def gate_qa(ctx: Any) -> str:
                 findings.extend(validate_repo_questions(repo_questions, changed_fns, "focused_qa"))
 
     findings.extend(correction_problems)
+    advisory: list[str] = []
+    rq_findings = [f for f in findings if f.startswith("[repo-questions]")]
+    non_rq_findings = [f for f in findings if not f.startswith("[repo-questions]")]
+    # When ONLY repo-questions problems remain, re-run focused QA once with them named;
+    # after that they are advisory and the run proceeds.
+    if rq_findings and not non_rq_findings and not check_failed:
+        if evidence.repo_question_rerun_due(ctx, "review_reruns_used"):
+            rq_report = "\n".join(rq_findings)
+            ctx.set_fact("repair_feedback", rq_report)
+            ctx.write_text("repair.txt", rq_report + "\n")
+            return Verdict("review_reloop", rq_report)
+        advisory = [evidence.advisory_repo_questions(rq_findings)]
+        findings = []
     if findings:
-        # Separate repo-questions from other findings.
-        rq_findings = [f for f in findings if f.startswith("[repo-questions]")]
-        non_rq_findings = [f for f in findings if not f.startswith("[repo-questions]")]
-
-        # When ONLY repo-questions problems remain, route to review_reloop.
-        if rq_findings and not non_rq_findings and not check_failed:
-            # Check re-run budget
-            reruns_used = int(ctx.facts.get("review_reruns_used", 0)) + 1
-            ctx.set_fact("review_reruns_used", reruns_used)
-            if reruns_used <= 2:
-                rq_report = "\n".join(rq_findings)
-                ctx.set_fact("repair_feedback", rq_report)
-                ctx.write_text("repair.txt", rq_report + "\n")
-                return Verdict("review_reloop", rq_report)
-            else:
-                rq_report = "\n".join(rq_findings)
-                raise ValueError(
-                    f"repository-question re-runs exhausted after {reruns_used} attempt(s): {rq_report}"
-                )
-
         # Classify only refactory's own text; check stderr/stdout is target text
         # and must not be word-scanned (correction 1: gate_qa classifies target text).
         # robustness_notes contain target test IDs and must not be classified
@@ -565,7 +563,7 @@ def gate_qa(ctx: Any) -> str:
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
         return _repair(ctx, findings, kind='check' if check_failed else 'review')
     ctx.set_fact("qa_passed", True)
-    ctx.write_json("fast-report.json", _report(ctx, "qa_passed", []))
+    ctx.write_json("fast-report.json", _report(ctx, "qa_passed", advisory))
     return "proceed"
 
 
@@ -578,7 +576,7 @@ def smoke(ctx: Any) -> dict[str, Any]:
 
 def report_package(ctx: Any) -> dict[str, Any]:
     result = create_ops.write_result(ctx)
-    report = _report(ctx, "completed", [])
+    report = _report(ctx, "completed", _advisories(ctx))
     ctx.write_json("fast-report.json", report)
     payload = json.loads(result["created"])
     payload["fast"] = report
@@ -666,7 +664,7 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
             )
         raise ValueError("artifact has no passing required runtime check")
     result = design_ops.report_artifact(ctx)
-    report = _report(ctx, "completed", [])
+    report = _report(ctx, "completed", _advisories(ctx))
     ctx.write_json("fast-report.json", report)
     payload = json.loads(result["designed"])
     payload["fast"] = report
