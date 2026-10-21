@@ -706,7 +706,13 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                     test_path = test_name.split("::")[0] if "::" in test_name else test_name
                     site_path = site.split(":")[0] if ":" in site else site
                     site_files = [site_path]
+                    # Derive project modules from site files' top-level packages
+                    # and the repository's standard package prefix.
                     project_modules = ["refactory_dsh"]
+                    for sf in site_files:
+                        top = sf.split("/")[0].replace(".py", "").replace(".ts", "")
+                        if top and top not in project_modules:
+                            project_modules.append(top)
 
                     try:
                         if test_path.endswith(".py"):

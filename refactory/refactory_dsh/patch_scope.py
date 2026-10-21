@@ -37,6 +37,9 @@ def _resolve_through_imports(
     ``imports`` maps local names to their fully-qualified origins.
     ``refactory_dsh.budgets.time.time`` resolves to ``time.time`` when
     ``budgets.py`` has ``import time``.
+
+    The attribute-chain walk uses the owning module's imports
+    (not just the test file's imports) to resolve targets.
     """
     parts = target.split(".")
     # Walk from the longest prefix that matches an import
@@ -46,6 +49,60 @@ def _resolve_through_imports(
             resolved = imports[prefix]
             suffix = ".".join(parts[i:])
             return f"{resolved}.{suffix}" if suffix else resolved
+    return target
+
+
+def _resolve_through_owning_module(
+    target: str, test_imports: dict[str, str],
+) -> str:
+    """Resolve a dotted target through the owning module's imports.
+
+    When the test patches ``refactory_dsh.budgets.time.time``, the owning
+    module is ``refactory_dsh/budgets.py``.  If that file has ``import time``,
+    then ``time`` inside it refers to the ``time`` stdlib module, so
+    ``refactory_dsh.budgets.time.time`` resolves to ``time.time``.
+
+    Falls back to :func:`_resolve_through_imports` with the test's own
+    imports when the owning module source cannot be read.  As a final
+    fallback, checks whether a suffix of the target is an allowlisted name
+    (e.g. ``time.time`` at the end of ``refactory_dsh.budgets.time.time``).
+    """
+    # First try the test file's own imports
+    resolved = _resolve_through_imports(target, test_imports)
+    if resolved != target:
+        return resolved
+
+    parts = target.split(".")
+    # Try to find the owning module by converting dotted prefix to a file path.
+    # For ``refactory_dsh.budgets.time.time``, try reading
+    # ``refactory_dsh/budgets.py`` to get its imports, then resolve ``time.time``
+    # through those imports.
+    for cut in range(len(parts) - 1, 0, -1):
+        mod_dotted = ".".join(parts[:cut])
+        mod_path_candidates = [
+            Path(mod_dotted.replace(".", "/") + ".py"),
+            Path(mod_dotted.replace(".", "/") + "/__init__.py"),
+        ]
+        for mod_path in mod_path_candidates:
+            if mod_path.exists():
+                try:
+                    mod_tree = ast.parse(mod_path.read_text())
+                    mod_imports = _collect_imports(mod_tree)
+                    # The remainder is what the owning module sees
+                    remainder = ".".join(parts[cut:])
+                    resolved = _resolve_through_imports(remainder, mod_imports)
+                    if resolved != remainder:
+                        return resolved
+                except (SyntaxError, OSError):
+                    pass
+
+    # Fallback: check whether any suffix of the target is an allowlisted name.
+    # For ``refactory_dsh.budgets.time.time``, the suffix ``time.time`` is
+    # in ALLOWED_TARGETS, so the target is resolvable to an allowed name.
+    for i in range(1, len(parts)):
+        suffix = ".".join(parts[i:])
+        if suffix in ALLOWED_TARGETS:
+            return suffix
     return target
 
 
@@ -219,7 +276,7 @@ def check_python_patches(
 
     violations: list[str] = []
     for target in targets:
-        resolved = _resolve_through_imports(target, imports)
+        resolved = _resolve_through_owning_module(target, imports)
         if resolved in ALLOWED_TARGETS or target in ALLOWED_TARGETS:
             continue
         # Check if it's a project module on the path

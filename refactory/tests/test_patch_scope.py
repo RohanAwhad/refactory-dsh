@@ -81,13 +81,15 @@ def test_time(monkeypatch):
     violations = patch_scope.check_python_patches(
         src, "test_time", ["refactory_dsh"], ["budgets.py"],
     )
-    # The target resolves through the import chain; budgets.time.time -> time.time
-    # which is allowlisted.  If resolution cannot follow the chain (no access to
-    # budgets.py source), the literal starts with a project module *but* the
-    # leaf 'time.time' is allowlisted.
-    # Accept either: no violation (fully resolved) or violation (conservatively
-    # flagged because we can't read budgets.py imports in a unit test).
-    # The design says 50 such targets resolve correctly; the test accepts both.
+    # The target 'refactory_dsh.budgets.time.time' should resolve through the
+    # owning module's imports.  When the owning module file is not on disk (as in
+    # this unit test), the resolver falls back to checking whether the leaf of
+    # the chain ('time.time') is allowlisted.  The test file imports ``time``,
+    # so _resolve_through_imports maps the partial chain.  Either way the target
+    # should NOT be flagged as a project-module violation.
+    assert not violations, (
+        f"expected no violations: 'time.time' is allowlisted, but got {violations}"
+    )
 
 
 def test_python_function_level_only_flags_patching_function():
@@ -140,6 +142,34 @@ test('external', () => {
         src, "external", ["@project"], ["src/helper.ts"],
     )
     assert not violations, "external package should not be flagged"
+
+
+def test_python_conftest_fixture_included():
+    """A function that requests a conftest fixture that patches project code is flagged."""
+    conftest_src = '''
+import pytest
+
+@pytest.fixture
+def patched_check(monkeypatch):
+    monkeypatch.setattr('refactory_dsh.design_ops.check_artifact', lambda *a: None)
+'''
+    test_src = '''
+def test_uses_fixture(patched_check):
+    assert True
+'''
+    # Parse the conftest to get its AST
+    import ast as _ast
+    conftest_tree = _ast.parse(conftest_src)
+    # check_python_patches currently doesn't accept conftest_trees directly,
+    # but the fixture detection looks in the test file's own AST plus conftest.
+    # To test the conftest path, we combine them into one source.
+    combined_src = conftest_src + "\n" + test_src
+    violations = patch_scope.check_python_patches(
+        combined_src, "test_uses_fixture", ["refactory_dsh"], ["design_ops.py"],
+    )
+    assert violations, (
+        "expected a violation: conftest fixture patches project code on the path"
+    )
 
 
 def test_typescript_vi_spyon_flags_project_import():

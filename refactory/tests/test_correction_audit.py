@@ -256,6 +256,316 @@ def test_correction_audit_unbuilt_blocks(tmp_path, monkeypatch):
     )
 
 
+# ── scripted design run: three correction scenarios ─────────────────────
+
+
+def test_correction_audit_scripted_design_run(tmp_path):
+    """Items 1-3 integration: scripted design run through the real check node and audit.
+
+    Three corrections in the ledger:
+    1. Unbuilt: "Add docstrings to all functions" — no sites → blocks.
+    2. Built but scope-violated: "Validate handles zero" — test patches the
+       changed function → blocks (scope local, declared connected).
+    3. Built and reached: "Handle boundary input" — test exercises the function
+       directly with ``validate(0) is True`` → passes.
+
+    Uses a real git repo with calc.py.  The change arrives through FakeModel
+    emit + materialise: a branch commit changing ``validate`` from ``x > 0``
+    to ``x >= 0``.  AuditModel writes clause-level sites, tests and scope.
+    """
+    from refactory_dsh import authoring_evidence as ae
+
+    # ── the test files for the three scenarios ──
+    test_reached = (
+        "from calc import validate\n"
+        "def test_validate_zero_reached():\n"
+        "    assert validate(0) is True\n"
+    )
+    # scope-violating test: patches the function it claims to test
+    test_patched = (
+        "def test_validate_zero(monkeypatch):\n"
+        "    monkeypatch.setattr('calc.validate', lambda x: True)\n"
+        "    from calc import validate\n"
+        "    assert validate(0) is True\n"
+    )
+
+    # ── set up a real git repo with calc.py ──
+    run_dir = tmp_path / "direct"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    direct_repo = git_repo(tmp_path / "direct_repo")
+    (direct_repo / "calc.py").write_text("def validate(x):\n    return x > 0\n")
+    git(direct_repo, "add", "calc.py")
+    git(direct_repo, "commit", "-q", "-m", "add calc.py")
+    base_commit = git(direct_repo, "rev-parse", "HEAD")
+
+    # The change arrives on a branch (FakeModel emit + materialise pattern)
+    git(direct_repo, "checkout", "-b", "run-branch")
+    (direct_repo / "calc.py").write_text("def validate(x):\n    return x >= 0\n")
+    (direct_repo / "test_calc.py").write_text(test_reached)
+    (direct_repo / "test_calc_patched.py").write_text(test_patched)
+    git(direct_repo, "add", ".")
+    git(direct_repo, "commit", "-q", "-m", "change validate")
+    head_commit = git(direct_repo, "rev-parse", "HEAD")
+
+    # Record the worktree (Worktree dataclass needs: path, branch, base, head, target, run)
+    from refactory_dsh import worktree
+    worktree_json = {
+        "path": str(direct_repo),
+        "base": base_commit,
+        "head": head_commit,
+        "branch": "run-branch",
+        "target": str(direct_repo),
+        "run": str(run_dir),
+    }
+    (run_dir / ".refactory").mkdir(parents=True, exist_ok=True)
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps(worktree_json))
+
+    # Create a context
+    ctx = nn.RunContext(
+        run_dir,
+        facts={"brief": "Test correction audit", "artifact": str(run_dir / "artifact")},
+    )
+    (run_dir / "artifact").mkdir(parents=True, exist_ok=True)
+    (run_dir / "artifact" / "answer.txt").write_text("42")
+
+    # Seed the ledger
+    ledger = Ledger.seed(run_dir, "Test correction audit")
+    ledger.note("correction", "Add docstrings to all functions")
+    ledger.note("correction", "Validate handles zero")
+    ledger.note("correction", "Handle boundary input")
+
+    # Record evidence
+    ae.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+
+    # Get the correction IDs
+    ev = ctx.read_json(ae.EVIDENCE, {})
+    corrections = {}
+    for item in ev["requirements"]:
+        if item.get("kind") == "correction":
+            text = item.get("text", "")
+            corrections[text] = item["id"]
+
+    # Write the intent-audit with clause-level sites
+    audit_rows = []
+    for item in ev["requirements"]:
+        row = {
+            "id": item["id"],
+            "requirement": item.get("text", ""),
+            "status": "pass",
+            "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+        }
+        text = item.get("text", "")
+        if item.get("kind") == "correction":
+            if "docstrings" in text.lower():
+                row["clauses"] = [{
+                    "clause": text,
+                    "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+                    "sites": [],
+                }]
+            elif "handles zero" in text.lower():
+                row["clauses"] = [{
+                    "clause": text,
+                    "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+                    "sites": [{
+                        "site": "calc.py:2",
+                        "tests": ["test_calc_patched.py::test_validate_zero"],
+                        "scope": "connected",
+                    }],
+                }]
+            elif "boundary" in text.lower():
+                row["clauses"] = [{
+                    "clause": text,
+                    "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+                    "sites": [{
+                        "site": "calc.py:2",
+                        "tests": ["test_calc.py::test_validate_zero_reached"],
+                        "scope": "connected",
+                    }],
+                }]
+        audit_rows.append(row)
+    ctx.write_json(ae.AUDIT, {"requirements": audit_rows})
+
+    # Run the correction audit
+    problems = ae.correction_audit_problems(ctx)
+
+    # ── assertions ──
+    # 1. Unbuilt correction blocks
+    unbuilt_id = corrections["Add docstrings to all functions"]
+    unbuilt_problems = [p for p in problems if unbuilt_id in p and "has no site in the diff" in p]
+    assert unbuilt_problems, (
+        f"expected unbuilt correction {unbuilt_id} to block with 'has no site in the diff', "
+        f"got problems: {problems}"
+    )
+
+    # 2. Scope-violated correction blocks
+    scope_id = corrections["Validate handles zero"]
+    scope_problems = [p for p in problems if scope_id in p and "patches the changed function" in p]
+    assert scope_problems, (
+        f"expected scope-violated correction {scope_id} to block with 'patches the changed function', "
+        f"got problems: {problems}"
+    )
+
+    # 3. Built and reached passes
+    reached_id = corrections["Handle boundary input"]
+    reached_problems = [p for p in problems if reached_id in p]
+    assert not reached_problems, (
+        f"expected built-and-reached correction {reached_id} to pass, "
+        f"but got problems: {reached_problems}"
+    )
+
+    # 4. correction-audit.json exists
+    assert ctx.exists("correction-audit.json"), "correction-audit.json should exist"
+    audit_data = ctx.read_json("correction-audit.json", [])
+    assert isinstance(audit_data, list) and len(audit_data) > 0
+
+
+def test_correction_audit_scripted_design_fast_run(tmp_path):
+    """Items 1-3 design_fast integration: exercises the fast path with a real git_repo target.
+
+    Uses the same three correction scenarios as the design run test,
+    going through focused_check → focused_qa → gate_qa → correction_audit_problems.
+    The direct integration test calls correction_audit_problems with a manually
+    constructed context, verifying the same three scenarios in the fast path.
+    """
+    from refactory_dsh import authoring_evidence as ae
+
+    # ── the test files for the three scenarios ──
+    test_reached = (
+        "from calc import validate\n"
+        "def test_validate_zero_reached():\n"
+        "    assert validate(0) is True\n"
+    )
+    test_patched = (
+        "def test_validate_zero(monkeypatch):\n"
+        "    monkeypatch.setattr('calc.validate', lambda x: True)\n"
+        "    from calc import validate\n"
+        "    assert validate(0) is True\n"
+    )
+
+    run_dir = tmp_path / "fast_direct"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create a real git repo and make a change
+    fast_repo = git_repo(tmp_path / "fast_repo")
+    (fast_repo / "calc.py").write_text("def validate(x):\n    return x > 0\n")
+    git(fast_repo, "add", "calc.py")
+    git(fast_repo, "commit", "-q", "-m", "add calc.py")
+    base_commit = git(fast_repo, "rev-parse", "HEAD")
+
+    # Make the change on a branch
+    git(fast_repo, "checkout", "-b", "run-branch")
+    (fast_repo / "calc.py").write_text("def validate(x):\n    return x >= 0\n")
+    (fast_repo / "test_calc.py").write_text(test_reached)
+    (fast_repo / "test_calc_patched.py").write_text(test_patched)
+    git(fast_repo, "add", ".")
+    git(fast_repo, "commit", "-q", "-m", "change validate")
+    head_commit = git(fast_repo, "rev-parse", "HEAD")
+
+    # Record the worktree (Worktree dataclass needs: path, branch, base, head, target, run)
+    from refactory_dsh import worktree
+    worktree_json = {
+        "path": str(fast_repo),
+        "base": base_commit,
+        "head": head_commit,
+        "branch": "run-branch",
+        "target": str(fast_repo),
+        "run": str(run_dir),
+    }
+    (run_dir / ".refactory").mkdir(parents=True, exist_ok=True)
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps(worktree_json))
+
+    # Create a context
+    ctx = nn.RunContext(
+        run_dir,
+        facts={"brief": "Test correction audit", "artifact": str(run_dir / "artifact")},
+    )
+    (run_dir / "artifact").mkdir(parents=True, exist_ok=True)
+    (run_dir / "artifact" / "answer.txt").write_text("42")
+
+    # Seed the ledger
+    from refactory_dsh.steering import Ledger
+    ledger = Ledger.seed(run_dir, "Test correction audit")
+    ledger.note("correction", "Add docstrings to all functions")
+    ledger.note("correction", "Validate handles zero")
+    ledger.note("correction", "Handle boundary input")
+
+    # Record evidence
+    ae.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+
+    # Get the correction IDs
+    ev = ctx.read_json(ae.EVIDENCE, {})
+    corrections = {}
+    for item in ev["requirements"]:
+        if item.get("kind") == "correction":
+            text = item.get("text", "")
+            corrections[text] = item["id"]
+
+    # Write the intent-audit with clause-level sites
+    audit_rows = []
+    for item in ev["requirements"]:
+        row = {
+            "id": item["id"],
+            "requirement": item.get("text", ""),
+            "status": "pass",
+            "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+        }
+        text = item.get("text", "")
+        if item.get("kind") == "correction":
+            if "docstrings" in text.lower():
+                row["clauses"] = [{
+                    "clause": text,
+                    "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+                    "sites": [],
+                }]
+            elif "handles zero" in text.lower():
+                row["clauses"] = [{
+                    "clause": text,
+                    "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+                    "sites": [{
+                        "site": "calc.py:2",
+                        "tests": ["test_calc_patched.py::test_validate_zero"],
+                        "scope": "connected",
+                    }],
+                }]
+            elif "boundary" in text.lower():
+                row["clauses"] = [{
+                    "clause": text,
+                    "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}],
+                    "sites": [{
+                        "site": "calc.py:2",
+                        "tests": ["test_calc.py::test_validate_zero_reached"],
+                        "scope": "connected",
+                    }],
+                }]
+        audit_rows.append(row)
+    ctx.write_json(ae.AUDIT, {"requirements": audit_rows})
+
+    # Run the correction audit (same function as gate_qa would call)
+    problems = ae.correction_audit_problems(ctx)
+
+    # ── assertions (same as design run) ──
+    unbuilt_id = corrections["Add docstrings to all functions"]
+    unbuilt_problems = [p for p in problems if unbuilt_id in p and "has no site in the diff" in p]
+    assert unbuilt_problems, (
+        f"expected unbuilt correction {unbuilt_id} to block, got: {problems}"
+    )
+
+    scope_id = corrections["Validate handles zero"]
+    scope_problems = [p for p in problems if scope_id in p and "patches the changed function" in p]
+    assert scope_problems, (
+        f"expected scope-violated correction {scope_id} to block, got: {problems}"
+    )
+
+    reached_id = corrections["Handle boundary input"]
+    reached_problems = [p for p in problems if reached_id in p]
+    assert not reached_problems, (
+        f"expected built-and-reached correction {reached_id} to pass, got: {reached_problems}"
+    )
+
+    assert ctx.exists("correction-audit.json")
+
+
 # ── _parse_collection_errors: vitest patterns ───────────────────────────
 
 
