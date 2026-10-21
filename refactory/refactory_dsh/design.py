@@ -398,7 +398,7 @@ class DesignMode(Mode):
             "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=("check.txt", "validation.txt", "authoring-evidence.json", *repo_change.CHECK_WRITES),
+            writes=("check.txt", "validation.txt", "authoring-evidence.json", "check-record.json", *repo_change.CHECK_WRITES),
             produces=("validation", "check_attempts_used", "review_attempts_used",
                       "attempts_used", "runtime_evidence",
                       *repo_change.CHECK_PRODUCES),

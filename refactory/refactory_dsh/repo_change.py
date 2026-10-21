@@ -917,7 +917,7 @@ def prepare_check_environment(
     prep_fail = install_fail
     if not problems:
         # Build a minimal context proxy for prepare_commands
-        _ctx = _PrepCtx(facts)
+        _ctx = _PrepCtx(facts, workdir=run)
         found, problems, cmd_fail = prepare_commands(
             _ctx, found, env, home, timeout, budget, amend=amend,
         )
@@ -928,8 +928,9 @@ def prepare_check_environment(
 
 class _PrepCtx:
     """Minimal context proxy for prepare_commands when called from prepare_check_environment."""
-    def __init__(self, facts: dict[str, Any]) -> None:
+    def __init__(self, facts: dict[str, Any], workdir: Path | None = None) -> None:
         self.facts = facts
+        self.workdir = workdir
 
     def knob(self, name: str, default: Any = None) -> Any:
         return default
