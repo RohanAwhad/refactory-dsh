@@ -63,6 +63,11 @@ class DesignMode(Mode):
                 180, "int", lo=10, hi=1800,
                 description="how long the brief's check may run",
             ),
+            "check_attempt_cap": Knob(
+                8, "int", lo=0,
+                description="hard cap on total check attempts including convergence grants; "
+                            "0 or a value at or below check_attempts disables the extension",
+            ),
             "design_review_attempts": Knob(
                 2, "int", lo=1, hi=4,
                 description="how many times the design review may reloop before proceeding "
@@ -398,8 +403,13 @@ class DesignMode(Mode):
             writes=("check.txt", "validation.txt", "authoring-evidence.json", *repo_change.CHECK_WRITES),
             produces=("validation", "check_attempts_used", "review_attempts_used",
                       "attempts_used", "runtime_evidence",
+                      "base_unavailable",
+                      "check_failures_history",
+                      "check_blocker_history",
+                      "convergence_extras_used",
+                      "convergence_granted",
                       *repo_change.CHECK_PRODUCES),
-            knobs=("check_attempts", "check_timeout_s"),
+            knobs=("check_attempts", "check_timeout_s", "check_attempt_cap"),
             max_iterations=8,
             notes="run the brief's check, in a sandbox",
         ))
