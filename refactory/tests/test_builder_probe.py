@@ -288,32 +288,29 @@ def test_probe_repeated_emission_refused(tmp_path):
 
 def test_probe_candidate_fidelity(tmp_path):
     """The clone's worktree record has base before candidate and head after it,
-    so _installs sees changed manifests and installs new dependencies.
+    so _installs sees a difference between base and head to detect changed manifests.
     """
     run, repo, found = _make_probe_run(tmp_path)
 
-    # Emission that adds a dependency to package.json
+    # Emission that modifies a tracked file — avoids npm-install failures from
+    # a non-existent package while still producing a new commit (base != head).
     emission = (
-        '===FILE: package.json===\n'
-        '{"name": "test", "dependencies": {"new-dep": "^1.0.0"}}\n'
+        '===FILE: app.py===\n'
+        'print("updated by candidate")\n'
     )
     (run / "emit.txt").write_text(emission)
 
-    # Run a prepared_clone and check the worktree record
-    try:
-        with prepared_clone(run, emission="emit.txt", deadline=60) as (clone_root, env, clone_found):
-            # base should be the pre-candidate tip
-            # head should differ from base (the candidate was committed)
-            assert clone_found.base != clone_found.head, \
-                "_installs must see a difference between base and head to detect changed manifests"
-            # The package.json in the clone should have the new dependency
-            pkg = json.loads((clone_root / "package.json").read_text())
-            assert "new-dep" in pkg.get("dependencies", {}), \
-                "the candidate emission's package.json should be in the clone"
-    except Exception:
-        # The clone may fail for various reasons in test env, but the assertion
-        # about base != head is the key check
-        pass
+    # Run a prepared_clone and check the worktree record.
+    # No bare ``except Exception`` — AssertionError must propagate so the test
+    # can actually fail when base == head.
+    with prepared_clone(run, emission="emit.txt", deadline=60) as (clone_root, env, clone_found):
+        # base should be the pre-candidate tip
+        # head should differ from base (the candidate was committed)
+        assert clone_found.base != clone_found.head, \
+            "_installs must see a difference between base and head to detect changed manifests"
+        # The file in the clone should have the candidate's content
+        assert (clone_root / "app.py").read_text() == 'print("updated by candidate")\n', \
+            "the candidate emission should be applied in the clone"
 
 
 # ── worker-route integration tests ───────────────────────────────────────────
