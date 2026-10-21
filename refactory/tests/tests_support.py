@@ -448,8 +448,10 @@ class FakeModel:
                 audit_rows.append(row)
             (root / "intent-audit.json").write_text(json.dumps({"requirements": audit_rows}))
         # Scripted repo_questions: when the run directory has changed-functions.json,
-        # auto-generate a valid repo_questions record for markdown and JSON answers.
-        if answer and workdir is not None:
+        # auto-generate a valid repo_questions record for reviewer answers only.
+        # Only inject into prompts that reference "Changed functions:" (reviewer prompts),
+        # never into emit, verifier, strategy or other non-reviewer answers.
+        if answer and workdir is not None and "Changed functions:" in prompt:
             from pathlib import Path
 
             root = Path(workdir)

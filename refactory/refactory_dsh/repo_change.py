@@ -152,8 +152,9 @@ def materialise_node(**fields: Any) -> Node:
     """The op that applies ``emit.txt`` as the run's next attempt (`materialise`)."""
     return Node(**{
         "id": "materialise", "kind": "op", "call": f"{OPS}:materialise",
-        "reads": (EMIT_FILE,), "writes": ("changes.diff",),
-        "produces": ("artifact", "files", "commit", "change", "emission_refused"),
+        "reads": (EMIT_FILE,), "writes": ("changes.diff", "changed-functions.json"),
+        "produces": ("artifact", "files", "commit", "change", "emission_refused",
+                     "changed_functions"),
         "notes": "commit the emitted files on the run's branch, or write the artifact directory",
         **fields,
     })
