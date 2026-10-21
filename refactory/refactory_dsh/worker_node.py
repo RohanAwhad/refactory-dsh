@@ -150,7 +150,18 @@ def main() -> int:
             # ``-m`` is the driver's worker_node.py file path).
             _pin_venv = str(Path(_pin_py).parent.parent)
             if sys.prefix != _pin_venv:
+                # Guard against infinite re-exec: if we already re-exec'd
+                # once and are still not on the pin, something is broken.
+                if os.environ.get('_REFACTORY_WORKER_REEXEC'):
+                    print(
+                        f'worker: re-exec did not land on the pin '
+                        f'(expected prefix {_pin_venv}, got {sys.prefix}); '
+                        f'the pin venv may be broken',
+                        file=sys.stderr,
+                    )
+                    return 1
                 if os.path.isfile(_pin_py):
+                    os.environ['_REFACTORY_WORKER_REEXEC'] = '1'
                     os.execv(_pin_py, [_pin_py, '-m', 'refactory_dsh.worker_node', *sys.argv[1:]])
                 print(
                     f'worker: pinned Python {_pin_py} not found; '

@@ -1143,6 +1143,236 @@ def test_drift_ignores_non_driver_fingerprints(tmp_path: Path, monkeypatch: pyte
     assert drift is None, "non-driver fingerprint change should not be counted as driver drift"
 
 
+def test_sibling_path_not_driver_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sibling directory ``<checkout>-runs/`` is not treated as driver drift.
+
+    ``fp_path.startswith(checkout)`` without a separator would match
+    ``<checkout>-runs/``.  The fix uses Path.is_relative_to on resolved paths.
+    """
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo)
+
+    # A sibling path that shares the checkout prefix but is not under it.
+    sibling = tmp_path / "repo-runs" / "graphs" / "graph.json"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_text('{"nodes": {}}')
+    sibling_fp = hashlib.sha256(sibling.read_bytes()).hexdigest()
+
+    fingerprints = {str(sibling): sibling_fp}
+
+    import refactory_dsh.pin as pin
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+
+    run_dir = tmp_path / "run"
+    _make_run_config(run_dir, commit_a, str(repo), fingerprints=fingerprints)
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    config = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
+
+    # Modify the sibling file — it must not be treated as driver drift.
+    sibling.write_text('{"nodes": {"changed": true}}')
+    drift = pin.detect_drift(config)
+    assert drift is None, "sibling path change should not be driver drift"
+
+
+def test_run_inside_checkout_unmoved_driver_changed_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run inside the driver checkout with an unmoved driver and a changed
+    run graph is refused by recovery.prepare, not pinned.
+
+    This is the default layout: runs sit in ``.factory/interactive/<mode>``
+    under the checkout.  A changed graph is a non-driver fingerprint and must
+    raise "prepared configuration … changed".
+    """
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo, files={"refactory/refactory_dsh/module.py": "v1"})
+
+    # Run directory INSIDE the checkout (the default layout).
+    run_dir = repo / ".factory" / "interactive" / "design"
+    run_dir.mkdir(parents=True)
+    (run_dir / ".refactory").mkdir(parents=True)
+
+    # Write a graph and fingerprint it.
+    run_graph = run_dir / "graphs" / "design-graph.json"
+    run_graph.parent.mkdir(parents=True)
+    run_graph.write_text('{"nodes": {}}')
+    run_graph_fp = hashlib.sha256(run_graph.read_bytes()).hexdigest()
+
+    driver_file = repo / "refactory" / "refactory_dsh" / "module.py"
+    driver_fp = hashlib.sha256(driver_file.read_bytes()).hexdigest()
+
+    fingerprints = {
+        str(driver_file): driver_fp,
+        str(run_graph): run_graph_fp,
+    }
+
+    import refactory_dsh.pin as pin
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+
+    _make_run_config(run_dir, commit_a, str(repo), fingerprints=fingerprints)
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    config = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
+
+    # Driver has NOT moved — no drift.
+    drift = pin.detect_drift(config)
+    assert drift is None
+
+    # Modify ONLY the run graph (under .factory/, not driver code).
+    run_graph.write_text('{"nodes": {"changed": true}}')
+
+    # detect_drift still returns None — graph change is not driver drift.
+    drift = pin.detect_drift(config)
+    assert drift is None
+
+
+def test_moved_driver_plus_changed_run_graph_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A moved driver plus a changed run graph: recovery.prepare refuses
+    naming the run's graphs, and the supervisor does not respawn.
+
+    The driver drift triggers pinning (skip_driver_paths set), but the
+    changed non-driver fingerprint (the run's graphs) must still raise
+    the "prepared configuration … changed" refusal.
+    """
+    from refactory_dsh import recovery
+
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo, files={"refactory/refactory_dsh/module.py": "v1"})
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / ".refactory").mkdir(parents=True)
+
+    # Write a graph and fingerprint it.
+    run_graph = run_dir / "graphs" / "design-graph.json"
+    run_graph.parent.mkdir(parents=True)
+    run_graph.write_text('{"nodes": {}}')
+    run_graph_fp = hashlib.sha256(run_graph.read_bytes()).hexdigest()
+
+    driver_file = repo / "refactory" / "refactory_dsh" / "module.py"
+    driver_fp = hashlib.sha256(driver_file.read_bytes()).hexdigest()
+
+    fingerprints = {
+        str(driver_file): driver_fp,
+        str(run_graph): run_graph_fp,
+    }
+
+    import refactory_dsh.pin as pin
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+    from refactory_dsh import paths
+    monkeypatch.setattr(paths, "REPO_ROOT", repo)
+
+    config = _make_run_config(run_dir, commit_a, str(repo),
+                              fingerprints=fingerprints,
+                              mode="test_pack/test_mode")
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    # Write a spine checkpoint.
+    checkpoint = {
+        "run_id": str(run_dir.resolve()),
+        "graph": {"name": "test_pack-test_mode"},
+        "status": "ready",
+        "configuration_fingerprints": fingerprints,
+        "file_fingerprints": {},
+    }
+    (run_dir / ".refactory" / "spine-checkpoint.json").write_text(json.dumps(checkpoint))
+
+    # Move driver to commit B (driver drift).
+    _add_commit(repo, {"refactory/refactory_dsh/module.py": "v2"})
+
+    # Change the run graph (non-driver change).
+    run_graph.write_text('{"nodes": {"changed": true}}')
+
+    # recovery.prepare with skip_driver_paths= the driver checkout must STILL
+    # refuse because the non-driver fingerprint (run graph) changed.
+    with pytest.raises(ValueError, match="changed.*explicit invalidation"):
+        recovery.prepare(run_dir, "test_pack-test_mode",
+                         skip_driver_paths=str(repo))
+
+
+def test_gui_open_stale_build_warns_not_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A GUI open on a stale build warns and opens, not refuses.
+
+    The console's _open_mode catches the RuntimeError from require_build
+    and logs a warning instead of raising ConsoleError.
+    """
+    from refactory_dsh.console import _open_mode
+    from refactory_dsh import interactive, registry, lowering
+
+    project_path = tmp_path / "proj"
+    project_path.mkdir()
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / ".refactory").mkdir(parents=True)
+
+    graphs = workdir / "graphs"
+    graphs.mkdir(parents=True)
+    (graphs / "pkg-mode.graph.json").write_text("{}")
+    (workdir / ".refactory" / "declarations.json").write_text("{}")
+
+    def _fake_prepare(mode, *, workdir=None, project=None, **kw):
+        (Path(workdir) / ".refactory" / "run-config.json").write_text(json.dumps({
+            "mode": mode, "project": str(project), "model_context": {},
+        }))
+        return "pkg-mode", graphs
+
+    monkeypatch.setattr(interactive, "prepare", _fake_prepare)
+
+    class _FakeMode:
+        def state_dict(self) -> dict:
+            return {"knobs": {}}
+
+    monkeypatch.setattr(registry, "resolve", lambda proj, mode: ("fake", _FakeMode))
+    monkeypatch.setattr(interactive, "with_knobs", lambda state, knobs: state)
+    monkeypatch.setattr(lowering, "knob_environment", lambda state, extra=None: dict(extra or {}))
+    monkeypatch.setattr("refactory_dsh.workers.environment", lambda ctx: {})
+
+    # Make require_build raise as if the build is stale under GUI mode.
+    def _stale_require_build(**kw):
+        if kw.get("gui_mode"):
+            raise RuntimeError("the build is stale; restart the GUI")
+    monkeypatch.setattr("refactory_dsh.paths.require_build", _stale_require_build)
+    monkeypatch.setenv("REFACTORY_GUI_MODE", "1")
+
+    # Should NOT raise ConsoleError — it warns and opens.
+    result = _open_mode("pkg/mode", project=project_path, workdir=workdir)
+    assert result["mode"] == "pkg/mode"
+
+
+def test_worker_reexec_guard_prevents_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broken pin venv cannot re-exec forever.
+
+    After one re-exec, if the process is still not on the pin,
+    worker_node.main() fails with a message naming both interpreters.
+    """
+    from refactory_dsh import worker_node
+
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    pin_checkout = tmp_path / "pin" / "checkout"
+    pin_py = pin_checkout / ".venv" / "bin" / "python"
+    pin_py.parent.mkdir(parents=True)
+    pin_py.write_text("#!/bin/sh\n")
+
+    config = {"driver": {"pin_checkout": str(pin_checkout)}}
+    (run_dir / ".refactory" / "run-config.json").write_text(json.dumps(config))
+
+    monkeypatch.setattr(sys, "prefix", "/wrong/venv")
+    monkeypatch.chdir(run_dir)
+    monkeypatch.setattr(sys, "argv", ["worker_node.py", "spec.json"])
+
+    # Simulate that we already re-exec'd once.
+    monkeypatch.setenv("_REFACTORY_WORKER_REEXEC", "1")
+
+    ret = worker_node.main()
+    assert ret == 1
+
+
 def test_resume_uses_check_only_for_require_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """interactive.run(resume=True) passes check_only=True to require_build.
 

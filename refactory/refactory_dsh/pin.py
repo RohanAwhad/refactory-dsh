@@ -169,11 +169,26 @@ def detect_drift(run_config: dict) -> dict | None:
     # driver drift: they are handled by recovery's explicit-invalidation
     # refusal ("prepared configuration … changed") and the supervisor's
     # prepare() call.
+    #
+    # Use Path.is_relative_to on resolved paths so a sibling directory like
+    # ``<checkout>-runs/`` is never counted as driver.  Also exclude the
+    # run's own directory and any ``.factory/`` run tree: these contain
+    # graphs/ and other per-run artefacts that are not driver code.
     from refactory_dsh.recovery import _configuration_fingerprint
 
+    checkout_resolved = Path(checkout).resolve()
     fingerprints_at_launch = driver.get("fingerprints_at_launch") or {}
     for fp_path, expected in fingerprints_at_launch.items():
-        if not fp_path.startswith(checkout):
+        fp_resolved = Path(fp_path).resolve()
+        if not fp_resolved.is_relative_to(checkout_resolved):
+            continue
+        # Paths under .factory/ inside the checkout are per-run artefacts
+        # (graphs, run configs), not driver code.
+        try:
+            rel = fp_resolved.relative_to(checkout_resolved)
+        except ValueError:
+            continue
+        if any(part == ".factory" for part in rel.parts):
             continue
         try:
             current = _configuration_fingerprint(Path(fp_path))

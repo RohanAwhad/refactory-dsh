@@ -128,11 +128,17 @@ named `graph-pin-<commit12>` provisioned in the person's own `~/.dsh` — so
 credentials stay where they are and DSH_HOME is never changed.
 
 The resume path detects drift by comparing the recorded commit and configuration
-fingerprints against the current checkout. When drift is found, the owner process
-re-execs under the pin's Python interpreter. After re-exec, `REPO_ROOT` resolves
-to the pin, so every path — `dsh_command()`, `venv_bin()`, the node commands —
-naturally points to the pin's code. The loop-breaking guard: if `REPO_ROOT`
-already equals the pin checkout, re-exec is skipped.
+fingerprints against the current checkout.  Only fingerprints under the driver
+checkout (by path component, not string prefix) count as driver drift; the run's
+own graphs, `.factory/` artefacts, and project packages are not driver drift
+and are still validated normally — a changed run graph raises the same "prepared
+configuration … changed" refusal as before.
+
+When drift is found, the owner process re-execs under the pin's Python
+interpreter. After re-exec, `REPO_ROOT` resolves to the pin, so every
+path — `dsh_command()`, `venv_bin()`, the node commands — naturally points
+to the pin's code. The loop-breaking guard: if `REPO_ROOT` already equals
+the pin checkout, re-exec is skipped.
 
 A dirty driver (uncommitted changes to machinery paths at launch) records a
 unified diff. When the pin is created, `git apply` applies that diff to the pin's

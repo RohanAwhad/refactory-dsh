@@ -369,7 +369,12 @@ def _open_mode(
     try:
         require_build(gui_mode=bool(os.environ.get("REFACTORY_GUI_MODE")))
     except RuntimeError as exc:
-        raise ConsoleError(str(exc)) from exc
+        # A stale build under the GUI must not refuse the open — warn and
+        # continue.  Main had no check here; the PR adds one, and refusing
+        # every open (including the case where a rebuild was skipped because
+        # a run was live) breaks the GUI workflow.
+        import logging as _clog
+        _clog.getLogger(__name__).warning("%s", exc)
     try:
         name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent,
                                            **({"model_context": model_context} if model_context else {}),

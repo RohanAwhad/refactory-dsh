@@ -35,10 +35,12 @@ the build is stale:
 
 - **CLI** (`refactory ceo`, `refactory optimize`): the launcher automatically runs
   `pnpm run build` before starting the run, unless a live run uses the same
-  checkout — in that case it warns and continues on the existing build.
-- **GUI** (`refactory ui`): a stale build raises an error asking you to restart —
-  `pnpm run build` and relaunch. The GUI does not rebuild `lib/` underneath
-  itself.
+  checkout — in that case it warns and continues on the existing build.  When the
+  rebuild itself fails (e.g. a syntax error in a TS source), the launch continues
+  with a warning naming the stale packages and the command to rebuild manually.
+- **GUI** (`refactory ui`): a stale build logs a warning naming the stale packages
+  and the command to rebuild (`pnpm run build`).  The GUI does not rebuild `lib/`
+  underneath itself.
 
 After every `git pull`, run `./install.sh` and restart any running GUI.
 

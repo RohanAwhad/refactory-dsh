@@ -50,7 +50,8 @@ def configuration_fingerprints(root: Path, identifier: str, project: Path) -> di
 
 
 def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = None,
-            acknowledge_failed: bool = False, skip_configuration: bool = False) -> Path:
+            acknowledge_failed: bool = False, skip_configuration: bool = False,
+            skip_driver_paths: str | None = None) -> Path:
     root = Path(root).resolve()
     checkpoint = root / '.refactory/spine-checkpoint.json'
     payload = checkpoint.read_bytes()
@@ -130,12 +131,32 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
         driver = config.get('driver', {})
         driver_checkout = driver.get('checkout', '')
         repo_root_str = str(REPO_ROOT)
-        for name, expected in expected_configuration.items():
-            actual_name = name
-            if driver_checkout and name.startswith(driver_checkout) and driver_checkout != repo_root_str:
-                actual_name = repo_root_str + name[len(driver_checkout):]
+        # When skip_driver_paths is set, driver fingerprints (those whose
+        # resolved path is under the driver checkout) are skipped — they are
+        # handled by the pin.  Non-driver fingerprints (the run's own
+        # graphs, project packages) are still checked so that "prepared
+        # configuration … changed" is raised as on main.
+        _driver_co_resolved = Path(skip_driver_paths).resolve() if skip_driver_paths else None
+        _run_root_resolved = root.resolve()
+        for fp_name, expected in expected_configuration.items():
+            actual_name = fp_name
+            fp_resolved = Path(fp_name).resolve()
+            # Decide if this fingerprint is a driver path.
+            _is_driver = False
+            if _driver_co_resolved is not None and fp_resolved.is_relative_to(_driver_co_resolved):
+                # Paths under the run's own directory are per-run artefacts
+                # even when the run is inside the checkout.
+                if not fp_resolved.is_relative_to(_run_root_resolved):
+                    _rel = fp_resolved.relative_to(_driver_co_resolved)
+                    if not any(part == ".factory" for part in _rel.parts):
+                        _is_driver = True
+            if _is_driver:
+                continue  # skipped: driver fingerprint handled by the pin
+            # Path translation for re-exec'd process comparing against the pin.
+            if driver_checkout and fp_name.startswith(driver_checkout) and driver_checkout != repo_root_str:
+                actual_name = repo_root_str + fp_name[len(driver_checkout):]
             if _configuration_fingerprint(Path(actual_name)) != expected:
-                raise ValueError(f'prepared configuration {name!r} changed; dependent results need explicit invalidation')
+                raise ValueError(f'prepared configuration {fp_name!r} changed; dependent results need explicit invalidation')
     if resource_limits:
         from refactory_dsh.budgets import ResourceLimits, RunBudget
         RunBudget.from_path(root / '.refactory/resource-usage.json').resume(ResourceLimits.from_dict(resource_limits))
@@ -178,9 +199,13 @@ def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
         # acquires its own nonblocking lock. Otherwise a fast child can reject
         # its parent as the still-active owner. The child repeats validation;
         # an intervening invocation can refuse this queued request safely.
+        # When driver drift was detected, skip only the driver's fingerprints
+        # so that non-driver changes (run graphs, project packages) still
+        # raise the "prepared configuration … changed" refusal.
+        _skip_drv = config.get('driver', {}).get('checkout') if _drift is not None else None
         prepare(root, config['mode'].replace('/', '-'),
                 acknowledge_failed=acknowledge_failed,
-                skip_configuration=(_drift is not None))
+                skip_driver_paths=_skip_drv)
     supervisor_log = root / '.refactory/supervisor.log'
     supervisor_log.parent.mkdir(parents=True, exist_ok=True)
     with supervisor_log.open('ab') as output:

@@ -1050,16 +1050,26 @@ fire.  When the prefixes differ, the worker re-execs with
 package is loaded rather than the driver's `worker_node.py` file path that
 `sys.argv[0]` holds under `-m` dispatch.
 
+A re-exec loop guard prevents infinite re-execs when the pin's venv is broken:
+the environment variable `_REFACTORY_WORKER_REEXEC` is set before `os.execv`.
+If the re-exec'd process still finds itself on the wrong venv, it fails with
+a diagnostic message naming both interpreters instead of re-exec'ing again.
+
 ### Drift scope
 
 `detect_drift` counts only fingerprint paths under the driver checkout as
-driver drift.  Changes to non-driver paths — the run's own `graphs/` directory,
-project packages — are not driver drift and do not trigger pinning.  Recovery's
-`prepare()` still refuses those changes with "prepared configuration … changed;
-dependent results need explicit invalidation", and the supervisor's `prepare()`
-calls do the same.  This prevents a run whose own configuration changed from
-receiving a full pin (worktree, installs, build, profile) and bypassing the
-explicit-invalidation refusal.
+driver drift, using `Path.is_relative_to` on resolved paths so a sibling
+directory like `<checkout>-runs/` is never counted.  Paths under `.factory/`
+inside the checkout (the run's own graphs and artefacts) are also excluded
+from driver drift.
+
+Changes to non-driver paths — the run's own `graphs/` directory, project
+packages — are not driver drift and do not trigger pinning.  Recovery's
+`prepare()` and the supervisor's `prepare()` calls still refuse those changes
+with "prepared configuration … changed; dependent results need explicit
+invalidation" even when the driver has moved and a pin is being created.
+The `skip_driver_paths` parameter tells `prepare()` which fingerprint paths
+to skip (the driver's); all others are still validated.
 
 ### Stale-build handling on resume
 
@@ -1074,6 +1084,8 @@ stopping the launch.
 The supervisor loop calls `recovery.prepare()` at two sites: the resume-pending
 path (where a person explicitly resumes) and the transient-exit respawn path.
 Both sites detect drift before `prepare()` and, when the driver has moved,
-resolve the pin and pass `skip_configuration=True` to `prepare()` so the
-fingerprint comparison does not refuse against the moved checkout. The re-exec'd
-owner child validates against the pin's files after re-exec.
+resolve the pin and pass `skip_driver_paths=` the driver checkout to
+`prepare()`.  This skips only the driver's fingerprints; non-driver
+fingerprints (the run's graphs, project packages) are still validated and
+raise the "prepared configuration … changed" refusal as on main.  The
+re-exec'd owner child validates against the pin's files after re-exec.
