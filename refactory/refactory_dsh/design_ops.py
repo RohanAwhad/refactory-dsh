@@ -202,11 +202,17 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         "pitfalls": "(no pitfalls analysis yet)",
         "pitfalls_review": "(no pitfalls review has run yet)",
     } if deliver else {}
+    claims_facts = {
+        "claims_check_feedback": "",
+        "claims_check_attempts_used": 0,
+        "design_review_status": "",
+    } if deliver else {}
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
             "research_review": "(no research review has run yet)", "research_scope": research_scope,
             "design_review_feedback": "(no design review has run yet)",
             "design_review_findings": "(no findings yet)",
             **pitfalls_facts,
+            **claims_facts,
             **UNREFUSED, **located, **planned}
 
 
@@ -422,6 +428,7 @@ def gate_design_review(ctx: Any) -> str:
         if coverage:
             ctx.set_fact("design_review_findings",
                          ctx.facts["design_review_findings"] + "\n\n" + coverage)
+        ctx.set_fact("design_review_status", design_review_status(ctx.facts))
         return "proceed"
 
     report = "\n".join(f"- {p}" for p in problems)
@@ -434,6 +441,7 @@ def gate_design_review(ctx: Any) -> str:
         if coverage:
             ctx.set_fact("design_review_findings", report + "\n\n" + coverage)
         ctx.write_text("reviews/design-review-feedback.txt", report + "\n")
+        ctx.set_fact("design_review_status", design_review_status(ctx.facts))
         return "proceed"
 
     # Reloop to design_doc with the findings.
@@ -442,6 +450,32 @@ def gate_design_review(ctx: Any) -> str:
     ctx.set_fact("design_review_findings",
                  "(no findings yet)")
     return Verdict("reloop", report)
+
+
+def design_review_status(facts: dict) -> str:
+    """One-line status for the approval gate, from the run's facts.
+
+    Returns '' when no review has run, 'Design review: PASS' on pass,
+    or 'Design review: FAIL, N unresolved' plus one line per finding.
+    """
+    used = int(facts.get("design_review_attempts_used", 0))
+    if used == 0:
+        return ""
+    findings = str(facts.get("design_review_findings", ""))
+    if "(none: the design review" in findings:
+        return "Design review: PASS"
+    if findings == "(no findings yet)":
+        return ""
+    lines = [
+        ln for ln in findings.splitlines()
+        if ln.startswith("- ")
+        and not ln.startswith("- the review did not state 'VERDICT: PASS'")
+    ]
+    n = len(lines)
+    return (
+        f"Design review: FAIL, {n} unresolved\n"
+        + "\n".join(lines)
+    )
 
 
 def gate_pitfalls(ctx: Any) -> str:
