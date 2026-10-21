@@ -1058,8 +1058,10 @@ describe('a fork with nothing to fan out to', () => {
     spine.verdict('gate', 'proceed')
     // Skip b with person provenance
     spine.skip('b', { source: 'person', at: '2026-01-01T00:00:00Z' })
-    // Redo gate (which calls invalidateNodes with clearSkips=true for b)
-    spine.redo('gate')
+    // Redo the gate's upstream node (a), which calls invalidateNodes
+    // with clearSkips=true for all descendants (gate, b).
+    // planRedo refuses gates directly; redo a instead.
+    spine.redo('a')
     const state = spine.state()
     // After redo, provenance for b should be cleared
     expect(prov(state).b).toBeUndefined()
