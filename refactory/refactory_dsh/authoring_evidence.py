@@ -529,8 +529,7 @@ def correction_audit_problems(ctx: Any) -> list[str]:
             if in_section and s.startswith("## "):
                 break
             if in_section and (s.startswith("- ") or s.startswith("* ")):
-                import re as _re
-                m = _re.match(r'[`*]*([^`*\s]+:\d+(?:-\d+)?)', s[2:].strip())
+                m = re.match(r'[`*]*([^`*\s]+:\d+(?:-\d+)?)', s[2:].strip())
                 if m:
                     exempted_sites.add(m.group(1))
 

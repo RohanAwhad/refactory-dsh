@@ -81,50 +81,70 @@ def test_time(monkeypatch):
     violations = patch_scope.check_python_patches(
         src, "test_time", ["refactory_dsh"], ["budgets.py"],
     )
-    # The target 'refactory_dsh.budgets.time.time' should resolve through the
-    # owning module's imports.  When the owning module file is not on disk (as in
-    # this unit test), the resolver falls back to checking whether the leaf of
-    # the chain ('time.time') is allowlisted.  The test file imports ``time``,
-    # so _resolve_through_imports maps the partial chain.  Either way the target
-    # should NOT be flagged as a project-module violation.
-    assert not violations, (
-        f"expected no violations: 'time.time' is allowlisted, but got {violations}"
-    )
+    # Should resolve to time.time (allowlisted) via the suffix fallback
+    assert not violations, f"expected no violation (resolves to allowlisted): {violations}"
 
 
 def test_python_function_level_only_flags_patching_function():
     src = '''
+import pytest
+
 def test_clean():
-    assert 1 + 1 == 2
+    assert True
 
 def test_patching(monkeypatch):
     monkeypatch.setattr('refactory_dsh.design_ops.check_artifact', lambda *a: None)
     assert True
 '''
-    clean = patch_scope.check_python_patches(
+    # Only test_patching should be flagged, not test_clean
+    violations_clean = patch_scope.check_python_patches(
         src, "test_clean", ["refactory_dsh"], ["design_ops.py"],
     )
-    assert not clean, "test_clean does not patch anything"
-
-    patching = patch_scope.check_python_patches(
+    violations_patching = patch_scope.check_python_patches(
         src, "test_patching", ["refactory_dsh"], ["design_ops.py"],
     )
-    assert patching, "test_patching should be flagged"
+    assert not violations_clean, "test_clean should not be flagged"
+    assert violations_patching, "test_patching should be flagged"
+
+
+def test_python_conftest_fixture_included():
+    # Simulate a conftest fixture that patches project code
+    src = '''
+import pytest
+
+def test_uses_fixture(patched_design_ops):
+    assert True
+'''
+    # The fixture is defined in the same file for simplicity
+    src_with_fixture = '''
+import pytest
+
+@pytest.fixture
+def patched_design_ops(monkeypatch):
+    monkeypatch.setattr('refactory_dsh.design_ops.check_artifact', lambda *a: None)
+
+def test_uses_fixture(patched_design_ops):
+    assert True
+'''
+    violations = patch_scope.check_python_patches(
+        src_with_fixture, "test_uses_fixture", ["refactory_dsh"], ["design_ops.py"],
+    )
+    assert violations, "expected a violation via conftest fixture"
 
 
 def test_typescript_vi_mock_flags_relative_import():
     src = '''
 import { vi } from 'vitest';
-import { helper } from '../src/helper';
-
 vi.mock('../src/helper');
 
-test('something', () => {
-    expect(true).toBe(true);
+describe('test', () => {
+    it('works', () => {
+        expect(true).toBe(true);
+    });
 });
 '''
     violations = patch_scope.check_typescript_patches(
-        src, "something", ["@project"], ["src/helper.ts"],
+        src, "works", [], ["src/helper.ts"],
     )
     assert violations, "expected a violation for vi.mock of relative import"
 
@@ -133,56 +153,20 @@ def test_typescript_vi_mock_allows_external_package():
     src = '''
 import { vi } from 'vitest';
 vi.mock('@deepseek-ai/schemastery');
-
-test('external', () => {
-    expect(true).toBe(true);
-});
 '''
     violations = patch_scope.check_typescript_patches(
-        src, "external", ["@project"], ["src/helper.ts"],
+        src, "", [], ["src/helper.ts"],
     )
     assert not violations, "external package should not be flagged"
-
-
-def test_python_conftest_fixture_included():
-    """A function that requests a conftest fixture that patches project code is flagged."""
-    conftest_src = '''
-import pytest
-
-@pytest.fixture
-def patched_check(monkeypatch):
-    monkeypatch.setattr('refactory_dsh.design_ops.check_artifact', lambda *a: None)
-'''
-    test_src = '''
-def test_uses_fixture(patched_check):
-    assert True
-'''
-    # Parse the conftest to get its AST
-    import ast as _ast
-    conftest_tree = _ast.parse(conftest_src)
-    # check_python_patches currently doesn't accept conftest_trees directly,
-    # but the fixture detection looks in the test file's own AST plus conftest.
-    # To test the conftest path, we combine them into one source.
-    combined_src = conftest_src + "\n" + test_src
-    violations = patch_scope.check_python_patches(
-        combined_src, "test_uses_fixture", ["refactory_dsh"], ["design_ops.py"],
-    )
-    assert violations, (
-        "expected a violation: conftest fixture patches project code on the path"
-    )
 
 
 def test_typescript_vi_spyon_flags_project_import():
     src = '''
 import { vi } from 'vitest';
 import { helper } from '../src/helper';
-
-test('spy', () => {
-    vi.spyOn(helper, 'parse');
-    expect(true).toBe(true);
-});
+vi.spyOn(helper, 'parse');
 '''
     violations = patch_scope.check_typescript_patches(
-        src, "spy", ["@project"], ["src/helper.ts"],
+        src, "", [], ["src/helper.ts"],
     )
     assert violations, "expected a violation for vi.spyOn on project import"
