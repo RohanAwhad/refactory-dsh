@@ -1,0 +1,438 @@
+{
+  "name": "default_pack-edit_fast",
+  "nodes": {
+    "emit": {
+      "id": "emit",
+      "reads": [
+        "brief.json",
+        "repair.txt",
+        "survey.json",
+        "validation.txt"
+      ],
+      "writes": [
+        "emit.txt"
+      ],
+      "blocking": true,
+      "resource_role": "work",
+      "role": "builder",
+      "model": "",
+      "prompt_template": "Current stage: emit the package into emit.txt.\nRevise an existing mode. The reference below is its current source: keep everything the brief does not ask to change, and change only what it asks for. Prefer the smallest edit that achieves the brief over a rewrite.\nPackage name: {{name}}\nBrief: {{brief}}\nClass of work: {{class_of_work}}\nInputs: {{requires_input}}\nAPI: {{api}}\nSelected reference: {{survey}}\nReference source: {{reference}}\nLast structural validation: {{validation}}\nRepair findings: {{repair_feedback}}\nImplement the smallest complete reusable package that satisfies the brief. Use the supplied API and reference source directly. Inspect reference files only to resolve a concrete missing dependency or detail; do not search for other packages, read framework internals, delivery receipts or prior acceptance histories. Preserve Task bindings, feedable inputs and required artifact invariants. Do not delegate or launch research or review subagents. A focused QA stage and canonical runtime validation follow. Emit the whole package as file blocks introduced by ===FILE: <relative path>===, starting with __init__.py containing PACKAGE = nn.Package(...). Paths are relative to the package root, never prefixed with the package name. Write those blocks to emit.txt. Write nothing but emit.txt: do not apply or test your change anywhere \u2014 the target, the run's worktree or a copy \u2014 because materialise and the check do that after you answer and send you the result. Then return a short completion message. Materialization, registration, structural admission, the requested check and canonical smoke belong to later runtime nodes; do not invoke them or locate their implementation during emission.",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "focused_check": {
+      "id": "focused_check",
+      "reads": [
+        "authoring-evidence.json",
+        "emit.txt",
+        "smoke.json"
+      ],
+      "writes": [
+        "authoring-evidence.json",
+        "focused-check.json",
+        "focused-source.json"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "command": "python -m refactory_dsh.run refactory_dsh.fast_ops:focused_check",
+      "callable_name": "refactory_dsh.fast_ops:focused_check",
+      "notes": "run the explicitly requested bounded check; no implicit full evaluation",
+      "command_timeout_s": 8580,
+      "_type": "FnNode"
+    },
+    "focused_qa": {
+      "id": "focused_qa",
+      "reads": [
+        "authoring-evidence.json",
+        "brief.json",
+        "focused-check.json"
+      ],
+      "writes": [
+        "focused-qa.json",
+        "intent-audit.json"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "role": "code_reviewer",
+      "model": "",
+      "prompt_template": "Perform one focused QA review of the requested change. Brief: {{brief}}\nArtifact/package path: {{output_path}}\nEmitted or changed files to review: {{review_files}}\nRequired check command and its runtime result: {{focused_check}}\nRead those files and relevant existing checks; inspect other project source only when needed to understand a dependency or finding. Use the supplied runtime result as evidence for the check already executed. Run any additional checks the brief requires that this result does not cover. Check the requested behavior and obvious regressions; do not delegate or launch research, other reviewers, an optimizer or a full model evaluation. Honor checks explicitly requested in the brief, and state any that could not run. Do not modify the implementation during QA. Do not inspect framework internals, delivery receipts or prior acceptance histories to discover this stage's output contract; it is specified below.\nWrite focused-qa.json with exactly this shape: {\"status\":\"pass\" or \"fail\", \"checks\":[{\"name\":\"...\", \"command\":\"... or source inspection\", \"status\":\"pass\" or \"fail\" or \"not_run\", \"evidence\":\"actual output or specific source finding\"}], \"findings\":[\"unresolved defects\"], \"not_run\":[\"checks outside this focused scope\"]}. At least one substantive check is required. A required check not run is a failure. Structural admission, runtime validation and this review are different evidence. After writing focused-qa.json, return a short completion message. The runtime reads that file, applies the repair bound and advances the graph; do not run the gate, generate extra reports or repeat completed checks for handoff.\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory and read authoring-evidence.json for the full validation receipt.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{repair_feedback}}\n{{qa_gate}}\n{{overwatch_review}}\nThe runtime has already executed canonical smoke/acceptance on this revision. Read its receipt and actual output files; do not repeat a full model/Task feed. Use targeted spot checks only for a concrete uncovered requirement. A numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n\nWrite intent-audit.json as {\"requirements\":[{\"id\":\"baseline id\", \"requirement\":\"the concrete ask(s) checked\", \"status\":\"pass|fail|unverified|excluded\", \"clauses\":[{\"clause\":\"one distinct obligation\", \"evidence\":[{\"path\":\"file\", \"detail\":\"finding\"}]}], \"evidence\":[{\"path\":\"actual file path\", \"detail\":\"command/output or precise finding\"}], \"reason\":\"explanation\", \"user_change\":\"ledger id or brief, only for an explicit user exclusion\", \"user_quote\":\"exact text of that explicit exclusion\"}]}. For every constraint or correction row, list each distinct clause \u2014 every separate obligation in the text \u2014 in the \"clauses\" array, each with its own evidence from the diff. Omitting a clause that is in the text, or listing a clause with no evidence, is a structural failure. Cover EVERY baseline id in authoring-evidence.json, decomposing compound asks into separate rows with the same id when needed. Map every ask, accepted criterion, design obligation and current ledger instruction to actual current evidence. Evidence paths are relative to the run directory or absolute delivered file paths. Cite existing individual files, never directories, line-number suffixes or intent-audit.json itself. Write every probe fixture you create into the run directory, under a path namespaced to your own node (for example `scratch/<node id>/<name>`), never /tmp or any other outside location and never a peer's shared name: concurrent reviewers stage probes beside each other, so a flat shared name can be clobbered by a peer. The audit accepts only files inside the run directory or the delivered artifact, so a fixture kept elsewhere cannot be cited and its verification is lost. A pass needs a supporting file and specific evidence; an exclusion needs the actual explicit user change id, exact user_quote and reason. Report omissions as fail/unverified with precise reasons, even if other reviewers passed.\nIf authoring-evidence.json contains a non-empty \"process_notes\" list, write a \"process_notes\" key in intent-audit.json as [{\"id\":\"ledger-N\", \"text\":\"the directive\", \"followed\":true|false, \"detail\":\"where in the run artifacts this was or was not followed\"}]. Cite run artifacts other than intent-audit.json. Process notes are not baseline requirements and never block the gate; this section is informational so a person reviewing the run can see whether each directive was honoured.\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "gate_qa": {
+      "id": "gate_qa",
+      "reads": [
+        "authoring-evidence.json",
+        "focused-check.json",
+        "focused-qa.json",
+        "focused-source.json",
+        "intent-audit.json"
+      ],
+      "writes": [
+        "fast-report.json",
+        "repair.txt"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.fast_ops:gate_qa",
+      "gate_prompt": "repair only within the shared bound; unresolved findings are failure",
+      "max_iterations": 4,
+      "_type": "GateNode"
+    },
+    "materialise": {
+      "id": "materialise",
+      "reads": [
+        "emit.txt"
+      ],
+      "writes": [
+        "staging/manifest.json"
+      ],
+      "blocking": true,
+      "resource_role": "work",
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:materialise",
+      "callable_name": "refactory_dsh.create_ops:materialise",
+      "notes": "write the staged package to disk",
+      "_type": "FnNode"
+    },
+    "prepare": {
+      "id": "prepare",
+      "reads": [],
+      "writes": [
+        "brief.json",
+        "repair.txt",
+        "research-review.txt",
+        "staging/source-snapshot.json",
+        "strategy-review.txt",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "resource_role": "work",
+      "command": "python -m refactory_dsh.run refactory_dsh.fast_ops:prepare_package",
+      "callable_name": "refactory_dsh.fast_ops:prepare_package",
+      "notes": "read the brief, set up per-run staging, and publish to the prompts",
+      "_type": "FnNode"
+    },
+    "register": {
+      "id": "register",
+      "reads": [],
+      "writes": [
+        "registered.json",
+        "staging/package-diff.json"
+      ],
+      "blocking": true,
+      "resource_role": "work",
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:register",
+      "callable_name": "refactory_dsh.create_ops:register",
+      "notes": "confirm the registry lists the new package",
+      "_type": "FnNode"
+    },
+    "report": {
+      "id": "report",
+      "reads": [
+        "authoring-evidence.json",
+        "intent-audit.json"
+      ],
+      "writes": [
+        "create.json",
+        "fast-report.json"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "command": "python -m refactory_dsh.run refactory_dsh.fast_ops:report_package",
+      "callable_name": "refactory_dsh.fast_ops:report_package",
+      "notes": "summarise what was created",
+      "_type": "FnNode"
+    },
+    "smoke": {
+      "id": "smoke",
+      "reads": [],
+      "writes": [
+        "authoring-evidence.json",
+        "fast-report.json",
+        "repair.txt",
+        "revision.json",
+        "smoke.json",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.create_ops:gate_smoke",
+      "command_timeout_s": 7800,
+      "gate_prompt": "run the new mode once, and compare a revision with the mode it revises; a mode that cannot score is not finished",
+      "max_iterations": 4,
+      "_type": "GateNode"
+    },
+    "survey": {
+      "id": "survey",
+      "reads": [],
+      "writes": [
+        "survey.json"
+      ],
+      "blocking": true,
+      "resource_role": "work",
+      "command": "python -m refactory_dsh.run refactory_dsh.fast_ops:survey_package",
+      "callable_name": "refactory_dsh.fast_ops:survey_package",
+      "notes": "record only the explicitly requested reference; fast mode does not research other packages",
+      "_type": "FnNode"
+    },
+    "validate": {
+      "id": "validate",
+      "reads": [
+        "brief.json",
+        "emit.txt"
+      ],
+      "writes": [
+        "fast-report.json",
+        "repair.txt",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "resource_role": "work",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.fast_ops:validate_package",
+      "gate_prompt": "import the package and check it is a usable mode",
+      "max_iterations": 4,
+      "_type": "GateNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "emit",
+      "target": "materialise",
+      "condition": null
+    },
+    {
+      "source": "focused_check",
+      "target": "focused_qa",
+      "condition": null
+    },
+    {
+      "source": "focused_qa",
+      "target": "gate_qa",
+      "condition": null
+    },
+    {
+      "source": "gate_qa",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_qa",
+      "target": "report",
+      "condition": "proceed"
+    },
+    {
+      "source": "materialise",
+      "target": "validate",
+      "condition": null
+    },
+    {
+      "source": "prepare",
+      "target": "survey",
+      "condition": null
+    },
+    {
+      "source": "register",
+      "target": "smoke",
+      "condition": null
+    },
+    {
+      "source": "smoke",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "smoke",
+      "target": "focused_check",
+      "condition": "proceed"
+    },
+    {
+      "source": "survey",
+      "target": "emit",
+      "condition": null
+    },
+    {
+      "source": "validate",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "validate",
+      "target": "register",
+      "condition": "proceed"
+    }
+  ],
+  "start_node": "prepare",
+  "terminal": true,
+  "knob_values": {
+    "task_ref": "",
+    "single_shot": 0.0,
+    "smoke_timeout_s": 3600.0,
+    "sample_knobs": "",
+    "requires_input": "",
+    "data_node": 0.0,
+    "name": "",
+    "brief": "",
+    "revision_of": "",
+    "allow_regression": 0.0,
+    "repair_attempts": 1.0,
+    "check": "",
+    "check_timeout_s": 60.0
+  },
+  "knob_specs": {
+    "task_ref": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "a Task class the produced mode must satisfy, as `module:Class` or a registered name (empty for none)",
+      "required": false
+    },
+    "single_shot": {
+      "default": false,
+      "kind": "bool",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "build the harness for one run of one thing, with no Task binding; the explicit alternative to naming a Task, and one of the two is required",
+      "required": false
+    },
+    "smoke_timeout_s": {
+      "default": 3600,
+      "kind": "int",
+      "lo": 1,
+      "hi": 86400,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "wall-clock seconds allowed for each full mode validation pass, including its model calls; timeout fails creation",
+      "required": false
+    },
+    "sample_knobs": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "knob values a validation run should use, as a JSON array of \"NAME=VALUE\" strings; without them the smoke runs the declared defaults, which for an input-taking mode is the built-in fixture",
+      "required": false
+    },
+    "requires_input": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "the inputs the produced mode must accept, comma-separated (e.g. `package` or `source_tree`); each must be received as a knob named after it or read from the run directory",
+      "required": false
+    },
+    "data_node": {
+      "default": false,
+      "kind": "bool",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "build the package as a DataNode that runs its subgraph once per data item; naming a Task implies this, so the knob is only for a caller that wants to be explicit",
+      "required": false
+    },
+    "name": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "the package to create (empty takes the name from the brief)",
+      "required": false
+    },
+    "brief": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "what the package should do, in the asker's words",
+      "required": true
+    },
+    "revision_of": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "for an edit: the <package>/<mode> being revised",
+      "required": false
+    },
+    "allow_regression": {
+      "default": false,
+      "kind": "bool",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "for an edit: skip original-mode execution and score comparison; still validate the revised mode (default false)",
+      "required": false
+    },
+    "repair_attempts": {
+      "default": 1,
+      "kind": "int",
+      "lo": 0,
+      "hi": 3,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "total repairs across admission, runtime validation and focused QA",
+      "required": false
+    },
+    "check": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "explicit focused check command in the emitted package; empty means not requested",
+      "required": false
+    },
+    "check_timeout_s": {
+      "default": 60,
+      "kind": "int",
+      "lo": 1,
+      "hi": 600,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "seconds allowed for the explicit focused check",
+      "required": false
+    }
+  }
+}

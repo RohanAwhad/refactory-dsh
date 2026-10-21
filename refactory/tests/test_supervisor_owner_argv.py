@@ -6,9 +6,12 @@ These tests verify that:
    entry point.
 3. With no owner_argv and no entry point, _start_child returns None and records a failure.
 4. The interactive.prepare function writes owner_argv to run-config.json.
+5. recovery.start → supervisor records start-failure for no owner (via in-process Popen).
+6. The resume-pending and respawn code paths handle None from _start_child.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -188,17 +191,49 @@ def test_supervise_handles_none_child_inline(tmp_path):
     assert result == 1
 
 
-# ── T5: console status shows failed for None child ────────────────────────
+# ── T5: recovery.start → supervisor records start-failure ─────────────────
 
 
-def test_console_status_shows_failed_for_no_owner(tmp_path):
-    """start-failure.json with no owner_argv reason causes console.status to show failed."""
+def test_recovery_start_records_failure_for_no_owner(tmp_path):
+    """recovery.start → supervisor in-process → start-failure for no owner.
+
+    Patches subprocess.Popen so recovery.start runs the supervisor
+    in-process rather than as a subprocess.  The supervisor discovers
+    no owner_argv and no entry point, records start-failure.json, and
+    exits.  Console status reflects the failure.
+    """
+    from contextlib import contextmanager
+    from refactory_dsh import recovery, console
+
     root = _make_run_dir(tmp_path, mode='default_pack/design', status='ready')
-    sv.record_start_failure(
-        root, os.getpid(), 1, 'ready', 'ready',
-        reason='no owner_argv in run-config.json and no refactory.owner_module entry point',
-    )
-    from refactory_dsh import console
+
+    @contextmanager
+    def fake_ownership(wd):
+        yield 0
+
+    def fake_popen(argv, **kwargs):
+        # Run the supervisor in-process so we can assert its side effects.
+        sv.supervise(root, max_respawns=0)
+        m = MagicMock()
+        m.pid = os.getpid()
+        return m
+
+    with (
+        patch('refactory_dsh.run_ownership.ownership', fake_ownership),
+        patch.object(recovery, 'prepare', lambda r, n, **kw: None),
+        patch('refactory_dsh.pin.detect_drift', return_value=None),
+        patch('subprocess.Popen', side_effect=fake_popen),
+        patch('importlib.metadata.entry_points', return_value=[]),
+    ):
+        result = recovery.start(root)
+
+    assert result['status'] == 'queued'
+
+    failure = run_state.read_start_failure(root)
+    assert failure is not None
+    assert 'no owner_argv' in failure['reason']
+    assert 'refactory.owner_module' in failure['reason']
+
     st = console.status(root)
     assert st['state'] == 'failed'
     activity = st.get('activity', {})
@@ -299,3 +334,100 @@ def test_fallback_command_matches_todays_format(tmp_path):
     today_argv = [sys.executable, '-m', 'refactory_dsh.interactive', mode,
                   '--workdir', str(root), '--headless', '--resume']
     assert argv == today_argv
+
+
+# ── T8: resume-pending path handles None child ────────────────────────────
+
+
+def test_supervise_resume_pending_none_child(tmp_path):
+    """Resume-pending: _start_child → None preserves start-failure and exits.
+
+    Without the ``if child is None`` guard at the resume-pending site, the
+    code clears start-failure.json via ``sf_path.unlink()``.  This test
+    fails when that guard is removed.
+    """
+    root = _make_run_dir(tmp_path, mode='default_pack/design', status='executing')
+
+    # Write resume-pending.json with correct checkpoint SHA.
+    cp_bytes = (root / '.refactory/spine-checkpoint.json').read_bytes()
+    pending = {
+        'at': '2026-01-01T00:00:00+00:00',
+        'checkpoint_sha256': hashlib.sha256(cp_bytes).hexdigest(),
+    }
+    (root / '.refactory/resume-pending.json').write_text(json.dumps(pending))
+
+    def mock_start_child(r):
+        sv.record_start_failure(
+            r, os.getpid(), 1,
+            run_state.spine_status(r), run_state.spine_status(r),
+            reason='no owner_argv in run-config.json and no '
+                   'refactory.owner_module entry point')
+        return None
+
+    with (
+        patch.object(sv, '_start_child', side_effect=mock_start_child),
+        patch('refactory_dsh.recovery.prepare', lambda r, n, **kw: r / 'graphs'),
+    ):
+        result = sv.supervise(root, first_exit_code=1, max_respawns=3)
+
+    assert result == 1  # inline → last_exit_code
+
+    # The guard must prevent sf_path.unlink() from clearing start-failure.
+    failure = run_state.read_start_failure(root)
+    assert failure is not None, (
+        'start-failure.json was cleared; the resume-pending None guard is missing')
+    assert 'no owner_argv' in failure['reason']
+
+
+# ── T9: respawn path handles None child ───────────────────────────────────
+
+
+def test_supervise_respawn_none_child(tmp_path):
+    """Respawn: _start_child → None exits cleanly without AttributeError.
+
+    Without the ``if child is None`` guard at the respawn site, the code
+    accesses ``child.pid`` and raises ``AttributeError``.  This test fails
+    when that guard is removed.
+    """
+    root = _make_run_dir(tmp_path, mode='default_pack/design', status='executing')
+
+    # Set owner_pid to a dead process so needs_supervision returns True.
+    dead = _dead_pid()
+    cp = json.loads((root / '.refactory/spine-checkpoint.json').read_text())
+    cp['owner_pid'] = dead
+    (root / '.refactory/spine-checkpoint.json').write_text(json.dumps(cp))
+
+    call_count = 0
+
+    class FakeChild:
+        def __init__(self):
+            self.pid = dead
+            self.returncode = 1
+        def wait(self):
+            pass
+        def poll(self):
+            return self.returncode
+
+    def mock_start_child(r):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return FakeChild()
+        # Second call: simulate no owner.
+        sv.record_start_failure(
+            r, os.getpid(), 1,
+            run_state.spine_status(r), run_state.spine_status(r),
+            reason='no owner_argv in run-config.json and no '
+                   'refactory.owner_module entry point')
+        return None
+
+    with (
+        patch.object(sv, '_start_child', side_effect=mock_start_child),
+        patch('refactory_dsh.recovery.prepare', lambda r, n, **kw: r / 'graphs'),
+    ):
+        result = sv.supervise(root, first_exit_code=1, max_respawns=3)
+
+    assert result == 1  # no crash, returns last_exit_code
+    assert call_count >= 2, (
+        'respawn site was not reached; _start_child was called '
+        f'{call_count} time(s)')

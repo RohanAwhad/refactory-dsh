@@ -713,7 +713,9 @@ naming product modules by string:
    appends the current root at call time, keeping its current-root behaviour
    and avoiding stale absolute paths. For backward compatibility with runs
    created before this change, the supervisor discovers the owner module
-   from the `refactory.owner_module` entry point.
+   from the `refactory.owner_module` entry point.  The supervisor fallback
+   is the only owner-module lookup; it takes the first entry point without
+   caching.
 
 **Behaviour changes:** Behaviour is unchanged on both runtimes
 (`python -m refactory_dsh.design` and `refactory ceo`). After pulling:

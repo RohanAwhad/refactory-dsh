@@ -202,6 +202,7 @@ def _build_owner_argv(root: Path) -> tuple[list[str] | None, str]:
     # No owner_argv and no entry point: cannot build argv.
     return None, project
 
+
 def _start_child(root: Path) -> subprocess.Popen | None:
     """Start the owner child process.  Returns None when no owner is available."""
     argv, project = _build_owner_argv(root)

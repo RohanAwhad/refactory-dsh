@@ -1,0 +1,311 @@
+{
+  "name": "loop_mode-loop",
+  "nodes": {
+    "again": {
+      "id": "again",
+      "reads": [
+        "scheduler.json"
+      ],
+      "writes": [],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:again",
+      "gate_prompt": "loop back to forward, or leave for the report",
+      "max_iterations": 64,
+      "_type": "GateNode"
+    },
+    "backward": {
+      "id": "backward",
+      "reads": [
+        "loop/journal.jsonl"
+      ],
+      "writes": [
+        "loop/journal.jsonl",
+        "loop/state.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:backward",
+      "callable_name": "refactory_packages.loop_mode.ops:backward",
+      "notes": "read the traces into the gradient the proposal step receives",
+      "_type": "FnNode"
+    },
+    "forward": {
+      "id": "forward",
+      "reads": [
+        "loop/config.json",
+        "loop/journal.jsonl"
+      ],
+      "writes": [
+        "loop/journal.jsonl",
+        "loop/progress.jsonl",
+        "loop/runs/",
+        "loop/state.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:forward",
+      "callable_name": "refactory_packages.loop_mode.ops:forward",
+      "notes": "run the batch; the only step that spends evaluation budget",
+      "_type": "FnNode"
+    },
+    "init": {
+      "id": "init",
+      "reads": [],
+      "writes": [
+        "loop/config.json",
+        "loop/journal.jsonl",
+        "loop/state.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:init",
+      "callable_name": "refactory_packages.loop_mode.ops:init",
+      "notes": "seed the population; the only step that reads the settings",
+      "_type": "FnNode"
+    },
+    "loss": {
+      "id": "loss",
+      "reads": [
+        "loop/journal.jsonl"
+      ],
+      "writes": [
+        "loop/journal.jsonl",
+        "loop/state.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:loss",
+      "callable_name": "refactory_packages.loop_mode.ops:loss",
+      "notes": "turn the batch into one number",
+      "_type": "FnNode"
+    },
+    "optimizer": {
+      "id": "optimizer",
+      "reads": [
+        "loop/config.json",
+        "loop/journal.jsonl"
+      ],
+      "writes": [
+        "loop/journal.jsonl",
+        "loop/pending.json",
+        "loop/state.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:optimizer",
+      "callable_name": "refactory_packages.loop_mode.ops:optimizer",
+      "notes": "propose the next batch, validated before anything is run",
+      "_type": "FnNode"
+    },
+    "report": {
+      "id": "report",
+      "reads": [
+        "loop/config.json",
+        "loop/journal.jsonl"
+      ],
+      "writes": [
+        "loop/manifest.json",
+        "loop/report.json",
+        "loop/report.md"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:report",
+      "callable_name": "refactory_packages.loop_mode.ops:report",
+      "notes": "write the report, the visibility surface",
+      "_type": "FnNode"
+    },
+    "scheduler": {
+      "id": "scheduler",
+      "reads": [
+        "loop/journal.jsonl"
+      ],
+      "writes": [
+        "loop/journal.jsonl",
+        "loop/state.json",
+        "scheduler.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:scheduler",
+      "callable_name": "refactory_packages.loop_mode.ops:scheduler",
+      "notes": "close the epoch and say what bound the run",
+      "_type": "FnNode"
+    },
+    "step": {
+      "id": "step",
+      "reads": [
+        "loop/journal.jsonl",
+        "loop/pending.json"
+      ],
+      "writes": [
+        "loop/journal.jsonl",
+        "loop/state.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.loop_mode.ops:step",
+      "callable_name": "refactory_packages.loop_mode.ops:step",
+      "notes": "install the offspring that are genuinely new points",
+      "_type": "FnNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "again",
+      "target": "forward",
+      "condition": "again"
+    },
+    {
+      "source": "again",
+      "target": "report",
+      "condition": "done"
+    },
+    {
+      "source": "backward",
+      "target": "optimizer",
+      "condition": null
+    },
+    {
+      "source": "forward",
+      "target": "loss",
+      "condition": null
+    },
+    {
+      "source": "init",
+      "target": "forward",
+      "condition": null
+    },
+    {
+      "source": "loss",
+      "target": "backward",
+      "condition": null
+    },
+    {
+      "source": "optimizer",
+      "target": "step",
+      "condition": null
+    },
+    {
+      "source": "scheduler",
+      "target": "again",
+      "condition": null
+    },
+    {
+      "source": "step",
+      "target": "scheduler",
+      "condition": null
+    }
+  ],
+  "start_node": "init",
+  "terminal": true,
+  "knob_values": {
+    "target": "circle_packing/adaptive",
+    "epochs": 2.0,
+    "batch_size": 4.0,
+    "project": ".",
+    "optimizer": "random",
+    "elite": 3.0,
+    "attempts": 3.0,
+    "max_evaluations": 64.0,
+    "seed": 0.0
+  },
+  "knob_specs": {
+    "target": {
+      "default": "circle_packing/adaptive",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": true,
+      "description": "the <package>/<mode> this run optimizes; frozen, because moving it changes what is measured rather than how well",
+      "required": false
+    },
+    "epochs": {
+      "default": 2,
+      "kind": "int",
+      "lo": 1,
+      "hi": 16,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many epochs to run",
+      "required": false
+    },
+    "batch_size": {
+      "default": 4,
+      "kind": "int",
+      "lo": 1,
+      "hi": 16,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "candidates per batch",
+      "required": false
+    },
+    "project": {
+      "default": ".",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": true,
+      "description": "the project the target is resolved against; frozen, because a different project is a different run rather than a knob",
+      "required": false
+    },
+    "optimizer": {
+      "default": "random",
+      "kind": "enum",
+      "lo": null,
+      "hi": null,
+      "enum": [
+        "random",
+        "autoresearch"
+      ],
+      "values": [],
+      "frozen": false,
+      "description": "which optimizer proposes the next batch",
+      "required": false
+    },
+    "elite": {
+      "default": 3,
+      "kind": "int",
+      "lo": 1,
+      "hi": 8,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "parents each batch is proposed against",
+      "required": false
+    },
+    "attempts": {
+      "default": 3,
+      "kind": "int",
+      "lo": 1,
+      "hi": 8,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "retries per batch after a refusal",
+      "required": false
+    },
+    "max_evaluations": {
+      "default": 64,
+      "kind": "int",
+      "lo": 1,
+      "hi": 4096,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "hard ceiling on inner runs",
+      "required": false
+    },
+    "seed": {
+      "default": 0,
+      "kind": "int",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": true,
+      "description": "the run's randomness; frozen, so a score measures the structure rather than the draw",
+      "required": false
+    }
+  }
+}

@@ -176,16 +176,13 @@ def _snapshot_path(key: str, suffix: str = "") -> Path:
     return SNAPSHOT_DIR / f"{key}{suffix}.graph.json"
 
 
-@pytest.fixture(scope="session")
-def _ensure_snapshots():
-    """Generate snapshot files if they don't exist.
+def regenerate_snapshots() -> None:
+    """Regenerate all snapshot files from the current code.
 
-    The first run on a fresh checkout generates them from the current code.
-    Subsequent runs compare against them. To regenerate after a deliberate
-    change, delete the snapshot directory and rerun.
+    Run this once after a deliberate lowering change::
+
+        python -c "from tests.test_lowering_smoke import regenerate_snapshots; regenerate_snapshots()"
     """
-    if SNAPSHOT_DIR.exists() and any(SNAPSHOT_DIR.iterdir()):
-        return  # snapshots already exist
     SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     for key, mode_cls in _mode_classes():
         data = _lower_mode_bytes(mode_cls, name=key)
@@ -193,6 +190,18 @@ def _ensure_snapshots():
         if key in _SMOKE_MODES:
             data1800 = _lower_mode_bytes(mode_cls, name=key, smoke_timeout_s=1800)
             _snapshot_path(key, "_smoke1800").write_bytes(data1800)
+    print(f"wrote {len(list(SNAPSHOT_DIR.iterdir()))} snapshots to {SNAPSHOT_DIR}")
+
+
+@pytest.fixture(scope="session")
+def _ensure_snapshots():
+    """Verify committed snapshot files exist; never regenerate inside the test."""
+    if not SNAPSHOT_DIR.exists() or not any(SNAPSHOT_DIR.iterdir()):
+        pytest.fail(
+            f"Snapshot directory is missing or empty at {SNAPSHOT_DIR}.\n"
+            f"Regenerate with:\n"
+            f'  python -c "from tests.test_lowering_smoke import regenerate_snapshots; regenerate_snapshots()"'
+        )
 
 
 @pytest.mark.usefixtures("_ensure_snapshots")

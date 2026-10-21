@@ -1,0 +1,77 @@
+{
+  "name": "dataset_probe-dataset",
+  "nodes": {
+    "data": {
+      "id": "data",
+      "reads": [],
+      "writes": [
+        "current_item.json"
+      ],
+      "blocking": true,
+      "task_ref": "refactory_packages.dataset_probe.tasks:CountingTask",
+      "source_path": null,
+      "source_format": null,
+      "inline_items": [],
+      "subgraph_entry": "work",
+      "subgraph_exit": "work",
+      "parallelism": 1,
+      "split": "all",
+      "shuffle": false,
+      "shuffle_seed": null,
+      "limit": null,
+      "max_items": 500,
+      "_type": "DataNode"
+    },
+    "finish": {
+      "id": "finish",
+      "reads": [],
+      "writes": [
+        "done.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.dataset_probe.ops:done",
+      "callable_name": "refactory_packages.dataset_probe.ops:done",
+      "notes": "",
+      "_type": "FnNode"
+    },
+    "work": {
+      "id": "work",
+      "reads": [
+        "current_item.json"
+      ],
+      "writes": [
+        "seen.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_packages.dataset_probe.ops:record",
+      "callable_name": "refactory_packages.dataset_probe.ops:record",
+      "notes": "",
+      "_type": "FnNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "data",
+      "target": "finish",
+      "condition": null
+    }
+  ],
+  "start_node": "data",
+  "terminal": true,
+  "knob_values": {
+    "min_items": 1.0
+  },
+  "knob_specs": {
+    "min_items": {
+      "default": 1,
+      "kind": "int",
+      "lo": 1,
+      "hi": 10,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many items the whole run must have processed before any pass counts; the Task's check reads it, so raising it turns a pass that processed too little into a failure",
+      "required": false
+    }
+  }
+}

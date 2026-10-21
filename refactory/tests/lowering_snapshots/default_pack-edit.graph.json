@@ -1,0 +1,770 @@
+{
+  "name": "default_pack-edit",
+  "nodes": {
+    "code_reviewer": {
+      "id": "code_reviewer",
+      "reads": [
+        "authoring-evidence.json",
+        "design.md",
+        "emit.txt",
+        "staging/package-diff.json"
+      ],
+      "writes": [
+        "reviews/code-review.md"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "## The design\nRead the file `design.md` in the run directory. It contains the package design.\n\n## The emitted source\nRead the file `emit.txt` in the run directory. It contains the emitted package source files. Review these against the design.\n\nYou are the code reviewer. Read the emitted source against the design and the API: are every op, node, knob and fact declared and consumed, does `score()` read a fact the graph produces, and would the package import? Check that required outputs not measured by score() have explicit invariants and real content checks. Attempt the typed removal or bypass of their producers with normal validation; it must refuse. Check that admission and content guards also accept legitimate data and notation supported by the contract, not only reject bad cases. If `staging/package-diff.json` exists, review the diff between the source and the staged package. Record findings in `reviews/code-review.md`. A defect that would stop the package working is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. Style is not blocking.\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory and read authoring-evidence.json for the full validation receipt.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{validation}}\n{{qa_gate}}\n{{overwatch_review}}\nThe runtime has already executed canonical smoke/acceptance on this revision. Read its receipt and actual output files; do not repeat a full model/Task feed. Use targeted spot checks only for a concrete uncovered requirement. A numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "design": {
+      "id": "design",
+      "reads": [
+        "brief.json",
+        "strategy.json"
+      ],
+      "writes": [
+        "design.md"
+      ],
+      "blocking": true,
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "{{intent}}\n\nPackage name: {{name}}\nBrief: {{brief}}\n\n## The class of work this harness is for\n{{class_of_work}}\n\nRead the API below and write the design for the package: every operation, every node, every knob, and what score() reads. Be concrete and complete \u2014 the next step writes the code from your design alone. For each required deliverable, name its meaningful content, producer, run-time check, and whether score() measures it. Protect required ungraded producers with Mode.invariants(), using artifact_produced where appropriate. A placeholder or same-named fallback is not the requested output. Preserve mathematical reasoning in the delivered document, not only in transient programs or execution metadata. Design for the whole class of work, not for one sample: when a Task is bound, the harness reads its input from that Task's item or accepts it as a declared input. The `data` node is the harness's input port, so its items come from the Task it binds or from a `source_path` with a `source_format` at run time, never from a list baked into the graph.\n\n## The approach that was chosen\n{{strategy}}\n\n## What this mode must take as input\n{{requires_input}}\n## API\n{{api}}\n\n## Reference package\n{{reference}}\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "emit": {
+      "id": "emit",
+      "reads": [
+        "brief.json",
+        "design.md",
+        "validation.txt"
+      ],
+      "writes": [
+        "emit.txt"
+      ],
+      "blocking": true,
+      "resource_role": "work",
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "Write the package `{{name}}` as complete, runnable Python.\n\nBrief: {{brief}}\n\n## The class of work this harness is for\n{{class_of_work}}\n\nA harness is for a class of work, not for one instance of it. When a Task is bound, the harness reads its input from that Task's item \u2014 the `data` node writes `current_item.json` before each pass \u2014 or accepts it as one of the declared inputs below, and it must not hardcode a single sample. The `data` node is the input port and stays feedable at run time: declare `task_ref`, or `source_path` with a `source_format` of `directory`, `jsonl` or `csv`, and never `inline_items`. Any item of the class may arrive, with whatever path or fields it names, so assume nothing about a particular one.\n\nKeep each required ungraded deliverable's producer in invariants(); do not let successful numeric grading conceal a missing explanation. If the required content is absent, fail or retry instead of publishing a success-shaped fallback. Treat the Task input's documented JSON values and strings as data; do not reject ordinary quoted prose just because it resembles Python syntax. Content checks should enforce the promised structure and substantive content. Identify unresolved fields in their actual template context; punctuation, braces, or ordinary words alone are not evidence of a placeholder. Keep guards small and specific to a stated contract violation.\n\nDesign: Read the file `design.md` in the run directory. It contains the package design with all operations, nodes, knobs, and score definitions.\n\n## What this mode must take as input\n{{requires_input}}\n\n## API\n{{api}}\n\n## Reference package\n{{reference}}\n\n## What went wrong last time\n{{validation}}\n\n## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\nWrite every file into emit.txt as a block introduced by a line of exactly:\n===FILE: <relative path>===\nfollowed by the file's full contents. Every path is relative to the **package's own root**: the manifest is exactly `__init__.py`, not `{{name}}/__init__.py`, not `refactory/refactory_packages/{{name}}/__init__.py`, and not `.factory/packages/{{name}}/__init__.py`. The package is written where it belongs; a path that repeats its directory buries the package inside itself. Emit `__init__.py` (with `PACKAGE = nn.Package(...)`), the ops module, and any module the ops or the mode need. Use the declared ops module path in every `call` and `evaluator`. When a Task is bound, the mode must accept that Task's per-item prompt as its input and produce what its `verify()` scores, and the graph's start node is a `data` node whose `subgraph_entry` and `subgraph_exit` delimit the per-item subgraph. No prose outside the blocks. Do not create the files themselves: the materialise step writes them from emit.txt. Then return a short completion message.\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "fork_qa": {
+      "id": "fork_qa",
+      "reads": [],
+      "writes": [],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "targets": [
+        "health_checker",
+        "code_reviewer",
+        "qa_director"
+      ],
+      "_type": "ForkNode"
+    },
+    "gate_overwatch": {
+      "id": "gate_overwatch",
+      "reads": [
+        "authoring-evidence.json",
+        "intent-audit.json",
+        "reviews/overwatch.md"
+      ],
+      "writes": [
+        "reviews/overwatch-gate.txt",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.create_ops:gate_overwatch",
+      "gate_prompt": "proceed only on a stated PASS verdict",
+      "max_iterations": 12,
+      "_type": "GateNode"
+    },
+    "gate_qa": {
+      "id": "gate_qa",
+      "reads": [
+        "authoring-evidence.json",
+        "reviews/code-review.md",
+        "reviews/health-check.md",
+        "reviews/qa-synthesized.md",
+        "reviews/qa.md"
+      ],
+      "writes": [
+        "reviews/qa-gate.txt",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.create_ops:gate_qa",
+      "gate_prompt": "proceed only when every review ran and none is blocking",
+      "max_iterations": 12,
+      "_type": "GateNode"
+    },
+    "gate_research": {
+      "id": "gate_research",
+      "reads": [
+        "research-plan.json"
+      ],
+      "writes": [
+        "research-review.txt"
+      ],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.create_ops:gate_research",
+      "gate_prompt": "proceed only when the plan is a plan and its findings exist",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
+    "gate_strategy": {
+      "id": "gate_strategy",
+      "reads": [
+        "strategy.json"
+      ],
+      "writes": [],
+      "blocking": true,
+      "evaluator_type": "user",
+      "evaluator_role": null,
+      "evaluator_command": null,
+      "gate_prompt": "Approve the strategy before any code is written? The chosen approach is in strategy.json in the run directory, and the package is written from it. Answer proceed to build it, or reloop to have the strategy director choose another approach.",
+      "max_iterations": 4,
+      "_type": "GateNode"
+    },
+    "health_checker": {
+      "id": "health_checker",
+      "reads": [
+        "authoring-evidence.json",
+        "brief.json",
+        "design.md",
+        "staging/package-diff.json"
+      ],
+      "writes": [
+        "reviews/health-check.md"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "Brief: {{brief}}\n\n## The design\nRead the file `design.md` in the run directory. It contains the package design to check the implementation against.\n\nYou are the health checker. Run the created package the way a user would: import it, list its modes, check its declared tools, and run bounded interface and artifact checks. Canonical smoke has already run. Use its authoritative receipt and outputs. A targeted extra model check must name a concrete unmet criterion and its bounded scope. Record every command and its exact output in `reviews/health-check.md`. If anything fails or is missing, write `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. If `staging/package-diff.json` exists, use it to focus checks on what changed from the source package. A check you did not run is not a check that passed \u2014 say which ones you skipped.\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory and read authoring-evidence.json for the full validation receipt.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{validation}}\n{{qa_gate}}\n{{overwatch_review}}\nThe runtime has already executed canonical smoke/acceptance on this revision. Read its receipt and actual output files; do not repeat a full model/Task feed. Use targeted spot checks only for a concrete uncovered requirement. A numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "join_qa": {
+      "id": "join_qa",
+      "reads": [],
+      "writes": [],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "sources": [
+        "health_checker",
+        "code_reviewer",
+        "qa_director"
+      ],
+      "_type": "JoinNode"
+    },
+    "materialise": {
+      "id": "materialise",
+      "reads": [
+        "emit.txt"
+      ],
+      "writes": [
+        "staging/manifest.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:materialise",
+      "callable_name": "refactory_dsh.create_ops:materialise",
+      "notes": "write the staged package to disk",
+      "_type": "FnNode"
+    },
+    "overwatch": {
+      "id": "overwatch",
+      "reads": [
+        "authoring-evidence.json",
+        "brief.json",
+        "design.md",
+        "reviews/qa-synthesized.md",
+        "strategy.json"
+      ],
+      "writes": [
+        "intent-audit.json",
+        "reviews/overwatch.md"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "Brief: {{brief}}\n\n## The strategy\nRead the file `strategy.json` in the run directory. It contains the strategy and acceptance criteria.\n\n## The merged reviews\nRead the file `reviews/qa-synthesized.md` in the run directory. It contains the merged reviews from all three reviewers.\n\n## What the last audit was refused for\n{{overwatch_review}}\n\nYou are the overwatch. This is not another review: audit the reviews themselves. Take each ask in the brief and each acceptance criterion, and say what evidence proves it \u2014 a command and its output \u2014 or that nothing does. Reproduce bounded spot checks on what the reviews claim passed: import the package, read back its knobs, and inspect actual artifacts. Audit actual final validation receipts and the accepted design against the brief and latest intent ledger. Required behavior without adequate evidence is failed or unverified with a precise reason. Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. Write `reviews/overwatch.md` ending with exactly `VERDICT: PASS` or `VERDICT: FAIL`. A missing required check cannot pass.\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory and read authoring-evidence.json for the full validation receipt.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{validation}}\n{{qa_gate}}\n{{overwatch_review}}\nThe runtime has already executed canonical smoke/acceptance on this revision. Read its receipt and actual output files; do not repeat a full model/Task feed. Use targeted spot checks only for a concrete uncovered requirement. A numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n\nWrite intent-audit.json as {\"requirements\":[{\"id\":\"baseline id\", \"requirement\":\"the concrete ask(s) checked\", \"status\":\"pass|fail|unverified|excluded\", \"clauses\":[{\"clause\":\"one distinct obligation\", \"evidence\":[{\"path\":\"file\", \"detail\":\"finding\"}]}], \"evidence\":[{\"path\":\"actual file path\", \"detail\":\"command/output or precise finding\"}], \"reason\":\"explanation\", \"user_change\":\"ledger id or brief, only for an explicit user exclusion\", \"user_quote\":\"exact text of that explicit exclusion\"}]}. For every constraint or correction row, list each distinct clause \u2014 every separate obligation in the text \u2014 in the \"clauses\" array, each with its own evidence from the diff. Omitting a clause that is in the text, or listing a clause with no evidence, is a structural failure. Cover EVERY baseline id in authoring-evidence.json, decomposing compound asks into separate rows with the same id when needed. Map every ask, accepted criterion, design obligation and current ledger instruction to actual current evidence. Evidence paths are relative to the run directory or absolute delivered file paths. Cite existing individual files, never directories, line-number suffixes or intent-audit.json itself. Write every probe fixture you create into the run directory, under a path namespaced to your own node (for example `scratch/<node id>/<name>`), never /tmp or any other outside location and never a peer's shared name: concurrent reviewers stage probes beside each other, so a flat shared name can be clobbered by a peer. The audit accepts only files inside the run directory or the delivered artifact, so a fixture kept elsewhere cannot be cited and its verification is lost. A pass needs a supporting file and specific evidence; an exclusion needs the actual explicit user change id, exact user_quote and reason. Report omissions as fail/unverified with precise reasons, even if other reviewers passed.\nIf authoring-evidence.json contains a non-empty \"process_notes\" list, write a \"process_notes\" key in intent-audit.json as [{\"id\":\"ledger-N\", \"text\":\"the directive\", \"followed\":true|false, \"detail\":\"where in the run artifacts this was or was not followed\"}]. Cite run artifacts other than intent-audit.json. Process notes are not baseline requirements and never block the gate; this section is informational so a person reviewing the run can see whether each directive was honoured.\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "prepare": {
+      "id": "prepare",
+      "reads": [],
+      "writes": [
+        "brief.json",
+        "research-review.txt",
+        "staging/source-snapshot.json",
+        "strategy-review.txt",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:prepare_create",
+      "callable_name": "refactory_dsh.create_ops:prepare_create",
+      "notes": "read the brief, set up per-run staging, and publish to the prompts",
+      "_type": "FnNode"
+    },
+    "qa_director": {
+      "id": "qa_director",
+      "reads": [
+        "authoring-evidence.json",
+        "brief.json",
+        "staging/package-diff.json",
+        "strategy.json"
+      ],
+      "writes": [
+        "reviews/qa.md"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "Brief: {{brief}}\n\n## The strategy (the acceptance criteria are in it)\nRead the file `strategy.json` in the run directory. It contains the strategy with acceptance criteria to test the package against.\n\nYou are the QA director. Design adversarial checks against this package \u2014 the cases a friendly reviewer would not try \u2014 and run them. Full model/Task validation has already run in canonical smoke. Inspect its receipt and delivered outputs; do not repeat the full feed by default. Missing semantic checks, required output contracts, or other prerequisites remain blocking. Read the actual delivered files against the brief: mathematical explanations need the formula or state/transition, why it counts the requested objects, and verification. Method names, hashes, paths and successful execution alone do not establish that. Through the public package interface, check acceptance of ordinary quoted prose, Unicode and mathematical notation, including nested LaTeX braces, where the contract supports them. Check malformed inputs and unresolved template fields too, recording each acceptance or rejection and its reason. Inspect what score() does not grade, and mark any untested requirement as unverified. If `staging/package-diff.json` exists, use the diff to identify what changed from the source. Write `reviews/qa.md` with each check and its exact result. Every acceptance criterion in the strategy must have a check. Anything that breaks an acceptance criterion is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory and read authoring-evidence.json for the full validation receipt.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{validation}}\n{{qa_gate}}\n{{overwatch_review}}\nThe runtime has already executed canonical smoke/acceptance on this revision. Read its receipt and actual output files; do not repeat a full model/Task feed. Use targeted spot checks only for a concrete uncovered requirement. A numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "record_findings": {
+      "id": "record_findings",
+      "reads": [
+        "research-plan.json"
+      ],
+      "writes": [
+        "research/"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:record_findings",
+      "callable_name": "refactory_dsh.create_ops:record_findings",
+      "notes": "write each direction's finding where the reviews will look for it",
+      "_type": "FnNode"
+    },
+    "register": {
+      "id": "register",
+      "reads": [],
+      "writes": [
+        "registered.json",
+        "staging/package-diff.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:register",
+      "callable_name": "refactory_dsh.create_ops:register",
+      "notes": "confirm the registry lists the new package",
+      "_type": "FnNode"
+    },
+    "report": {
+      "id": "report",
+      "reads": [
+        "authoring-evidence.json",
+        "intent-audit.json"
+      ],
+      "writes": [
+        "create.json"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:write_result",
+      "callable_name": "refactory_dsh.create_ops:write_result",
+      "notes": "summarise what was created",
+      "_type": "FnNode"
+    },
+    "research_director": {
+      "id": "research_director",
+      "reads": [
+        "brief.json",
+        "research-review.txt",
+        "survey.json"
+      ],
+      "writes": [
+        "research-plan.json"
+      ],
+      "blocking": true,
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "{{intent}}\n\nPackage name: {{name}}\nBrief: {{brief}}\n\n## What already exists\n{{survey}}\n\nYou are the research director. Decide what has to be learned before this package can be designed: between three and five questions, each one answerable from this checkout, from the reference package, or from the API below. Spawn one subagent per question and have each write its findings to `research/<slug>.md` under the run directory, then write `research-plan.json` yourself.\n\n## What was wrong with the last plan\n{{research_review}}\n\n## The plan's shape\nWrite one JSON array and nothing else, one object per direction:\n\n[{\"focus\": \"<the question this direction answers>\",\n  \"slug\": \"<a file-name-safe name for it>\",\n  \"finding\": \"<what the answer is, in one paragraph>\"}]\n\nRules:\n- Between three and five directions for a full design, or one to three for a scoped change. The research scope is a fact set by the prepare step.\n- `slug` is lower-case letters, digits and dashes only, and `research/<slug>.md` is\n  where that direction's long form belongs.\n- `finding` states what the answer *is*. A direction nobody could answer says so in\n  the finding (\"not answered: <why>\") rather than being dropped or invented.\n- A plan that says subagents are still working is not a plan: by the time you answer,\n  the work is either done or it is not.\n\n## API\n{{api}}\n\n## Reference package\n{{reference}}\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "review": {
+      "id": "review",
+      "reads": [
+        "strategy.json"
+      ],
+      "writes": [
+        "strategy-review.txt"
+      ],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.create_ops:review_design",
+      "gate_prompt": "check the intended graph before any code exists",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
+    "smoke": {
+      "id": "smoke",
+      "reads": [],
+      "writes": [
+        "authoring-evidence.json",
+        "revision.json",
+        "smoke.json",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.create_ops:gate_smoke",
+      "command_timeout_s": 7800,
+      "gate_prompt": "run the new mode once, and compare a revision with the mode it revises; a mode that cannot score is not finished",
+      "max_iterations": 12,
+      "_type": "GateNode"
+    },
+    "strategy_director": {
+      "id": "strategy_director",
+      "reads": [
+        "brief.json",
+        "research-plan.json",
+        "survey.json"
+      ],
+      "writes": [
+        "strategy-plan.json"
+      ],
+      "blocking": true,
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "{{intent}}\n\nPackage name: {{name}}\nBrief: {{brief}}\n\n## What already exists\n{{survey}}\n\n## What the research found\n{{research}}\n\nYou are the strategy director. From the research, choose between two and five strategy perspectives on how this package could work \u2014 including one that argues for the simplest thing that satisfies the brief, and one that says what the acceptance criteria must be. Spawn one subagent per perspective and have each write `strategy/<slug>.md` under the run directory. Then write `strategy-plan.json` as an array of `{\"perspective\", \"slug\", \"intent_items\"}` objects, where `intent_items` lists the asks from the brief that perspective covers. Every ask must be covered by at least one perspective; name the uncovered ones rather than leaving them out.\n\n## Reference package\n{{reference}}\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "survey": {
+      "id": "survey",
+      "reads": [],
+      "writes": [
+        "survey.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:survey",
+      "callable_name": "refactory_dsh.create_ops:survey",
+      "notes": "enumerate what already exists, before anything is invented",
+      "_type": "FnNode"
+    },
+    "synthesize_qa": {
+      "id": "synthesize_qa",
+      "reads": [
+        "reviews/code-review.md",
+        "reviews/health-check.md",
+        "reviews/qa.md"
+      ],
+      "writes": [
+        "reviews/qa-synthesized.md"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "command": "python -m refactory_dsh.run refactory_dsh.create_ops:synthesize_qa",
+      "callable_name": "refactory_dsh.create_ops:synthesize_qa",
+      "notes": "merge the three reviews; an absent review is not a passed one",
+      "_type": "FnNode"
+    },
+    "synthesize_strategy": {
+      "id": "synthesize_strategy",
+      "reads": [
+        "brief.json",
+        "research-plan.json",
+        "strategy-plan.json",
+        "strategy-review.txt",
+        "survey.json"
+      ],
+      "writes": [
+        "strategy.json"
+      ],
+      "blocking": true,
+      "role": "ceo",
+      "model": "",
+      "prompt_template": "{{intent}}\n\nPackage name: {{name}}\nBrief: {{brief}}\n\n## What already exists\n{{survey}}\n\n## What the research found\n{{research}}\n\n## The perspectives\n{{strategy_plan}}\n\n## What went wrong last time\n{{design_review}}\n\nCompile the perspectives into one strategy. Every ask in the brief must appear in it unless the user explicitly agreed to exclude it; naming an ask out of scope does not supply that agreement. Preserve user-approved non-goals and later explicit user steering. An unmet ask remains unresolved. Then decide the approach: consider at least two, say why the one you chose wins, say what it will not do, name the existing mode it is closest to, and describe the graph you intend to write.\n\nWrite one JSON object and nothing else:\n\n{\"considered\": [{\"approach\": \"...\", \"why_not\": \"...\"}],\n \"chosen\": \"<the approach>\",\n \"why\": \"<why it wins>\",\n \"will_not\": [\"<something deliberately out of scope>\"],\n \"closest_existing\": \"<package>/<mode>, or 'none'\",\n \"knobs\": [{\"name\": \"...\", \"kind\": \"int|float|bool|str|enum\", \"default\": ...,\n            \"lo\": null, \"hi\": null, \"enum\": [], \"description\": \"...\"}],\n \"nodes\": [{\"id\": \"...\", \"kind\": \"op|agent|gate|fork|join|data\",\n            \"reads\": [], \"writes\": [], \"produces\": [], \"knobs\": [],\n            \"notes\": \"...\"}],\n \"edges\": [{\"source\": \"...\", \"target\": \"...\", \"condition\": null}],\n \"start\": \"<node id>\",\n \"score\": \"<which produced fact score() reads, and why that is the right number>\"}\n\nRules:\n- At least two approaches in `considered`. One approach is not a choice.\n- `nodes` and `edges` describe the graph you intend to write, so it can be checked\n  before any code exists. The node fields above are common fields, not a closed\n  list. Add the fields required by each node's kind below, at the node's top level;\n  putting them only in `notes` does not declare them. List each declared knob in\n  `knobs` on the nodes that consume it.\n- An `op` requires `call: \"<module>:<function>\"`.\n- An `agent` requires a nonempty `prompt_template` containing its actual worker\n  instructions. A `call` or a module path to a prompt constant is not a substitute\n  for `prompt_template`. It may also declare `role` and `tools`.\n- A function `gate` requires `evaluator: \"<module>:<function>\"`. A person-answered\n  or agent-answered gate instead declares `gate_kind: \"user\"` or `\"agent\"` and no\n  evaluator. Gates need at least two outgoing edges with distinct, nonempty\n  `condition` verdicts, no unconditional edge, and a bounded `max_iterations`.\n- A `data` node requires `subgraph_entry` and `subgraph_exit`, naming the first\n  and last nodes of the per-item subgraph. Bind the requested `task_ref`, or use a\n  runtime `source_path` and `source_format`; do not bake instances into the graph.\n  It writes `current_item.json` before each pass; declare that write when consumed.\n  Declare `item_scores` in `produces` when score() aggregates Task verdicts.\n  The subgraph is entered through these fields, NOT through an ordinary edge.\n  The data node has at most one outgoing edge, to the continuation AFTER all items;\n  the per-item exit does not need an edge back to the data node or to that\n  continuation. For example, `items` with subgraph_entry=`solve` and\n  subgraph_exit=`publish` has per-item edges solve -> execute -> explain -> publish\n  and one outer edge items -> finish. Do not add items -> solve or publish -> finish.\n  When the requested harness is Task-bound, its start node is the data node.\n- A `fork` declares `targets` naming its branch entries. A `join` declares `sources`\n  naming the branch exits it waits for. These fields connect the parallel branches;\n  do not replace them with extra ordinary edges from the fork or to the join.\n- Omit kind-specific fields that do not apply to that node. All node ids named by\n  edges, subgraph boundaries, targets and sources must exist in `nodes`.\n- Every read must be written by some node, and every declared knob consumed.\n- `closest_existing` must name a mode from the survey, or be 'none' if none is close.\n",
+      "tools": [],
+      "timeout": null,
+      "max_iterations": 1,
+      "post_checks": [],
+      "_type": "AgentNode"
+    },
+    "validate": {
+      "id": "validate",
+      "reads": [
+        "brief.json",
+        "emit.txt"
+      ],
+      "writes": [
+        "validation.txt"
+      ],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.create_ops:validate",
+      "gate_prompt": "import the package and check it is a usable mode",
+      "max_iterations": 12,
+      "_type": "GateNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "design",
+      "target": "emit",
+      "condition": null
+    },
+    {
+      "source": "emit",
+      "target": "materialise",
+      "condition": null
+    },
+    {
+      "source": "fork_qa",
+      "target": "join_qa",
+      "condition": null
+    },
+    {
+      "source": "gate_overwatch",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_overwatch",
+      "target": "overwatch",
+      "condition": "audit"
+    },
+    {
+      "source": "gate_overwatch",
+      "target": "report",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_qa",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_qa",
+      "target": "overwatch",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_research",
+      "target": "research_director",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_research",
+      "target": "strategy_director",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_strategy",
+      "target": "design",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_strategy",
+      "target": "strategy_director",
+      "condition": "reloop"
+    },
+    {
+      "source": "join_qa",
+      "target": "synthesize_qa",
+      "condition": null
+    },
+    {
+      "source": "materialise",
+      "target": "validate",
+      "condition": null
+    },
+    {
+      "source": "overwatch",
+      "target": "gate_overwatch",
+      "condition": null
+    },
+    {
+      "source": "prepare",
+      "target": "survey",
+      "condition": null
+    },
+    {
+      "source": "record_findings",
+      "target": "gate_research",
+      "condition": null
+    },
+    {
+      "source": "register",
+      "target": "smoke",
+      "condition": null
+    },
+    {
+      "source": "research_director",
+      "target": "record_findings",
+      "condition": null
+    },
+    {
+      "source": "review",
+      "target": "gate_strategy",
+      "condition": "proceed"
+    },
+    {
+      "source": "review",
+      "target": "synthesize_strategy",
+      "condition": "reloop"
+    },
+    {
+      "source": "smoke",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "smoke",
+      "target": "fork_qa",
+      "condition": "proceed"
+    },
+    {
+      "source": "strategy_director",
+      "target": "synthesize_strategy",
+      "condition": null
+    },
+    {
+      "source": "survey",
+      "target": "research_director",
+      "condition": null
+    },
+    {
+      "source": "synthesize_qa",
+      "target": "gate_qa",
+      "condition": null
+    },
+    {
+      "source": "synthesize_strategy",
+      "target": "review",
+      "condition": null
+    },
+    {
+      "source": "validate",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "validate",
+      "target": "register",
+      "condition": "proceed"
+    }
+  ],
+  "start_node": "prepare",
+  "terminal": true,
+  "knob_values": {
+    "attempts": 3.0,
+    "review_attempts": 3.0,
+    "research_attempts": 3.0,
+    "design_attempts": 2.0,
+    "task_ref": "",
+    "single_shot": 0.0,
+    "smoke_timeout_s": 3600.0,
+    "sample_knobs": "",
+    "requires_input": "",
+    "data_node": 0.0,
+    "name": "",
+    "brief": "",
+    "revision_of": "",
+    "allow_regression": 0.0
+  },
+  "knob_specs": {
+    "attempts": {
+      "default": 3,
+      "kind": "int",
+      "lo": 1,
+      "hi": 8,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many times the emit step may be retried with the validator's reasons",
+      "required": false
+    },
+    "review_attempts": {
+      "default": 3,
+      "kind": "int",
+      "lo": 1,
+      "hi": 5,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many times the review gates may reloop before stopping; defaults to the same as check_attempts",
+      "required": false
+    },
+    "research_attempts": {
+      "default": 3,
+      "kind": "int",
+      "lo": 1,
+      "hi": 8,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many times the research step may be retried when its plan is not a plan or its findings were never written",
+      "required": false
+    },
+    "design_attempts": {
+      "default": 2,
+      "kind": "int",
+      "lo": 1,
+      "hi": 5,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "how many times the strategy step may be retried when the intended graph does not hold together",
+      "required": false
+    },
+    "task_ref": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "a Task class the produced mode must satisfy, as `module:Class` or a registered name (empty for none)",
+      "required": false
+    },
+    "single_shot": {
+      "default": false,
+      "kind": "bool",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "build the harness for one run of one thing, with no Task binding; the explicit alternative to naming a Task, and one of the two is required",
+      "required": false
+    },
+    "smoke_timeout_s": {
+      "default": 3600,
+      "kind": "int",
+      "lo": 1,
+      "hi": 86400,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "wall-clock seconds allowed for each full mode validation pass, including its model calls; timeout fails creation",
+      "required": false
+    },
+    "sample_knobs": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "knob values a validation run should use, as a JSON array of \"NAME=VALUE\" strings; without them the smoke runs the declared defaults, which for an input-taking mode is the built-in fixture",
+      "required": false
+    },
+    "requires_input": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "the inputs the produced mode must accept, comma-separated (e.g. `package` or `source_tree`); each must be received as a knob named after it or read from the run directory",
+      "required": false
+    },
+    "data_node": {
+      "default": false,
+      "kind": "bool",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "build the package as a DataNode that runs its subgraph once per data item; naming a Task implies this, so the knob is only for a caller that wants to be explicit",
+      "required": false
+    },
+    "name": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "the package to create (empty takes the name from the brief)",
+      "required": false
+    },
+    "brief": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "what the package should do, in the asker's words",
+      "required": true
+    },
+    "revision_of": {
+      "default": "",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "for an edit: the <package>/<mode> being revised",
+      "required": false
+    },
+    "allow_regression": {
+      "default": false,
+      "kind": "bool",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "for an edit: skip original-mode execution and score comparison; still validate the revised mode (default false)",
+      "required": false
+    }
+  }
+}
