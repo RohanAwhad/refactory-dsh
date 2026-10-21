@@ -169,9 +169,10 @@ def wire_verification(graph: Any, *, fast: bool = False,
             writes=("reviews/verification-gate.txt", "reviews/verification-unresolved.md",
                     "fast-report.json", "repair.txt"),
             produces=("verification_gate", "repair_feedback", "repairs_used",
-                      "check_repairs_used", "verification_iterations_used"),
-            knobs=("repair_attempts",),
-            max_iterations=VERIFIER_GATE_LIMIT + 2,
+                      "check_repairs_used", "verification_iterations_used",
+                      "convergence_extras_used", "convergence_granted"),
+            knobs=("repair_attempts", "check_attempt_cap"),
+            max_iterations=15,  # check_attempt_cap(8) + VERIFIER_GATE_LIMIT(3) + review_budget(3) + 1
             notes="proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
         ))
     elif check_node and proceed_target:

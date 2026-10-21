@@ -725,6 +725,87 @@ asserts it exceeds 600 s with `check_timeout_s=1800`;
 `test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
 another name that declares the knob gets the envelope.
 
+## 24. Delivery conflict resolution loop (dm-102)
+
+When delivery merges the target branch and an authored file conflicts, the run
+loops back to the builder automatically instead of pushing behind main.
+
+**The loop.** `deliver → delivery_gate → emit → materialise`. When
+`delivery_conflict_files` is non-empty, the `delivery_gate` evaluator records
+the conflict (main's tip, the conflicted paths, and the conflict detail) in
+`pending-merge.json`, sets `validation` with the conflict description, and
+returns `reloop`. The worktree stays clean while the builder works.
+Materialise reads `pending-merge.json`, runs `git merge --no-commit
+<target_tip>`, resolves generated-file conflicts to theirs (main's side),
+applies the emission, and either commits the merge or aborts it — all in one
+deterministic step. Materialise refuses an emission that leaves conflict
+markers. When MERGE_HEAD is present, `git commit` creates a merge commit.
+The check, base comparison and reviews run on the merged result before
+delivery tries again.
+
+**The merge exists only inside materialise.** The delivery gate does not
+start a merge. It records what materialise needs, then the builder works on
+a clean worktree. Materialise's `_commit_emission` is the single place
+where `git merge --no-commit` runs, and its except/finally blocks abort it
+on any failure. A stop at any point — a crash at emit, a refused or empty
+emission, budget exhaustion, or a person's stop — leaves the worktree clean.
+
+**Safety invariants.**
+
+- *Nothing pushes without main.* `_deliver` raises `NotDelivered` on conflict,
+  check_failed or abandoned; `push_head` is never set to `found.head` as a
+  fallback. ls-remote failure on an existing repository raises instead of
+  falling through.
+- *Conflict-marker refusal.* `_commit_emission` scans each emitted file for
+  `<<<<<<<` / `>>>>>>>` (excluding `<<<<<<< SEARCH` / `>>>>>>> REPLACE`) and
+  raises `AttemptRefused` before committing.
+- *Every conflicted path in the emission.* During a merge, `_commit_emission`
+  refuses before writing unless every `--diff-filter=U` path appears in the
+  emission as ===FILE: or ===EDIT:.
+- *Worktree never left mid-merge.* The merge runs only inside
+  `_commit_emission`. On any failure (edit application, marker check, missing
+  path, commit failure), the except block aborts the merge and deletes
+  `pending-merge.json`. `_abort_pending_merge` at the top of the delivery_gate
+  evaluator cleans up any stale merge from a crashed materialise. After a
+  crash between the merge commit and the record write, `require_current`
+  adopts the existing merge commit.
+- *Loop bound.* `delivery_gate` counts reloops against `check_attempts`
+  (default 3). At the limit, it raises an error naming the conflicting files
+  without starting a merge. `graph-control redeliver` accepts a run stopped
+  there.
+- *Delivery advance (dm-116).* When delivery pushes a merge commit, the
+  finally block advances the worktree record (head = merge, base = main's
+  tip) so a later push fast-forwards.
+
+**Tests.**
+
+- `test_two_runs_conflict_reloop`: two runs editing the same function; the
+  second's delivery reloops and the pushed head is a merge commit containing
+  main; the merge's second parent is main's tip.
+- `test_merge_failure_leaves_worktree_clean`: materialise crashes during a
+  merge; no MERGE_HEAD remains.
+- `test_emission_with_conflict_markers_refused`: a file with markers is
+  refused; a normal SEARCH/REPLACE block succeeds.
+- `test_emission_missing_conflicted_path_aborts_merge`: an emission omitting
+  a conflicted path aborts the merge and leaves the worktree clean.
+- `test_materialise_base_moves_to_main_tip`: removing the base-move logic
+  fails this test.
+- `test_base_changed_authored_file_conflict`: delivery does not push on
+  authored-file conflict; conflict facts are set.
+- `test_merged_result_fails_check`: delivery does not push on failed merged
+  check; the worktree is not marked succeeded.
+- `test_edit_resolves_conflict_keeping_mains_lines`: an ===EDIT: block
+  resolves a merge conflict by keeping main's lines.
+- `test_ls_remote_failure_stops_existing_repo`: ls-remote failure on an
+  existing repository stops delivery instead of pushing without main.
+- `test_delivery_advances_worktree_after_merge_push`: after delivery pushes a
+  merge commit, the worktree record advances so a later push fast-forwards.
+- `test_apply_corrections_no_ledger_leaves_design_unchanged`: with no ledger,
+  the agent does not run and design.md is unchanged.
+- `test_unresolved_conflict_stops_after_budget`: a builder that never resolves
+  stops after check_attempts, with a clean worktree (no MERGE_HEAD, no
+  unmerged entries).
+
 ## 17. Goal completion requires a finished run (#347, C1)
 
 Goals were marked complete from runs that had failed before review. `spine.next()`
@@ -841,6 +922,82 @@ evidence. The CEO instructions explicitly forbid recommending skipping a check g
 and `test_run_report_checked_false_when_check_did_not_run`.
 
 ---
+
+### Signal-crash classification at preparation call sites (dm-105)
+
+`run_command` already retries once on direct signals (rc < 0) and on shell-wrapped
+SIGABRT/SIGBUS/SIGSEGV (exit 134/135/139). A new helper `is_signal_crash(result)`
+classifies what survives that retry: it returns `(True, signal_label)` when the
+return code is a direct signal or a shell-wrapped signal in `_AMBIGUOUS_SHELL_EXITS`.
+
+Every preparation call site — install (`worktree.ensure_environment`), generate and
+setup (`repo_change.prepare_commands`), and delivery's post-merge generate and
+merged-tree check (`delivery._regenerate_merge`, `_merge_target`, `_check_merged`)
+— calls `is_signal_crash` after `run_command` returns with `not result.ok`. When
+the crash persists, the call site normalises the `prep_failure` dict's `returncode`
+to a negative signal number so `check_failure_kind` returns `'uncertain'`
+(infrastructure), and the run stops without spending a code attempt. A shell-wrapped
+command whose child aborts and that exits 134 (as `./install.sh` did) is classified
+the same way: `run_command` retries once, and on the second crash `is_signal_crash`
+detects exit 134 in `_AMBIGUOUS_SHELL_EXITS`.
+
+In delivery, a signal crash in `_check_merged` or in `_merge_target`'s generate
+stops the run as infrastructure (raises ValueError) rather than continuing to push
+the reviewed commit. Crash detection uses the structured `infrastructure` flag on
+`MergeResult` and the second element of `_check_merged`'s return tuple, not text
+scanning for "killed by SIG".
+
+### Base comparison discard-and-rebuild on crash (dm-105)
+
+When any step of the base comparison — install, generate, setup or the check
+command itself — crashes (a signal that survives the retry), `run_base_check`
+discards `BASE_CHECK_HOME`, the base worktree and the cache file, and rebuilds
+from scratch. On double failure, the base environment is discarded again (HOME,
+worktree, cache) so the next check gets a fresh start, and the result is returned
+with `environment_failure` set but never cached. The run continues without
+excusals, and the "continued without excusals" note appears in `check.txt`, the
+evidence, and the PR's Verification section.
+
+A setup that leaves a marker in HOME before crashing makes the next check's
+setup exit 1 on reuse. This is exactly the b27a rerun failure. Discarding HOME
+after a double crash prevents it.
+
+Deterministic (non-crash) failures — a non-zero exit that repeats — are cached
+as before. The base is prepared at most twice per attempt, so the check node's
+time limit still holds.
+
+### Rolling convergence (dm-109)
+
+After the regular check attempts are spent, another check attempt is granted each
+time the attempt's parsed failure set is non-empty, a strict subset of the previous
+attempt's set, contains no failure that was not in an earlier attempt, and the
+runner completed fully (excusal_blocker returns None on the recorded check output,
+not the feedback text).  The extension stops the first time the set does not
+strictly shrink.  Hard cap: at most 8 check attempts in total (counting the regular
+ones), controlled by the `check_attempt_cap` knob (default 8, declared on design,
+design_fast, create, edit and their fast variants).  Setting it to 0 or to a value
+at or below the regular check attempts disables the extension.  An empty failure set
+is not progress.  The overall `attempts` cap does not refuse an attempt this rule
+granted: granted attempts are counted separately via `convergence_extras_used`.
+The count of granted attempts and the failure count at each granted attempt are
+recorded in the run and the PR's Verification section.
+
+Runner completion is judged from the `check_blocker_history` fact, which records
+the excusal_blocker result computed from the full check output at each attempt.
+This avoids false refusals when the feedback text (gate_qa's stderr/stdout)
+contains warning lines that excusal_blocker would misinterpret.
+
+### Repair feedback augmentation (dm-109)
+
+When a check fails, the builder's feedback includes: (a) the design's `[left: ...]`
+sites with their reasons, telling the builder not to change them but to fix the
+tests or callers instead; (b) broken guarantees — tests that fail on the attempt,
+are absent from the base's failure set, live in files the attempt did not change,
+and the base completed fully.
+
+In fast modes, the [left] sites and broken guarantees are stored in the
+`focused-check.json` payload's `robustness_notes` field by `focused_check`, and
+prepended to the builder's feedback by `gate_qa`.
 
 ## 15. Independent verification step (dm-84, #400)
 
@@ -975,6 +1132,60 @@ refuse when a new package appears (not only when an existing one changed).
 
 ---
 
+## 24. One note is one ledger entry — heading escape (dm-132)
+
+**The invariant.** One note is always one entry. The recorded source travels with the
+text: a CEO note stays a CEO note, and a user-relayed note stays user-relayed. No
+ledger writer can produce more than one entry from one note.
+
+**The attack vector.** A note body containing `## [...] verdict` or `## [...] correction`
+at the start of a line is parsed as a separate entry by `parse_entries`, because the
+parser starts a new entry at any line beginning with `## [`. A CEO note with a forged
+verdict block becomes a separate verdict entry that `take_verdict` returns through the
+upfront shortcut. A forged correction block becomes a user-relayed requirement.
+
+**The escape scheme.** Lossless backslash byte-stuffing via `splitlines(keepends=True)`.
+On write, every body line whose content (after stripping the trailing line ending) starts
+with zero-or-more backslashes followed by `## [` gains one leading backslash. On read,
+`parse_entries` removes exactly one leading backslash from lines matching `\+## [`.
+
+- `## [X]` → stored `\## [X]` → read removes one `\` → `## [X]`.
+- `\## [X]` → stored `\\## [X]` → read removes one `\` → `\## [X]`.
+- `\\## [X]` → stored `\\\## [X]` → read removes one `\` → `\\## [X]`.
+
+**The separator set.** `str.splitlines()` splits on: `\n`, `\r`, `\r\n`, `\x0b`, `\x0c`,
+`\x1c`, `\x1d`, `\x1e`, `\x85`, `\u2028`, `\u2029`. The writer and reader both use
+`splitlines(keepends=True)`, so they cannot disagree on where a line starts.
+
+**The three write sites.** `Ledger.seed()`, `Ledger.note()`, `Ledger._decision_entry()`.
+All three call `_escape_body()` on the text before writing.
+
+**The single read site.** `parse_entries()` applies `_unescape_line()` to each body line
+before appending. This is the single unescape point for all consumers (14+ call sites
+including `entries()`, `take_verdict()`, `verdicts()`, `render_entries()`,
+`requirements()`, `identity()`, and `agent_delivery.begin()`).
+
+**Verdict single-line check.** `verdict()` rejects a gate or value that spans multiple
+lines under any line separator (not just `\n`), using `len(x.splitlines()) != 1`.
+
+**Both runtimes.** The ledger is shared by the DSH runtime and the walker runtime. Both
+read through `parse_entries` and both write through the three `Ledger` methods, so the
+fix applies to both runtimes.
+
+**The legacy `\## [` edge case.** A pre-existing line starting with `\## [` in an old
+ledger will lose one backslash on read. This is theoretical — no plausible legacy content
+starts with `\## [`.
+
+**Test.** `test_steering.py`: `test_forged_verdict_in_ceo_note_does_not_produce_verdict`
+(parametrized over 6 separators), `test_forged_correction_in_ceo_note_not_a_requirement`
+(parametrized over 6 separators), `test_seed_with_forged_heading_stays_one_entry`,
+`test_decision_entry_body_escaped`, `test_literal_backslash_heading_round_trips`,
+`test_verdict_rejects_multiline_gate_or_value`,
+`test_existing_ledger_parses_unchanged`, `test_legacy_backslash_heading_edge_case`,
+`test_escape_does_not_affect_other_markdown_headings`.
+
+---
+
 Two things that were on this list have moved off it, which is the point of keeping it:
 
 - **mathlib is no longer untested.** It was installed and the mathlib problem ran, and
@@ -983,3 +1194,109 @@ Two things that were on this list have moved off it, which is the point of keepi
   where it is not, so a CI machine without it is honest rather than green by omission.
 - **SRF's own optimizer is no longer unused.** `map_elites` is ported, counted
   separately from the thirteen modes, and asserted by name (§8).
+
+
+## Pin integrity
+
+### Repository guard
+
+The `repo_guard` pytest plugin (loaded via `conftest.py`) snapshots the
+repository's worktree list, hooks and git config at session start and compares
+at session end. Any change attributed to the test session fails the suite.
+
+Pin tests use temporary git repositories created with `git init` in `tmp_path`.
+No test creates a worktree in the real repository under test, so the guard never
+fires for pin operations.
+
+### Hooks isolation during pin preparation
+
+A pin's `pnpm install` runs prepare scripts (such as `lefthook install`) that
+can rewrite the driver's shared hooks. Pin creation isolates hooks:
+
+1. `extensions.worktreeConfig` is enabled on the driver (the same extension
+   run worktrees already enable, and the canary checks already expect).
+2. `core.hooksPath` is set to `<gitdir>/hooks.isolated` as a per-worktree
+   config on the pin (the same path `worktree._isolate_hooks` uses for run
+   worktrees), so hooks write to the pin's own git dir, not the driver's
+   shared hooks.
+3. The `LEFTHOOK=0` and `HUSKY=0` environment variables are set during
+   `pnpm install` and `pnpm build`.
+
+### Dirty driver pinning
+
+When a driver has uncommitted changes to machinery paths at launch, the unified
+diff is recorded in the driver record (`dirty_diff`). When a pin is created,
+`git apply` applies that diff to the pin's worktree. If the diff conflicts with
+the pin's commit (the checkout has moved and the changes overlap), pin creation
+refuses with a `RuntimeError` naming the commit and the conflicting paths.
+
+### File lock for concurrent pin creation
+
+`create_pin()` acquires an exclusive `flock` on
+`<refactory_home>/pins/<key>.lock` before preparing a pin. Concurrent callers
+block until the first one finishes, then find the prepared pin and return it.
+A rebuild (`require_build`) is also refused when a live run uses the checkout:
+the run is registered on its driver at launch, and `_refuse_if_live_runs`
+checks every registered run's owner lock before allowing a build.
+
+### In-place pin preparation
+
+The pin is prepared directly at its final path (`<refactory_home>/pins/<key>/`),
+guarded by an exclusive file lock (`<key>.lock`). The `pin.json` file is the
+readiness marker: it is written only after all preparation steps (worktree
+creation, hooks isolation, dirty diff application, `uv sync`, `pnpm install`,
+`pnpm build`, and profile provisioning) succeed. A failure at any point removes
+the pin directory and propagates the error. Concurrent callers block on the lock
+and, after the first one finishes, find the prepared pin via `pin.json` and
+return it immediately.
+
+### Worker dispatch under a pin
+
+The dispatched worker (`worker_node.py`) compares `sys.prefix` (the venv root)
+with the pin's venv, not `os.path.realpath(sys.executable)`.  A uv venv's Python
+is a symlink to the shared uv interpreter, so `realpath` resolves both the
+driver's and the pin's binaries to the same target and the re-exec would never
+fire.  When the prefixes differ, the worker re-execs with
+`[pin_py, '-m', 'refactory_dsh.worker_node', *sys.argv[1:]]` so the pin's
+package is loaded rather than the driver's `worker_node.py` file path that
+`sys.argv[0]` holds under `-m` dispatch.
+
+A re-exec loop guard prevents infinite re-execs when the pin's venv is broken:
+the environment variable `_REFACTORY_WORKER_REEXEC` is set before `os.execv`.
+If the re-exec'd process still finds itself on the wrong venv, it fails with
+a diagnostic message naming both interpreters instead of re-exec'ing again.
+
+### Drift scope
+
+`detect_drift` counts only fingerprint paths under the driver checkout as
+driver drift, using `Path.is_relative_to` on resolved paths so a sibling
+directory like `<checkout>-runs/` is never counted.  Paths under `.factory/`
+inside the checkout (the run's own graphs and artefacts) are also excluded
+from driver drift.
+
+Changes to non-driver paths — the run's own `graphs/` directory, project
+packages — are not driver drift and do not trigger pinning.  Recovery's
+`prepare()` and the supervisor's `prepare()` calls still refuse those changes
+with "prepared configuration … changed; dependent results need explicit
+invalidation" even when the driver has moved and a pin is being created.
+The `skip_driver_paths` parameter tells `prepare()` which fingerprint paths
+to skip (the driver's); all others are still validated.
+
+### Stale-build handling on resume
+
+`interactive.run()` passes `check_only=True` to `require_build()` on resume
+and respawn.  A stale build on a resume child warns to stderr instead of
+attempting a rebuild.  Where a rebuild is attempted (a fresh launch with no live
+runs), a failed `pnpm run build` is caught and logged as a warning rather than
+stopping the launch.
+
+### Supervisor drift detection
+
+The supervisor loop calls `recovery.prepare()` at two sites: the resume-pending
+path (where a person explicitly resumes) and the transient-exit respawn path.
+Both sites detect drift before `prepare()` and, when the driver has moved,
+resolve the pin and pass `skip_driver_paths=` the driver checkout to
+`prepare()`.  This skips only the driver's fingerprints; non-driver
+fingerprints (the run's graphs, project packages) are still validated and
+raise the "prepared configuration … changed" refusal as on main.  The
+re-exec'd owner child validates against the pin's files after re-exec.

@@ -76,9 +76,9 @@ ARTIFACT_REVIEW_INSTRUCTIONS = (
 
 _PATH_LINE_RE = re.compile(r'\b[\w/._-]+\.\w+:\d+\b')
 
-EVIDENCE = "authoring-evidence.json"
+from refactory_dsh.invocations import EVIDENCE  # canonical in invocations
 AUDIT = "intent-audit.json"
-REVIEWERS = ("health_checker", "code_reviewer", "qa_director", "overwatch", "focused_qa")
+from refactory_dsh.invocations import REVIEWERS  # canonical in invocations
 INPUTS = ("brief.json", "strategy.json", "design.md", "implementation-plan.txt")
 # Longer inputs are cited by path and sha256: the evidence is inlined into every reviewer prompt.
 INLINE_LIMIT = 2048

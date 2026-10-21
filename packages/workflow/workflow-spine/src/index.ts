@@ -38,6 +38,7 @@ import { commandOf, isDeterministic, runDataCommand, runDeterministic, runWarnin
 import type { CommandFailure, CommandOutcome } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 import { validateBuild } from './build-stamp.ts'
+import { validateWorkspaceBuild } from './workspace-stamp.ts'
 import { presentCall, presentResult, presentationMeta } from './present.ts'
 
 export { Spine, validateGraph } from './spine.ts'
@@ -498,6 +499,25 @@ function payloadEnv(value: unknown): Record<string, string> | undefined {
   return out
 }
 
+/**
+ * Build the argv for {@code wf_open}, including the session's project when set.
+ *
+ * Exported so the project-propagation tests call the real logic instead of
+ * re-implementing it inline.
+ */
+export function buildWfOpenArgv(
+  openArgs: readonly string[],
+  sessionCwd: string | undefined,
+  mode: string,
+): string[] {
+  const argv = [...openArgs]
+  if (typeof sessionCwd === 'string' && sessionCwd !== '') {
+    argv.push('--project', sessionCwd)
+  }
+  argv.push(mode)
+  return argv
+}
+
 export function apply(ctx: Context, config: Config): void {
   // Detect stale builds early, before any graph is configured or opened.
   // A stale build is a developer-infrastructure error with no recovery path —
@@ -510,6 +530,16 @@ export function apply(ctx: Context, config: Config): void {
   } catch (err) {
     process.stderr.write(`\n${err instanceof Error ? err.message : String(err)}\n\n`)
     process.exit(1)
+  }
+  try {
+    validateWorkspaceBuild()
+  } catch (err) {
+    // Workspace stamp mismatch is a warning, not fatal: a stale workspace build
+    // must not kill a spine mount mid-run, during a resume, or at GUI boot.
+    // The per-package validateBuild() above remains fatal.
+    process.stderr.write(
+      `\nWARNING: ${err instanceof Error ? err.message : String(err)}\n\n`,
+    )
   }
 
   const { toolPrefix, maxIterations, ceoDeny, interactiveOpen } = config
@@ -1850,7 +1880,7 @@ export function apply(ctx: Context, config: Config): void {
             + '`python -m refactory_dsh.console open`)',
           )
         }
-        const argv = [...config.openArgs, args.mode]
+        const argv = buildWfOpenArgv(config.openArgs, session.header?.cwd, args.mode)
         // The console refuses without a workdir, so an absent one is derived from
         // the session and the mode rather than dropped. The payload's `run` is
         // still the authority on where the run actually landed.

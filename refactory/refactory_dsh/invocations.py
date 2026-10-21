@@ -59,6 +59,19 @@ CHECK_PRODUCES = ("commit", "files", "inherited_failures", "changed_functions")
 
 INVOCATION = Path('.refactory/invocation.json')
 
+#: Where the console records about a run it started.
+CONSOLE_FILE = "console.json"
+
+#: The nodes whose delivery must carry authoring evidence.
+REVIEWERS = ("health_checker", "code_reviewer", "qa_director", "overwatch", "focused_qa")
+
+#: The callable names of delivery's entry points, used by graph_control to find
+#: the deliver node by its callable rather than by its id or a command substring.
+DELIVER_ENTRY_POINTS = frozenset({"refactory_dsh.delivery:deliver_design"})
+
+#: Where a run records its authoring evidence.
+EVIDENCE = "authoring-evidence.json"
+
 
 def _inputs(workdir: Path, declarations: dict[str, Any]) -> list[Path]:
     nodes = [node for node in declarations.values() if isinstance(node, dict)]

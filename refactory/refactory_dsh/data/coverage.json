@@ -117,7 +117,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-      "reviewed_schema": "e46b06c075fd498119207352327459795efea4734de6ee6831f81cde06631702"
+      "reviewed_schema": "d608c8da29ae1ccbb61ea7607baa7bf0704393f705f97df98c6d172f5e86e58c"
     },
     "default_pack/create_fast": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -137,7 +137,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a small reusable package with a strategist, coder and focused QA. Canonical smoke precedes focused QA; structural, runtime and review failures share repair_attempts. Supply a brief, name and task/single-shot inputs.",
-      "reviewed_schema": "139325608facacb16306c1b8fc199b04e6bd977034dc89e3334542f16126e4da"
+      "reviewed_schema": "ce7035565ccddc4d6810fa435397806f50bbb953aeadcaeed70e17ba7653a71c"
     },
     "default_pack/design": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -175,7 +175,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-      "reviewed_schema": "32597dfe6e80246ac6bc48c24dd33ccef91bd3bde731aa6d9f5ee9557d29475f"
+      "reviewed_schema": "bcc24737c05230f3317f959516d89f4f81c14c4ad7a6a80d608e0fc564e7e895"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -204,7 +204,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-      "reviewed_schema": "55108d92b43c4f175338571742dfced924af4f80e214b0de67c55db28ca7bf76"
+      "reviewed_schema": "eab48d871a8c7d9bdff259e77503824538b01ff1e36989949124e9d57469ecb8"
     },
     "default_pack/edit": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -224,7 +224,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-      "reviewed_schema": "9da78dbad0326302ae1a8e21dd8e9f75989bcca75075fdf3a0baba324d59dec3"
+      "reviewed_schema": "cd7ee27db0e0466a076ef6d97f56c79d506399bf3c4f10a7339cb652ec4941c6"
     },
     "default_pack/edit_fast": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -244,7 +244,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Revise a small mode package with a coder and focused QA after canonical validation. Supply revision_of, name and brief. allow_regression=true skips original execution/comparison but still requires revised validation and intent evidence.",
-      "reviewed_schema": "54fbba3bc9fcfcf5107a7af1bd855c1f232de0bdcc487f0d6c4801e5e00f272a"
+      "reviewed_schema": "acc7216ae2c123f0618249e5adfdb09778c49610d0441e75ca06783f6602272d"
     },
     "fix_pack/make_pass": {
       "doc": "refactory/docs/tutorials/01-write-a-mode.md",
@@ -558,15 +558,21 @@
         {
           "arguments": {},
           "explanation": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated."
+        },
+        {
+          "arguments": {
+            "run": "/path/to/run"
+          },
+          "explanation": "Check a specific run's driver pin state: its recorded commit, profile name, and whether a pin exists."
         }
       ],
       "interfaces": {
         "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
-        "cli": "refactory doctor",
+        "cli": "refactory doctor [--run DIR]",
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
-      "purpose": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated.",
-      "reviewed_schema": "4e5762fd76050e80185bfba003afaadb79684ea7d61fc91e1c086a5ccbcd1d76"
+      "purpose": "Inspect prerequisites and configured credentials without a model call; with --run, also report a run's driver pin state. Configured does not mean authenticated.",
+      "reviewed_schema": "22c0386b3491338de9e7ddfe53d52c1fd72bb93a87a9798061d8e3b33fda4f2b"
     },
     "cli:list": {
       "doc": "refactory/docs/cli.md",
@@ -624,6 +630,30 @@
       },
       "purpose": "Manage installed mode packages through registry subcommands; read their help before mutations.",
       "reviewed_schema": "be7bcd90aa83a34d63c41828e491c54b431cab1fdcea3ce59520246693aebaf0"
+    },
+    "cli:pin": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "pin_action": "list"
+          },
+          "explanation": "List all driver pins with their commit, creation time and driver checkout. Each pin is a prepared worktree of an older commit that a resumed run uses when the driver has moved."
+        },
+        {
+          "arguments": {
+            "pin_action": "prune"
+          },
+          "explanation": "Remove pins no live or resumable run refers to and clean up their graph-pin profiles from the person's DSH home."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI route.",
+        "cli": "refactory pin {list,prune}",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI route."
+      },
+      "purpose": "Manage driver pins: list active pins and their runs, or prune those no run refers to. A pin is a prepared worktree of the commit a run was launched with, shared across runs at the same commit.",
+      "reviewed_schema": "d47740d328a9f172e8f92555f1da70c29bcfe21fe4c8124ee2066559dfaeca14"
     },
     "cli:projects": {
       "doc": "refactory/docs/cli.md",
