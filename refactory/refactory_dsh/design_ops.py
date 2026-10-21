@@ -437,7 +437,11 @@ def gate_design_review(ctx: Any) -> str:
         ctx.set_fact("pitfall_coverage",
                      "pitfalls check skipped: no pitfalls_researcher in this graph")
 
-    # ── mechanical check 5: repository questions and brief-example trace ──
+    # ── mechanical check 5: finding coverage ──
+    from refactory_dsh import findings_coverage
+    problems.extend(findings_coverage.gate_problems(ctx))
+
+    # ── mechanical check 6: repository questions and brief-example trace ──
     deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
     if deliverable_kind_value == "repository_change" and design_text:
         from refactory_dsh.authoring_evidence import check_review_questions
