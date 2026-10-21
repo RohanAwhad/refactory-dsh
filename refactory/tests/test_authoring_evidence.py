@@ -363,21 +363,20 @@ def test_person_skip_lets_require_completion_pass(tmp_path):
             }
         }
     }))
-    # Write evidence with status='skipped' and matching provenance
-    (tmp_path / evidence.EVIDENCE).write_text(json.dumps({
-        "schema": 1, "id": "test",
-        "identity": {"root": str(tmp_path), "files": {}, "intent": [], "inputs": {}},
-        "requirements": [], "process_notes": [],
-        "settings": {key: None for key in evidence.SETTINGS},
-        "receipts": {}, "outputs": {},
-        "validation": {
-            "status": "skipped",
-            "source": "person",
-            "at": "2026-10-20T22:25:29+00:00",
-            "via": "graph-control",
-            "node": "check",
-        }
-    }))
+    # Read the existing evidence (written by audit_context with correct identity),
+    # then update only the validation section to status='skipped' with provenance.
+    existing = ctx.read_json(evidence.EVIDENCE, {})
+    existing["validation"] = {
+        "status": "skipped",
+        "source": "person",
+        "at": "2026-10-20T22:25:29+00:00",
+        "via": "graph-control",
+        "node": "check",
+    }
+    # Clear receipts since we no longer have a passing check
+    existing["receipts"] = {}
+    existing["outputs"] = {}
+    (tmp_path / evidence.EVIDENCE).write_text(json.dumps(existing))
     problems = evidence.current_problems(ctx)
     assert not any("did not pass" in p for p in problems), f"person skip should be accepted, got: {problems}"
     # Should not raise

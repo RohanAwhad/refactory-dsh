@@ -283,6 +283,7 @@ def record_skip(workdir: Path, node: str, provenance: dict[str, str]) -> dict[st
 def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
     """Legacy reports remain readable; new evidence cannot authorize old sign-off."""
     # Check skip provenance before the early return.
+    person_skip_accepted = False
     prov = _check_skip_provenance(ctx.workdir)
     if prov is not None:
         if prov['source'] != 'person':
@@ -298,8 +299,9 @@ def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
             at_match = validation.get('at') == prov['at']
             node_match = validation.get('node') == prov['node']
             if source_match and at_match and node_match:
-                # Person skip accepted. Fall through to worker checks below.
-                pass
+                # Person skip accepted. Suppress "did not pass" below;
+                # keep identity, receipt, settings, output and worker checks.
+                person_skip_accepted = True
             else:
                 return ["authoritative runtime evidence is missing"]
         else:
@@ -311,7 +313,7 @@ def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
     problems = []
     if now is None or now["identity"] != digest(evidence.get("identity")):
         problems.append("artifact, accepted inputs or user intent changed after validation; rerun validation and reviews")
-    if evidence.get("validation", {}).get("status") != "pass":
+    if not person_skip_accepted and evidence.get("validation", {}).get("status") != "pass":
         problems.append("required runtime validation did not pass")
     if evidence.get("settings") != {key: ctx.knob(key, None) for key in SETTINGS}:
         problems.append("validation inputs or comparison policy changed after execution")
