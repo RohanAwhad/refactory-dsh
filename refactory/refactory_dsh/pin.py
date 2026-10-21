@@ -301,7 +301,7 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
     :func:`worktree._isolate_hooks` for per-worktree hook isolation, the same
     helpers run worktrees use.
     """
-    from refactory_dsh.worktree import NO_HOOKS, _isolate_hooks
+    from refactory_dsh.git_hooks import NO_HOOKS, _isolate_hooks
 
     commit12 = commit[:12]
     key = _pin_key(commit, dirty_diff)

@@ -1293,6 +1293,91 @@ def test_moved_driver_plus_changed_run_graph_refuses(
                          skip_driver_paths=str(repo))
 
 
+def test_default_layout_moved_driver_resumes_on_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run inside the driver checkout (the default layout) with a moved
+    driver and unchanged graph: it pins and resumes, reading its graphs
+    from the run directory.
+
+    Dropping the run-directory exclusion from the path translation must
+    fail this test.
+    """
+    from refactory_dsh import recovery
+
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo, files={"refactory/refactory_dsh/module.py": "v1"})
+
+    # Run directory INSIDE the checkout (the default layout).
+    run_dir = repo / ".factory" / "interactive" / "design"
+    run_dir.mkdir(parents=True)
+    (run_dir / ".refactory").mkdir(parents=True)
+
+    # Write a graph and fingerprint it.
+    run_graph = run_dir / "graphs" / "design-graph.json"
+    run_graph.parent.mkdir(parents=True)
+    run_graph.write_text('{"nodes": {}}')
+    run_graph_fp = hashlib.sha256(run_graph.read_bytes()).hexdigest()
+
+    driver_file = repo / "refactory" / "refactory_dsh" / "module.py"
+    driver_fp = hashlib.sha256(driver_file.read_bytes()).hexdigest()
+
+    fingerprints = {
+        str(driver_file): driver_fp,
+        str(run_graph): run_graph_fp,
+    }
+
+    import refactory_dsh.pin as pin
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+    from refactory_dsh import paths
+    monkeypatch.setattr(paths, "REPO_ROOT", repo)
+
+    _make_run_config(run_dir, commit_a, str(repo),
+                     fingerprints=fingerprints,
+                     mode="test_pack/test_mode")
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    # Write a spine checkpoint.
+    checkpoint = {
+        "run_id": str(run_dir.resolve()),
+        "graph": {"name": "test_pack-test_mode"},
+        "status": "ready",
+        "configuration_fingerprints": fingerprints,
+        "file_fingerprints": {},
+    }
+    (run_dir / ".refactory" / "spine-checkpoint.json").write_text(json.dumps(checkpoint))
+
+    # Move driver to commit B (driver drift).
+    _add_commit(repo, {"refactory/refactory_dsh/module.py": "v2"})
+
+    # Create a prepared pin structure with the v1 file.
+    key = pin._pin_key(commit_a, None)
+    pin_root = pin.refactory_home() / "pins" / key
+    pin_checkout = pin_root / "checkout"
+    pin_checkout.mkdir(parents=True)
+    (pin_checkout / ".git").write_text("gitdir: dummy")
+    (pin_checkout / "refactory" / "refactory_dsh" / "module.py").parent.mkdir(
+        parents=True, exist_ok=True,
+    )
+    (pin_checkout / "refactory" / "refactory_dsh" / "module.py").write_text("v1")
+    pin._atomic_write_json(pin_root / "pin.json", {
+        "commit": commit_a, "created": "now",
+        "driver_checkout": str(repo), "runs": [],
+    })
+
+    # Monkeypatch REPO_ROOT to pin (simulating re-exec).
+    monkeypatch.setattr(paths, "REPO_ROOT", pin_checkout)
+
+    # recovery.prepare with skip_driver_paths must succeed: the graph
+    # fingerprint should NOT be translated into the pin (it lives in the
+    # run directory, not in driver code).
+    graphs = recovery.prepare(
+        run_dir, "test_pack-test_mode",
+        skip_driver_paths=str(repo),
+    )
+    assert graphs == run_dir / "graphs"
+
+
 def test_gui_open_stale_build_warns_not_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

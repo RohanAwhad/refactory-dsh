@@ -9,6 +9,7 @@
     "refactory_dsh.dsh_runtime",
     "refactory_dsh.evaluators",
     "refactory_dsh.events",
+    "refactory_dsh.git_hooks",
     "refactory_dsh.finished_control",
     "refactory_dsh.graph_control",
     "refactory_dsh.harness_check",

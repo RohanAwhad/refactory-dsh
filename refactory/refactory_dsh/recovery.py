@@ -153,8 +153,24 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
             if _is_driver:
                 continue  # skipped: driver fingerprint handled by the pin
             # Path translation for re-exec'd process comparing against the pin.
+            # Only translate true driver paths: under the driver checkout by
+            # path components and outside the run's own directory and any
+            # ``.factory/`` run tree.  A run inside the checkout (the default
+            # layout) has its graphs/ here; translating them into the pin
+            # would look for files that do not exist there.
             if driver_checkout and fp_name.startswith(driver_checkout) and driver_checkout != repo_root_str:
-                actual_name = repo_root_str + fp_name[len(driver_checkout):]
+                _should_translate = True
+                if fp_resolved.is_relative_to(_run_root_resolved):
+                    _should_translate = False
+                else:
+                    try:
+                        _trel = fp_resolved.relative_to(Path(driver_checkout).resolve())
+                        if any(part == ".factory" for part in _trel.parts):
+                            _should_translate = False
+                    except ValueError:
+                        pass
+                if _should_translate:
+                    actual_name = repo_root_str + fp_name[len(driver_checkout):]
             if _configuration_fingerprint(Path(actual_name)) != expected:
                 raise ValueError(f'prepared configuration {fp_name!r} changed; dependent results need explicit invalidation')
     if resource_limits:
