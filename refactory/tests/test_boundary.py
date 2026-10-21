@@ -295,10 +295,7 @@ def test_no_core_imports_product_runtime():
     for mod in core_modules:
         script = (
             f"import sys\n"
-            f"try:\n"
-            f"    import {mod}\n"
-            f"except Exception:\n"
-            f"    pass\n"
+            f"import {mod}\n"
             f"product = {product_modules!r}\n"
             f"leaked = [m for m in sys.modules if m in product]\n"
             f"print(','.join(leaked) if leaked else '')\n"
@@ -323,10 +320,7 @@ def test_no_core_imports_product_runtime():
             for allowed_mod in list(expected):
                 script2 = (
                     f"import sys\n"
-                    f"try:\n"
-                    f"    import {allowed_mod}\n"
-                    f"except Exception:\n"
-                    f"    pass\n"
+                    f"import {allowed_mod}\n"
                     f"product = {product_modules!r}\n"
                     f"leaked = [m for m in sys.modules if m in product]\n"
                     f"print(','.join(leaked) if leaked else '')\n"
@@ -359,10 +353,7 @@ def test_no_core_imports_product_runtime():
         mod = f"refactory_packages.{pack_name}"
         script = (
             f"import sys\n"
-            f"try:\n"
-            f"    import {mod}\n"
-            f"except Exception:\n"
-            f"    pass\n"
+            f"import {mod}\n"
             f"product = {product_modules!r}\n"
             f"leaked = [m for m in sys.modules if m in product]\n"
             f"print(','.join(leaked) if leaked else '')\n"

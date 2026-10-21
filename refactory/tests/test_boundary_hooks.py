@@ -84,46 +84,35 @@ def test_core_only_environment():
         # No worktree record
         run_dir = Path(tempfile.mkdtemp())
         (run_dir / ".refactory").mkdir()
+        (run_dir / "out.txt").write_text("")
         os.environ["REFACTORY_WORKDIR"] = str(run_dir)
         expected_path = os.environ["PATH"]
 
-        # Patch subprocess.Popen at the model module level
-        import refactory_dsh.model as _mod
-        _mod.subprocess.Popen = _CapturePopen
-        _mod._environment_overlay = _mod._UNSET
+        spec = {
+            'schema_version': 1,
+            'reads': [],
+            'writes': ['out.txt'],
+            'node_id': 'test_node',
+            'prompt': 'test prompt',
+            'model_context': {
+                'worker_backend': 'dsh',
+                'runtime_root': str(run_dir),
+            },
+            'post_checks': [],
+        }
 
-        import refactory_dsh.agent_delivery as _ad
-        _ad._worktree_state = _ad._UNSET
-        _ad._delivery_identity = _ad._UNSET
+        from refactory_dsh.worker_node import execute
+        try:
+            execute(spec, run_dir)
+        except SystemExit:
+            pass
 
-        from refactory_dsh.model import DshModelClient
-        client = DshModelClient.__new__(DshModelClient)
-        client._dsh_home = Path.home()
-        client._provider = ""
-        client._model = ""
-        client._effort = ""
-        client._worker_backend = "dsh"
-        client._runtime_root = Path(".")
-        client._budget = None
-        client._worker_receipt = None
-        client._routing_provenance = {}
-        client._timeout_s = 30
-        client._attempts = 1
-        client._backoff_s = 1.0
-        client._dsh_cli = ""
-        client._python_bin = Path(sys.executable)
-        client._permission_mode = "skip"
-        client._role_routes = {}
-        client._node_routes = {}
-        client._provider_config = {}
-
-        env = client._environment()
-
-        assert env["PATH"] == expected_path, (
-            f"PATH mismatch:\\ngot:      {env['PATH']}\\nexpected: {expected_path}"
+        assert _captured, "Popen was not called"
+        assert _captured['env']["PATH"] == expected_path, (
+            f"PATH mismatch:\\ngot:      {_captured['env']['PATH']}\\nexpected: {expected_path}"
         )
-        assert env.get("LEFTHOOK") == "0", f"LEFTHOOK not suppressed: {env.get('LEFTHOOK')}"
-        assert env.get("HUSKY") == "0", f"HUSKY not suppressed: {env.get('HUSKY')}"
+        assert _captured['env'].get("LEFTHOOK") == "0", f"LEFTHOOK not suppressed"
+        assert _captured['env'].get("HUSKY") == "0", f"HUSKY not suppressed"
         assert "refactory_dsh.worktree" not in sys.modules, "worktree should not be loaded in core-only mode"
         print("PASS")
     """)
@@ -136,7 +125,7 @@ def test_core_only_environment():
 # Test 2: product registered — entry point provides worktree overlay
 # ---------------------------------------------------------------------------
 def test_product_registered_environment():
-    """With entry points, _environment() applies the worktree's PATH/VIRTUAL_ENV."""
+    """With entry points, worker_node.execute reaches Popen with the worktree's PATH/VIRTUAL_ENV."""
     script = _EP_PREAMBLE + _POPEN_CAPTURE + textwrap.dedent("""\
         import json, os, sys, tempfile
         from pathlib import Path
@@ -161,39 +150,29 @@ def test_product_registered_environment():
             "run": str(run_dir),
         }
         (refactory_dir / "worktree.json").write_text(json.dumps(record))
+        (run_dir / "out.txt").write_text("")
         os.environ["REFACTORY_WORKDIR"] = str(run_dir)
 
-        # Patch Popen at the model module level
-        import refactory_dsh.model as _mod
-        _mod.subprocess.Popen = _CapturePopen
-        _mod._environment_overlay = _mod._UNSET
+        spec = {
+            'schema_version': 1,
+            'reads': [],
+            'writes': ['out.txt'],
+            'node_id': 'test_node',
+            'prompt': 'test prompt',
+            'model_context': {
+                'worker_backend': 'dsh',
+                'runtime_root': str(run_dir),
+            },
+            'post_checks': [],
+        }
 
-        import refactory_dsh.agent_delivery as _ad
-        _ad._worktree_state = _ad._UNSET
-        _ad._delivery_identity = _ad._UNSET
+        from refactory_dsh.worker_node import execute
+        try:
+            execute(spec, run_dir)
+        except SystemExit:
+            pass
 
-        from refactory_dsh.model import DshModelClient
-        client = DshModelClient.__new__(DshModelClient)
-        client._dsh_home = Path.home()
-        client._provider = ""
-        client._model = ""
-        client._effort = ""
-        client._worker_backend = "dsh"
-        client._runtime_root = Path(".")
-        client._budget = None
-        client._worker_receipt = None
-        client._routing_provenance = {}
-        client._timeout_s = 30
-        client._attempts = 1
-        client._backoff_s = 1.0
-        client._dsh_cli = ""
-        client._python_bin = Path(sys.executable)
-        client._permission_mode = "skip"
-        client._role_routes = {}
-        client._node_routes = {}
-        client._provider_config = {}
-
-        env = client._environment()
+        assert _captured, "Popen was not called"
 
         from refactory_dsh.worktree import check_environment
         from refactory_dsh.invocations import CHECK_HOME
@@ -201,11 +180,11 @@ def test_product_registered_environment():
         home.mkdir(parents=True, exist_ok=True)
         expected = check_environment(worktree_dir, home)
 
-        assert env["PATH"] == expected["PATH"], (
-            f"PATH mismatch:\\ngot:      {env['PATH']}\\nexpected: {expected['PATH']}"
+        assert _captured['env']["PATH"] == expected["PATH"], (
+            f"PATH mismatch:\\ngot:      {_captured['env']['PATH']}\\nexpected: {expected['PATH']}"
         )
-        assert env.get("VIRTUAL_ENV") == expected.get("VIRTUAL_ENV"), (
-            f"VIRTUAL_ENV mismatch:\\ngot: {env.get('VIRTUAL_ENV')}\\n"
+        assert _captured['env'].get("VIRTUAL_ENV") == expected.get("VIRTUAL_ENV"), (
+            f"VIRTUAL_ENV mismatch:\\ngot: {_captured['env'].get('VIRTUAL_ENV')}\\n"
             f"expected: {expected.get('VIRTUAL_ENV')}"
         )
         print("PASS")
@@ -221,7 +200,7 @@ def test_product_registered_environment():
 def test_worker_import_sequence_has_overlay():
     """The worker process finds the overlay via entry points, not via agent_delivery's worktree import."""
     script = _EP_PREAMBLE + _POPEN_CAPTURE + textwrap.dedent("""\
-        import json, os, sys, tempfile, types
+        import json, os, sys, tempfile
         from pathlib import Path
 
         # Create a fake worktree with managed .venv
@@ -244,53 +223,48 @@ def test_worker_import_sequence_has_overlay():
             "run": str(run_dir),
         }
         (refactory_dir / "worktree.json").write_text(json.dumps(record))
+        (run_dir / "out.txt").write_text("")
         os.environ["REFACTORY_WORKDIR"] = str(run_dir)
 
-        # Stub agent_delivery so it does NOT import worktree via its own imports
-        stub = types.ModuleType("refactory_dsh.agent_delivery")
-        stub._path = lambda workdir: Path(workdir) / ".refactory" / "agent-delivery"
-        stub.begin = lambda *a, **kw: {"prompt": "test", "id": "test"}
-        stub.finish = lambda *a, **kw: {"status": "delivered"}
-        sys.modules["refactory_dsh.agent_delivery"] = stub
+        spec = {
+            'schema_version': 1,
+            'reads': [],
+            'writes': ['out.txt'],
+            'node_id': 'test_node',
+            'prompt': 'test prompt',
+            'model_context': {
+                'worker_backend': 'dsh',
+                'runtime_root': str(run_dir),
+            },
+            'post_checks': [],
+        }
 
-        # Patch Popen and reset overlay cache
-        import refactory_dsh.model as _mod
-        _mod.subprocess.Popen = _CapturePopen
-        _mod._environment_overlay = _mod._UNSET
+        from refactory_dsh.worker_node import execute
+        try:
+            execute(spec, run_dir)
+        except SystemExit:
+            pass
 
-        from refactory_dsh.model import DshModelClient
-        client = DshModelClient.__new__(DshModelClient)
-        client._dsh_home = Path.home()
-        client._provider = ""
-        client._model = ""
-        client._effort = ""
-        client._worker_backend = "dsh"
-        client._runtime_root = Path(".")
-        client._budget = None
-        client._worker_receipt = None
-        client._routing_provenance = {}
-        client._timeout_s = 30
-        client._attempts = 1
-        client._backoff_s = 1.0
-        client._dsh_cli = ""
-        client._python_bin = Path(sys.executable)
-        client._permission_mode = "skip"
-        client._role_routes = {}
-        client._node_routes = {}
-        client._provider_config = {}
+        assert _captured, "Popen was not called"
 
-        env = client._environment()
+        # Verify the entry-point caches were populated during execute
+        import refactory_dsh.agent_delivery as _ad
+        ws = _ad.get_worktree_state()
+        assert ws is not None, "worktree_state entry point not discovered during execute"
+        from refactory_dsh import worktree
+        assert ws.recorded is worktree.recorded, "recorded mismatch"
+        assert ws.shared_changed is worktree.shared_changed, "shared_changed mismatch"
 
-        # Even with agent_delivery stubbed, the overlay is found via entry point
+        # Verify the environment overlay matched
         from refactory_dsh.worktree import check_environment
         from refactory_dsh.invocations import CHECK_HOME
         home = run_dir / CHECK_HOME
         home.mkdir(parents=True, exist_ok=True)
         expected = check_environment(worktree_dir, home)
 
-        assert env["PATH"] == expected["PATH"], (
-            f"PATH mismatch with stubbed agent_delivery:\\n"
-            f"got:      {env['PATH']}\\nexpected: {expected['PATH']}"
+        assert _captured['env']["PATH"] == expected["PATH"], (
+            f"PATH mismatch with entry-point overlay:\\n"
+            f"got:      {_captured['env']['PATH']}\\nexpected: {expected['PATH']}"
         )
         print("PASS")
     """)
@@ -740,6 +714,8 @@ def test_delivery_identity_stale_install():
         refactory_dir.mkdir()
         # Create EVIDENCE file so the stale check triggers
         (run_dir / "authoring-evidence.json").write_text("{}")
+        # No worktree.json — the worktree_state stale check must pass first
+        (run_dir / "out.txt").write_text("")
 
         import refactory_dsh.agent_delivery as _ad
         _ad._delivery_identity = _ad._UNSET
@@ -748,23 +724,14 @@ def test_delivery_identity_stale_install():
         from refactory_dsh.invocations import REVIEWERS
         node = REVIEWERS[0]  # e.g. "health_checker"
 
-        # Simulate calling _execution_contract which calls get_delivery_identity
-        di = _ad.get_delivery_identity()
-        from refactory_dsh.invocations import EVIDENCE
-        if di is None and node in REVIEWERS and (run_dir / EVIDENCE).exists():
-            try:
-                raise RuntimeError(
-                    "the delivery-identity entry point is not installed but this node "
-                    "needs authoring evidence; re-run `uv sync` or `./install.sh`"
-                )
-            except RuntimeError as e:
-                msg = str(e)
-                assert "uv sync" in msg, f"error missing fix hint: {msg}"
-                print("PASS")
-                sys.exit(0)
-
-        print("FAIL: stale check did not trigger")
-        sys.exit(1)
+        try:
+            _ad.begin(run_dir, node, "test prompt", ["out.txt"])
+            print("FAIL: no error raised")
+            sys.exit(1)
+        except RuntimeError as e:
+            msg = str(e)
+            assert "uv sync" in msg or "install.sh" in msg, f"error missing fix hint: {msg}"
+            print("PASS")
     """)
     result = _run_script(script)
     assert result.returncode == 0, f"delivery_identity stale-install failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
