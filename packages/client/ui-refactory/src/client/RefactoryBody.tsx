@@ -680,7 +680,7 @@ export function RefactoryBody({
       </div></div>
     )
   }
-  const { project, modes, strategies, packages } = choices.value
+  const { project, modes, strategies, packages, projects } = choices.value
   const selected = chosen
   const packageNames = [...new Set([...packages.map(item => item.name), ...modes.map(mode => mode.package)])].sort()
   const packageModes = modes.filter(mode => mode.package === state.selectedPackage)
@@ -734,6 +734,15 @@ export function RefactoryBody({
             }}>{t(`setup.${view}`)}</button>)}
         </div>
         <p className={css.note}>{t(intent === 'run' ? 'panel.onceHelp' : 'panel.startHelp')}</p>
+        {projects.length > 0 && (!selected || selected.parameters?.target !== undefined) && <div className={css.field}>
+          <FieldLabel htmlFor="refactory-target" help={t('help.target')}>{t('target.label')}</FieldLabel>
+          <select id="refactory-target" className={css.control} data-refactory-target
+            value={state.knobs?.target ?? ''}
+            onChange={event => { setKnob(tab.id, 'target', event.target.value) }}>
+            <option value="">{t('target.new')}</option>
+            {projects.map(p => <option key={p.path} value={p.path}>{p.name} · {p.kind}</option>)}
+          </select>
+        </div>}
         <div className={css.field}>
           <FieldLabel htmlFor="refactory-package" help={t('help.package')}>{t('package.label')}</FieldLabel>
           <select id="refactory-package" className={css.control} data-refactory-package value={state.selectedPackage ?? ''}

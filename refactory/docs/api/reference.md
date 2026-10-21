@@ -474,7 +474,7 @@ Discover, list and resolve packages of modes.
 | function | `discover_names` | `(project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `enabled_packages` | `(project: 'Path') -> 'dict[str, Package]'` |
 | function | `import_package` | `(project: 'Path', source: 'str', *, ref: 'str' = '', as_name: 'str' = '', trust: 'str' = 'generated') -> 'str'` |
-| function | `install_workspace` | `(project: 'Path') -> 'Path \| None'` |
+| function | `install_workspace` | `(project: 'Path', *, project_override: 'Path \| None' = None) -> 'Path \| None'` |
 | function | `installed_names` | `(project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `is_enabled` | `(project: 'Path', name: 'str') -> 'bool'` |
 | function | `load` | `(name: 'str', project: 'Path \| None' = None) -> 'Package'` |
@@ -566,7 +566,7 @@ Running code we did not write.
 | kind | name | signature |
 |---|---|---|
 | class | `SandboxError` | `` |
-| class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False, timeout_s: 'int \| None' = None, elapsed_s: 'float \| None' = None, progress: 'dict[str, Any]' = <factory>, prep_failure: 'dict[str, Any] \| None' = None) -> None` |
+| class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False, timeout_s: 'int \| None' = None, elapsed_s: 'float \| None' = None, progress: 'dict[str, Any]' = <factory>, prep_failure: 'dict[str, Any] \| None' = None, cwd_outside: 'str \| None' = None) -> None` |
 | function | `ast_check` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, include_contracts: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `is_secret` | `(name: 'str') -> 'bool'` |
@@ -576,12 +576,12 @@ Running code we did not write.
 | function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None, require_ready: 'bool' = True) -> 'dict[str, Any]'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
 | function | `refactory_env` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
-| function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 0, cpu_s: 'int \| None' = None, file_mb: 'int' = 16384, env: 'dict[str, str] \| None' = None, budget: 'Any' = None, home: 'Path \| None' = None, exact_env: 'bool' = False, stdin: 'Any' = None) -> 'SandboxResult'` |
+| function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 0, cpu_s: 'int \| None' = None, file_mb: 'int' = 16384, env: 'dict[str, str] \| None' = None, budget: 'Any' = None, home: 'Path \| None' = None, exact_env: 'bool' = False, stdin: 'Any' = None, worktree_root: 'Path \| None' = None) -> 'SandboxResult'` |
 | function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 16384, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, model: 'bool' = False, knobs: 'dict[str, Any] \| None' = None, model_context: 'dict[str, str] \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `usage` | `() -> 'str'` |
-| function | `verify_sandboxed` | `(name: 'str', *, project: 'Path \| None' = None, requires_data_node: 'bool' = False, requires_task_ref: 'str' = '', requires_task_refs: 'tuple[str, ...]' = (), requires_input: 'tuple[str, ...]' = (), **kwargs: 'Any') -> 'SandboxResult'` |
+| function | `verify_sandboxed` | `(name: 'str', *, project: 'Path \| None' = None, shared_project: 'Path \| None' = None, requires_data_node: 'bool' = False, requires_task_ref: 'str' = '', requires_task_refs: 'tuple[str, ...]' = (), requires_input: 'tuple[str, ...]' = (), **kwargs: 'Any') -> 'SandboxResult'` |
 
 - **`SandboxError`** — A sandboxed run could not be carried out.
 - **`SandboxResult`** — What a sandboxed run produced.
@@ -763,6 +763,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 | function | `holdout` | `(run_root: 'Path') -> 'dict[str, Any] \| None'` |
 | function | `leaderboard` | `(run_root: 'Path', *, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
 | function | `level_two` | `() -> 'dict[str, Any]'` |
+| function | `list_projects` | `() -> 'list[dict[str, Any]]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `runs` | `(*, project: 'Path \| None' = None, runs_root: 'Path \| None' = None, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
 | function | `runtime_context` | `(project: 'Path', *, provider: 'str' = '', model: 'str' = '') -> 'dict[str, Any]'` |
@@ -779,6 +780,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`holdout`** — The held-out audit a run recorded, or ``None`` when it recorded none.
 - **`leaderboard`** — The candidates by score, with each one's diff against its parent.
 - **`level_two`** — The three level-2 seams by name, each with what it says it is.
+- **`list_projects`** — The registered projects, as the GUI's target picker needs them.
 - **`runs`** — Every run under the root, newest first, each with where it got to.
 - **`runtime_context`** — Describe the existing nested model configuration without a model request.
 - **`start`** — Begin a run in its own process, and hand back the id to watch it with.

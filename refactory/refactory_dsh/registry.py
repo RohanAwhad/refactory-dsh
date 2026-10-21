@@ -44,23 +44,36 @@ def workspace_root(project: Path) -> Path:
     return Path(project) / WORKSPACE
 
 
-def install_workspace(project: Path) -> Path | None:
+def install_workspace(project: Path, *, project_override: Path | None = None) -> Path | None:
     """Make workspace packages importable under `refactory_packages`.
 
     Extending the distribution's `__path__` is what lets a package in a writable
     directory be imported by the same ``refactory_packages.<name>`` path the
     installed ones use, so an op written in a generated package needs no special
     case and the op namespace does not depend on where a package happens to live.
+
+    ``project_override``, when given, adds that path's workspace root too, so a
+    worktree's ``.factory/packages/`` is importable alongside the shared one.
     """
     import refactory_packages
 
     root = workspace_root(project)
     if not root.is_dir():
-        return None
-    resolved = str(root.resolve())
-    if resolved not in refactory_packages.__path__:
-        refactory_packages.__path__.append(resolved)
-        importlib.invalidate_caches()
+        if project_override is None:
+            return None
+    else:
+        resolved = str(root.resolve())
+        if resolved not in refactory_packages.__path__:
+            refactory_packages.__path__.append(resolved)
+            importlib.invalidate_caches()
+    if project_override is not None:
+        override_root = workspace_root(project_override)
+        if override_root.is_dir():
+            override_resolved = str(override_root.resolve())
+            if override_resolved not in refactory_packages.__path__:
+                refactory_packages.__path__.insert(0, override_resolved)
+                importlib.invalidate_caches()
+            return override_root
     return root
 
 

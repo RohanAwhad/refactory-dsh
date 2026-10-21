@@ -65,6 +65,14 @@ Doctor checks local configuration, not authentication or quota. Runtime shows th
 
 New coding workers default to **Skip permission checks**, including full native sandbox bypass for DSH/Codex. Their tools can access what your OS account can access. To retain backend checks, choose **Native permission policy** in the Modes panel or pass `--permission-mode default` in the CLI. Existing saved profiles and runs preserve their policy. [Worker permissions](models.md#model-provider-versus-coding-agent)
 
+## Targets, uncommitted changes and worktrees
+
+A Design run works on the repository its `target` knob names (or a new project when empty). Pass `--target /path/to/repo` in the CLI, or pick one from the GUI's target selector, which lists the same projects as `refactory projects`.
+
+To start a run from your uncommitted changes, set `--knob include_uncommitted=true`. The run copies your modified, staged and untracked files into its worktree and commits them as its own base. Your checkout is never changed.
+
+**Which modes get a worktree:** Design and design_fast use a git worktree. Create, create_fast, edit and edit_fast stage their package in a per-run directory (not a git worktree, because `.factory/` is gitignored). Loop and optimize write only into their run directory and need no isolation.
+
 ## 4. Choose the output you want
 
 | Your goal | Use | Result |

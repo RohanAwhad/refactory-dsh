@@ -151,7 +151,7 @@ class CreateMode(Mode):
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
-            "prepare", "op", call=f"{OPS}:prepare",
+            "prepare", "op", call=f"{OPS}:prepare_create",
             # What to build (`name`, `brief`) and the creation directives
             # (`task_ref`, `single_shot`, `data_node`) are read here and published as
             # facts. The walker passes the first two in the run's task; on DSH they
@@ -159,12 +159,14 @@ class CreateMode(Mode):
             # here, before the first model call.
             knobs=("name", "brief", "task_ref", "single_shot", "data_node",
                    "revision_of", "requires_input", "smoke_timeout_s"),
-            writes=("brief.json", "research-review.txt", "strategy-review.txt", "validation.txt"),
+            writes=("brief.json", "research-review.txt", "strategy-review.txt", "validation.txt",
+                    "staging/source-snapshot.json"),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
                       "design_review", "api", "reference", "task_ref", "class_of_work",
                       "data_node", "requires_input", "research_review", "qa_gate",
-                      "overwatch_review"),
-            notes="read the brief and publish it to the prompts",
+                      "overwatch_review", "package_root", "source_hash",
+                      "source_existed", "dest_hash", "dest_existed"),
+            notes="read the brief, set up per-run staging, and publish to the prompts",
         ))
         graph.add(Node(
             "survey", "op", call=f"{OPS}:survey",
@@ -412,10 +414,11 @@ class CreateMode(Mode):
                 "name a concrete unmet criterion and its bounded scope. Record every "
                 "command and its exact output in `reviews/health-check.md`. If anything "
                 "fails or is missing, write `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
+                "If `staging/package-diff.json` exists, use it to focus checks on what changed from the source package. "
                 "A check you did not run is not a check that passed — say which ones you "
                 "skipped."
             ),
-            reads=("brief.json", "design.md"),
+            reads=("brief.json", "design.md", "staging/package-diff.json"),
             writes=("reviews/health-check.md",),
             produces=("health_check",),
             notes="run the package and record what happened, command by command",
@@ -432,10 +435,11 @@ class CreateMode(Mode):
                 "or bypass of their producers with normal validation; it must refuse. "
                 "Check that admission and content guards also accept legitimate data "
                 "and notation supported by the contract, not only reject bad cases. "
+                "If `staging/package-diff.json` exists, review the diff between the source and the staged package. "
                 "Record findings in `reviews/code-review.md`. A defect that "
                 "would stop the package working is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. Style is not blocking."
             ),
-            reads=("design.md", "emit.txt"),
+            reads=("design.md", "emit.txt", "staging/package-diff.json"),
             writes=("reviews/code-review.md",),
             produces=("code_review",),
             notes="review the emitted source against the design",
@@ -461,11 +465,12 @@ class CreateMode(Mode):
                 "fields too, recording each acceptance or rejection and its reason. "
                 "Inspect what score() "
                 "does not grade, and mark any untested requirement as unverified. "
+                "If `staging/package-diff.json` exists, use the diff to identify what changed from the source. "
                 "Write `reviews/qa.md` with each check and its exact result. Every "
                 "acceptance criterion in the strategy must have a check. Anything that "
                 "breaks an acceptance criterion is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
             ),
-            reads=("brief.json", "strategy.json"),
+            reads=("brief.json", "strategy.json", "staging/package-diff.json"),
             writes=("reviews/qa.md",),
             produces=("qa_review",),
             notes="attack the package against its acceptance criteria",
@@ -525,8 +530,8 @@ class CreateMode(Mode):
 
         graph.add(Node(
             "register", "op", call=f"{OPS}:register",
-            writes=("registered.json",),
-            produces=("registered",),
+            writes=("registered.json", "staging/package-diff.json"),
+            produces=("registered", "package_path"),
             notes="confirm the registry lists the new package",
         ))
         graph.add(Node(

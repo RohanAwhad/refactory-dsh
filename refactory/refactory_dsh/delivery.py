@@ -95,9 +95,7 @@ TITLE_LIMIT = 72
 VERIFY_ATTEMPTS = 5
 VERIFY_WAIT_S = 2.0
 
-#: The callable names of delivery's entry points, used by graph_control to find
-#: the deliver node by its callable rather than by its id or a command substring.
-DELIVER_ENTRY_POINTS = frozenset({"refactory_dsh.delivery:deliver_design"})
+from refactory_dsh.invocations import DELIVER_ENTRY_POINTS  # canonical in invocations
 
 
 #: A GitHub remote: HTTPS, with or without a user, or SSH in either spelling.
@@ -1541,6 +1539,20 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
                     f"`{corr_old}` \u2192 `{corr_new}`"
                     + (f" ({corr_note})" if corr_note else "") + ".\n")
 
+    # Render uncommitted-changes note in the PR's Verification when the base
+    # included the person's uncommitted files.
+    uncommitted = worktree.uncommitted_record(found)
+    uncommitted_line = ""
+    if uncommitted:
+        paths = [entry["path"] for entry in uncommitted]
+        uncommitted_line = (
+            f"- **Uncommitted base:** the base included {len(uncommitted)} uncommitted "
+            f"file(s) from the working tree, opted in via `include_uncommitted`: "
+            + ", ".join(f"`{p}`" for p in paths[:10])
+            + ("…" if len(paths) > 10 else "")
+            + ". They are part of this PR; that is the meaning of opting in.\n"
+        )
+
     import json as _json
     from refactory_dsh import authoring_evidence as evidence
 
@@ -1589,6 +1601,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         f"## Verification\n\n"
         + check_line
         + command_corrections
+        + uncommitted_line
         + reviews_line
         + _base_evidence(ctx)
         + f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"

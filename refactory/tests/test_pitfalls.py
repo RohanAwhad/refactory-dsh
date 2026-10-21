@@ -19,6 +19,7 @@ from tests_support import (
     PITFALLS_ANSWER,
     RESEARCH_ANSWER,
     REVIEW_ANSWERS,
+    VERIFICATION_ANSWER,
     render,
 )
 
@@ -349,3 +350,198 @@ def test_fixture_repo_gets_pitfall_for_pinning_test(tmp_path):
     assert (repo / "tests" / "test_config.py").is_file()
     content = (repo / "tests" / "test_config.py").read_text()
     assert "assert timeout == 300" in content
+
+
+# ── three-form evidence classifier ────────────────────────────────────────
+
+def test_new_project_design_run_passes_pitfalls_gate(tmp_path):
+    """T0: A scripted new-project design run whose pitfalls use absent: and
+    brief.json evidence gets past gate_pitfalls and completes successfully.
+
+    Red without C1: brief.json evidence (no colon) is rejected by the old
+    colon check, gate_pitfalls reloops, and the run dies with ValueError.
+    """
+    new_project_pitfalls = json.dumps([
+        {
+            "id": "PIT-001",
+            "risk": "high",
+            "category": "scope_boundaries",
+            "evidence": "absent: pyproject.toml",
+            "prescription": "create a pyproject.toml",
+        },
+        {
+            "id": "PIT-002",
+            "risk": "medium",
+            "category": "pinning_tests",
+            "evidence": "brief.json",
+            "prescription": "the brief asks for tests but none exist yet",
+        },
+    ])
+    design_doc = (
+        "# Do the thing\n\n"
+        "## Summary\n\nFix it properly.\n\n"
+        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "a tool" | \u00a7 Changes | tool.py |\n\n'
+        "## Rule and sites\n\n"
+        "- `tool.py:1` \u2014 **[changed]**\n\n"
+        "## Docs\n\n"
+        "- docs/models.md\n\n"
+        "## Changes\n\n"
+        "- tool.py\n\n"
+        "## Anti-patterns to avoid\n\n"
+        "- PIT-001: addressed at `tool.py:1`\n"
+        "- PIT-002: [set-aside: no tests exist yet in a new project]\n"
+    )
+    answers = [
+        RESEARCH_ANSWER,
+        new_project_pitfalls,
+        "perspectives",
+        "one plan",
+        design_doc,
+        DESIGN_REVIEW_ANSWER,
+        render({"tool.py": "print('built')\n"}),
+        VERIFICATION_ANSWER,
+        *REVIEW_ANSWERS,
+    ]
+    result = DesignMode().run(
+        tmp_path / "run",
+        model=FakeModel(answers),
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "my_tool", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+
+
+def test_empty_target_absent_evidence_passes_gate(tmp_path):
+    """T1 (pin): absent: evidence with a truly absent path passes gate_pitfalls.
+
+    This is a pin test — the colon in 'absent: pyproject.toml' means the old
+    code did not reject it either. The red-green proofs are T0, T2, T2b, T4.
+    """
+    source = tmp_path / "repo"
+    source.mkdir()
+    run = tmp_path / "run"
+    ctx = nn.RunContext(run, knobs={"pitfalls_attempts": 3})
+    ctx.facts.update({"source": str(source), "pitfalls_attempts_used": 0})
+    pitfalls_data = json.dumps([{
+        "id": "PIT-001", "risk": "high", "category": "scope_boundaries",
+        "evidence": "absent: pyproject.toml",
+        "prescription": "create a pyproject.toml",
+    }])
+    ctx.write_text("pitfalls.json", pitfalls_data)
+    import refactory_dsh.design_ops as ops
+    assert ops.gate_pitfalls(ctx) == "proceed"
+
+
+def test_false_absence_claim_refused_naming_path(tmp_path):
+    """T2: A false absence claim (the path exists) is refused, naming the path.
+
+    Red without C1: the old code passes 'absent: pyproject.toml' because it
+    contains a colon, then the regex finds no file:N match and silently skips.
+    """
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\n")
+    raw = json.dumps([{
+        "id": "PIT-001", "risk": "high", "category": "scope_boundaries",
+        "evidence": "absent: pyproject.toml",
+        "prescription": "create a pyproject.toml",
+    }])
+    problems = pitfalls_mod.validate_pitfalls(raw, str(source))
+    assert any("false absence" in p and "pyproject.toml" in p for p in problems)
+
+
+def test_false_glob_absence_claim_refused_naming_matches(tmp_path):
+    """T2b: A false glob absence claim is refused, naming match(es).
+
+    Red without C1: the old code treats 'absent: tests/test_*.py' as a
+    potential file:line citation, finds no digit after *, and silently passes.
+    """
+    source = tmp_path / "repo"
+    (source / "tests").mkdir(parents=True)
+    (source / "tests" / "test_foo.py").write_text("")
+    (source / "tests" / "test_bar.py").write_text("")
+    raw = json.dumps([{
+        "id": "PIT-001", "risk": "high", "category": "scope_boundaries",
+        "evidence": "absent: tests/test_*.py",
+        "prescription": "no tests yet",
+    }])
+    problems = pitfalls_mod.validate_pitfalls(raw, str(source))
+    assert any("false absence" in p and "test_" in p for p in problems)
+
+
+def test_no_citation_still_refused():
+    """T3 (pin): Evidence with no colon, no absent:, no run-file pattern is
+    still refused.
+
+    Green both before and after: the existing colon check already catches this.
+    """
+    raw = json.dumps([{
+        "id": "PIT-001", "risk": "high", "category": "pinning_tests",
+        "evidence": "the code is fragile",
+        "prescription": "fix it",
+    }])
+    problems = pitfalls_mod.validate_pitfalls(raw)
+    assert any("does not cite" in p for p in problems)
+
+
+def test_run_file_citation_accepted_when_exists_refused_when_not(tmp_path):
+    """T4: A run-file citation is accepted when the file exists, and refused
+    when it does not.
+
+    Red without C1: brief.json has no colon and is rejected by the old check.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    # brief.json exists -> accepted
+    (run_dir / "brief.json").write_text("{}")
+    raw_brief = json.dumps([{
+        "id": "PIT-001", "risk": "high", "category": "scope_boundaries",
+        "evidence": "brief.json",
+        "prescription": "see the brief",
+    }])
+    problems = pitfalls_mod.validate_pitfalls(raw_brief, "", run_dir=str(run_dir))
+    assert not any("brief.json" in p for p in problems)
+
+    # research file exists -> accepted
+    (run_dir / "research").mkdir()
+    (run_dir / "research" / "api-surface.md").write_text("# Findings\n")
+    raw_research = json.dumps([{
+        "id": "PIT-001", "risk": "high", "category": "scope_boundaries",
+        "evidence": "research/api-surface.md",
+        "prescription": "see the research",
+    }])
+    problems = pitfalls_mod.validate_pitfalls(raw_research, "", run_dir=str(run_dir))
+    assert not any("api-surface" in p for p in problems)
+
+    # brief.json does not exist -> refused
+    empty_run = tmp_path / "empty_run"
+    empty_run.mkdir()
+    problems = pitfalls_mod.validate_pitfalls(raw_brief, "", run_dir=str(empty_run))
+    assert any("brief.json" in p and "not found" in p for p in problems)
+
+    # research file does not exist -> refused
+    problems = pitfalls_mod.validate_pitfalls(raw_research, "", run_dir=str(empty_run))
+    assert any("api-surface" in p and "not found" in p for p in problems)
+
+
+def test_absent_claim_rejects_absolute_and_escape_paths():
+    """T5: Absence claims with absolute or .. paths are refused as unsafe."""
+    raw_abs = json.dumps([{
+        "id": "PIT-001", "risk": "high", "category": "scope_boundaries",
+        "evidence": "absent: /etc/passwd",
+        "prescription": "should not work",
+    }])
+    problems = pitfalls_mod.validate_pitfalls(raw_abs)
+    assert any("absolute" in p for p in problems)
+
+    raw_escape = json.dumps([{
+        "id": "PIT-001", "risk": "high", "category": "scope_boundaries",
+        "evidence": "absent: ../../etc/passwd",
+        "prescription": "should not work",
+    }])
+    problems = pitfalls_mod.validate_pitfalls(raw_escape)
+    assert any("escapes" in p for p in problems)

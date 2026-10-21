@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -20,6 +21,15 @@ from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
 from refactory_dsh.repo_change import refuse_truncated
+
+#: Where a create/edit run stages its package inside the run directory, so two
+#: parallel runs of the same package name never collide.  A git worktree is not
+#: used because ``.factory/`` is gitignored: a worktree of the project would
+#: contain no ``.factory/packages/`` and nothing written there becomes a commit.
+#: A staging copy inside the run directory isolates the run and records its own
+#: content hash so ``register()`` can detect whether the shared package changed
+#: since ``prepare``.
+STAGING_DIR = Path(".factory-staging")
 
 STAGING = "staging"
 
@@ -750,9 +760,13 @@ def materialise(ctx: Any) -> dict[str, Any]:
             "nothing to write"
         )
     name = str(ctx.facts["name"])
-    # The workspace, not the install tree: a run must not write generated code into
-    # the checkout, and the workspace is also the boundary a sandbox needs.
-    root = registry.workspace_root(project_for_nodes()) / name
+    # When the run has a staging directory (from prepare_create), write there
+    # instead of the shared .factory/packages/<name>/.
+    staging_root = ctx.facts.get("package_root")
+    if staging_root:
+        root = Path(staging_root)
+    else:
+        root = registry.workspace_root(project_for_nodes()) / name
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
@@ -781,7 +795,13 @@ def materialise(ctx: Any) -> dict[str, Any]:
             indent=2,
         )
     )
-    registry.install_workspace(project_for_nodes())
+    # When staging, make the staged package importable for validation.
+    staging_root = ctx.facts.get("package_root")
+    if staging_root:
+        staging_base = Path(staging_root).parent.parent.parent  # up from .factory/packages/<name>
+        registry.install_workspace(project_for_nodes(), project_override=staging_base)
+    else:
+        registry.install_workspace(project_for_nodes())
     ctx.write_json(f"{STAGING}/manifest.json", {"package": name, "files": sorted(written)})
     return {"package_path": str(root), "files": sorted(written)}
 
@@ -817,6 +837,10 @@ def validate(ctx: Any) -> str:
         revision = str(ctx.facts.get("revision_of") or brief.get("mode") or "")
         task_refs, requires_data = _required_bindings(ctx, revision)
         requires_data = requires_data or bool(brief.get("data_node"))
+    # When the package is staged (prepare_create), the project for validation is
+    # the staging base, not the shared checkout.
+    staging_root = ctx.facts.get("package_root")
+    staging_project = Path(staging_root).parent.parent.parent if staging_root else None
     try:
         problems = check_package(
             name,
@@ -825,6 +849,7 @@ def validate(ctx: Any) -> str:
             requires_data_node=requires_data,
             requires_task_refs=tuple(task_refs),
             requires_input=declared_inputs(ctx.knob("requires_input", "")),
+            project_override=staging_project,
         )
     except Exception as exc:
         problems = [f"{type(exc).__name__}: {exc}"]
@@ -1004,6 +1029,7 @@ def check_package(
     requires_task_ref: str = "",
     requires_task_refs: tuple[str, ...] = (),
     requires_input: tuple[str, ...] = (),
+    project_override: Path | None = None,
 ) -> list[str]:
     """Everything wrong with a staged package, as a list of reasons.
 
@@ -1016,11 +1042,19 @@ def check_package(
     The two checks are both run rather than the first that fires: the retry prompt
     is more useful the more of the truth it carries, and parsing and semantics
     catch different things.
+
+    ``project_override``, when given, is the directory whose ``.factory/packages/``
+    holds the staged package (e.g. the per-run staging base).  Without it, the
+    shared project checkout is used.
     """
     from refactory_dsh import sandbox
 
-    registry.install_workspace(project_for_nodes())
-    root = registry.workspace_root(project_for_nodes()) / name
+    shared_project = project_for_nodes() if project_override else None
+    project = project_override or project_for_nodes()
+    registry.install_workspace(project)
+    if shared_project:
+        registry.install_workspace(shared_project)
+    root = registry.workspace_root(project) / name
     if not root.is_dir():
         return [f"no directory at {root}"]
     problems: list[str] = []
@@ -1034,7 +1068,7 @@ def check_package(
     if problems:
         return problems
 
-    problems.extend(sandbox.ast_check(name, project_for_nodes()))
+    problems.extend(sandbox.ast_check(name, project))
     if any("does not parse" in problem for problem in problems):
         # Nothing further can be learned from a file that is not valid Python.
         return problems
@@ -1046,7 +1080,8 @@ def check_package(
 
     checked = sandbox.verify_sandboxed(
         name,
-        project=project_for_nodes(),
+        project=project,
+        shared_project=shared_project,
         requires_data_node=requires_data_node,
         requires_task_ref=requires_task_ref,
         requires_task_refs=requires_task_refs,
@@ -1059,8 +1094,116 @@ def check_package(
 
 
 def register(ctx: Any) -> dict[str, Any]:
-    """Confirm the registry now sees the package under its own name."""
+    """Confirm the registry now sees the package under its own name.
+
+    When the run staged the package in its own directory (``prepare_create``), copy it
+    atomically to the shared ``.factory/packages/<name>/``.  If the shared package's
+    state differs from what ``prepare`` recorded — including when it now exists and did
+    not before — refuse and name the other run (read from ``.origin.json``).
+
+    Reloop safety: when the shared package's ``.origin.json`` names this run, the
+    conflict check is skipped — this run already registered it on a previous iteration,
+    and re-registering the updated staging copy is the intended behaviour.
+    """
     name = str(ctx.facts["name"])
+    staging_root = ctx.facts.get("package_root")
+    if staging_root:
+        import tempfile
+        shared = registry.workspace_root(project_for_nodes()) / name
+        # Detect whether the shared package changed since prepare.
+        source_hash = ctx.facts.get("source_hash", "")
+        source_existed = ctx.facts.get("source_existed", source_hash != "")
+        own_run_id = _invocation_run_id(ctx.workdir)
+        # When editing from a different source package, verify the source
+        # hasn't changed since prepare recorded its hash.
+        _revision_of_fact = str(ctx.facts.get("revision_of") or "")
+        _source_pkg = _revision_of_fact.split("/")[0] if _revision_of_fact else ""
+        if _source_pkg and _source_pkg != name:
+            source_loc = registry.workspace_root(project_for_nodes()) / _source_pkg
+            if source_existed:
+                if source_loc.exists():
+                    current_source = _dir_hash(source_loc)
+                    if current_source != source_hash:
+                        other_run = _origin_run_id(source_loc)
+                        other_info = f" (registered by run {other_run})" if other_run else ""
+                        raise ValueError(
+                            f"the source package {_source_pkg!r} changed since this run's "
+                            f"prepare (hash {source_hash[:12]} -> {current_source[:12]})"
+                            f"{other_info}; another run registered it first. This run's "
+                            f"staged package is kept at {staging_root} for inspection."
+                        )
+                else:
+                    raise ValueError(
+                        f"the source package {_source_pkg!r} existed when this run's "
+                        f"prepare ran, but it is gone now; another run deleted it. "
+                        f"This run's staged package is kept at {staging_root} "
+                        f"for inspection."
+                    )
+            # For the destination check below: use the destination's recorded
+            # state from prepare, not the source's.  An edit whose destination
+            # already existed at prepare must not be falsely refused.
+            dest_hash = ctx.facts.get("dest_hash", "")
+            dest_existed = ctx.facts.get("dest_existed", False)
+            source_hash = dest_hash
+            source_existed = dest_existed
+        if shared.exists():
+            current = _dir_hash(shared)
+            # A reloop: this run already registered the package on a previous
+            # iteration.  The origin stamp written by _stamp_origin_run_id
+            # identifies the registering run, so a match means the shared
+            # package is ours and safe to overwrite.
+            is_reloop = _origin_run_id(shared) == own_run_id
+            if not is_reloop:
+                if not source_existed:
+                    # Package did not exist at prepare but now does: another run created it.
+                    other_run = _origin_run_id(shared)
+                    other_info = f" (registered by run {other_run})" if other_run else ""
+                    raise ValueError(
+                        f"the shared package {name!r} did not exist when this run's prepare "
+                        f"ran, but it exists now{other_info}; another run registered it first. "
+                        f"This run's staged package is kept at {staging_root} for inspection."
+                    )
+                if current != source_hash:
+                    other_run = _origin_run_id(shared)
+                    other_info = f" (registered by run {other_run})" if other_run else ""
+                    raise ValueError(
+                        f"the shared package {name!r} changed since this run's prepare "
+                        f"(hash {source_hash[:12]} -> {current[:12]}){other_info}; another run "
+                        f"registered it first. This run's staged package is kept at "
+                        f"{staging_root} for inspection."
+                    )
+        elif source_existed:
+            raise ValueError(
+                f"the shared package {name!r} existed when this run's prepare ran, "
+                f"but it is gone now; another run deleted it. "
+                f"This run's staged package is kept at {staging_root} for inspection."
+            )
+        # Record the source-versus-staged diff for reviewers before copying.
+        _record_staging_diff(ctx, Path(staging_root))
+        # Write this run's id into the staged .origin.json before copying.
+        _stamp_origin_run_id(Path(staging_root), ctx.workdir)
+        # Atomic swap: write to a sibling temp dir, rename the old aside, rename
+        # the new in, then delete the old.
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        temp = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=shared.parent))
+        old_aside: Path | None = None
+        try:
+            dest = temp / name
+            shutil.copytree(staging_root, dest)
+            if shared.exists():
+                old_aside = shared.with_name(f".{name}-old-{os.getpid()}")
+                shared.rename(old_aside)
+            dest.rename(shared)
+        except BaseException:
+            # Roll back: if we moved the old aside, put it back.
+            if old_aside is not None and old_aside.exists() and not shared.exists():
+                old_aside.rename(shared)
+            raise
+        finally:
+            if old_aside is not None and old_aside.exists():
+                shutil.rmtree(old_aside, ignore_errors=True)
+            if temp.exists():
+                shutil.rmtree(temp, ignore_errors=True)
     registry.install_workspace(project_for_nodes())
     importlib.invalidate_caches()
     if name not in registry.discover_names(project_for_nodes()):
@@ -1075,7 +1218,230 @@ def register(ctx: Any) -> dict[str, Any]:
             f"the package is registered but not readable: {described.problem()}"
         )
     ctx.write_json("registered.json", described.payload["describe"])
-    return {"registered": ", ".join(described.payload["ids"])}
+    result: dict[str, Any] = {"registered": ", ".join(described.payload["ids"])}
+    if staging_root:
+        # Point package_path to the shared location so downstream steps
+        # (smoke / _revision) write provenance into the installed package,
+        # not the per-run staging copy that register already consumed.
+        result["package_path"] = str(registry.workspace_root(project_for_nodes()) / name)
+    return result
+
+
+def _record_staging_diff(ctx: Any, staged_root: Path) -> None:
+    """Record the diff between the source package and the staged result for reviewers.
+
+    ``prepare_create`` saves a snapshot of the source package's files in
+    ``staging/source-snapshot.json``.  This function compares that snapshot with
+    the staged package (after ``materialise`` wrote into it) and writes a
+    structured diff to ``staging/package-diff.json`` so reviewers can see exactly
+    what the run changed.  For a new create every file is ``added``; for an edit
+    the diff shows modifications, additions and deletions.
+    """
+    import difflib
+
+    source_snapshot: dict[str, str | None] = ctx.read_json(
+        f"{STAGING}/source-snapshot.json", {}
+    )
+    staged_files: dict[str, str | None] = {}
+    for path in sorted(staged_root.rglob("*")):
+        if path.is_file():
+            rel = str(path.relative_to(staged_root))
+            try:
+                staged_files[rel] = path.read_text()
+            except (UnicodeDecodeError, OSError):
+                staged_files[rel] = None
+
+    all_paths = sorted(set(source_snapshot) | set(staged_files))
+    if not all_paths:
+        return
+
+    changes: list[dict[str, str]] = []
+    diff_lines: list[str] = []
+    for rel in all_paths:
+        old_content = source_snapshot.get(rel)
+        new_content = staged_files.get(rel)
+        in_source = rel in source_snapshot
+        in_staged = rel in staged_files
+
+        if not in_source:
+            changes.append({"path": rel, "kind": "added"})
+            diff_lines.append(f"--- /dev/null")
+            diff_lines.append(f"+++ staged/{rel}")
+            if new_content is not None:
+                for line in new_content.splitlines():
+                    diff_lines.append(f"+{line}")
+            diff_lines.append("")
+        elif not in_staged:
+            changes.append({"path": rel, "kind": "deleted"})
+            diff_lines.append(f"--- source/{rel}")
+            diff_lines.append(f"+++ /dev/null")
+            if old_content is not None:
+                for line in old_content.splitlines():
+                    diff_lines.append(f"-{line}")
+            diff_lines.append("")
+        elif old_content != new_content:
+            changes.append({"path": rel, "kind": "modified"})
+            if old_content is not None and new_content is not None:
+                diff = difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    new_content.splitlines(keepends=True),
+                    fromfile=f"source/{rel}",
+                    tofile=f"staged/{rel}",
+                )
+                diff_lines.extend(line.rstrip("\n") for line in diff)
+            else:
+                diff_lines.append(f"--- source/{rel} (binary)")
+                diff_lines.append(f"+++ staged/{rel} (binary)")
+                diff_lines.append("Binary files differ")
+            diff_lines.append("")
+
+    ctx.write_json(f"{STAGING}/package-diff.json", {
+        "source_file_count": len(source_snapshot),
+        "staged_file_count": len(staged_files),
+        "changes": changes,
+        "diff": "\n".join(diff_lines),
+    })
+
+
+def _origin_run_id(shared: Path) -> str:
+    """Read the registering run's id from the package's ``.origin.json``, or empty."""
+    origin_path = shared / ".origin.json"
+    if origin_path.exists():
+        try:
+            data = json.loads(origin_path.read_text())
+            return str(data.get("run_id", ""))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return ""
+
+
+def _invocation_run_id(workdir: Path) -> str:
+    """The run's invocation id, or the workdir basename as fallback.
+
+    Uses the same source as ``repo_change._run_id``: the ``invocation.json``
+    file the spine writes into the run directory before the first node runs.
+    """
+    from refactory_dsh import worktree as _wt
+    inv_path = Path(workdir) / _wt.INVOCATION
+    if inv_path.exists():
+        try:
+            data = json.loads(inv_path.read_text())
+            found = str(data.get("id") or "")
+            if re.fullmatch(r"[0-9a-f]{12,}", found):
+                return found[:12]
+        except (json.JSONDecodeError, OSError):
+            pass
+    return Path(workdir).name
+
+
+def _stamp_origin_run_id(staging_root: Path, workdir: Path) -> None:
+    """Write the registering run's id into the staged package's ``.origin.json``."""
+    origin_path = staging_root / ".origin.json"
+    run_id = _invocation_run_id(workdir)
+    try:
+        data = json.loads(origin_path.read_text()) if origin_path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    data["run_id"] = run_id
+    origin_path.write_text(json.dumps(data, indent=2))
+
+
+def _dir_hash(root: Path) -> str:
+    """A content hash of every file under ``root``, for change detection.
+
+    Skips ``__pycache__`` directories and ``.pyc`` bytecode files, as the
+    repository's other content hashes do (``authoring_evidence.py`` and
+    ``registry.py``).  An import of the shared package between prepare and
+    register must not change the hash.
+    """
+    h = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            if "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            h.update(str(path.relative_to(root)).encode())
+            h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def prepare_create(ctx: Any) -> dict[str, Any]:
+    """Read the brief and set up a per-run staging directory for the package.
+
+    This replaces ``prepare()`` for create/edit modes that need isolation.  The
+    package is written into a staging directory inside the run directory rather
+    than the shared ``.factory/packages/<name>/``, so two parallel runs of the
+    same package name never collide.  For edit mode, the source package is copied
+    into the staging directory and its content hash recorded so ``register()``
+    can detect mid-run changes.
+
+    Why staging rather than a git worktree: ``.factory/`` is in ``.gitignore``
+    in this repository, so a git worktree of the project contains no
+    ``.factory/packages/``, and nothing written there can become a commit.
+    """
+    # First, run the original prepare to get all the standard facts.
+    prepared = prepare(ctx)
+    name = str(prepared["name"])
+
+    # Set up the staging directory.  Resolve to an absolute path so that
+    # downstream subprocess calls (verify_sandboxed) can find the package when
+    # their cwd is set to the staging project directory.
+    staging_base = Path(ctx.workdir).resolve() / STAGING_DIR
+    pkg_root = staging_base / ".factory" / "packages" / name
+    pkg_root.mkdir(parents=True, exist_ok=True)
+
+    # For edit mode: if a source package exists, copy it into staging.
+    # Record both the hash and whether the package existed, so register can
+    # refuse when a new package appears (source_hash="" was previously skipped).
+    source_hash = ""
+    source_existed = False
+    # When revision_of is set (edit mode), use the package component of
+    # revision_of (the part before the first '/') to find the source.
+    revision_of = str(prepared.get("revision_of") or "")
+    if revision_of:
+        source_pkg_name = revision_of.split("/")[0]
+    else:
+        source_pkg_name = name
+    shared = registry.workspace_root(project_for_nodes()) / source_pkg_name
+
+    # Snapshot the source package's files so register() can record a diff for
+    # reviewers.  For a new create the snapshot is empty; for edit it captures
+    # every file in the shared package before the run touches it.
+    source_files: dict[str, str | None] = {}
+    if shared.is_dir():
+        # Copy existing package as the starting point for an edit.
+        shutil.copytree(shared, pkg_root, dirs_exist_ok=True)
+        source_hash = _dir_hash(shared)
+        source_existed = True
+        for _src_path in sorted(shared.rglob("*")):
+            if _src_path.is_file():
+                if "__pycache__" in _src_path.parts or _src_path.suffix == ".pyc":
+                    continue
+                _rel = str(_src_path.relative_to(shared))
+                try:
+                    source_files[_rel] = _src_path.read_text()
+                except (UnicodeDecodeError, OSError):
+                    source_files[_rel] = None  # binary or unreadable
+    ctx.write_json(f"{STAGING}/source-snapshot.json", source_files)
+
+    # When revision_of differs from name (editing into a new destination),
+    # record the destination's state separately so register() can check each
+    # against its own record.
+    dest_hash = ""
+    dest_existed = False
+    if revision_of and source_pkg_name != name:
+        dest_shared = registry.workspace_root(project_for_nodes()) / name
+        if dest_shared.is_dir():
+            dest_hash = _dir_hash(dest_shared)
+            dest_existed = True
+
+    return {
+        **prepared,
+        "package_root": str(pkg_root),
+        "source_hash": source_hash,
+        "source_existed": source_existed,
+        "dest_hash": dest_hash,
+        "dest_existed": dest_existed,
+    }
 
 
 #: A wheel's mandatory members, beside `RECORD`, for it to be a wheel at all.

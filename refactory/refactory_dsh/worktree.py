@@ -106,6 +106,9 @@ from refactory_dsh.invocations import HOOK_SUPPRESS  # canonical in invocations
 #: Where the spine records the invocation that owns a run directory (`invocations`).
 INVOCATION = Path(".refactory") / "invocation.json"
 
+#: The per-worktree record of files copied from the person's uncommitted working tree.
+UNCOMMITTED_RECORD = "uncommitted-files.json"
+
 
 class AttemptRefused(ValueError):
     """An attempt's files cannot be applied as they were emitted.
@@ -379,6 +382,185 @@ def _readd(target: Path, path: Path, branch: str) -> None:
     _isolate_hooks(target, path)
 
 
+def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[str, str]]:
+    """Copy every uncommitted change from ``target`` into ``worktree_path`` and record it.
+
+    Copies modified tracked files, staged files, untracked unignored files, and deletes
+    tracked files the person deleted — including the old side of staged renames.  The
+    worktree is then committed as the run's base ("working-tree base for run-<id>"), so
+    the attempts' diffs show only the run's own change, and the PR's Verification lists
+    which files came from the working tree.
+
+    Uses ``git status --porcelain`` to capture renames (``git mv a b`` must delete ``a``
+    in the worktree) rather than separate ``--name-only --diff-filter`` calls that miss
+    the old side of a staged rename.
+
+    The person's checkout is never modified.
+    """
+    import hashlib as _hl
+
+    target = Path(target).resolve()
+    worktree_path = Path(worktree_path).resolve()
+    run = Path(run).resolve()
+    wt_name = worktree_path.name
+    run_id = wt_name.removeprefix("run-") if wt_name.startswith("run-") else wt_name
+
+    # Parse ``git status --porcelain=v1 -z --untracked-files=all`` for a unified
+    # view of all changes including renames, staged deletes, modified, added and
+    # untracked files.  The ``-z`` flag gives NUL-separated output so paths with
+    # spaces or special characters are not quoted, and ``--untracked-files=all``
+    # enumerates individual files inside new directories instead of collapsing
+    # them to the directory name.
+    try:
+        status_output = git(target, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    except ValueError:
+        status_output = ""
+    copy_paths: set[str] = set()
+    delete_paths: set[str] = set()
+    untracked_set: set[str] = set()
+
+    # NUL-separated entries: each is "XY path\0" except renames which are
+    # "XY new\0old\0" (two path entries — with -z the field order is reversed:
+    # the entry's path is the destination, the next NUL field is the source).
+    entries_raw = status_output.split("\0") if status_output else []
+    i = 0
+    while i < len(entries_raw):
+        entry = entries_raw[i]
+        if len(entry) < 4:
+            i += 1
+            continue
+        xy = entry[:2]
+        path = entry[3:]
+        # Renames: with -z, the entry path is the NEW name (destination) and
+        # the next NUL-separated field is the OLD name (source).
+        if xy[0] == "R" or xy[1] == "R":
+            new_name = path
+            i += 1
+            old_name = entries_raw[i] if i < len(entries_raw) else ""
+            copy_paths.add(new_name)
+            if old_name:
+                delete_paths.add(old_name)
+            i += 1
+            continue
+        if not path:
+            i += 1
+            continue
+        # Deleted: either index or worktree column is 'D'
+        if "D" in xy:
+            delete_paths.add(path)
+            i += 1
+            continue
+        # Untracked
+        if xy == "??":
+            copy_paths.add(path)
+            untracked_set.add(path)
+            i += 1
+            continue
+        # Modified, Added, Copied, etc.
+        copy_paths.add(path)
+        i += 1
+
+    entries: list[dict[str, str]] = []
+
+    # Delete files that the person deleted or renamed away.
+    for rel in sorted(delete_paths):
+        dest = worktree_path / rel
+        if dest.exists():
+            dest.unlink()
+        entries.append({"path": rel, "kind": "deleted", "sha256": ""})
+
+    # Copy files that exist in the working tree.
+    # Symlink safety: recreate symlinks as symlinks (os.readlink + os.symlink)
+    # instead of copying the target's contents.  This prevents two hazards:
+    #   1. A retargeted tracked absolute symlink being written through,
+    #      overwriting the old link's target outside the worktree.
+    #   2. An untracked symlink to a credentials file having its contents
+    #      committed into the run's base and delivered with the PR.
+    # Before writing any destination, unlink it if it is already a symlink so
+    # we never follow an existing link to a location outside the worktree.
+    # Regular-file destinations whose resolved path escapes the worktree (e.g.
+    # because a parent component is a symlink) are refused.
+    wt_resolved = worktree_path.resolve()
+    for rel in sorted(copy_paths):
+        source = target / rel
+        dest = worktree_path / rel
+        if not source.exists() and not source.is_symlink():
+            # The person deleted it after staging, or it's gone; treat as deleted.
+            if dest.exists() or dest.is_symlink():
+                dest.unlink()
+            entries.append({"path": rel, "kind": "deleted", "sha256": ""})
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Unlink an existing destination symlink before writing anything,
+        # so we never write through a link to outside the worktree.
+        if dest.is_symlink():
+            dest.unlink()
+        if source.is_symlink():
+            # Recreate the symlink faithfully rather than copying the target
+            # file's contents.
+            link_target = os.readlink(source)
+            os.symlink(link_target, dest)
+            sha = _hl.sha256(link_target.encode()).hexdigest()
+            kind = "untracked" if rel in untracked_set else "modified"
+            entries.append({"path": rel, "kind": kind, "sha256": sha})
+        else:
+            # Refuse a regular-file destination that resolves outside the
+            # worktree (a parent directory might be a symlink).
+            resolved_dest = dest.resolve()
+            if not (str(resolved_dest).startswith(str(wt_resolved) + os.sep)
+                    or resolved_dest == wt_resolved):
+                entries.append({"path": rel, "kind": "refused", "sha256": ""})
+                continue
+            try:
+                content = source.read_bytes()
+            except OSError:
+                continue
+            sha = _hl.sha256(content).hexdigest()
+            dest.write_bytes(content)
+            kind = "untracked" if rel in untracked_set else "modified"
+            entries.append({"path": rel, "kind": kind, "sha256": sha})
+
+    if not entries:
+        return entries
+
+    # Stage and commit the working-tree state as the run's base commit.
+    git(worktree_path, *NO_HOOKS, "add", "--all")
+    env = {**os.environ, **COMMITTER}
+    git(worktree_path, *NO_HOOKS, "commit", "-q", "--allow-empty",
+        "-m", f"working-tree base for run-{run_id}", env=env)
+
+    # Update the run's worktree record so `found.head` and `found.base` reflect
+    # the new commit (the base is now the working-tree commit, and so is head).
+    new_head = git(worktree_path, "rev-parse", "HEAD").strip()
+    run_record = _json(run / RECORD)
+    if run_record:
+        run_record["head"] = new_head
+        run_record["base"] = new_head
+        _write_json(run / RECORD, run_record)
+    # Also update the per-slot record.
+    slot_record_path = slot(target) / f"run-{run_id}.json"
+    slot_data = _json(slot_record_path)
+    if slot_data:
+        slot_data["base"] = new_head
+        _write_json(slot_record_path, slot_data)
+
+    # Record the uncommitted files alongside the worktree record.
+    record_path = slot(target) / f"run-{run_id}.{UNCOMMITTED_RECORD}"
+    _write_json(record_path, {"files": entries})
+
+    return entries
+
+
+def uncommitted_record(found: "Worktree") -> list[dict[str, str]]:
+    """The uncommitted files that were copied into ``found``'s worktree, or empty."""
+    if not hasattr(found, "target"):
+        return []
+    run_id = Path(found.path).name.removeprefix("run-")
+    path = slot(Path(found.target)) / f"run-{run_id}.{UNCOMMITTED_RECORD}"
+    data = _json(path)
+    return data.get("files", [])
+
+
 def _branch_exists(target: Path, branch: str) -> bool:
     try:
         git(target, "rev-parse", "-q", "--verify", f"refs/heads/{branch}")
@@ -428,6 +610,12 @@ def shared_changed(found: Worktree) -> bool:
         return False
     _write_json(record_path, {**record, "shared": now})
     return True
+
+
+import types as _types
+_worktree_state_bridge = _types.SimpleNamespace(
+    recorded=recorded, shared_changed=shared_changed,
+)
 
 
 # ── attempts: each one a commit on the run's branch ─────────────────────────
