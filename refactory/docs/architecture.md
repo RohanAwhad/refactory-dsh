@@ -332,8 +332,9 @@ quotation the design attributes to the brief appears verbatim in the brief. On
 failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
 proceeds to `gate_strategy` with the remaining findings shown — it never fails the
 run. A **person answers `gate_strategy`** at that point, because a
-run that can approve its own plan is not reviewed at all, so a headless run refuses
-that gate unless the caller supplies the verdict. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
+run that can approve its own plan is not reviewed at all, so a walker run stops at
+the gate and records the visit; a headless DSH run refuses at the spine level;
+the caller can supply the verdict up front via the ledger. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in
 parallel**, merge into one synthesis whose blocking findings the QA gate reads, and
 are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs between the check and the reviews, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. A QA or
@@ -438,7 +439,7 @@ Explicit upfront `--approve` or `RunContext.verdicts` remains standing authoriza
 from the caller. A ledger-backed upfront approval remains active when that same
 work directory is reopened; it has no separate invocation identifier. Without a
 current scoped answer or standing authorization, a
-headless run **refuses** at the gate and names it.
+walker run **stops** at the gate; a headless DSH run refuses at the spine level.
 
 **It is inert when unused.** An empty ledger renders the empty string and `annotate`
 returns the workflow it was given. A run nobody steered is the run it would have been,

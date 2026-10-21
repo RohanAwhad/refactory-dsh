@@ -896,8 +896,14 @@ def _steer(
     ledger = Ledger(run_root)
     if seed is not None:
         Ledger.seed(run_root, seed)
+    effective_kind = kind
     if note is not None:
-        ledger.note(kind, note, scope=scope, source=source)
+        if verdicts and kind == "info":
+            from refactory_dsh.steering import NOTE_KINDS
+            _, _, verdict_value = str(verdicts[-1]).partition("=")
+            effective_kind = NOTE_KINDS.get(verdict_value.strip().lower(), kind)
+        ledger.note(effective_kind, note, scope=scope, source=source)
+    _effective_kind = effective_kind
     recorded_scopes: dict[str, str] = {}
     for pair in verdicts:
         gate, _, value = str(pair).partition("=")
@@ -935,6 +941,7 @@ def _steer(
         "finished": search_finished(run_root),
         "control": latest_receipt(run_root),
     }
+    payload["_effective_kind"] = _effective_kind
     if with_gates:
         payload["gates"] = gates(run_root)
     if control is not None:
@@ -1264,8 +1271,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     single.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
-        help="answer a gate a person owns, as <gate>=<value> (repeatable); a headless "
-             "run refuses a user gate it was not told the answer to",
+        help="answer a gate a person owns, as <gate>=<value> (repeatable); a walker "
+             "run stops at a user gate and prints the steer command; answer it, then resume",
     )
     single.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for the person")
     single.add_argument("--provider", default="", help="provider route for this run's model")
@@ -1431,8 +1438,8 @@ def _parser() -> argparse.ArgumentParser:
     packages.add_argument("--args", default="", help="extra registry flags, as a shell-quoted string")
 
     make = sub.add_parser("create", help="create a package of modes from a brief (model-driven)")
-    make.add_argument("--name", required=True)
-    make.add_argument("--brief", required=True)
+    make.add_argument("--name", default="")
+    make.add_argument("--brief", default="")
     make.add_argument("--provider", default="", help="provider route for this authoring run")
     make.add_argument("--model", default="", help="model id for this authoring run")
     make.add_argument("--extends", default="")
@@ -1468,9 +1475,9 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     revise = sub.add_parser("edit", help="revise a mode from a brief (model-driven)")
-    revise.add_argument("--mode", required=True)
-    revise.add_argument("--name", required=True)
-    revise.add_argument("--brief", required=True)
+    revise.add_argument("--mode", default="")
+    revise.add_argument("--name", default="")
+    revise.add_argument("--brief", default="")
     revise.add_argument("--provider", default="", help="provider route for this authoring run")
     revise.add_argument("--model", default="", help="model id for this authoring run")
     revise.add_argument("--allow-regression", action="store_true",
@@ -1488,8 +1495,8 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     artifact = sub.add_parser("design", help="design and check a software artifact (model-driven)")
-    artifact.add_argument("--name", required=True)
-    artifact.add_argument("--brief", required=True)
+    artifact.add_argument("--name", default="")
+    artifact.add_argument("--brief", default="")
     artifact.add_argument("--provider", default="", help="provider route for this authoring run")
     artifact.add_argument("--model", default="", help="model id for this authoring run")
     artifact.add_argument("--check", default="", help="the command that proves the artifact works")
@@ -1798,7 +1805,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             payload['recorded_verdicts'] = list(args.verdict)
             payload['recorded_note'] = args.note
-            payload['recorded_kind'] = args.kind
+            payload['recorded_kind'] = payload.pop('_effective_kind', args.kind)
             from refactory_dsh import readable
             payload['text'] = readable.format_steer(payload)
         elif args.verb == "best":

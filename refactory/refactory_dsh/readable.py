@@ -131,8 +131,18 @@ def format_steer(payload: dict[str, Any]) -> str:
             else:
                 lines.append(f"Recorded verdict {pair}.")
         root = payload.get('run', '')
+        # Read the resume command from run-config.json when available.
+        resume_cmd = f"refactory graph-control resume --run {root}"
+        config_path = Path(root) / '.refactory/run-config.json' if root else None
+        if config_path and config_path.exists():
+            try:
+                import json as _json
+                config = _json.loads(config_path.read_text())
+                resume_cmd = config.get('resume_command', resume_cmd)
+            except (OSError, ValueError):
+                pass
         lines.append("Continue the run:")
-        lines.append(f"  refactory graph-control resume --run {root}")
+        lines.append(f"  {resume_cmd}")
 
     if has_note:
         kind = payload.get('recorded_kind', 'info')

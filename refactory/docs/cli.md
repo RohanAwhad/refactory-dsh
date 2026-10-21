@@ -215,3 +215,43 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 Read [Models](models.md) for managed credentials, resolved routing, worker receipts and unsupported backend capabilities. A random seed does not make provider responses deterministic. Candidate counts, elapsed time and tokens have separate limits; repeated trials and final holdout measurements consume the shared resource allocation. Token enforcement occurs at usage boundaries and can overshoot during an in-flight request.
 
 For samples and resume on authoring APIs, use the documented Python Create/Edit/Design entry points and their `--help`; those flags are not all aliases on `refactory ceo`. [Authoring guide](tutorials/03-author-with-a-model.md).
+
+## Walker (direct Python execution)
+
+The walker runs the same graphs in-process:
+
+```
+python -m refactory_dsh.design --name <n> --brief <text> --check <cmd>
+python -m refactory_dsh.create --name <n> --brief <text> [--single | --task <ref>]
+python -m refactory_dsh.edit --mode <pkg>/<mode> --name <n> --brief <text>
+```
+
+### Common flags
+
+| flag | what it does |
+|---|---|
+| `--resume <dir>` | continue a stopped run; no other arguments needed |
+| `--verdict <gate>=<value>` | answer a user gate (repeatable) |
+| `--model <id>` | model id for this run |
+| `--provider <route>` | provider route |
+| `--model-timeout <s>` | seconds one completion may take |
+| `--workdir <dir>` | the run directory |
+| `--attempts <n>` | how many repair cycles |
+
+### Gate flow
+
+At a `user` gate the walker stops and prints the steer command. Answer with:
+
+```
+refactory steer --run <dir> --verdict <gate>=<verdict> [--note "..."]
+```
+
+Then resume:
+
+```
+python -m refactory_dsh.design --resume <dir>
+```
+
+`halt` at any user gate ends the run. A reloop verdict's note becomes a correction
+in the intent ledger. An up-front `--verdict gate_strategy=proceed` is persisted
+as a run-scoped ledger entry and survives a resume.

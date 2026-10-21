@@ -3,7 +3,8 @@
 A small, real pipeline rather than a fixture: materialize the task, write a draft,
 check it with a deterministic rule, let a person approve it, then publish or record
 the rejection. ``approve`` is answered by a person through the driving agent; this
-module never invents that answer, and a headless run refuses at it.
+module never invents that answer. A walker run stops at it; a headless DSH run
+refuses at the spine level.
 
 Every operation is a plain function of the run context: it reads the files it
 declares, writes the files it declares, and returns the facts it declares.

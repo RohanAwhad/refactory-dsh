@@ -110,11 +110,6 @@ def prepare(
         # relative one: `interactive <mode>` with no `--workdir` used to fail before the
         # graph started, on the default root that is relative by design.
         workdir.mkdir(parents=True, exist_ok=True)
-        if not steering.Ledger(workdir).exists():
-            # Selecting a mode is itself an explicit run request. Do not invent a
-            # broader purpose when the caller supplied no prose intent.
-            steering.Ledger.seed(workdir, intent.strip() or f"Run {identifier}.")
-
         from refactory_dsh import invocations, workers
         from refactory_dsh.model import DshModelClient
         routing_context = dict(model_context or {})
@@ -128,18 +123,29 @@ def prepare(
             model_context['budget_ledger'] = str(workdir / LEDGER)
 
         name = f"{package}-{mode_name}"
-        graphs = invocations.prepare(
-            state, workdir, name=name,
-            transform=lambda workflow: workers.lower_workflow(steering.for_run(workflow, workdir), workdir, model_context, lowering.node_declarations(state)),
+        from refactory_dsh.run_preparation import prepare_run
+        graphs = prepare_run(
+            state, workdir,
+            invocation_name=name,
+            mode_id=identifier,
+            intent=intent.strip() or f"Run {identifier}.",
+            transform=lambda workflow, stage_dir=None: workers.lower_workflow(
+                steering.for_run(workflow, stage_dir or workdir),
+                workdir, model_context, lowering.node_declarations(state)),
+            runtime="dsh",
+            command="refactory ceo",
+            resume_command=f"refactory graph-control resume --run {workdir}",
+            worker_backend=model_context.get("worker_backend", "dsh"),
             resource_limits=resource_limits,
+            project=project,
         )
         import json
-        from refactory_dsh.recovery import configuration_fingerprints
-
-        (workdir / '.refactory/run-config.json').write_text(json.dumps({'mode': identifier,
-            'project': str(project.resolve()), 'knobs': knobs or [], 'model_context': model_context,
-            'resource_limits': resource_limits,
-            'configuration_fingerprints': configuration_fingerprints(workdir, identifier, project)}))
+        # Update run-config.json with DSH-specific fields.
+        config_path = workdir / '.refactory/run-config.json'
+        config = json.loads(config_path.read_text())
+        config['knobs'] = knobs or []
+        config['model_context'] = model_context
+        config_path.write_text(json.dumps(config, indent=2, default=str))
         return name, graphs
 
 

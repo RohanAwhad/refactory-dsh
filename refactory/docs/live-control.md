@@ -28,7 +28,7 @@ Pending user gates retain their prompt and accepted verdicts.
 
 **Live mode (no `--headless`).** When a run reaches a user gate, the terminal shows the gate's own prompt (including the delivery line, with the run's facts filled in), the accepted verdicts, and asks the person to pick one. After choosing a verdict, the person may add an optional multi-line note (ending with a line containing only `.`); the note is recorded as steering in the intent ledger — a correction with reloop, a constraint with proceed.
 
-**Headless mode.** A headless run refuses a user gate and prints the exact commands to answer it later:
+**Headless mode.** A headless DSH run stops at a user gate and prints the exact commands to answer it later. A walker run (``python -m refactory_dsh.design`` etc.) stops with ``GateStop`` and prints the same commands:
 
 ```
 refactory: <gate> is waiting for a person.

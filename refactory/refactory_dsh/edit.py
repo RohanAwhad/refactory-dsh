@@ -144,9 +144,9 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m refactory_dsh.edit",
         description="Revise an existing mode from a brief.",
     )
-    parser.add_argument("--mode", required=True, help="the mode to revise")
-    parser.add_argument("--name", required=True, help="the package to write the revision into")
-    parser.add_argument("--brief", required=True)
+    parser.add_argument("--mode", required=False, default="", help="the mode to revise")
+    parser.add_argument("--name", required=False, default="", help="the package to write the revision into")
+    parser.add_argument("--brief", required=False, default="")
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--fast", action="store_true", help="use the inspectable edit_fast graph with focused QA")
     parser.add_argument("--repair-attempts", type=int, default=1, help="fast graph repair limit (0..3)")
@@ -184,6 +184,11 @@ def main(argv: list[str] | None = None) -> int:
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
     )
     args = parser.parse_args(argv)
+    if not args.resume:
+        if not args.mode:
+            parser.error("--mode is required when not resuming")
+        if not args.name:
+            parser.error("--name is required when not resuming")
 
     from refactory_dsh.model import DshModelClient
     from refactory_dsh.paths import project_root

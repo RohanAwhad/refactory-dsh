@@ -17,7 +17,7 @@ from typing import Any, Callable
 from refactory_dsh import lowering
 from refactory_dsh.nn.executor import ITEMS_OVERRIDE
 from refactory_dsh.run_artifacts import archive_root, overlaps, owned_outputs
-from refactory_dsh.steering import LEDGER
+from refactory_dsh.steering import LEDGER as STEERING_LEDGER
 from refactory_dsh.run_ownership import LOCK, ownership
 
 # ── constants that core and product share ──────────────────────────────────────
@@ -110,13 +110,14 @@ def _inputs(workdir: Path, declarations: dict[str, Any]) -> list[Path]:
         resolved = path.resolve() if path.is_absolute() else (workdir / path).resolve()
         if resolved.is_relative_to(workdir):
             inputs.extend([relative(path), resolved.relative_to(workdir)])
-    inputs.extend([Path(ITEMS_OVERRIDE), Path(LEDGER), LOCK])
+    inputs.extend([Path(ITEMS_OVERRIDE), LOCK])
     return inputs
 
 
 def prepare(
     state: dict[str, Any], workdir: Path, *, name: str, transform: Callable,
     resource_limits: dict[str, Any] | None = None,
+    intent: str = "",
 ) -> Path:
     """Stage a valid lowering, archive prior ownership, then install or roll back."""
     with ownership(workdir):
@@ -135,7 +136,7 @@ def prepare(
             raise ValueError('existing run has no ownership declarations; use a new work directory')
         writes = [name for node in prior.values() if isinstance(node, dict) for name in node.get('writes', [])]
         targets, retained = owned_outputs(workdir, writes, _inputs(workdir, lowering.node_declarations(state)))
-        metadata = [Path('facts.json'), Path('graphs'), Path('.memory'), Path(lowering.DECLARATIONS),
+        metadata = [Path(STEERING_LEDGER), Path('facts.json'), Path('graphs'), Path('.memory'), Path(lowering.DECLARATIONS),
                     Path('.refactory/spine-status.json'), Path('.refactory/agent-delivery'),
                     Path('.refactory/events.jsonl'), Path('.refactory/spine-checkpoint.json'),
                     Path('.refactory/graph-controls'), Path('.refactory/graph-control-receipt.json'),
@@ -165,7 +166,14 @@ def prepare(
         # Nothing from the old invocation moves until the complete new lowering exists.
         with tempfile.TemporaryDirectory(prefix='prepare-', dir=runtime) as temporary:
             stage = Path(temporary)
-            lowering.write_mode_graph(state, stage / 'graphs', name=name, transform=transform)
+            # Seed the ledger into the stage so the fold reads the fresh intent.
+            if intent:
+                from refactory_dsh import steering as steering_mod
+                steering_mod.Ledger.seed(stage, intent)
+            lowering.write_mode_graph(
+                state, stage / 'graphs', name=name,
+                transform=lambda workflow: transform(workflow, stage_dir=stage),
+            )
             lowering.write_declarations(state, stage)
             (stage / INVOCATION).write_text(json.dumps(record, indent=2) + '\n')
             fresh_metadata: list[Path] = []
@@ -185,7 +193,8 @@ def prepare(
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     (workdir / relative).rename(destination)
                     moved.append(relative)
-                for relative in [Path('graphs'), Path(lowering.DECLARATIONS), INVOCATION, *fresh_metadata]:
+                ledger_install = [Path(STEERING_LEDGER)] if (stage / STEERING_LEDGER).exists() else []
+            for relative in [Path('graphs'), Path(lowering.DECLARATIONS), INVOCATION, *fresh_metadata, *ledger_install]:
                     (stage / relative).rename(workdir / relative)
                     installed.append(relative)
             except Exception:

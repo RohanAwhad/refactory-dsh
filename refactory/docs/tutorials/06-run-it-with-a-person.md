@@ -34,7 +34,7 @@ check fn 'python -m refactory_dsh.run refactory_packages.review_pack.ops:check'
 approve user None
 ```
 
-## A headless run refuses
+## A headless run stops
 
 ```bash
 uv run refactory package smoke review_pack/review
@@ -47,7 +47,7 @@ an agent; pass one in RunContext.verdicts (an interactive run collects a fresh
 answer) or make the gate `fn`."}
 ```
 
-That refusal is the point: an invented verdict is indistinguishable in the artifacts
+That stop is the point: an invented verdict is indistinguishable in the artifacts
 from one a person gave, so it must not be invented.
 
 ## Run it with a person
@@ -82,9 +82,9 @@ Answer `1`. The run completes, `final.md` is written, and the verdict is recorde
 the run's ledger.
 
 > A piped or captured stdin is not a person, so the answerer delegates and the run
-> **refuses** the gate, naming it. That is why a headless DSH run of the same mode
-> stops with `the graph did not finish: gate approve is answered by a person and
-> could not be asked: no user-questions answerer accepted the request` instead of
+> **stops** at the gate, naming it. A walker run raises ``GateStop``; a headless
+> DSH run stops with `the graph did not finish: gate approve is answered by a person
+> and could not be asked: no user-questions answerer accepted the request` instead of
 > scoring 0.
 
 ## The history is durable; approval is scoped
@@ -214,8 +214,8 @@ then repeat adoption. This does not waive failed evaluations or an overfit warni
 ## What to take away
 
 - **Who answers a gate is part of the architecture**, not a convention: the IR
-  carries it, the runtime enforces it, and a headless run refuses rather than
-  guessing.
+  carries it, the runtime enforces it, and a walker run stops (a headless DSH run
+  refuses at the spine level) rather than guessing.
 - The decision history is durable. Interactive approval applies once to the
   reviewed inputs; another visit needs a new answer.
 - Steering is context; structure is the outer loop's job. During use the graph does
