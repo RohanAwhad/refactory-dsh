@@ -246,7 +246,7 @@ def prepared_clone(
             if emission_path.is_file():
                 from refactory_dsh.repo_change import apply_emission
                 emission_content = emission_path.read_text()
-                files_dict, deletes, _rev = apply_emission(emission_content, found, workdir)
+                files_dict, deletes, _rev, _repeated = apply_emission(emission_content, found, workdir)
                 if files_dict or deletes:
                     _apply_emission_to_clone(clone_dir, files_dict, deletes)
                     # Stage and commit

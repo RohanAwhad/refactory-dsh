@@ -704,12 +704,13 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
         return {"emission_refused": str(refused)}
 
 
-def apply_emission(answer: str, found: worktree.Worktree, workdir: Path) -> tuple[dict[Path, str], tuple[Path, ...], str]:
+def apply_emission(answer: str, found: worktree.Worktree, workdir: Path) -> tuple[dict[Path, str], tuple[Path, ...], str, list[str]]:
     """Parse emit.txt and resolve edits against the run worktree, read-only.
 
-    Returns (files, deletes, rev) where files maps relative paths to content,
-    deletes lists paths to remove, and rev is the revision the emission was
-    applied against.  The .git refusal and _inside symlink refusal are applied.
+    Returns (files, deletes, rev, repeated) where files maps relative paths to content,
+    deletes lists paths to remove, rev is the revision the emission was
+    applied against, and repeated lists paths whose edits were already applied.
+    The .git refusal and _inside symlink refusal are applied.
     """
     files_raw, changed, deletes = _emitted(answer, edits=True)
     path = Path(found.path)
@@ -720,12 +721,15 @@ def apply_emission(answer: str, found: worktree.Worktree, workdir: Path) -> tupl
         rev = str(last["applied_to"])
         deletes = tuple(name for name in deletes if worktree.committed_text(found, name) is not None)
 
+    repeated: list[str] = []
     for relative, pairs in changed.items():
         current = worktree.committed_text(found, relative, rev)
         if current is None:
             raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
                                  "write it whole with ===FILE:")
-        files_raw[relative], _skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
+        files_raw[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
+        if skipped:
+            repeated.append(str(relative))
 
     # Apply .git and _inside guards
     for relative in (*files_raw, *deletes):
@@ -733,7 +737,7 @@ def apply_emission(answer: str, found: worktree.Worktree, workdir: Path) -> tupl
             raise AttemptRefused(f"{relative} is inside git's own state, not a file of the artifact; leave it out")
         worktree._inside(path, relative)
 
-    return files_raw, deletes, rev
+    return files_raw, deletes, rev, repeated
 
 
 def _is_repeated_emission(found: worktree.Worktree, digest: str, last: dict[str, Any]) -> bool:
@@ -753,7 +757,10 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
     """Apply emit.txt to the run's worktree as its next attempt; one a prune removed is added back."""
     found = worktree.require_current(ctx.workdir)
     answer = ctx.read_text(EMIT_FILE)
-    files, deletes, rev = apply_emission(answer, found, ctx.workdir)
+    files, deletes, rev, repeated = apply_emission(answer, found, ctx.workdir)
+    if repeated:
+        target_guard.warn(f"emit re-sent edits the last attempt already holds, so they were skipped rather than "
+                          f"applied twice: {target_guard._named(repeated)}")
     path = Path(found.path)
     digest = hashlib.sha256(answer.encode()).hexdigest()
     last = _json(Path(ctx.workdir) / EMISSION)

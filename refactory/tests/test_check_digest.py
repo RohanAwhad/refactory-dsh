@@ -45,7 +45,7 @@ def _make_run_with_worktree(tmp_path, *, check_cmd="echo ok", emit_content="===F
     base = git(repo, "rev-parse", "HEAD")
     head = base
 
-    found = worktree.Worktree(target=str(repo), path=str(repo), branch=branch, base=base, head=head)
+    found = worktree.Worktree(target=str(repo), path=str(repo), branch=branch, base=base, head=head, run=str(run))
     worktree._write_json(run / ".refactory" / "slot" / "run-dac367f4e563.json", {
         "target": str(repo), "path": str(repo), "branch": branch, "base": base, "head": head,
     })
@@ -97,7 +97,7 @@ def test_digest_from_pytest_output(tmp_path, monkeypatch):
 
     ctx = nn.RunContext(tmp_path / "run", facts={"check": "python -m pytest", "name": "test", "brief": "test"},
                         knobs={"check_timeout_s": 60, "attempts": 3})
-    (tmp_path / "run").mkdir(parents=True)
+    (tmp_path / "run").mkdir(parents=True, exist_ok=True)
     (tmp_path / "run" / ".refactory").mkdir()
     ctx._declared = ("check.txt", "validation.txt", "authoring-evidence.json", "check-record.json",
                      "test-guardedness.json")

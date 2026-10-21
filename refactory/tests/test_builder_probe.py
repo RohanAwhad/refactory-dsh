@@ -69,8 +69,9 @@ def _make_probe_run(tmp_path):
     base = _git(repo, "rev-parse", "HEAD")
     head = base
 
-    found = Worktree(target=str(repo), path=str(repo), branch=branch, base=base, head=head)
+    found = Worktree(target=str(repo), path=str(repo), branch=branch, base=base, head=head, run=str(run))
     _write_json(run / ".refactory" / "slot" / "run-test.json", asdict(found))
+    _write_json(run / ".refactory" / "worktree.json", asdict(found))
 
     # Write facts.json
     (run / "facts.json").write_text(json.dumps({
