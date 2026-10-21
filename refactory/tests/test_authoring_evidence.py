@@ -400,6 +400,34 @@ def test_ceo_skip_is_refused_by_require_completion(tmp_path):
     assert any("ceo" in p for p in problems), f"CEO skip should be refused, got: {problems}"
 
 
+def test_fast_mode_ceo_skip_refused(tmp_path):
+    """AC-13: fast_ops.report_artifact raises ValueError naming 'ceo' when the
+    check was skipped by the CEO, independently of the current_problems path."""
+    import json
+    from refactory_dsh import fast_ops
+
+    ctx = nn.RunContext(tmp_path, facts={"name": "test_pkg"})
+    # focused-check.json with a non-pass status (the check never ran)
+    ctx.write_json("focused-check.json", {"status": "skipped"})
+    # declarations.json marking focused_check as a runtime_evidence producer
+    decl_dir = tmp_path / ".refactory"
+    decl_dir.mkdir(exist_ok=True)
+    (decl_dir / "declarations.json").write_text(json.dumps({
+        "focused_check": {"produces": ["runtime_evidence"]}
+    }))
+    # spine checkpoint with CEO skip provenance
+    (decl_dir / "spine-checkpoint.json").write_text(json.dumps({
+        "state": {
+            "skipped": ["focused_check"],
+            "skip_provenance": {
+                "focused_check": {"source": "ceo", "at": "2026-10-20T22:25:29+00:00"}
+            }
+        }
+    }))
+    with pytest.raises(ValueError, match="ceo"):
+        fast_ops.report_artifact(ctx)
+
+
 def test_requirements_excludes_ceo_note_naming_gate_verdict(tmp_path):
     """dm-113: A CEO note naming a gate verdict is excluded from requirements."""
     ctx = audit_context(tmp_path)
