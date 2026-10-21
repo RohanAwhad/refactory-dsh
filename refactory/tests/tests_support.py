@@ -475,26 +475,12 @@ class FakeModel:
                                 })
                         if rq_entries:
                             rq_json = json.dumps(rq_entries)
-                            # For markdown answers (reviews/*.md): append if not already present
-                            if "## Repository questions" not in answer and "repo_questions" not in answer:
-                                if "focused-qa.json" not in prompt and "Write focused-qa.json" not in prompt:
-                                    answer = answer.rstrip()
-                                    # Insert before VERDICT line if present
-                                    if "\nVERDICT:" in answer:
-                                        parts = answer.rsplit("\nVERDICT:", 1)
-                                        answer = (
-                                            parts[0] + "\n\n"
-                                            "## Repository questions\n\n"
-                                            "```json\n" + rq_json + "\n```\n\n"
-                                            "VERDICT:" + parts[1]
-                                        )
-                                    else:
-                                        answer += (
-                                            "\n\n## Repository questions\n\n"
-                                            "```json\n" + rq_json + "\n```\n"
-                                        )
-                            # For JSON answers (focused-qa.json): inject repo_questions key
-                            elif ("Write focused-qa.json" in prompt or "focused-qa.json" in prompt) and answer.strip().startswith("{"):
+                            # For JSON answers (focused-qa.json): inject repo_questions key.
+                            # Check this BEFORE the markdown path: a focused_qa answer is
+                            # valid JSON that does not contain "repo_questions" as text, so
+                            # the markdown guard would match first and then skip because the
+                            # prompt mentions focused-qa.json, leaving the elif unreachable.
+                            if ("Write focused-qa.json" in prompt or "focused-qa.json" in prompt) and answer.strip().startswith("{"):
                                 try:
                                     qa_obj = json.loads(answer)
                                     if isinstance(qa_obj, dict) and "repo_questions" not in qa_obj:
@@ -502,6 +488,23 @@ class FakeModel:
                                         answer = json.dumps(qa_obj)
                                 except (json.JSONDecodeError, ValueError):
                                     pass
+                            # For markdown answers (reviews/*.md): append if not already present
+                            elif "## Repository questions" not in answer and "repo_questions" not in answer:
+                                answer = answer.rstrip()
+                                # Insert before VERDICT line if present
+                                if "\nVERDICT:" in answer:
+                                    parts = answer.rsplit("\nVERDICT:", 1)
+                                    answer = (
+                                        parts[0] + "\n\n"
+                                        "## Repository questions\n\n"
+                                        "```json\n" + rq_json + "\n```\n\n"
+                                        "VERDICT:" + parts[1]
+                                    )
+                                else:
+                                    answer += (
+                                        "\n\n## Repository questions\n\n"
+                                        "```json\n" + rq_json + "\n```\n"
+                                    )
                 except (json.JSONDecodeError, OSError):
                     pass
         return answer
