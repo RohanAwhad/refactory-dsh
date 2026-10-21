@@ -280,7 +280,7 @@ def prepared_clone(
         from dataclasses import asdict
         _write_json(record_path, {**asdict(clone_found), "owner_pid": os.getpid()})
 
-        # Prepare environment
+        # Prepare environment using the factored helper
         home_dir.mkdir(parents=True, exist_ok=True)
         dsh_home_dir.mkdir(parents=True, exist_ok=True)
 
@@ -289,37 +289,23 @@ def prepared_clone(
         if remaining <= 0:
             raise TimeoutError("probe deadline exceeded during clone")
 
-        # Run ensure_environment with commit_lockfiles=False
-        amended, problems, install_fail = worktree.ensure_environment(
-            clone_found, workdir, commit_lockfiles=False,
+        from refactory_dsh.repo_change import prepare_check_environment
+        from refactory_dsh.run import _read_facts
+        facts = _read_facts(workdir)
+
+        clone_found, env, problems, prep_fail = prepare_check_environment(
+            clone_found, facts,
+            amend=False, commit_lockfiles=False,
+            run=workdir, home=home_dir, timeout=remaining,
         )
         if problems:
             raise ValueError(f"probe environment preparation failed: {'; '.join(problems)}")
-        if amended.head != clone_found.head:
-            clone_found = amended
 
-        # Build check environment
-        env = worktree.check_environment(clone_dir, home_dir)
+        # Strip run worktree paths and set probe-specific env vars
         env = _strip_worktree_path(env, found.path)
         env["DSH_HOME"] = str(dsh_home_dir)
         env["LEFTHOOK"] = "0"
         env["HUSKY"] = "0"
-
-        # Run prepare_commands with amend=False
-        from refactory_dsh.repo_change import prepare_commands
-        from refactory_dsh.run import _read_facts
-        facts = _read_facts(workdir)
-
-        elapsed = time.monotonic() - start
-        remaining = deadline - elapsed
-        if remaining <= 0:
-            raise TimeoutError("probe deadline exceeded during preparation")
-
-        clone_found, prep_problems, _prep_fail = prepare_commands(
-            _FactsProxy(facts), clone_found, env, home_dir, remaining, None, amend=False,
-        )
-        if prep_problems:
-            raise ValueError(f"probe preparation failed: {'; '.join(prep_problems)}")
 
         yield clone_dir, env, clone_found
 

@@ -453,13 +453,11 @@ def main() -> int:
             from refactory_dsh.nn.executor import RunContext, render
             prompt = request['prompt']
             context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
-            # Re-fill feedback keys before rendering
+            # Re-fill feedback keys before rendering — a failure to re-derive
+            # a declared key refuses the dispatch (dm-120).
             values = {**context.knobs, **context.facts}
-            try:
-                values, refilled_keys = fill_feedback(workdir, request['node'], values)
-                context = RunContext(workdir, knobs=context.knobs, facts={**context.facts, **{k: values[k] for k in (refilled_keys or [])}})
-            except (RuntimeError, ValueError):
-                refilled_keys = []
+            values, refilled_keys = fill_feedback(workdir, request['node'], values)
+            context = RunContext(workdir, knobs=context.knobs, facts={**context.facts, **{k: values[k] for k in (refilled_keys or [])}})
             rendered = render(prompt, context)
             # Detect unresolved template keys from the template itself (not
             # substituted values).  Record as a warning, not a refusal: the

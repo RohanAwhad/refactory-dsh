@@ -1,6 +1,17 @@
-"""Tests for check_digest: failure digest parsing."""
+"""Tests for check_digest: failure digest parsing.
+
+Tests are driven through check_artifact (design) and focused_check (design_fast)
+as the brief requires, with unit tests for node's test runner and formatting.
+"""
 
 from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from refactory_dsh.check_digest import (
     CheckDigest,
@@ -11,11 +22,52 @@ from refactory_dsh.check_digest import (
     format_digest,
 )
 from refactory_dsh.base_check import strip_ansi
+from refactory_dsh import design_ops, repo_change, worktree, nn
+from refactory_dsh.nn import Verdict
 
 
-def test_digest_from_pytest_output():
-    """Digest from pytest output has failing test IDs first."""
-    output = (
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _make_run_with_worktree(tmp_path, *, check_cmd="echo ok", emit_content="===FILE: tool.py===\nprint('ok')\n"):
+    """Create a minimal run directory with a worktree so check_artifact can run."""
+    from tests_support import git_repo, git, render
+    repo = git_repo(tmp_path / "repo")
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / ".refactory").mkdir(parents=True)
+
+    # Set up the worktree
+    branch = "refactory/run-test"
+    git(repo, "checkout", "-b", branch)
+    (repo / "tool.py").write_text("print('old')\n")
+    git(repo, "add", "tool.py")
+    git(repo, "commit", "-q", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    head = base
+
+    found = worktree.Worktree(target=str(repo), path=str(repo), branch=branch, base=base, head=head)
+    worktree._write_json(run / ".refactory" / "slot" / "run-dac367f4e563.json", {
+        "target": str(repo), "path": str(repo), "branch": branch, "base": base, "head": head,
+    })
+    (run / ".refactory" / "slot").mkdir(parents=True, exist_ok=True)
+    from dataclasses import asdict
+    worktree._write_json(run / ".refactory" / "slot" / "run-dac367f4e563.json", asdict(found))
+
+    ctx = nn.RunContext(run, facts={"check": check_cmd, "name": "test-digest", "brief": "test"},
+                        knobs={"check_timeout_s": 60, "attempts": 3})
+    ctx._declared = ("check.txt", "validation.txt", "authoring-evidence.json", "check-record.json",
+                     "test-guardedness.json")
+    ctx._declared_facts = ("validation", "check_attempts_used", "review_attempts_used",
+                          "attempts_used", "runtime_evidence", "inherited_failures")
+    ctx.enforce_writes = False
+    return ctx, repo, run
+
+
+# ── digest through check_artifact (design mode) ──────────────────────────────
+
+def test_digest_from_pytest_output(tmp_path, monkeypatch):
+    """Digest from pytest output via check_artifact, with failing test IDs first."""
+    pytest_output = (
         "============================= FAILURES =============================\n"
         "_________________________ test_addition _________________________\n"
         "    def test_addition():\n"
@@ -28,18 +80,46 @@ def test_digest_from_pytest_output():
         "PASSED tests/test_math.py::test_subtraction\n"
         "1 failed, 1 passed in 0.5s\n"
     )
-    digest = digest_check_output(output)
-    assert digest.runners, "should have at least one runner"
-    pytest_runner = digest.runners[0]
-    assert pytest_runner.name == "pytest"
-    assert not pytest_runner.passed
-    assert len(pytest_runner.failures) >= 1
-    assert "test_addition" in pytest_runner.failures[0].test_id
+    # Monkeypatch so check_artifact's run_check returns our pytest output
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: None)
+    from refactory_dsh.sandbox import SandboxResult
+    fake_result = SandboxResult(ok=False, returncode=1, elapsed_s=1.0,
+                                 stdout=pytest_output, stderr="")
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, cmd, timeout: fake_result)
+    # Stub out base_check and authoring_evidence to avoid side effects
+    from refactory_dsh import base_check, authoring_evidence
+    monkeypatch.setattr(base_check, "compute_test_guardedness", lambda *a, **k: None)
+    monkeypatch.setattr(authoring_evidence, "record", lambda *a, **k: None)
+    monkeypatch.setattr(authoring_evidence, "stop_unrepairable", lambda *a, **k: None)
+    # Stub repair to just return the detail
+    from refactory_dsh import create_ops
+    monkeypatch.setattr(create_ops, "repair", lambda ctx, details: Verdict("reloop", details[0]))
+
+    ctx = nn.RunContext(tmp_path / "run", facts={"check": "python -m pytest", "name": "test", "brief": "test"},
+                        knobs={"check_timeout_s": 60, "attempts": 3})
+    (tmp_path / "run").mkdir(parents=True)
+    (tmp_path / "run" / ".refactory").mkdir()
+    ctx._declared = ("check.txt", "validation.txt", "authoring-evidence.json", "check-record.json",
+                     "test-guardedness.json")
+    ctx._declared_facts = ("validation", "check_attempts_used", "review_attempts_used",
+                          "attempts_used", "runtime_evidence", "inherited_failures")
+    ctx.enforce_writes = False
+
+    result = design_ops.check_artifact(ctx)
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    # The digest should contain the failing test ID
+    assert "test_addition" in result.reason
+    # The check-record.json should have been written
+    cr = json.loads((tmp_path / "run" / "check-record.json").read_text())
+    assert cr["status"] == "fail"
+    assert "test_addition" in cr.get("digest", "")
 
 
-def test_digest_from_vitest_output():
-    """Digest from vitest output strips source-map noise."""
-    output = (
+def test_digest_from_vitest_output(tmp_path, monkeypatch):
+    """Digest from vitest output via focused_check, source-map noise stripped."""
+    from refactory_dsh import fast_ops
+    vitest_output = (
         "Sourcemap for foo.js points to missing source files\n"
         " FAIL  src/foo.test.ts > math > should add\n"
         "   AssertionError: expected 3 to be 4\n"
@@ -48,10 +128,40 @@ def test_digest_from_vitest_output():
         "\n"
         " Test Files  1 failed\n"
     )
-    digest = digest_check_output(output)
-    formatted = format_digest(digest)
-    assert "Sourcemap" not in formatted
-    assert "should add" in formatted or "math" in formatted
+    from refactory_dsh.sandbox import SandboxResult
+    fake_result = SandboxResult(ok=False, returncode=1, elapsed_s=1.0,
+                                 stdout=vitest_output, stderr="")
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, cmd, timeout: fake_result)
+
+    # Stub out base_check and authoring evidence
+    from refactory_dsh import base_check, authoring_evidence
+    monkeypatch.setattr(base_check, "compute_test_guardedness", lambda *a, **k: None)
+    monkeypatch.setattr(authoring_evidence, "record", lambda *a, **k: None)
+    monkeypatch.setattr(authoring_evidence, "stop_unrepairable", lambda *a, **k: None)
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True)
+    (run / ".refactory").mkdir()
+    (run / "emit.txt").write_text("===FILE: answer.py===\nprint(1)\n")
+    (run / "focused-check.json").write_text("{}")
+    (run / "focused-source.json").write_text("{}")
+    (run / "authoring-evidence.json").write_text("{}")
+
+    ctx = nn.RunContext(run, facts={"check": "npx vitest run", "name": "test", "brief": "test",
+                                    "artifact": str(run)},
+                        knobs={"check_timeout_s": 60, "repair_attempts": 1})
+    ctx._declared = ("focused-check.json", "focused-source.json", "authoring-evidence.json",
+                     "check-record.json", "check.txt")
+    ctx._declared_facts = ("focused_check", "output_path", "review_files", "runtime_evidence",
+                          "inherited_failures")
+    ctx.enforce_writes = False
+
+    fast_ops.focused_check(ctx)
+    cr = json.loads((run / "check-record.json").read_text())
+    assert cr["status"] == "fail"
+    digest = cr.get("digest", "")
+    assert "Sourcemap" not in digest
+    assert "should add" in digest or "math" in digest
 
 
 def test_digest_from_node_test_runner():

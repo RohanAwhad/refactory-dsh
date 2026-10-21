@@ -126,10 +126,7 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         "validation": "(no check has run yet)",
         **UNREFUSED,
     }
-    import json as _json_mod
-    (Path(ctx.workdir) / "feedback-initial.json").write_text(
-        _json_mod.dumps(feedback_initial, indent=2) + "\n"
-    )
+    ctx.write_json("feedback-initial.json", feedback_initial)
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
             "research_review": "(no research review has run yet)", "research_scope": research_scope,
             "design_review_feedback": "(no design review has run yet)",

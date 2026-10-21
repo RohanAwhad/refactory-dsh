@@ -753,29 +753,14 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
     """Apply emit.txt to the run's worktree as its next attempt; one a prune removed is added back."""
     found = worktree.require_current(ctx.workdir)
     answer = ctx.read_text(EMIT_FILE)
-    files, changed, deletes = _emitted(answer, edits=True)
+    files, deletes, rev = apply_emission(answer, found, ctx.workdir)
     path = Path(found.path)
     digest = hashlib.sha256(answer.encode()).hexdigest()
-    rev = found.head
     last = _json(Path(ctx.workdir) / EMISSION)
     if _is_repeated_emission(found, digest, last):
-        # The last attempt is this emission already -- materialise redone, or the same
-        # answer given again -- so it applies to what it applied to then: its edits'
-        # text, and the files it deletes, are gone from the last attempt itself.
-        rev = str(last["applied_to"])
-        deletes = tuple(name for name in deletes if worktree.committed_text(found, name) is not None)
-    repeated = []
-    for relative, pairs in changed.items():
-        current = worktree.committed_text(found, relative, rev)
-        if current is None:
-            raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
-                                 "write it whole with ===FILE:")
-        files[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
-        if skipped:
-            repeated.append(str(relative))
-    if repeated:
-        target_guard.warn(f"emit re-sent edits the last attempt already holds, so they were skipped rather than "
-                          f"applied twice: {target_guard._named(repeated)}")
+        # The last attempt is this emission already; apply_emission already resolved
+        # against the previous application's rev.
+        pass
     # No drift warning: the run's base is pinned, so a moving checkout changes nothing it sees.
     attempt = len(worktree.git(path, "rev-list", f"{found.base}..HEAD").split()) + 1
     advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)

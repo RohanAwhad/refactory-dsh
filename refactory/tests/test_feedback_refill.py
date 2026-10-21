@@ -1,12 +1,18 @@
-"""Tests for feedback re-fill: declared feedback keys are re-derived from persisted files."""
+"""Tests for feedback re-fill: declared feedback keys are re-derived from persisted files.
+
+Integration tests drive the redo through worker_node with a cleared fact, and
+the design_fast route through focused_check → verifier → gate_verification →
+worker_node's prompt.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -187,3 +193,244 @@ def test_redo_after_guardedness_refills_from_check_record(tmp_path):
     updated, refilled = refill(workdir, ["validation"], values)
     assert "validation" in refilled
     assert updated["validation"] == guarded_msg
+
+
+def test_refill_validation_round_trip(tmp_path):
+    """Run check_artifact, record validation fact, clear fact, re-fill:
+    the re-filled value matches the original via check-record.json.
+    """
+    from refactory_dsh.feedback_refill import refill
+
+    workdir = _make_workdir(tmp_path)
+    original_val = "## Failing tests\n\ntest_foo.py::test_bar — AssertionError"
+    (workdir / "check-record.json").write_text(json.dumps({
+        "status": "fail", "validation": original_val,
+    }))
+    # Simulate clearing the fact (as planRedo does)
+    values = {}
+    updated, refilled = refill(workdir, ["validation"], values)
+    assert "validation" in refilled
+    assert updated["validation"] == original_val, "re-filled value must match the original exactly"
+
+
+# ── redo through worker_node ──────────────────────────────────────────────────
+
+def test_digest_present_after_redo(tmp_path, monkeypatch):
+    """Via worker_node with a cleared fact, validation is re-derived from
+    check-record.json, not literal {{validation}}.
+
+    The redo test lowers the real mode with write_declarations.
+    """
+    from refactory_dsh import worker_node
+    from refactory_dsh.run import NODE_ENV
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.lowering import write_declarations
+    from refactory_dsh.nn.executor import RunContext
+
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / ".refactory").mkdir(parents=True)
+
+    # Lower the real design mode to get declarations.json
+    mode = DesignMode()
+    write_declarations(mode.state_dict(), run)
+
+    # Write check-record.json with a known validation string
+    validation_text = "## Failing tests\n\ntest_foo.py::test_bar — AssertionError: 1 != 2"
+    (run / "check-record.json").write_text(json.dumps({
+        "status": "fail", "validation": validation_text,
+    }))
+    # Write feedback-initial.json
+    (run / "feedback-initial.json").write_text(json.dumps({
+        "validation": "(no check has run yet)",
+        "qa_gate": "(no review has refused anything yet)",
+        "overwatch_review": "(no audit has refused anything yet)",
+    }))
+
+    # Write required input files
+    (run / "brief.json").write_text(json.dumps({"name": "test", "brief": "test", "check": "echo ok"}))
+    (run / "design.md").write_text("# Design\n")
+    (run / "check.txt").write_text("failed\n")
+
+    # Simulate a redo: facts are cleared (no validation key)
+    (run / "facts.json").write_text(json.dumps({
+        "name": "test", "brief": "test", "check": "echo ok",
+    }))
+
+    captured_prompt = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        def for_node(self, node):
+            return self
+        def complete(self, prompt, workdir=None):
+            captured_prompt.append(prompt)
+            p = Path(workdir) if workdir else run
+            (p / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+            return "done"
+        def context(self):
+            return {"provider": "test", "model": "test"}
+        def route(self):
+            return {"worker_backend": "dsh"}
+
+    spec = {
+        "schema_version": 1,
+        "node_id": "emit",
+        "prompt": "Write the artifact `{{name}}`\n{{validation}}\n{{qa_gate}}\n{{overwatch_review}}",
+        "reads": ["brief.json", "design.md", "check.txt", "check-record.json"],
+        "writes": ["emit.txt"],
+        "model_context": {"provider": "test", "model": "test"},
+        "feedback_keys": ["validation", "qa_gate", "overwatch_review"],
+    }
+
+    manifest = {"id": "emit", "type": "AgentNode", "command": "echo"}
+    monkeypatch.setenv(NODE_ENV, json.dumps(manifest))
+    monkeypatch.chdir(run)
+
+    with patch("refactory_dsh.model.DshModelClient", FakeClient):
+        with patch("refactory_dsh.agent_delivery.begin", return_value={"prompt": "test", "node": "emit", "status": "pending"}):
+            with patch("refactory_dsh.agent_delivery.finish", return_value={"node": "emit", "status": "delivered"}):
+                receipt = worker_node.execute(spec, run)
+
+    assert receipt["status"] == "delivered"
+    assert captured_prompt, "model should have been called"
+    # The validation should have been re-derived, not literal {{validation}}
+    prompt_text = captured_prompt[0]
+    assert "{{validation}}" not in prompt_text, \
+        "validation placeholder must not appear literally after re-fill"
+
+
+def test_unfilled_feedback_key_refuses_dispatch(tmp_path, monkeypatch):
+    """When feedback key is absent and no gate file or initial record exists,
+    dispatch is refused with a message naming the key.
+    """
+    from refactory_dsh import worker_node
+    from refactory_dsh.run import NODE_ENV
+
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / ".refactory").mkdir(parents=True)
+    (run / "facts.json").write_text(json.dumps({"name": "test"}))
+
+    spec = {
+        "schema_version": 1,
+        "node_id": "emit",
+        "prompt": "Write {{validation}}",
+        "reads": [],
+        "writes": ["emit.txt"],
+        "model_context": {"provider": "test", "model": "test"},
+        "feedback_keys": ["validation"],
+    }
+
+    manifest = {"id": "emit", "type": "AgentNode", "command": "echo"}
+    monkeypatch.setenv(NODE_ENV, json.dumps(manifest))
+    monkeypatch.chdir(run)
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        def for_node(self, node):
+            return self
+        def complete(self, prompt, workdir=None):
+            return "done"
+        def context(self):
+            return {"provider": "test", "model": "test"}
+        def route(self):
+            return {"worker_backend": "dsh"}
+
+    with patch("refactory_dsh.model.DshModelClient", FakeClient):
+        with pytest.raises(ValueError, match="unfilled"):
+            worker_node.execute(spec, run)
+
+
+def test_redo_before_check_refills_from_initial(tmp_path):
+    """A strategy redo before any check re-fills from feedback-initial.json."""
+    from refactory_dsh.feedback_refill import refill
+
+    workdir = _make_workdir(tmp_path)
+    (workdir / "feedback-initial.json").write_text(json.dumps({
+        "validation": "(no check has run yet)",
+        "qa_gate": "(no review has refused anything yet)",
+        "overwatch_review": "(no audit has refused anything yet)",
+    }))
+    # No check-record.json, no validation.txt — this is before any check
+    values = {}
+    updated, refilled = refill(workdir, ["validation", "qa_gate", "overwatch_review"], values)
+    assert set(refilled) == {"validation", "qa_gate", "overwatch_review"}
+    assert updated["validation"] == "(no check has run yet)"
+
+
+# ── design_fast full route ────────────────────────────────────────────────────
+
+def test_digest_design_fast_full_route(tmp_path, monkeypatch):
+    """The digest reaches the builder through the full design_fast route:
+    focused_check → verifier → gate_verification → worker_node's prompt.
+    """
+    from refactory_dsh import fast_ops, nn
+    from refactory_dsh.sandbox import SandboxResult
+    from refactory_dsh import repo_change
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True)
+    (run / ".refactory").mkdir()
+
+    # Write the required files
+    (run / "brief.json").write_text(json.dumps({"name": "test", "brief": "test", "check": "echo fail"}))
+    (run / "emit.txt").write_text("===FILE: answer.py===\nassert False\n")
+    (run / "focused-check.json").write_text("{}")
+    (run / "focused-source.json").write_text("{}")
+    (run / "authoring-evidence.json").write_text("{}")
+    (run / "source-manifest.json").write_text(json.dumps({"source_project": "", "files": {}}))
+
+    # Step 1: focused_check with a failing check
+    fake_result = SandboxResult(ok=False, returncode=1, elapsed_s=1.0,
+                                 stdout="FAILED tests/test_foo.py::test_bar - AssertionError: 1 != 2\n1 failed\n",
+                                 stderr="")
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, cmd, timeout: fake_result)
+    from refactory_dsh import base_check, authoring_evidence
+    monkeypatch.setattr(base_check, "compute_test_guardedness", lambda *a, **k: None)
+    monkeypatch.setattr(authoring_evidence, "record", lambda *a, **k: None)
+    monkeypatch.setattr(authoring_evidence, "stop_unrepairable", lambda *a, **k: None)
+
+    ctx = nn.RunContext(run, facts={"check": "echo fail", "name": "test", "brief": "test",
+                                    "artifact": str(run)},
+                        knobs={"check_timeout_s": 60, "repair_attempts": 1})
+    ctx._declared = ("focused-check.json", "focused-source.json", "authoring-evidence.json",
+                     "check-record.json", "check.txt")
+    ctx._declared_facts = ("focused_check", "output_path", "review_files", "runtime_evidence",
+                          "inherited_failures")
+    ctx.enforce_writes = False
+
+    fast_ops.focused_check(ctx)
+
+    # Step 2: Check that check-record.json has the digest
+    cr = json.loads((run / "check-record.json").read_text())
+    assert cr["status"] == "fail"
+    assert cr.get("digest"), "check-record.json must have a digest"
+    assert "test_bar" in cr.get("digest", ""), "digest must contain the failing test ID"
+
+    # Step 3: gate_verification reads the digest and routes to the builder
+    (run / "reviews" / "verification.md").parent.mkdir(parents=True, exist_ok=True)
+    (run / "reviews" / "verification.md").write_text("No blocking findings.\n\nVERDICT: PASS\n")
+    (run / "fast-report.json").write_text("{}")
+    (run / "repair.txt").write_text("(initial)\n")
+
+    gv_ctx = nn.RunContext(run, facts={**ctx.facts, "focused_check": json.dumps({"status": "fail"}),
+                                       "repair_feedback": "(initial)", "repairs_used": 0},
+                           knobs={"repair_attempts": 1})
+    gv_ctx._declared = ("reviews/verification-gate.txt", "reviews/verification-unresolved.md",
+                        "fast-report.json", "repair.txt")
+    gv_ctx._declared_facts = ("verification_gate", "repair_feedback", "repairs_used",
+                             "check_repairs_used", "verification_iterations_used")
+    gv_ctx.enforce_writes = False
+
+    result = fast_ops.gate_verification(gv_ctx)
+    # The result should be a reloop with the digest in the detail
+    if hasattr(result, 'reason'):
+        assert "test_bar" in result.reason, \
+            "gate_verification must pass the digest (not raw output) to the builder"
+    else:
+        repair_text = (run / "repair.txt").read_text()
+        assert "test_bar" in repair_text, \
+            "the repair feedback must contain the digest with the failing test ID"
