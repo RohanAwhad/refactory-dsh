@@ -56,7 +56,7 @@ def _edit_config(**overrides) -> EditConfig:
     """An edit config with the person's strategy approval recorded.
 
     `EditMode` is the create-v2 graph, so it carries the same `user` gate: a
-    headless run refuses it, and a test that stands in for the person says so.
+    walker run stops at it, and a test that stands in for the person says so.
     """
     return EditConfig(verdicts={"gate_strategy": "proceed"}, **overrides)
 

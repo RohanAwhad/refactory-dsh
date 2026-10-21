@@ -110,11 +110,6 @@ def prepare(
         # relative one: `interactive <mode>` with no `--workdir` used to fail before the
         # graph started, on the default root that is relative by design.
         workdir.mkdir(parents=True, exist_ok=True)
-        if not steering.Ledger(workdir).exists():
-            # Selecting a mode is itself an explicit run request. Do not invent a
-            # broader purpose when the caller supplied no prose intent.
-            steering.Ledger.seed(workdir, intent.strip() or f"Run {identifier}.")
-
         from refactory_dsh import invocations, workers
         from refactory_dsh.model import DshModelClient
         routing_context = dict(model_context or {})
@@ -128,10 +123,21 @@ def prepare(
             model_context['budget_ledger'] = str(workdir / LEDGER)
 
         name = f"{package}-{mode_name}"
-        graphs = invocations.prepare(
-            state, workdir, name=name,
-            transform=lambda workflow: workers.lower_workflow(steering.for_run(workflow, workdir), workdir, model_context, lowering.node_declarations(state)),
+        from refactory_dsh.run_preparation import prepare_run
+        graphs = prepare_run(
+            state, workdir,
+            invocation_name=name,
+            mode_id=identifier,
+            intent=intent.strip() or f"Run {identifier}.",
+            transform=lambda workflow, stage_dir=None: workers.lower_workflow(
+                steering.for_run(workflow, stage_dir or workdir),
+                workdir, model_context, lowering.node_declarations(state)),
+            runtime="dsh",
+            command="refactory ceo",
+            resume_command=f"refactory graph-control resume --run {workdir}",
+            worker_backend=model_context.get("worker_backend", "dsh"),
             resource_limits=resource_limits,
+            project=project,
         )
         import json
         from refactory_dsh.recovery import configuration_fingerprints
@@ -437,12 +443,22 @@ def run(
                         print(f"  {line}", file=sys.stderr)
                 print(f"  Answer it with one of {verdicts_str} (add --note \"...\" to say why):", file=sys.stderr)
                 print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
+                # Read the resume command from run-config.json when available.
+                resume_cmd = f"refactory graph-control resume --run {workdir}"
+                config_path = workdir / ".refactory/run-config.json"
+                if config_path.exists():
+                    try:
+                        import json as _json
+                        _cfg = _json.loads(config_path.read_text())
+                        resume_cmd = _cfg.get("resume_command", resume_cmd)
+                    except (OSError, ValueError):
+                        pass
                 if gate_info.get("ceo_notes"):
                     print(f"  CEO observation:", file=sys.stderr)
                     for ceo_line in gate_info["ceo_notes"].splitlines():
                         print(f"    {ceo_line}", file=sys.stderr)
                 print(f"  Then continue the run:", file=sys.stderr)
-                print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
+                print(f"    {resume_cmd}", file=sys.stderr)
         except (OSError, ValueError, KeyError, TypeError):
             pass  # gate diagnostic; do not mask the run's exit code
         # A run that stopped short of its end names the nodes it never reached;

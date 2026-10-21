@@ -61,7 +61,8 @@
     "refactory_dsh.tools",
     "refactory_dsh.worker_config",
     "refactory_dsh.worker_node",
-    "refactory_dsh.workers"
+    "refactory_dsh.workers",
+    "refactory_dsh.run_preparation"
   ],
   "product": [
     "refactory_dsh.authoring_evidence",
@@ -143,6 +144,7 @@
     {"path": "refactory_dsh/patches/agent-node.yml", "classification": "core", "reason": "agent node patch used by model"},
     {"path": "refactory_dsh/data/coverage.json", "classification": "product", "reason": "capability coverage data used by discovery and gen_discovery"},
     {"path": "refactory_dsh/data/documentation.json", "classification": "product", "reason": "documentation data used by discovery and gen_discovery"},
-    {"path": "refactory_dsh/data/boundary.json", "classification": "core", "reason": "module classification data used by test_boundary.py"}
+    {"path": "refactory_dsh/data/boundary.json", "classification": "core", "reason": "module classification data used by test_boundary.py"},
+    {"path": "refactory_dsh/data/verdict-routing-cases.json", "classification": "core", "reason": "verdict routing shared test cases used by test_route_verdict.py and verdict-routing.test.ts"}
   ]
 }

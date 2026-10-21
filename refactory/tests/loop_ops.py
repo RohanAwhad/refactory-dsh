@@ -57,6 +57,11 @@ def write_best(ctx: Any) -> dict[str, Any]:
     return {"best": 42.0}
 
 
+def noop(ctx: Any) -> None:
+    """Do nothing — a placeholder for graphs that need a start node."""
+    pass
+
+
 def record_item(ctx: Any) -> dict[str, Any]:
     """Append the current item's id, so a test can see one pass per item."""
     item = ctx.read_json("current_item.json", {}) or {}

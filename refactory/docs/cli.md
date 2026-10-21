@@ -216,6 +216,46 @@ Read [Models](models.md) for managed credentials, resolved routing, worker recei
 
 For samples and resume on authoring APIs, use the documented Python Create/Edit/Design entry points and their `--help`; those flags are not all aliases on `refactory ceo`. [Authoring guide](tutorials/03-author-with-a-model.md).
 
+## Walker (direct Python execution)
+
+The walker runs the same graphs in-process:
+
+```
+python -m refactory_dsh.design --name <n> --brief <text> --check <cmd>
+python -m refactory_dsh.create --name <n> --brief <text> [--single | --task <ref>]
+python -m refactory_dsh.edit --mode <pkg>/<mode> --name <n>
+```
+
+### Common flags
+
+| flag | what it does |
+|---|---|
+| `--brief <text>` | what to build (required for design and create when not resuming) |
+| `--resume <dir>` | continue a stopped run; no other arguments needed |
+| `--verdict <gate>=<value>` | answer a user gate (repeatable) |
+| `--model <id>` | model id for this run |
+| `--provider <route>` | provider route |
+| `--model-timeout <s>` | seconds one completion may take |
+| `--workdir <dir>` | the run directory |
+| `--attempts <n>` | how many repair cycles |
+
+### Gate flow
+
+At a `user` gate the walker stops and prints the steer command. Answer with:
+
+```
+refactory steer --run <dir> --verdict <gate>=<verdict> [--note "..."]
+```
+
+Then resume:
+
+```
+python -m refactory_dsh.design --resume <dir>
+```
+
+`halt` at any user gate ends the run. A reloop verdict's note becomes a correction
+in the intent ledger. An up-front `--verdict gate_strategy=proceed` is persisted
+as a run-scoped ledger entry and survives a resume.
 
 ## Pin management
 

@@ -1626,6 +1626,12 @@ def test_the_console_and_chat_route_says_how_it_will_be_delivered_when_approved_
     from refactory_dsh import design
 
     monkeypatch.setattr(design.DesignMode, "run", lambda self, *a, **k: nn.RunResult(exit_ok=True, facts={}))
+    # The walker profile check needs a headless profile; create one under a
+    # fake DSH home so the test does not depend on the real ~/.dsh directory.
+    _fake_dsh = tmp_path / "fake_dsh"
+    (_fake_dsh / "profiles" / "headless").mkdir(parents=True)
+    (_fake_dsh / "profiles" / "headless" / "package.json").write_text("{}")
+    monkeypatch.setattr("refactory_dsh.dsh_profile.model_home", lambda home=None: _fake_dsh)
     monkeypatch.chdir(tmp_path)
     assert design.main(["--name", NAME, "--brief", "a tool", "--check", "true", "--workdir", "run",
                         "--verdict", "gate_strategy=proceed"]) == 0

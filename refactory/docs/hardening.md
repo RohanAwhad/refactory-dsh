@@ -557,12 +557,13 @@ the choice real rather than decorative:
 - `fn` requires an evaluator, and the other two **refuse** one, because a gate with
   two answerers has an answer that depends on the runtime.
 - `lowering` emits the declared kind and emits a command **only** for `fn`.
-- A walker that meets a `user` gate **refuses**, naming the node, rather than
-  inventing a verdict. A run that pauses cannot quietly decide for the person; an
-  invented verdict is indistinguishable from one they gave. The answer arrives through
-  explicit `RunContext.verdicts` standing authorization, or a one-use ledger
-  decision scoped to the current review inputs. Interactive answers are consumed;
-  a later gate visit asks again rather than replaying historical approval.
+- A walker that meets a `user` gate **stops** and records the gate visit, so
+  `refactory steer --verdict` is accepted. The person answers with
+  `refactory steer --run <dir> --verdict <gate>=<verdict> [--note ...]`, then
+  continues with `--resume <dir>`. The answer arrives through explicit
+  `RunContext.verdicts` standing authorization, or a one-use ledger decision
+  scoped to the current review inputs. Interactive answers are consumed; a later
+  gate visit asks again rather than replaying historical approval.
 
 **And a second defect, found by an existing test rather than by this work.** The first
 version of `Node.to_state` serialized `gate_kind` unconditionally, which changed
@@ -572,7 +573,7 @@ reasons that had nothing to do with the search. `test_no_batch_slot_is_silently_
 caught it as a vanished batch slot. A field at its default is now omitted.
 
 **Held by.** Six tests: a mode can declare a person-answered gate and it reaches the
-IR; a headless walk refuses one; a supplied verdict lets it proceed; an unknown
+IR; a walker run stops at one; a supplied verdict lets it proceed; an unknown
 verdict is still refused; a gate cannot have two answerers; and the default is not
 serialized. Verified both ways — restoring the hardcoded `fn` fails the first.
 
