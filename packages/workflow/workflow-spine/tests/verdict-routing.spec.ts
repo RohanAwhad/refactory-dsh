@@ -12,7 +12,7 @@ interface RoutingCase {
   expect: { target?: string; halt?: boolean; reason?: string; error?: boolean }
 }
 
-const casesPath = resolve(__dirname, '../../../refactory/refactory_dsh/data/verdict-routing-cases.json')
+const casesPath = resolve(__dirname, '../../../../refactory/refactory_dsh/data/verdict-routing-cases.json')
 const cases: RoutingCase[] = JSON.parse(readFileSync(casesPath, 'utf-8'))
 
 function buildSpine(gate: string, edges: RoutingCase['edges'], gateKind: string): Spine {

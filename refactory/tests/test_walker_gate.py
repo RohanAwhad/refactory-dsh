@@ -24,7 +24,7 @@ from refactory_dsh.nn.graph import Edge
 def _simple_gate_graph():
     """A minimal graph with an op, an agent, a user gate, and an emitter."""
     graph = Graph()
-    graph.add(Node("prepare", "op", call="tests.loop_ops:noop",
+    graph.add(Node("prepare", "op", call="loop_ops:noop",
                     writes=(), produces=("name", "brief", "check")))
     graph.add(Node("design_agent", "agent",
                     prompt_template="Design: {{brief}}",
@@ -209,7 +209,7 @@ def test_verdict_routing_cases():
 def test_gate_stop_in_fork_branch(tmp_path):
     """GateStop in a fork branch records refused, not an uncaught exception."""
     graph = Graph()
-    graph.add(Node("start", "op", call="tests.loop_ops:noop",
+    graph.add(Node("start", "op", call="loop_ops:noop",
                     writes=(), produces=()))
     graph.add(Node("fork", "fork", targets=("branch_a",)))
     graph.add(Node("branch_a", "gate", gate_kind="user",
@@ -233,7 +233,7 @@ def test_gate_stop_in_data_pass(tmp_path):
                     writes=("current_item.json",), produces=("item_scores",)))
     graph.add(Node("inner_gate", "gate", gate_kind="user",
                     reads=(), max_iterations=2, notes="user gate in data pass"))
-    graph.add(Node("finish", "op", call="tests.loop_ops:noop"))
+    graph.add(Node("finish", "op", call="loop_ops:noop"))
     graph.connect("data", "finish")
 
     from refactory_dsh.nn.executor import execute
@@ -350,7 +350,7 @@ def test_gate_stop_output(tmp_path, capsys):
 def test_halt_in_fork_branch(tmp_path):
     """HaltStop in a fork branch records halted."""
     graph = Graph()
-    graph.add(Node("start", "op", call="tests.loop_ops:noop",
+    graph.add(Node("start", "op", call="loop_ops:noop",
                     writes=(), produces=()))
     graph.add(Node("fork", "fork", targets=("branch_a",)))
     # A gate with an upfront halt verdict.
