@@ -260,34 +260,41 @@ def test_edit_gate_stop(tmp_path, monkeypatch, capsys):
 # ── profile check tests ──────────────────────────────────────────────────
 
 
-def test_dsh_missing_profile_refused(tmp_path, monkeypatch):
-    """A DSH-backed run with no headless profile directory is refused."""
+def _prepare_walker_run(tmp_path, monkeypatch, *, worker_backend, headless=None):
+    """Run prepare_run for a walker run whose DSH model home holds ``headless`` (or nothing)."""
     from refactory_dsh.run_preparation import prepare_run
+    from refactory_dsh.nn import Graph, Node
 
-    # Make model_home point to a directory with no 'headless' subdirectory.
     fake_home = tmp_path / "dsh_home"
     fake_home.mkdir()
+    if headless is not None:
+        (fake_home / "profiles" / "headless").mkdir(parents=True)
+        for name, text in headless.items():
+            (fake_home / "profiles" / "headless" / name).write_text(text)
     monkeypatch.setattr("refactory_dsh.dsh_profile.model_home", lambda: fake_home)
-
-    # A minimal valid state dict for run preparation.
-    from refactory_dsh.nn import Graph, Node
+    monkeypatch.setattr("refactory_dsh.recovery.configuration_fingerprints",
+                        lambda workdir, mode_id, project: {})
     graph = Graph()
     graph.add(Node("a", "op", call="module:fn"))
     state = {"version": 1, "graph": graph.to_state(), "knobs": {}, "ports": [], "memory": []}
+    return prepare_run(
+        state, tmp_path / "run", invocation_name="test", mode_id="test/test", intent="test",
+        transform=lambda workflow, stage_dir=None: workflow, runtime="walker",
+        command="test", resume_command="test", worker_backend=worker_backend,
+        project=Path("."))
 
-    with pytest.raises(ValueError, match="does not exist"):
-        prepare_run(
-            state, tmp_path / "run",
-            invocation_name="test",
-            mode_id="test/test",
-            intent="test",
-            transform=lambda workflow, stage_dir=None: workflow,
-            runtime="walker",
-            command="test",
-            resume_command="test",
-            worker_backend="dsh",
-            project=Path("."),
-        )
+
+def test_dsh_missing_profile_allowed(tmp_path, monkeypatch):
+    """A DSH-backed run with no headless profile yet is not refused: DSH creates the
+    profile from its shipped template on first use, as a fresh install has none."""
+    _prepare_walker_run(tmp_path, monkeypatch, worker_backend="dsh")
+
+
+def test_dsh_broken_profile_refused(tmp_path, monkeypatch):
+    """A DSH-backed run whose headless profile directory has no package.json is refused."""
+    with pytest.raises(ValueError, match="has no package.json"):
+        _prepare_walker_run(tmp_path, monkeypatch, worker_backend="dsh",
+                            headless={"cordis.yml": "[]\n"})
 
 
 def test_fake_model_missing_profile_allowed(tmp_path, monkeypatch):
