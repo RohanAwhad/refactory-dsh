@@ -749,9 +749,9 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m refactory_dsh.design",
         description="Design, emit and check a software artifact from a brief.",
     )
-    parser.add_argument("--name", required=True, help="the artifact's name")
-    parser.add_argument("--brief", required=True, help="what to build")
-    parser.add_argument("--check", required=True,
+    parser.add_argument("--name", required=False, default="", help="the artifact's name")
+    parser.add_argument("--brief", required=False, default="", help="what to build")
+    parser.add_argument("--check", required=False, default="",
                         help="the command that decides whether it works")
     parser.add_argument("--attempts", type=int, default=2)
     parser.add_argument("--fast", action="store_true", help="use the inspectable design_fast graph with focused QA")
@@ -793,6 +793,11 @@ def main(argv: list[str] | None = None) -> int:
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
     )
     args = parser.parse_args(argv)
+    if not args.resume:
+        if not args.name:
+            parser.error("--name is required when not resuming")
+        if not args.brief:
+            parser.error("--brief is required when not resuming")
     delivered = [flag for flag, given in (("--no-pr", args.no_pr), ("--refine", args.refine),
                                           ("--review-comments", args.review_comments)) if given]
     if args.fast and delivered:
@@ -803,21 +808,39 @@ def main(argv: list[str] | None = None) -> int:
     from refactory_dsh.paths import project_root
 
     if args.resume:
+        workdir = Path(args.resume)
+        # Read fast from run-config.json when available.
+        fast = args.fast
+        config_path = workdir / '.refactory/run-config.json'
+        if config_path.exists():
+            try:
+                run_config = json.loads(config_path.read_text())
+                fast = run_config.get('fast', fast)
+            except (json.JSONDecodeError, OSError):
+                pass
         client = DshModelClient(
-            project=None if args.resume else project_root(),
-            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
+            project=None,
+            timeout_s=int(args.model_timeout_s) if args.model_timeout_s else DEFAULT_TIMEOUT_S,
+            model=args.model, provider=args.provider,
         )
-        try:
-            from refactory_dsh.fast import DesignFastMode
+        from refactory_dsh.run_ownership import ownership
 
-            run = (DesignFastMode if args.fast else DesignMode).resume(
-                Path(args.resume), model=client, resource_limits=arguments(args),
-            )
+        try:
+            with ownership(workdir):
+                from refactory_dsh.fast import DesignFastMode
+
+                run = (DesignFastMode if fast else DesignMode).resume(
+                    workdir, model=client, resource_limits=arguments(args),
+                )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
+        if run.gate_stop:
+            from refactory_dsh.run_preparation import print_gate_stop
+            print_gate_stop(run.gate_stop, workdir, graph=(DesignFastMode if fast else DesignMode)().build())
+            return 2
         print(json.dumps({
-            "resumed": str(Path(args.resume)), "exit_ok": run.exit_ok, "error": run.error,
+            "resumed": str(workdir), "exit_ok": run.exit_ok, "error": run.error,
             "facts": {key: value for key, value in run.facts.items() if key in
                       ("name", "files", "artifact", "check", "validation")},
         }, indent=2, default=str))
@@ -850,26 +873,67 @@ def main(argv: list[str] | None = None) -> int:
 
     verdicts = parse_verdicts(args.verdict)
     workdir = Path(args.workdir or f".factory/design/{args.name}")
-    if not args.fast:
-        # A gate answered up front shows nobody delivery.md, so the plan is said here (#350).
-        from refactory_dsh import delivery
-
-        knobs = {"name": args.name, "brief": args.brief, "target": args.target, "base": args.base,
-                 "refine": args.refine, **{name: state["knobs"][name]["value"]
-                                           for name in ("worktree", "pr", "repo_owner", "repo_visibility")}}
-        (delivery.announce if "gate_strategy" in verdicts else delivery.forget)(knobs, workdir)
-    result = mode.run(
-        workdir,
-        model=DshModelClient(
-            project=None if args.resume else project_root(),
-            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
-        ),
-        task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project,
-              "target": args.target, "base": args.base, "setup": args.setup, "generate": args.generate,
-              "refine": args.refine},
-        verdicts=verdicts,
-        resource_limits=arguments(args),
+    mode_name = "design_fast" if args.fast else "design"
+    client = DshModelClient(
+        project=project_root(),
+        timeout_s=int(args.model_timeout_s) if args.model_timeout_s else DEFAULT_TIMEOUT_S,
+        model=args.model, provider=args.provider,
     )
+    from refactory_dsh.run_ownership import ownership
+    from refactory_dsh.nn.executor import GateStop, HaltStop
+
+    try:
+        with ownership(workdir):
+            # Run preparation.
+            from refactory_dsh.run_preparation import prepare_run
+            from refactory_dsh import steering
+
+            prepare_run(
+                state, workdir,
+                invocation_name=f"default_pack-{mode_name}",
+                mode_id=f"default_pack/{mode_name}",
+                intent=args.brief,
+                transform=lambda workflow, stage_dir=None: steering.for_run(workflow, stage_dir or workdir),
+                runtime="walker",
+                command=f"python -m refactory_dsh.design",
+                resume_command=f"python -m refactory_dsh.design --resume {workdir}",
+                fast=args.fast,
+                worker_backend=client.route().get("worker_backend", "") if callable(getattr(client, "route", None)) else "",
+                project=project_root(),
+            )
+
+            # Persist up-front verdicts as run-scoped ledger entries.
+            ledger = steering.Ledger(workdir)
+            for gate, value in verdicts.items():
+                ledger.verdict(gate, value, approval=True)
+
+            if not args.fast:
+                # A gate answered up front shows nobody delivery.md, so the plan is said here (#350).
+                from refactory_dsh import delivery
+
+                knob_values = {"name": args.name, "brief": args.brief, "target": args.target, "base": args.base,
+                         "refine": args.refine, **{name: state["knobs"][name]["value"]
+                                                   for name in ("worktree", "pr", "repo_owner", "repo_visibility")}}
+                (delivery.announce if "gate_strategy" in verdicts else delivery.forget)(knob_values, workdir)
+
+            result = mode.run(
+                workdir,
+                model=client,
+                task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project,
+                      "target": args.target, "base": args.base, "setup": args.setup, "generate": args.generate,
+                      "refine": args.refine},
+                resource_limits=arguments(args),
+            )
+    except Exception as exc:
+        print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
+        return 2
+    if result.gate_stop:
+        from refactory_dsh.run_preparation import print_gate_stop
+        print_gate_stop(result.gate_stop, workdir, graph=mode.build())
+        return 2
+    if result.halted:
+        print(json.dumps({"halted": True, "error": result.error}), file=sys.stderr)
+        return 2
     if not result.exit_ok:
         print(json.dumps({"error": result.error}), file=sys.stderr)
         # dm-127: show design review status when stopped at a user gate.

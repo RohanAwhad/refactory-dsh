@@ -351,14 +351,12 @@ def test_a_headless_run_refuses_a_gate_meant_for_a_person(tmp_path):
 
     This is the point of the gate kind: inventing a verdict would produce a result
     nobody can account for, and it would be indistinguishable from one where the
-    person actually said something.
+    person actually said something. A walker run now stops with GateStop.
     """
-    from refactory_dsh.nn.executor import ExecutionError
-
     mode = _gated_mode()()
     result = mode.evaluate(tmp_path / "run")
     assert result.exit_ok is False
-    assert "answered by 'user'" in (result.error or ""), result.error
+    assert "ask" in (result.error or ""), result.error
 
 
 def test_a_supplied_verdict_lets_it_proceed(tmp_path):
@@ -443,7 +441,7 @@ def test_a_gate_a_person_answered_is_replayed_on_the_next_run(tmp_path):
     Ledger.seed(work, "build a mode for circle packing")
     first = execute(_gated_mode()().build(), work)
     assert first.exit_ok is False
-    assert "answered by 'user'" in (first.error or ""), first.error
+    assert "ask" in (first.error or ""), first.error
 
     Ledger(work).verdict("ask", "proceed")
     replayed = execute(_gated_mode()().build(), work)

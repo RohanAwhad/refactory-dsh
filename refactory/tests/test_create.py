@@ -44,7 +44,7 @@ def _config(**overrides) -> CreateConfig:
     """A create config standing in for the person's answers.
 
     `gate_strategy` is a `user` gate, carried over from create-v2: the strategy is
-    a decision the person owns. A headless run refuses it, so a test that wants a
+    a decision the person owns. A walker run stops at it; a test that wants a
     package passes the approval it is standing in for. The default is `single_shot`
     because the package these fixtures emit has no Task binding; a test that names a
     Task overrides it, and naming a Task wins.

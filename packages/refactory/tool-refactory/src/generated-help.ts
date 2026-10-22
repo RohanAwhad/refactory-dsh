@@ -276,14 +276,14 @@ export const CHAT = {
         "type": "integer"
       },
       "brief": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--brief"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "dataNode": {
@@ -334,14 +334,14 @@ export const CHAT = {
         "type": "string"
       },
       "name": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--name"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "provider": {
@@ -479,14 +479,14 @@ export const CHAT = {
         "type": "string"
       },
       "brief": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--brief"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "check": {
@@ -523,14 +523,14 @@ export const CHAT = {
         "type": "string"
       },
       "name": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--name"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "noPr": {
@@ -781,25 +781,25 @@ export const CHAT = {
         "type": "integer"
       },
       "brief": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--brief"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "mode": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--mode"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "model": {
@@ -814,14 +814,14 @@ export const CHAT = {
         "type": "string"
       },
       "name": {
-        "default": null,
+        "default": "",
         "description": "",
         "flags": [
           "--name"
         ],
         "nargs": null,
         "positional": false,
-        "required": true,
+        "required": false,
         "type": "string"
       },
       "provider": {
@@ -1103,7 +1103,7 @@ export const CHAT = {
     "arguments": {
       "approve": {
         "default": [],
-        "description": "answer a gate a person owns, as <gate>=<value> (repeatable); a headless run refuses a user gate it was not told the answer to",
+        "description": "answer a gate a person owns, as <gate>=<value> (repeatable); a walker run stops at a user gate and prints the steer command; answer it, then resume",
         "flags": [
           "--verdict"
         ],
@@ -1565,7 +1565,7 @@ export const PARAMETERS = {
     "type": "boolean"
   },
   "approve": {
-    "description": "create: answer a gate a person owns, as <gate>=<value> (repeatable); gate_strategy is one, so a headless create is told the answer (console verdict). Read help topic=create for defaults and constraints. design: answer a gate a person owns, as <gate>=<value> (repeatable) (console verdict). Read help topic=design for defaults and constraints. edit: answer a gate a person owns, as <gate>=<value> (repeatable) (console verdict). Read help topic=edit for defaults and constraints. run: answer a gate a person owns, as <gate>=<value> (repeatable); a headless run refuses a user gate it was not told the answer to (console verdict). Read help topic=run for defaults and constraints.",
+    "description": "create: answer a gate a person owns, as <gate>=<value> (repeatable); gate_strategy is one, so a headless create is told the answer (console verdict). Read help topic=create for defaults and constraints. design: answer a gate a person owns, as <gate>=<value> (repeatable) (console verdict). Read help topic=design for defaults and constraints. edit: answer a gate a person owns, as <gate>=<value> (repeatable) (console verdict). Read help topic=edit for defaults and constraints. run: answer a gate a person owns, as <gate>=<value> (repeatable); a walker run stops at a user gate and prints the steer command; answer it, then resume (console verdict). Read help topic=run for defaults and constraints.",
     "items": {
       "type": "string"
     },
@@ -1787,5 +1787,5 @@ export const PARAMETERS = {
     "type": "string"
   }
 } as const
-export const OPERATING_GUIDE = "# CEO operating guide\n\nRefactory runs explicit graphs. The runtime owns node order, branches, checks,\nevidence, user gates and recovery. Drive the selected graph; do not reproduce its\nworkers in conversation or mark work complete from prose alone.\n\nStart with `refactory` action `help`. Read `help` with `topic` equal to a mode ID\nor operation for its live arguments, defaults, constraints, examples and interface\nroutes. `modes` lists installed packages, including packages added since build.\nCoverage warnings mean guidance may be missing or stale. Read `docs` with `query`\nfor search, or `page`, optional `section`, `offset` and `limit` for bounded reads.\nUse the returned IDs and continuation offsets. Help and docs carry schema, build\nand documentation identities. These APIs read shipped product docs; no shell,\nsource-code search or web access is needed for product discovery.\n\nCreate and Edit produce reusable mode packages. Design produces a software\nartifact. Canonical validation precedes QA and final intent review. Fast variants retain\nfocused QA and bounded repair. Edit allow_regression skips original execution and\ncomparison, while revised validation remains mandatory. Run uses a mode\nonce; Optimize (`start`) searches a scored mode. Read the mode's ports, required\ninputs and user gates before choosing. When a person is present, use `wf_open`\nwith the mode, knobs, intent and a fresh absolute workdir. Continue with the\nworkflow tools. The runtime asks user gates; never invent their verdicts.\nHeadless approvals require an explicit user-approved answer and `headless: true`.\n\nFor optimization, inspect `strategies` and `profiles`; `profile-resolve` previews\nsettings and the contract. `start` returns a durable run ID. Read incremental\n`status` using its offset, then candidates, artifacts and winner evidence. A run\ncan outlive a chat. A stopped, failed or unmeasured run is not success. Recovery\nrequires a known saved boundary; use the documented CLI or panel recovery route.\n\n`workers` explains effective worker routing and provenance. New runs load\n`refactory.workers.json` at the project root. Explicit profile/launch settings\nwin; node overrides beat role overrides, which beat the run route. This file\nselects graph workers, not this CEO's conversational model. Backend changes are\nconfigured through the file, CLI or panel. Native authentication stays in its\nexisting stores. New worker permissions default to `skip`; token caps are unset\nunless requested, and native workers do not support whole-tree token caps.\n\nUse `runtime` for configured credential readiness, which is not authentication\nproof. Follow explicit task and fixture constraints without asking again. Keep\nbuild/docs identity with evidence, and distinguish a generated receipt from\nchecks that establish the requested output.\n\n## Delegation and review discipline\n\nYou are an orchestrator. Delegate all technical work \u2014 writing code, fixing\nbugs, running checks, performing research \u2014 to the graph's agent nodes via\nsubagents. Review their output. When an agent fails, retry with better\ninstructions (wf_edit set-prompt/append-prompt, then wf_redo) or stop. Never\ntake over the agent's work yourself. For nodes whose prompts contain template\nplaceholders (`{{\u2026}}`), prefer `append-prompt`; `set-prompt` is refused when\nthe replacement drops a placeholder.\n\nEvery change that produces a pull request must pass through the graph's review\nnodes. \"The change\nis small\" or \"the code is already correct\" is not a reason to skip them.\n\nNever claim, restate, or re-apply a person's verdict or approval in a ledger\nnote or any other message. A user gate is answered only by the person through\nthe runtime; a ledger note about a gate verdict is your observation, not an\nanswer. Never use wf_edit skip on a check node (a node that produces runtime\nevidence). When a check cannot run (sandbox limit, missing tool, infrastructure\nstop), report what stopped it and what would unblock it\n(authoring_evidence.stop_unrepairable names the cause). When the person wants\nto skip the check, give them the exact command:\n`refactory graph-control skip --run <dir> --node <check_node>`.\nWhen the owner has stopped, the person can resume with\n`refactory graph-control resume --run <dir> [--acknowledge-failure]`.\nIf the person skips, the run report and PR say the check did not run.\n" as const
-export const BUILD_ID = "feb136a835d82b3ba8b8f44c6de0a9e662f318c5b34867412c75912a499ac0ae" as const
+export const OPERATING_GUIDE = "# CEO operating guide\n\nRefactory runs explicit graphs. The runtime owns node order, branches, checks,\nevidence, user gates and recovery. Drive the selected graph; do not reproduce its\nworkers in conversation or mark work complete from prose alone.\n\nStart with `refactory` action `help`. Read `help` with `topic` equal to a mode ID\nor operation for its live arguments, defaults, constraints, examples and interface\nroutes. `modes` lists installed packages, including packages added since build.\nCoverage warnings mean guidance may be missing or stale. Read `docs` with `query`\nfor search, or `page`, optional `section`, `offset` and `limit` for bounded reads.\nUse the returned IDs and continuation offsets. Help and docs carry schema, build\nand documentation identities. These APIs read shipped product docs; no shell,\nsource-code search or web access is needed for product discovery.\n\nCreate and Edit produce reusable mode packages. Design produces a software\nartifact. Canonical validation precedes QA and final intent review. Fast variants retain\nfocused QA and bounded repair. Edit allow_regression skips original execution and\ncomparison, while revised validation remains mandatory. Run uses a mode\nonce; Optimize (`start`) searches a scored mode. Read the mode's ports, required\ninputs and user gates before choosing. When a person is present, use `wf_open`\nwith the mode, knobs, intent and a fresh absolute workdir. Continue with the\nworkflow tools. The runtime asks user gates; never invent their verdicts.\nHeadless approvals require an explicit user-approved answer and `headless: true`.\n\nFor optimization, inspect `strategies` and `profiles`; `profile-resolve` previews\nsettings and the contract. `start` returns a durable run ID. Read incremental\n`status` using its offset, then candidates, artifacts and winner evidence. A run\ncan outlive a chat. A stopped, failed or unmeasured run is not success. Recovery\nrequires a known saved boundary; use the documented CLI or panel recovery route.\n\n`workers` explains effective worker routing and provenance. New runs load\n`refactory.workers.json` at the project root. Explicit profile/launch settings\nwin; node overrides beat role overrides, which beat the run route. This file\nselects graph workers, not this CEO's conversational model. Backend changes are\nconfigured through the file, CLI or panel. Native authentication stays in its\nexisting stores. New worker permissions default to `skip`; token caps are unset\nunless requested, and native workers do not support whole-tree token caps.\n\nUse `runtime` for configured credential readiness, which is not authentication\nproof. Follow explicit task and fixture constraints without asking again. Keep\nbuild/docs identity with evidence, and distinguish a generated receipt from\nchecks that establish the requested output.\n\n## Delegation and review discipline\n\nYou are an orchestrator. Delegate all technical work \u2014 writing code, fixing\nbugs, running checks, performing research \u2014 to the graph's agent nodes via\nsubagents. Review their output. When an agent fails, retry with better\ninstructions (wf_edit set-prompt/append-prompt, then wf_redo) or stop. Never\ntake over the agent's work yourself.\n\nEvery change that produces a pull request must pass through the graph's review\nnodes. \"The change\nis small\" or \"the code is already correct\" is not a reason to skip them.\n\nNever claim, restate, or re-apply a person's verdict or approval in a ledger\nnote or any other message. A user gate is answered only by the person through\nthe runtime; a ledger note about a gate verdict is your observation, not an\nanswer. Never use wf_edit skip on a check node (a node that produces runtime\nevidence). When a check cannot run (sandbox limit, missing tool, infrastructure\nstop), report what stopped it and what would unblock it\n(authoring_evidence.stop_unrepairable names the cause). When the person wants\nto skip the check, give them the exact command:\n`refactory graph-control skip --run <dir> --node <check_node>`.\nWhen the owner has stopped, the person can resume with\n`refactory graph-control resume --run <dir> [--acknowledge-failure]`.\nIf the person skips, the run report and PR say the check did not run.\n" as const
+export const BUILD_ID = "24a58febfab3f7632f14c6a396b1526b9b6f90b88cd382f4ca0017293aeeae51" as const

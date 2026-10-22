@@ -1660,6 +1660,12 @@ def test_the_direct_entry_point_passes_the_worktree_flags_to_design_fast(monkeyp
         return nn.RunResult(exit_ok=True, facts={})
 
     monkeypatch.setattr(DesignFastMode, "run", run)
+    # The walker profile check needs a headless profile; create one under a
+    # fake DSH home so the test does not depend on the real ~/.dsh directory.
+    _fake_dsh = tmp_path / "fake_dsh"
+    (_fake_dsh / "profiles" / "headless").mkdir(parents=True)
+    (_fake_dsh / "profiles" / "headless" / "package.json").write_text("{}")
+    monkeypatch.setattr("refactory_dsh.dsh_profile.model_home", lambda home=None: _fake_dsh)
     monkeypatch.chdir(tmp_path)
     assert design.main(["--name", NAME, "--brief", "b", "--check", "true", "--fast", "--no-worktree"]) == 0
     assert seen["knobs"]["worktree"] is False

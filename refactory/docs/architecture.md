@@ -341,25 +341,31 @@ On failure it reloops to `design_doc`; when `design_review_attempts` runs out, i
 proceeds to `gate_strategy` with the remaining findings shown — it never fails the
 run. A reviewer formatting miss re-runs `design_review` (via a `review_reloop` edge)
 without spending a `design_review_attempts` slot; the re-run counter is
-`design_review_reruns_used` (limit 2).
+`design_review_reruns_used`. There is one re-run. After it, missing repository
+questions are advisory and are shown with the findings. Only changed product code needs
+repository questions; see [authoring validation](authoring-validation.md#reviewer-re-runs).
 
 The `deliverable_kind` fact, computed by `prepare_design`, distinguishes repository
 changes from artifacts. The `review_instructions` fact renders `REPO_CHANGE_REVIEW_INSTRUCTIONS`
 (composed from verification methods M2, M3, M11, M12) or `ARTIFACT_REVIEW_INSTRUCTIONS`
 into each reviewer's prompt via `{{review_instructions}}`. The `changed_functions` module
 maps diff hunk line ranges onto function spans via `ast` (Python) and hunk-range entries
-(TypeScript), and its output is rendered into prompts as `{{changed_functions}}`.
+(TypeScript). It marks each entry `test` or `generated`, and keeps only the run's own
+changes when the branch merged its base in. The product entries are rendered into prompts
+as `{{changed_functions}}`.
 
 For the post-build QA gate, `gate_qa` validates each of the three review files independently,
 naming the reviewer and function in any refusal. A `review_reloop` edge from `gate_qa` to
-`fork_qa` re-runs only the reviewers. The fast `gate_qa` validates `focused-qa.json`'s
+`fork_qa` re-runs only the reviewers, once. After that re-run, missing repository questions
+are advisory: the gate proceeds, and the pull request lists them. The fast `gate_qa` validates `focused-qa.json`'s
 `repo_questions` key and strips `[repo-questions]`-prefixed problems from `failure_kind`'s
 word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
 PASS" or "Design review: FAIL, N unresolved" followed by the unresolved findings,
 carried by fact substitution to all template-rendered surfaces (terminal, GUI,
 headless refusal, `refactory status`). A **person answers `gate_strategy`** at that point, because a
-run that can approve its own plan is not reviewed at all, so a headless run refuses
-that gate unless the caller supplies the verdict. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
+run that can approve its own plan is not reviewed at all, so a walker run stops at
+the gate and records the visit; a headless DSH run stops and prints the steer and resume commands;
+the caller can supply the verdict up front via the ledger. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in
 parallel**, merge into one synthesis whose blocking findings the QA gate reads, and
 are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs between the check and the reviews, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. A **failure digest** is built from the check output per runner (pytest, vitest, node's test runner) and stored in `check-record.json`, which survives redo; the builder receives the digest rather than the raw output. A **builder probe** is available during emit: the builder can test named failing tests in a throwaway standalone clone before making its final emission. At the post-build gates, **per-correction audit** checks each gate correction item by item: for every correction in the ledger it records the site in the diff, the test that reaches that site (via mechanical hunk-level revert), and the evidence scope (via AST-based patch-target detection); see docs/hardening.md §25-27. A QA or
@@ -457,6 +463,24 @@ down before each evaluation. Without that copy an `optimize --intent` or a
 place steering is most wanted, because a search is what runs for hours. The copy is
 per candidate so the directory says what the person had said when it ran.
 
+**Steering command supply (product/core boundary).** The workflow spine's
+`wf_steer` tool requires a `steerCommand` and `steerArgs`. These are product
+values — the product module `refactory_dsh.console` owns the steer verb. To
+keep core clean, the product registers a `refactory.steer` Python entry point
+(in `pyproject.toml`); the core module `refactory_dsh.steer_probe` discovers it
+at import time via `importlib.metadata.entry_points`. At graph startup,
+`startup.ts` runs `python -m refactory_dsh.steer_probe` and publishes the
+result through the `graphStartup` Cordis service. The core YAML
+(`cordis.patch.yml`) reads the steer fields via `!!js` expressions, so no core
+file names a product Python module as a literal string. A core-only deploy
+(without the entry point) boots successfully: startup publishes `steerCommand:
+''` and logs a warning; `wf_steer` is not registered, and the spine degrades
+gracefully. A stale build (new YAML, old startup.ts) is detected by the YAML's
+own `!!js` comma expression, which warns once naming `pnpm run build`. The
+interactive driver's preflight (`interactive.py`) calls the same `find_steer_module()`
+helper in-process; a fresh start without the entry point refuses before the run
+directory is created, naming `uv sync`.
+
 **A person's gate answer is recorded and consumed for that review.** The ledger
 keeps the decision and the hashes of the gate's declared review inputs. An
 interactive answer or public `steer --verdict` authorizes one matching gate visit;
@@ -464,9 +488,9 @@ changed inputs expire an unused answer, and a later visit asks again even when t
 files are identical. Legacy unscoped answers remain history, not authorization.
 Explicit upfront `--approve` or `RunContext.verdicts` remains standing authorization
 from the caller. A ledger-backed upfront approval remains active when that same
-work directory is reopened; it has no separate invocation identifier. Without a
+work directory is resumed; it has no separate invocation identifier. Without a
 current scoped answer or standing authorization, a
-headless run **refuses** at the gate and names it.
+walker run **stops** at the gate; a headless DSH run stops and prints the steer and resume commands.
 
 **It is inert when unused.** An empty ledger renders the empty string and `annotate`
 returns the workflow it was given. A run nobody steered is the run it would have been,

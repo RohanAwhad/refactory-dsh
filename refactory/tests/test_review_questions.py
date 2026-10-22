@@ -477,8 +477,9 @@ def test_design_fast_reviewer_miss_reloops_focused_qa(tmp_path, monkeypatch):
     assert any("Code-change review instructions" in p for p in qa_prompts)
 
 
-def test_design_fast_gate_qa_exhaustion_names_node_and_function(tmp_path, monkeypatch):
-    """(c) gate_qa exhaustion: the run error names the node and the function."""
+def test_design_fast_repo_questions_advisory_after_one_rerun(tmp_path, monkeypatch):
+    """(c) focused_qa missing repo questions twice: one re-run, then the run proceeds and
+    fast-report.json records the gap, naming the node and the function."""
     import sys
     from refactory_dsh.fast import DesignFastMode
     from tests_support import FakeModel, VERIFICATION_ANSWER, git_repo, render
@@ -500,9 +501,8 @@ def test_design_fast_gate_qa_exhaustion_names_node_and_function(tmp_path, monkey
         PLAN,                      # strategy
         render({"tool.py": tool}), # emit
         VERIFICATION_ANSWER,       # verifier
-        bad_qa,                    # focused_qa (1st — reruns_used=1)
-        bad_qa,                    # focused_qa (2nd — reruns_used=2)
-        bad_qa,                    # focused_qa (3rd — reruns_used=3 > 2 → raise)
+        bad_qa,                    # focused_qa (1st — the one targeted re-run follows)
+        bad_qa,                    # focused_qa (2nd — still missing → advisory, proceed)
     ])
 
     run = DesignFastMode().run(
@@ -511,10 +511,13 @@ def test_design_fast_gate_qa_exhaustion_names_node_and_function(tmp_path, monkey
               "check": f"{sys.executable} tool.py",
               "target": str(repo)})
 
-    assert not run.exit_ok
-    # The error names the node (focused_qa) and the function (tool.py)
-    assert "repo-questions" in run.error.lower() or "re-runs exhausted" in run.error.lower()
-    assert "tool.py" in run.error
+    assert run.exit_ok, run.error
+    qa_prompts = [p for p in model.prompts if "Write focused-qa.json" in p]
+    assert len(qa_prompts) == 2
+    report = json.loads((tmp_path / "run/fast-report.json").read_text())
+    advisory = "\n".join(report["findings"])
+    assert "advisory: repository questions" in advisory
+    assert "focused_qa" in advisory and "tool.py" in advisory
 
 
 def test_design_review_exhaustion_reaches_strategy_without_failing(tmp_path, monkeypatch):
@@ -545,9 +548,8 @@ def test_design_review_exhaustion_reaches_strategy_without_failing(tmp_path, mon
         "perspectives",              # strategy_director
         "one plan",                  # synthesize_strategy
         DESIGN_DOC_ANSWER,           # design_doc
-        bad_design_review,           # design_review (1st — reruns_used=1 → review_reloop)
-        bad_design_review,           # design_review (2nd — reruns_used=2 → review_reloop)
-        bad_design_review,           # design_review (3rd — exhausted → proceed)
+        bad_design_review,           # design_review (1st — the one targeted re-run follows)
+        bad_design_review,           # design_review (2nd — still missing → advisory, proceed)
         # gate_strategy → proceed (via verdicts)
         render({"tool.py": tool}),   # emit
         VERIFICATION_ANSWER,         # verifier
@@ -573,16 +575,19 @@ def test_design_review_exhaustion_reaches_strategy_without_failing(tmp_path, mon
               "check": f"{sys.executable} tool.py",
               "target": str(repo)})
 
-    # The run does NOT fail — design_review exhaustion proceeds to gate_strategy
+    # The run does NOT fail — after one re-run the missing questions are advisory
     assert run.exit_ok, run.error
 
-    # design_review was called 3 times
+    # design_review was called twice: the first pass and its one targeted re-run
     dr_prompts = [p for p in model.prompts
                   if "Read the design document from `design.md`" in p
                   and "BLOCKING" in p and "open alternative" in p.lower()]
-    assert len(dr_prompts) >= 3, (
-        f"design_review ran {len(dr_prompts)} times, expected >= 3"
+    assert len(dr_prompts) == 2, (
+        f"design_review ran {len(dr_prompts)} times, expected 2"
     )
+    # The gap is shown with the findings instead of spending design-review attempts
+    assert "advisory: repository questions" in run.facts["design_review_findings"]
+    assert run.facts["design_review_status"].startswith("Design review: PASS")
 
 
 def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path, monkeypatch):
@@ -667,3 +672,115 @@ def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path
         "artifact DesignMode should have artifact instructions"
     assert not any("Code-change review instructions" in p for p in cr_art), \
         "artifact DesignMode must NOT have code-change instructions"
+
+
+def test_validate_repo_questions_ignores_entries_outside_the_list():
+    """A reviewer's extra entry (for a test, say) is not held to the evidence rule."""
+    from refactory_dsh.authoring_evidence import validate_repo_questions
+
+    record = [
+        {"function": "tool.py::build", "duplicates": "absent: searched for build",
+         "callers": "tool.py:3 calls it", "shared_state": "absent: none"},
+        {"function": "tests/test_tool.py::test_build", "duplicates": "unique",
+         "callers": "pytest collects it", "shared_state": "none"},
+    ]
+    assert validate_repo_questions(record, ["tool.py::build"], "code_reviewer") == []
+
+
+def _design_run(tmp_path, answers):
+    import sys
+    from refactory_dsh.design import DesignMode
+    from tests_support import FakeModel, git_repo
+
+    repo = git_repo(tmp_path / "repo")
+    model = FakeModel(answers)
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["pr"]["value"] = False
+    mode.load_state_dict(state)
+    run = mode.run(
+        tmp_path / "run", model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "rq_tool", "brief": "a tool",
+              "check": f"{sys.executable} tool.py",
+              "target": str(repo)})
+    return run, model
+
+
+def _design_answers(emitted: str, reviews: list[str]) -> list[str]:
+    from tests_support import (RESEARCH_ANSWER, PITFALLS_ANSWER, DESIGN_DOC_ANSWER,
+                               DESIGN_REVIEW_ANSWER, VERIFICATION_ANSWER)
+
+    return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, emitted, VERIFICATION_ANSWER,
+            *reviews, "VERDICT: PASS"]
+
+
+def test_design_mode_gate_qa_advisory_after_one_rerun_reaches_pr_text(tmp_path, monkeypatch):
+    """A code reviewer that leaves repository questions missing twice: one targeted re-run,
+    then gate_qa proceeds; qa-gate.txt and the pull-request text list the gap."""
+    from tests_support import render
+
+    bad_code_review = ("code review: the code matches the design.\n\n"
+                       "## Repository questions\n\n```json\n[]\n```")
+    run, model = _design_run(tmp_path, _design_answers(
+        render({"tool.py": "def build():\n    print('built')\n"}),
+        ["health: ok", bad_code_review, "qa: ok",      # first round
+         "health: ok", bad_code_review, "qa: ok"]))    # the one re-run
+
+    assert run.exit_ok, run.error
+    code_reviews = [p for p in model.prompts if "You are the code reviewer." in p]
+    assert len(code_reviews) == 2
+    gate = (tmp_path / "run/reviews/qa-gate.txt").read_text()
+    assert gate.startswith("proceed: no blocking finding")
+    assert "advisory: repository questions" in gate and "tool.py::build" in gate
+    pull_request = (tmp_path / "run/pull-request.md").read_text()
+    assert "Repository questions left unanswered (advisory)" in pull_request
+    assert "tool.py::build" in pull_request
+
+
+def test_design_mode_only_product_functions_need_repo_questions(tmp_path, monkeypatch):
+    """A change to tool.py and its test: the code reviewer answers for tool.py only, and
+    gate_qa proceeds without a re-run."""
+    from tests_support import render
+
+    code_review = (
+        "code review: the code matches the design.\n\n"
+        "## Repository questions\n\n```json\n"
+        + json.dumps([{"function": "tool.py::build",
+                       "duplicates": "absent: searched the repository for build",
+                       "callers": "tool.py:1 defines it; nothing else calls it yet",
+                       "shared_state": "absent: build touches no shared state"}])
+        + "\n```")
+    run, model = _design_run(tmp_path, _design_answers(
+        render({"tool.py": "def build():\n    print('built')\n",
+                "tests/test_tool.py": "def test_build():\n    assert True\n"}),
+        ["health: ok", code_review, "qa: ok"]))
+
+    assert run.exit_ok, run.error
+    assert len([p for p in model.prompts if "You are the code reviewer." in p]) == 1
+    entries = json.loads((tmp_path / "run/changed-functions.json").read_text())
+    assert {e["function"]: e["test"] for e in entries} == {
+        "tool.py::build": False, "tests/test_tool.py::test_build": True}
+
+
+def test_design_review_asks_repository_questions_for_product_sites_only(tmp_path, monkeypatch):
+    """A design that changes tool.py and its test: the design review answers for tool.py
+    only and passes on its first run."""
+    from tests_support import (RESEARCH_ANSWER, PITFALLS_ANSWER, DESIGN_DOC_ANSWER,
+                               DESIGN_REVIEW_ANSWER, VERIFICATION_ANSWER, render)
+
+    site = "- `tool.py:1` — **[changed]**\n\n"
+    assert site in DESIGN_DOC_ANSWER
+    design = DESIGN_DOC_ANSWER.replace(
+        site, "- `tool.py:1` — **[changed]**\n- `tests/test_tool.py:1` — **[changed]**\n\n")
+    run, model = _design_run(tmp_path, [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan", design,
+        DESIGN_REVIEW_ANSWER,  # answers for tool.py only
+        render({"tool.py": "def build():\n    print('built')\n",
+                "tests/test_tool.py": "def test_build():\n    assert True\n"}),
+        VERIFICATION_ANSWER, "health: ok", "code review: ok", "qa: ok", "VERDICT: PASS"])
+
+    assert run.exit_ok, run.error
+    assert int(run.facts.get("design_review_reruns_used", 0)) == 0
+    assert run.facts["design_review_status"].startswith("Design review: PASS")

@@ -2,7 +2,7 @@
 
 Level 3 needs a mode that pauses for a person; every shipped mode was runnable end
 to end without one. These hold the two properties the pause depends on: the IR says
-who answers each gate, and a headless run refuses the person's gate instead of
+who answers each gate, and a walker run stops at the person's gate instead of
 inventing a verdict.
 """
 
@@ -50,11 +50,10 @@ def test_the_author_note_is_the_prompt_the_person_is_shown():
 
 
 def test_a_headless_run_refuses_at_the_persons_gate(tmp_path):
-    """An invented verdict is indistinguishable from one a person gave."""
+    """A walker run stops at a user gate with GateStop."""
     result = _mode().evaluate(tmp_path / "run")
     assert result.exit_ok is False
-    assert "approve" in (result.error or "")
-    assert "answered by 'user'" in (result.error or "")
+    assert "approve" in (result.error or ""), result.error
 
 
 def test_the_persons_answer_completes_the_run_and_publishes(tmp_path):

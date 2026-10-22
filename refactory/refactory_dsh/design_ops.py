@@ -445,6 +445,7 @@ def gate_design_review(ctx: Any) -> str:
     deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
     if deliverable_kind_value == "repository_change" and design_text:
         from refactory_dsh.authoring_evidence import check_review_questions
+        from refactory_dsh.changed_functions import is_generated, is_test_path
         from refactory_dsh import design_contract
 
         run_name = str(ctx.facts.get("name") or "")
@@ -454,16 +455,19 @@ def gate_design_review(ctx: Any) -> str:
             for site in parsed.rule_sites
             if site["status"] == "changed"
         ]
-        # Normalise and deduplicate
+        target = str(ctx.facts.get("target") or "")
+        # Normalise and deduplicate; only product code needs repository questions.
         seen_fns: set[str] = set()
         deduped_fns: list[str] = []
         for fn in changed_fns:
             fn_norm = _re.sub(r':\d+(-\d+)?$', '', fn).strip()
-            if fn_norm and fn_norm not in seen_fns:
-                seen_fns.add(fn_norm)
-                deduped_fns.append(fn_norm)
+            file_path = fn_norm.split("::", 1)[0]
+            if (not fn_norm or fn_norm in seen_fns or is_test_path(file_path)
+                    or (target and is_generated(Path(target), file_path))):
+                continue
+            seen_fns.add(fn_norm)
+            deduped_fns.append(fn_norm)
         if deduped_fns:
-            target = str(ctx.facts.get("target") or "")
             rq_problems = check_review_questions(
                 review_text, deduped_fns, "design_review",
                 require_brief_trace=True,
@@ -472,20 +476,22 @@ def gate_design_review(ctx: Any) -> str:
             problems.extend(rq_problems)
 
     # ── reviewer re-run routing (before attempt increment) ──
+    advisory = ""
     if problems:
+        from refactory_dsh.authoring_evidence import advisory_repo_questions, repo_question_rerun_due
+
         rq_problems_only = [p for p in problems if p.startswith("[repo-questions]")]
         non_rq_problems = [p for p in problems if not p.startswith("[repo-questions]")]
         if rq_problems_only and not non_rq_problems:
-            # Only repo-questions problems: re-run the reviewer without spending an attempt.
-            reruns_used = int(ctx.facts.get("design_review_reruns_used", 0)) + 1
-            ctx.set_fact("design_review_reruns_used", reruns_used)
-            if reruns_used <= 2:
+            # Only repo-questions problems: re-run the reviewer once, naming what is missing,
+            # without spending an attempt. After that they are advisory and the review passes.
+            if repo_question_rerun_due(ctx, "design_review_reruns_used"):
                 rq_report = "\n".join(f"- {p}" for p in rq_problems_only)
                 ctx.write_text("reviews/design-review-feedback.txt", rq_report + "\n")
                 ctx.set_fact("design_review_feedback", rq_report)
                 return Verdict("review_reloop", rq_report)
-            # At the limit, let repo-questions problems join ordinary findings and
-            # take the existing reloop or proceed-on-exhaustion path.
+            advisory = advisory_repo_questions(rq_problems_only)
+            problems = []
 
     # ── decide: proceed, reloop, or exhaust ──
     allowed = int(ctx.knob("design_review_attempts", 2))
@@ -498,6 +504,9 @@ def gate_design_review(ctx: Any) -> str:
         ctx.set_fact("design_review_feedback", "(the design review passed)")
         ctx.set_fact("design_review_findings",
                      "(none: the design review passed)")
+        if advisory:
+            ctx.set_fact("design_review_findings",
+                         ctx.facts["design_review_findings"] + "\n\n" + advisory)
         coverage = ctx.facts.get("pitfall_coverage", "")
         if coverage:
             ctx.set_fact("design_review_findings",
