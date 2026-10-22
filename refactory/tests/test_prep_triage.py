@@ -245,6 +245,56 @@ def test_changed_file_in_error_makes_it_change_caused(tmp_path):
     assert result is not None, "should be change-caused: error names schema.json"
 
 
+def test_base_same_prep_failure_keeps_environment_handling(tmp_path):
+    """Base fails same step, no changed file uniquely named → inherited (None).
+
+    This is the negative-case counterpart of
+    test_changed_file_in_error_makes_it_change_caused: the base also fails
+    the same generate step with the same error text, and no changed file is
+    uniquely named in the attempt's error.  compare_prep_failure must return
+    None so that _check_in_worktree falls through to today's
+    "the worktree's environment could not be prepared" handling.
+    """
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "test00000015", run_dir)
+    wt = Path(found.path)
+    # Make a change that does NOT appear in the error text.
+    (wt / "unrelated.txt").write_text("change\n")
+    subprocess.run(["git", "-C", str(wt), "add", "unrelated.txt"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(wt), "commit", "-q", "-m", "unrelated change"],
+                   capture_output=True, check=True)
+    found = worktree.Worktree(
+        path=found.path, branch=found.branch,
+        base=found.base, head=subprocess.run(
+            ["git", "-C", str(wt), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip(),
+        target=found.target, run=found.run,
+    )
+    worktree.write_wrapper(found, run_dir)
+    ctx = _Ctx(run_dir, facts={"generate": "sh gen.sh", "setup": ""})
+    key = base_check.cache_key(found.base, "", "sh gen.sh", "")
+    # Cache: base fails the same step with the same error.
+    base_check._write_prep_cache(run_dir, key, {
+        "base_ok": False, "base_step": "sh gen.sh",
+        "base_error": "missing dependency: libfoo not found",
+        "base_returncode": 1,
+    })
+    prep_fail = {"step": "sh gen.sh", "returncode": 1, "timed_out": False}
+    result = base_check.compare_prep_failure(
+        ctx, prep_fail, ["missing dependency: libfoo not found"], found,
+        worktree.check_environment(wt, tmp_path / "home"),
+        tmp_path / "home", 60.0,
+    )
+    assert result is None, (
+        "base fails same step with no changed file uniquely named → "
+        "should return None (inherited), keeping today's environment handling"
+    )
+
+
 # ── Unit: convergence history ──────────────────────────────────────────────
 
 
@@ -368,4 +418,68 @@ def test_prep_triage_through_dsh_runner_fast(tmp_path, monkeypatch):
     )
     assert "TS2304" in (check_data.get("digest") or ""), (
         f"tsc error not in digest: {check_data.get('digest')!r}"
+    )
+
+
+# ── Integration: prep failure never reported as unbuilt (DesignMode) ───────
+
+
+def test_prep_failure_never_reported_as_unbuilt(tmp_path, monkeypatch):
+    """A change-caused generate failure whose error names a missing entry point
+    must NOT be reported as "unbuilt packages".
+
+    Per correction #10, the failure lines name the missing entry point — the
+    scenario that previously caused the "unbuilt packages" stop at
+    design_ops ~863.  The early-return for change_caused_prep fires before
+    the unbuilt diagnosis, so "unbuilt" never appears in the builder's
+    feedback.
+    """
+    from refactory_dsh import lowering, design_ops, repo_change
+    from refactory_dsh.run import run_node
+
+    repo = _git_init(tmp_path / "repo")
+    # Create a simple app and a generate script that fails with an error
+    # naming a missing entry point (packages/foo/dist/index.js).
+    _commit(repo, "app.py", "print('app')\n")
+    (repo / "gen.sh").write_text(
+        '#!/bin/sh\n'
+        'if [ -f FAIL_MARKER ]; then\n'
+        '  echo "Error: Cannot find module packages/foo/dist/index.js"\n'
+        '  echo "FAILED to import packages/foo/dist/index.js"\n'
+        '  exit 1\n'
+        'fi\n'
+        'echo ok\n'
+    )
+    subprocess.run(["chmod", "+x", str(repo / "gen.sh")], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "gen.sh"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "gen"],
+                   capture_output=True, check=True)
+
+    run_dir = tmp_path / "run"
+    worktree.create(repo, "HEAD", "dshrunner0003", run_dir)
+    lowering.write_declarations(DesignMode().state_dict(), run_dir)
+    (run_dir / "facts.json").write_text(json.dumps({
+        "name": "unbuilt_test", "brief": "a tool",
+        "check": "python app.py", "generate": "sh gen.sh",
+    }))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 3}))
+    (run_dir / "emit.txt").write_text(render({
+        "FAIL_MARKER": "yes\n", "app.py": "print('runner')\n",
+    }))
+    run_node(f"{repo_change.OPS}:materialise", workdir=run_dir, node_id="materialise")
+    verdict = run_node(
+        f"{design_ops.__name__}:check_artifact", workdir=run_dir, node_id="check",
+    )
+    # The change-caused prep failure should route to repair (reloop),
+    # NOT raise ValueError("check failed because of unbuilt packages...").
+    assert verdict == "reloop", f"expected reloop, got {verdict}"
+    facts = json.loads((run_dir / "facts.json").read_text())
+    validation = facts.get("validation", "")
+    assert "unbuilt" not in validation.lower(), (
+        f"'unbuilt' must not appear in validation: {validation!r}"
+    )
+    # The actual error text must reach the builder.
+    assert "packages/foo/dist/index.js" in validation, (
+        f"entry-point path not in validation: {validation!r}"
     )
