@@ -261,11 +261,6 @@
     },
     {
       "source": "gate_design_review",
-      "target": "design_review",
-      "condition": "review_reloop"
-    },
-    {
-      "source": "gate_design_review",
       "target": "gate_strategy",
       "condition": "proceed"
     },

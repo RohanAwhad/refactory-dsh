@@ -1432,13 +1432,15 @@ def test_a_design_missing_a_contract_part_reloops_before_the_gate(tmp_path):
     assert "Rule and sites" in verdict.reason
 
 
-def test_a_rule_site_without_a_marker_reloops_before_the_gate(tmp_path):
-    """A site the design lists without saying whether the change covers it reloops."""
+def test_a_rule_site_without_a_marker_is_advisory_at_the_gate(tmp_path):
+    """A site the design lists without a [changed] or [left] marker is listed as advisory."""
     import refactory_dsh.design_ops as ops
 
     design_text = (
         "# Make the gate check constraints\n\n"
         "## Summary\n\nSplit constraints into clauses.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n"
+        "| \"the brief\" | § Changes | test_tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `authoring_evidence.py:154` \u2014 **[changed]**\n"
         "- `create_ops.py:1696` \u2014 the overwatch gate\n\n"
@@ -1456,18 +1458,21 @@ def test_a_rule_site_without_a_marker_reloops_before_the_gate(tmp_path):
     ctx.write_text("design.md", design_text)
     ctx.write_json("brief.json", {"name": "b17_clauses", "brief": "split constraints"})
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "create_ops.py:1696" in verdict.reason
-    assert "authoring_evidence.py:154" not in verdict.reason
+    assert verdict == "proceed"
+    advisory = ctx.facts["design_review_advisory"]
+    assert "create_ops.py:1696" in advisory
+    assert "authoring_evidence.py:154" not in advisory
 
 
-def test_a_design_whose_title_is_the_run_name_reloops(tmp_path):
-    """The gate catches a title that equals the run name."""
+def test_a_design_whose_title_is_the_run_name_is_advisory(tmp_path):
+    """The gate notes a title that equals the run name, as advisory."""
     import refactory_dsh.design_ops as ops
 
     design_text = (
         "# b17_clauses\n\n"
         "## Summary\n\nDo the thing.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n"
+        "| \"the brief\" | § Changes | test_tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `file.py:1` \u2014 **[changed]**\n\n"
         "## Docs\n\n"
@@ -1483,17 +1488,19 @@ def test_a_design_whose_title_is_the_run_name_reloops(tmp_path):
     ctx.write_text("design.md", design_text)
     ctx.write_json("brief.json", {"name": "b17_clauses", "brief": "split constraints"})
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "title is the run name" in verdict.reason
+    assert verdict == "proceed"
+    assert "title is the run name" in ctx.facts["design_review_advisory"]
 
 
-def test_a_design_with_left_no_reason_reloops(tmp_path):
+def test_a_design_with_left_no_reason_is_advisory(tmp_path):
     """The gate catches a rule site marked [left] without a reason."""
     import refactory_dsh.design_ops as ops
 
     design_text = (
         "# Enforce clause coverage\n\n"
         "## Summary\n\nFix the audit.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n"
+        "| \"the brief\" | § Changes | test_tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `evidence.py:10` \u2014 **[changed]**\n"
         "- `ops.py:20` \u2014 **[left]**\n\n"
@@ -1510,8 +1517,8 @@ def test_a_design_with_left_no_reason_reloops(tmp_path):
     ctx.write_text("design.md", design_text)
     ctx.write_json("brief.json", {"name": "b17_clauses", "brief": "fix audit"})
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "[left] without a reason" in verdict.reason
+    assert verdict == "proceed"
+    assert "[left] without a reason" in ctx.facts["design_review_advisory"]
 
 
 # ── design_fast, on the same steps (`repo_change`) ─────────────────────────────

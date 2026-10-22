@@ -121,8 +121,8 @@ class DesignMode(Mode):
                 "## Research scope\n{{research_scope}}\n\n"
                 "You are the research director. Decide what has to be learned before "
                 "this artifact can be designed: between three and five questions for "
-                "a full design, or one to three focused questions for a scoped "
-                "change. Each must be "
+                "a full design, or one focused question for a scoped change (two or "
+                "three only when it spans unrelated parts of the code). Each must be "
                 "answerable by reading {{source}} — including the source code of tools "
                 "and libraries the change depends on, not only the files it changes — "
                 "or by running something there. Spawn "
@@ -161,11 +161,14 @@ class DesignMode(Mode):
             prompt_template=(
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
                 "Repository: {{source}}\n\n"
+                "## Research scope\n{{research_scope}}\n\n"
                 "## What the research found\n{{research}}\n\n"
                 "## What was wrong with the last attempt\n{{pitfalls_review}}\n\n"
                 "You are the pitfalls researcher. Before any strategy or design exists, "
                 "identify the risks a correct design must account for. Read the repository "
-                "and the brief, and produce a risk-ranked list of pitfalls.\n\n"
+                "and the brief, and produce a risk-ranked list of pitfalls. For a scoped "
+                "change, list at most five: only the risks a correct design of this "
+                "change must account for.\n\n"
                 "For each pitfall, provide:\n"
                 "- **id**: a short identifier in the format PIT-001, PIT-002, etc.\n"
                 "- **risk**: high, medium, or low.\n"
@@ -214,10 +217,13 @@ class DesignMode(Mode):
                 "It is built in {{source}}; read what is there before choosing.\n\n"
                 "## Pitfalls\n{{pitfalls}}\n\n"
                 "## What the research found\n{{research}}\n\n"
+                "## Research scope\n{{research_scope}}\n\n"
                 "You are the strategy director. From the research, choose between two "
                 "and five perspectives on how this artifact could be built — including "
                 "the simplest thing that could pass the check, and one that says what "
-                "the check will not catch. Spawn one subagent per perspective and have "
+                "the check will not catch. For a scoped change, use one perspective: "
+                "the simplest thing that could pass the check, saying also what the "
+                "check will not catch. Spawn one subagent per perspective and have "
                 "it write `strategy/<slug>.md` under the run directory, with each "
                 "finding as a heading `### FND-<slug>-<n> \u2014 <the finding>`, numbered "
                 "from 1 within the file. Then write "
@@ -253,7 +259,8 @@ class DesignMode(Mode):
                 "independent format reader, not just a parser the artifact author writes."
                 "\n\nThe research detail files (`research/*.md`) and strategy detail "
                 "files (`strategy/*.md`) are available as reads. Each carries finding "
-                "ids (`FND-<slug>-<n>`). Carry every finding id forward into the plan."
+                "ids (`FND-<slug>-<n>`). Use the findings that change what will be built, "
+                "citing their ids; the rest stay in those files for the design to read."
             ),
             reads=("brief.json", "research-plan.json", "strategy-plan.json", "pitfalls.json",
                    "research/", "strategy/"),
@@ -298,18 +305,17 @@ class DesignMode(Mode):
                 + design_contract.prompt_contract()
                 + "\n\n"
                 "9. `## Anti-patterns to avoid` (when the research produced pitfalls) — "
-                "for each pitfall id from the pitfalls analysis, either address it by "
-                "naming the site (a backticked `path:line` from Rule and sites) or the "
-                "section (§ heading name) that handles it, or set it aside with "
-                "`[set-aside: <reason>]`. A high-risk pitfall that is missing or set "
-                "aside without a reason fails the contract.\n\n"
-                "10. `## Research and perspective findings` \u2014 for each finding id "
-                "(FND-<slug>-<n>) from research/*.md and strategy/*.md, either address "
-                "it at a valid site (backticked `path:line` from Rule and sites) or "
-                "\u00a7 heading reference, or set it aside with `[set-aside: <reason>]`. "
-                "A finding id that is neither addressed nor set aside is blocking. "
-                "Read the detail files directly \u2014 a finding the summary dropped "
-                "is still required.\n"
+                "for each high-risk pitfall id, either address it by naming the site (a "
+                "backticked `path:line` from Rule and sites) or the section (§ heading "
+                "name) that handles it, or set it aside with `[set-aside: <reason>]`. A "
+                "high-risk pitfall that is missing or set aside without a reason fails "
+                "the contract. Medium and low pitfalls appear only where they change a "
+                "decision.\n\n"
+                "10. Research and perspective findings \u2014 read research/*.md and "
+                "strategy/*.md directly, and cite a finding id (FND-<slug>-<n>) where it "
+                "changes a decision. Do not list findings that change nothing; the "
+                "document is for building the change, not for accounting for the "
+                "research.\n"
                 "\n\n## Claims check feedback\n{{claims_check_feedback}}"
             ),
             reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt",
@@ -354,10 +360,12 @@ class DesignMode(Mode):
                 "what the brief says, find the quoted text verbatim in the brief. "
                 "For every design choice, confirm that exactly one decision is made "
                 "and no alternative is left open.\n\n"
-                "Report as BLOCKING:\n"
+                "Report as BLOCKING only what would make the build wrong or leave an ask "
+                "unmet:\n"
                 "- An open alternative or a choice left undecided.\n"
                 "- A claim about code you cannot confirm in the cited file.\n"
-                "- A claim about the brief the brief does not say.\n"
+                "- A claim about the brief the brief does not say (a difference only in "
+                "punctuation or formatting is a note, not a finding).\n"
                 "- A command, flag or file the design tells a person or the builder "
                 "to use that does not exist.\n"
                 "- A piece the design adds that nothing in the design uses or starts.\n"
@@ -368,18 +376,17 @@ class DesignMode(Mode):
                 "naming the existing one.\n"
                 "- A place in the code that applies or restates the same rule the design "
                 "changes, found by searching the source, that the design leaves unchanged "
-                "without giving a reason. The '## Rule and sites' section must list every "
-                "such place; one marked `[left]` without a reason, or one you find that "
-                "the design does not list at all, is BLOCKING.\n"
-                "- A doc that describes the behaviour the design changes, found by "
-                "searching the docs, that the design's '## Docs' section leaves out.\n"
-                "- A missing ## Failure trace section or a missing ## Ask mapping table.\n"
-                "- A failure trace entry whose cited file:line chain does not match the code "
-                "when you read it.\n"
-                "- An ask in the Ask mapping whose quoted text does not appear verbatim in the brief, "
-                "or whose named test does not exercise the ask.\n"
-                "- An ask in the brief that has no corresponding row in the Ask mapping table.\n\n"
+                "without giving a reason, or does not list at all in '## Rule and sites'. "
+                "Search every caller of a changed function in every mode and graph, not "
+                "only the brief's own path.\n"
+                "- An ask in the brief with no row in the Ask mapping table, or whose "
+                "named test does not exercise it.\n\n"
                 "List each finding as a line starting with `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem.\n\n"
+                "Write anything else under `## Notes`, never as BLOCKING: a doc the "
+                "'## Docs' section leaves out, a missing or thin Failure trace, a "
+                "quotation that differs only in punctuation or formatting, and style or "
+                "structure that does not change the build. Notes do not send the design "
+                "back.\n\n"
                 "{{review_instructions}}\n\n"
                 "Trace the brief's own example through the code in time order, naming the route a "
                 "real run takes for every runtime that runs it. Write the trace in a section headed "
@@ -401,7 +408,8 @@ class DesignMode(Mode):
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
                       "design_review_findings", "pitfall_coverage",
-                      "finding_coverage", "design_review_reruns_used", "design_review_status"),
+                      "finding_coverage", "design_review_reruns_used", "design_review_status",
+                      "design_review_advisory", "design_review_blocking"),
             knobs=("design_review_attempts",),
             max_iterations=6,
             notes="proceed on PASS with no findings; reloop to design_doc otherwise; "
@@ -704,7 +712,6 @@ class DesignMode(Mode):
         graph.connect("check_design_claims", "design_doc", condition="reloop")
         graph.connect("design_review", "gate_design_review")
         graph.connect("gate_design_review", "design_doc", condition="reloop")
-        graph.connect("gate_design_review", "design_review", condition="review_reloop")
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
         graph.connect("gate_strategy", "pick_corrections", condition="proceed")

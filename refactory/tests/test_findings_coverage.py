@@ -50,10 +50,13 @@ def test_gate_reloops_when_research_finding_missing(tmp_path):
     ctx.write_json('brief.json', {'name': 'x', 'brief': 'do a thing'})
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
-    assert verdict == 'reloop'
-    assert 'FND-foo-1' in verdict.reason
-    assert 'lowering op-name strings' in verdict.reason
-    assert 'research/foo.md' in verdict.reason
+    # An unaddressed finding is listed for the person; it never costs a design round.
+    assert verdict == 'proceed'
+    advisory = ctx.facts['design_review_advisory']
+    assert 'FND-foo-1' in advisory
+    assert 'lowering op-name strings' in advisory
+    assert 'research/foo.md' in advisory
+    assert ctx.facts['design_review_status'] == 'Design review: PASS, 1 advisory'
 
 
 def test_gate_reloops_when_perspective_finding_missing(tmp_path):
@@ -78,10 +81,11 @@ def test_gate_reloops_when_perspective_finding_missing(tmp_path):
     ctx.write_json('brief.json', {'name': 'x', 'brief': 'do a thing'})
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
-    assert verdict == 'reloop'
-    assert 'FND-bar-1' in verdict.reason
-    assert 'refactory_packages must be walked' in verdict.reason
-    assert 'strategy/bar.md' in verdict.reason
+    assert verdict == 'proceed'
+    advisory = ctx.facts['design_review_advisory']
+    assert 'FND-bar-1' in advisory
+    assert 'refactory_packages must be walked' in advisory
+    assert 'strategy/bar.md' in advisory
 
 
 def test_gate_passes_when_finding_set_aside(tmp_path):
@@ -135,8 +139,9 @@ def test_dropped_finding_still_reaches_coverage(tmp_path):
     ctx.write_json('brief.json', {'name': 'x', 'brief': 'do a thing'})
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
-    assert verdict == 'reloop'
-    assert 'FND-bar-1' in verdict.reason
+    assert verdict == 'proceed'
+    assert 'FND-bar-1' in ctx.facts['design_review_advisory']
+    assert 'FND-foo-1' not in ctx.facts['design_review_advisory']
 
 
 # ── unit tests: finding_coverage (5–10) ────────────────────────────────────
@@ -322,43 +327,16 @@ def test_definitions_with_markdown_decoration():
 # ── scripted run tests (18–20) ────────────────────────────────────────────
 
 def test_scripted_design_run_dropped_finding(tmp_path):
-    """18: A finding dropped by the summary still reaches the coverage check
-    and causes a reloop; the second design_doc prompt names it."""
+    """18: A finding dropped by the summary still reaches the coverage check, which
+    lists it as advisory at the person's gate instead of sending the design back."""
     from refactory_dsh.design import DesignMode
-
-    second_design_doc = (
-        "# Do the thing\n\n"
-        "## Summary\n\nFix it properly.\n\n"
-        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
-        "## Ask mapping\n\n"
-        "| Ask (quoted from brief) | Design section | Test |\n"
-        "|---|---|---|\n"
-        '| "a tool" | \u00a7 Changes | test_tool.py |\n\n'
-        "## Rule and sites\n\n"
-        "- `tool.py:1` \u2014 **[changed]**\n\n"
-        "## Docs\n\n"
-        "- docs/models.md\n\n"
-        "## Changes\n\n"
-        "- tool.py\n\n"
-        "## Research and perspective findings\n\n"
-        "- FND-api-surface-1: addressed at `tool.py:1`\n"
-        "- FND-existing-modes-1: addressed at \u00a7 Changes\n"
-        "- FND-acceptance-1: addressed at `tool.py:1`\n"
-        "- FND-simplest-1: addressed at `tool.py:1`\n"
-        "- FND-criteria-1: addressed at \u00a7 Changes\n"
-        "- FND-extra-1: addressed at `tool.py:1`\n\n"
-        "## Anti-patterns to avoid\n\n"
-        "- PIT-001: addressed at `tool.py:1`\n"
-    )
 
     answers = [
         RESEARCH_ANSWER,
         PITFALLS_ANSWER,
         "perspectives",
         "one plan",
-        DESIGN_DOC_ANSWER,      # first attempt — missing FND-extra-1
-        DESIGN_REVIEW_ANSWER,
-        second_design_doc,       # second attempt — addresses FND-extra-1
+        DESIGN_DOC_ANSWER,      # does not mention FND-extra-1
         DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
         VERIFICATION_ANSWER,
@@ -375,15 +353,16 @@ def test_scripted_design_run_dropped_finding(tmp_path):
     )
     assert result.exit_ok, result.error
 
-    # The second design_doc prompt must name the missing finding
+    # One design round: the uncovered finding did not send the design back.
     design_doc_prompts = [
         p for p in model.prompts if 'What the design review found' in p
     ]
-    assert len(design_doc_prompts) >= 2
-    second_prompt = design_doc_prompts[1]
-    assert 'FND-extra-1' in second_prompt
-    assert 'extra finding text' in second_prompt
-    assert 'research/extra.md' in second_prompt
+    assert len(design_doc_prompts) == 1
+    advisory = result.facts['design_review_advisory']
+    assert 'FND-extra-1' in advisory
+    assert 'extra finding text' in advisory
+    assert 'research/extra.md' in advisory
+    assert result.facts['design_review_status'].startswith('Design review: PASS, ')
 
 
 def test_scripted_create_run_finding_coverage(tmp_path):
@@ -498,6 +477,8 @@ def test_dsh_run_node_reports_missing_finding(tmp_path):
         node_id='gate_design_review',
     )
 
-    assert isinstance(result, Verdict)
-    assert 'FND-foo-1' in result.reason
-    assert 'important finding' in result.reason
+    assert result == 'proceed'
+    feedback = (d / 'reviews' / 'design-review-feedback.txt').read_text()
+    assert '## Advisory' in feedback
+    assert 'FND-foo-1' in feedback
+    assert 'important finding' in feedback
