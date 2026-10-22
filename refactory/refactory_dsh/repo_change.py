@@ -351,8 +351,8 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
                   f"(branch has attempt commits)", file=sys.stderr)
     worktree.write_wrapper(found, ctx.workdir)
     # Every step of a worktree run is held to its own worktree (#319, #347).
-    # Changes to the target or the launcher checkout are warnings: another
-    # session or person may be working there.
+    # In a worktree run, target changes fail the step; launcher-checkout
+    # changes are warnings. Another session or person may be working there.
     warn_dirs: tuple[Path, ...] = ()
     if launcher != target and (launcher / ".git").exists():
         warn_dirs = (launcher,)
@@ -416,8 +416,8 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
 
     ``output_only`` names further agent nodes -- besides ``emit`` -- whose only
     output is their declared file.  The agent-delivery bracket refuses one that
-    changed the run's worktree while it ran; in a worktree run, changes to the
-    target or the launcher checkout become warnings rather than failures.
+    changed the run's worktree while it ran; in a worktree run, target
+    changes are failures and launcher-checkout changes are warnings.
     """
     _artifact_name(name)
     if in_worktree is None:
