@@ -299,32 +299,39 @@ def watch(workdir: Path, node: str) -> dict[str, Any] | None:
     return found
 
 
+def _stray_matches(stray: dict[str, Any] | None, pre: str, now: str, watched_at: str) -> bool:
+    """Whether a path's change since watch() is another node's refusal undoing its stray.
+
+    True when the stray was recorded at or after this node's watch, this node's
+    pre-node bytes were that stray (``digest``), and the path now holds what the
+    stray's refusal restored (``pre_digest``).
+    """
+    return (stray is not None and stray.get("at", "") >= watched_at
+            and pre == stray.get("digest") and now == stray.get("pre_digest"))
+
+
 def _discount_strays(before: dict[str, Any], now: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of *now* with paths discounted by a concurrent refusal's stray record.
 
-    A path is treated as unchanged when its pre-node digest matches a stray recorded
-    at or after ``before['watched_at']``.  This prevents a parallel node from being
-    refused for files another node's refusal already set aside (dm-159, correction 4.1).
+    A path is treated as unchanged when this node's pre-node digest is a stray that
+    another node's refusal set aside at or after ``before['watched_at']``, and the
+    path now holds what that refusal restored (dm-159, correction 4.1).
     """
     watched_at = before.get("watched_at", "")
     if not watched_at or now.get("changes") is None or before.get("changes") is None:
         return now
-    root = Path(before["root"])
-    strays = _read_stray_record(root)
+    strays = _read_stray_record(Path(before["root"]))
     if not strays:
         return now
     adjusted = dict(now)
     adjusted["changes"] = dict(now["changes"])
-    for path in list(adjusted["changes"]):
-        stray_entry = strays.get(path)
-        if stray_entry is None:
-            continue
-        stray_at = stray_entry.get("at", "")
-        if stray_at < watched_at:
-            continue
-        pre_digest = before["changes"].get(path, "-")
-        if pre_digest == stray_entry.get("pre_digest"):
-            adjusted["changes"][path] = pre_digest  # treat as unchanged
+    for path in before["changes"].keys() | now["changes"].keys():
+        pre = before["changes"].get(path, "-")
+        if _stray_matches(strays.get(path), pre, now["changes"].get(path, "-"), watched_at):
+            if path in before["changes"]:
+                adjusted["changes"][path] = pre
+            else:
+                adjusted["changes"].pop(path, None)
     return adjusted
 
 
@@ -512,14 +519,18 @@ def restore_target(root: Path, before: dict[str, Any],
 
         # Filter out paths already set aside by another node's refusal
         effective = []
+        # A path whose pre-node bytes are another node's stray, set aside since this
+        # node's watch, is restored to what that refusal restored, never to the stray.
+        undone: dict[str, str] = {}
         for path in changed:
+            pre_digest = before.get("changes", {}).get(path, "-")
             stray_entry = strays.get(path)
-            if stray_entry is not None:
-                stray_at = stray_entry.get("at", "")
-                if stray_at >= watched_at:
-                    pre_digest = before.get("changes", {}).get(path, "-")
-                    if pre_digest == stray_entry.get("pre_digest"):
-                        continue
+            if (stray_entry is not None and stray_entry.get("at", "") >= watched_at
+                    and pre_digest == stray_entry.get("digest")):
+                now_digest = after.get("changes", {}).get(path, "-")
+                if now_digest == stray_entry.get("pre_digest"):
+                    continue
+                undone[path] = stray_entry.get("pre_digest", "-")
             effective.append(path)
 
         for path in effective:
@@ -541,6 +552,13 @@ def restore_target(root: Path, before: dict[str, Any],
                     "pre_digest": pre_digest,
                     "at": datetime.now(timezone.utc).isoformat(),
                 }
+
+                if path in undone:
+                    if undone[path] == "-":
+                        result["restored"].append(path)
+                    else:
+                        result["errors"].append(f"{path} (another node's refusal restored it)")
+                    continue
 
                 # (b) Restore pre-node content
                 symlink_marker = baseline_dir / (path + ".symlink.json")
@@ -573,7 +591,10 @@ def restore_target(root: Path, before: dict[str, Any],
                         content = _git(root, "show", f"HEAD:{prefix}{path}")
                         if content is not None:
                             full.parent.mkdir(parents=True, exist_ok=True)
-                            full.write_bytes(content.encode("utf-8", "surrogateescape"))
+                            if ls.startswith("120000"):
+                                os.symlink(content, full)
+                            else:
+                                full.write_bytes(content.encode("utf-8", "surrogateescape"))
                             # Restore mode from git ls-tree
                             if ls.startswith("100755"):
                                 full.chmod(0o755)

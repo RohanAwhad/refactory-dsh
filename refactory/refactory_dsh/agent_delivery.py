@@ -386,6 +386,12 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
             # the snapshot from before the first attempt would refuse it for changes the
             # person already saw, and chose to keep, every time.
             previous['target'] = target_guard.watch(workdir, node)
+            rewatched = previous['target']
+            if rewatched is not None and rewatched.get('changes') and (rewatched.get('also') or 'also' not in rewatched):
+                baseline_dir = workdir / ROOT / previous['id'] / 'target-baseline'
+                if baseline_dir.exists():
+                    baseline_dir.rename(baseline_dir.with_name(f"target-baseline-{uuid.uuid4().hex[:8]}"))
+                target_guard.save_baseline(Path(rewatched['root']), rewatched['changes'], baseline_dir)
             pending.write_text(json.dumps(previous, indent=2) + '\n')
     ledger = Ledger(workdir)
     ledger_text = ledger.path.read_text() if ledger.exists() else ""
@@ -406,7 +412,10 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     directory = workdir / ROOT / identifier
     directory.mkdir(parents=True, exist_ok=True)
     # Save pre-node target bytes for lossless restore (dm-159).
-    if target is not None and target.get('changes'):
+    # Only a snapshot taken just now is saved: a reused in-flight dispatch keeps its
+    # pre-node copies, which the agent may already have changed in the target.
+    if (previous is None and target is not None and target.get('changes')
+            and (target.get('also') or 'also' not in target)):
         baseline_dir = directory / 'target-baseline'
         target_guard.save_baseline(Path(target['root']), target['changes'], baseline_dir)
     contexts = list(previous.get('contexts', [])) if previous is not None else []
@@ -481,8 +490,10 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     # Restore the target losslessly on refusal (dm-159).
     restored_info = None
     wt_path = None
-    if fail_changes and record.get('target') is not None:
-        target_before = record['target']
+    target_before = record.get('target')
+    if fail_changes and target_before is not None and (target_before.get('also') or 'also' not in target_before):
+        # A worktree run only (a target-only snapshot, or an output-only one with `also`):
+        # a run without a worktree is refused exactly as before dm-159.
         if target_before.get('also'):
             wt_path = next(iter(target_before['also']), None)
         else:
@@ -525,7 +536,8 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     # edits that never pass through the step that writes the artifact.
     if fail_changes:
         tg_bl = target_guard._read(workdir)
-        is_oo = tg_bl is not None and record['node'] in tg_bl.get('output_only', ())
+        is_oo = (restored_info is not None and tg_bl is not None
+                 and record['node'] in tg_bl.get('output_only', ()))
         raise ValueError(target_guard.refusal(
             record['node'], record['target']['root'],
             fail_changes, writes, set_aside=set_aside,

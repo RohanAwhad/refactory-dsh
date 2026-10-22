@@ -1313,7 +1313,7 @@ def test_worktree_only_stray_no_could_not_be_restored(tmp_path, capsys):
     with pytest.raises(ValueError) as exc_info:
         agent_delivery.finish(run, "emit")
     # The refusal should NOT say "could not be restored" when target is clean.
-    assert "could not be restored" not in str(exc_info.value).lower()
+    assert "could not restore" not in str(exc_info.value).lower()
 
 
 def test_snapshot_resaved_on_reused_dispatch(tmp_path):
