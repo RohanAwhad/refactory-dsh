@@ -8,6 +8,7 @@ Mismatches reloop ``design_doc`` without spending a design-review attempt.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -346,6 +347,45 @@ def check_design_claims(ctx: Any) -> Any:
                     id_error = None
                 if id_error:
                     mismatches.append(id_error)
+
+    # ── Probe evidence: verify cited probe ids against probes.jsonl ──
+    _PROBE_ID_RE = re.compile(r'\(probe\s+([0-9a-f]{12}):\s*(\S+)\)')
+    probes_file = Path(ctx.workdir) / ".refactory" / "probes.jsonl"
+    probe_records: dict[str, str] = {}  # id -> status
+    if probes_file.is_file():
+        for line in probes_file.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                if isinstance(record, dict) and "id" in record and "status" in record:
+                    probe_records[record["id"]] = record["status"]
+            except json.JSONDecodeError:
+                continue
+
+    # Scan only non-fenced text, from the claim's end to the end of its line.
+    unfenced_text = _strip_fenced_blocks(design_text)[0]
+    for m in _CLAIM_RE.finditer(unfenced_text):
+        # From the claim's end to the end of its line
+        line_end = unfenced_text.find('\n', m.end())
+        if line_end == -1:
+            line_end = len(unfenced_text)
+        tail = unfenced_text[m.end():line_end]
+
+        for pm in _PROBE_ID_RE.finditer(tail):
+            cited_id = pm.group(1)
+            cited_status = pm.group(2)
+            if cited_id not in probe_records:
+                mismatches.append(
+                    f"probe id `{cited_id}` cited on claim line is not in probes.jsonl "
+                    f"(no probe with that id was run)"
+                )
+            elif probe_records[cited_id] != cited_status:
+                mismatches.append(
+                    f"probe id `{cited_id}` cited as `{cited_status}` but probes.jsonl "
+                    f"records status `{probe_records[cited_id]}`"
+                )
 
     # Attempt tracking.
     used = int(ctx.facts.get("claims_check_attempts_used", 0))

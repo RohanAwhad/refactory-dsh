@@ -37,7 +37,10 @@ they reach the refill logic only through the entry point.
 
 The emit prompt's "do not apply or test your change anywhere" exists because
 direct edits to the worktree bypass materialise and the check.  The builder probe
-gives a safe alternative:
+gives a safe alternative.  Since dm-133, the probe is also available to
+`design_doc` and `design_review` via `--command` (no `--emission`); the clone
+runs at the run's base with `emission=None`, and the same isolation guarantees
+apply:
 
 - **Standalone clone** (`git clone --no-local --depth 1`): not a linked worktree.
   No `.git` registration.  `origin` removed after clone.
