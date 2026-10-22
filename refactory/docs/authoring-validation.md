@@ -118,9 +118,24 @@ rendering and exchange-format text previously inline in health_checker and qa_di
 
 ### Reviewer re-runs
 
-A reviewer formatting miss (missing or incomplete repo_questions) re-runs the reviewer
-without spending a builder attempt. Each gate has its own re-run counter (limit 2).
-On exhaustion, the problems join the ordinary findings and take the existing path.
+Reviewers answer repository questions (duplicates, callers and shared state, each with
+`path:line` evidence or an `absent:` reason) for the run's changed **product** functions
+only:
+
+- Test files and generated files are left out. A generated file says so in its first
+  lines ("Generated … Do not edit"), as `generated-help.ts` does.
+- Code the branch merged in from its base is left out. When a run merges its base after
+  it began, a function counts only if it also changed relative to the merged-in commit
+  (`changed_functions.merged_upstream`).
+
+When missing repository questions are a gate's only problem, the reviewer is re-run
+once (`REPO_QUESTION_RERUNS`) without spending a builder or review attempt. The re-run's
+feedback names each missing function and answer.
+
+Questions still missing after that re-run are advisory. The gate proceeds and records
+them in `reviews/qa-gate.txt`, the design review's findings, or fast mode's
+`fast-report.json`. The pull request's Verification section lists them. A run whose
+reviews found nothing blocking never ends on repository questions.
 
 
 Overwatch receives the original brief, accepted strategy/criteria and design,

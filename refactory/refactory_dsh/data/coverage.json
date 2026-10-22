@@ -782,7 +782,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Create a reusable mode package from a brief; declare task or singleShot. For user gates prefer wf_open default_pack/create; headless approvals require explicit authorization.",
-      "reviewed_schema": "22d7d037bc452851ddc7afb71aaf473264ad47bd223797acd5963e54461a30b0"
+      "reviewed_schema": "392bb3377f80dc6b560c3662f78581d47992bc348e6e46c7f8cdd456c8efad96"
     },
     "design": {
       "chat": {
@@ -864,7 +864,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-      "reviewed_schema": "cf209301bbb3f9d4e7039a61172369fbb331bb7b7ff91387d7d27b7e9b68bd2a"
+      "reviewed_schema": "9865d7c964228209f020ece1e9b0d0db15b4b5866d22d1111b1fbfaf10fe5d83"
     },
     "docs": {
       "chat": {
@@ -950,7 +950,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Revise a reusable mode package and validate it before QA and final intent audit. allow_regression skips original execution/comparison; revised validation remains mandatory. Prefer wf_open default_pack/edit when a person is present.",
-      "reviewed_schema": "fb35ee05e06f1fd48592a8515767fbf8ae7aa6aa48b9815dab474e0251d9decc"
+      "reviewed_schema": "e21f29fdd1ffcb453ded9719de1a0b18d9b784ce46b60e6e44bc11605a43af46"
     },
     "graph-control": {
       "doc": "refactory/docs/live-control.md",
@@ -1143,7 +1143,7 @@
           "arguments": {
             "mode": "counting_pack/fixed_step"
           },
-          "explanation": "Preview a scored mode\u2019s effective optimization settings, immutable contract and worker provenance without launching a search."
+          "explanation": "Preview a scored mode’s effective optimization settings, immutable contract and worker provenance without launching a search."
         }
       ],
       "interfaces": {
@@ -1151,7 +1151,7 @@
         "cli": "python -m refactory_dsh.console profile-resolve",
         "panel": "Preview resolved configuration button."
       },
-      "purpose": "Preview a scored mode\u2019s effective optimization settings, immutable contract and worker provenance without launching a search.",
+      "purpose": "Preview a scored mode’s effective optimization settings, immutable contract and worker provenance without launching a search.",
       "reviewed_schema": "17102bf328d155cddd7605188e1ee9e6239d15c594ccff3971225ed817bb3141"
     },
     "profile-save": {
@@ -1275,7 +1275,7 @@
         "panel": "Run once executes enabled modes including full and fast authoring; chat offers stepwise gate control."
       },
       "purpose": "Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output.",
-      "reviewed_schema": "23b48615a063ca1be7468dbc4652affafbfdc7eb5751e97bcc9cdbb72fd46e97"
+      "reviewed_schema": "bc78064cf4257c5d2c56394f82879ae1592b9850466b12397b3bd25393a9356c"
     },
     "runs": {
       "chat": {
@@ -1430,7 +1430,7 @@
             "note": "Keep the output text unchanged",
             "run": "/tmp/example-run"
           },
-          "explanation": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed. Use --source ceo for the CEO\u2019s own observations (context only, not auditable); the CLI default is user-relayed (the person\u2019s words, auditable)."
+          "explanation": "Read or append to the run’s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed. Use --source ceo for the CEO’s own observations (context only, not auditable); the CLI default is user-relayed (the person’s words, auditable)."
         }
       ],
       "interfaces": {
@@ -1438,7 +1438,7 @@
         "cli": "python -m refactory_dsh.console steer",
         "panel": "Steering and user gate controls."
       },
-      "purpose": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
+      "purpose": "Read or append to the run’s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
       "reviewed_schema": "1cd553bcc1982fe5717a19d9a0dfd396ab3e3037efef6f634d15f165afa921df"
     },
     "stop": {

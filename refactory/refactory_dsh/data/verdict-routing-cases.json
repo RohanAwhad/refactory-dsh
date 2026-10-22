@@ -1,0 +1,80 @@
+[
+  {
+    "name": "proceed with matching edge",
+    "gate": "gate_strategy",
+    "edges": [
+      {"target": "synthesize_strategy", "condition": "reloop"},
+      {"target": "emit", "condition": "proceed"}
+    ],
+    "verdict": "proceed",
+    "gate_kind": "user",
+    "expect": {"target": "emit"}
+  },
+  {
+    "name": "proceed falling through to unconditional edge",
+    "gate": "simple_gate",
+    "edges": [
+      {"target": "reloop_target", "condition": "reloop"},
+      {"target": "forward", "condition": null}
+    ],
+    "verdict": "proceed",
+    "gate_kind": "user",
+    "expect": {"target": "forward"}
+  },
+  {
+    "name": "reloop following reloop edge",
+    "gate": "gate_strategy",
+    "edges": [
+      {"target": "synthesize_strategy", "condition": "reloop"},
+      {"target": "emit", "condition": "proceed"}
+    ],
+    "verdict": "reloop",
+    "gate_kind": "user",
+    "expect": {"target": "synthesize_strategy"}
+  },
+  {
+    "name": "halt with no halt edge (terminal)",
+    "gate": "gate_strategy",
+    "edges": [
+      {"target": "synthesize_strategy", "condition": "reloop"},
+      {"target": "emit", "condition": "proceed"}
+    ],
+    "verdict": "halt",
+    "gate_kind": "user",
+    "expect": {"halt": true, "reason": "verdict"}
+  },
+  {
+    "name": "unknown verdict",
+    "gate": "gate_strategy",
+    "edges": [
+      {"target": "synthesize_strategy", "condition": "reloop"},
+      {"target": "emit", "condition": "proceed"}
+    ],
+    "verdict": "nonsense",
+    "gate_kind": "user",
+    "expect": {"error": true}
+  },
+  {
+    "name": "mixed-case proceed",
+    "gate": "gate_strategy",
+    "edges": [
+      {"target": "synthesize_strategy", "condition": "reloop"},
+      {"target": "emit", "condition": "proceed"}
+    ],
+    "verdict": "Proceed",
+    "gate_kind": "user",
+    "expect": {"target": "emit"}
+  },
+  {
+    "name": "gate_overwatch audit edge",
+    "gate": "gate_overwatch",
+    "edges": [
+      {"target": "emit", "condition": "reloop"},
+      {"target": "overwatch", "condition": "audit"},
+      {"target": "report", "condition": "proceed"}
+    ],
+    "verdict": "audit",
+    "gate_kind": "fn",
+    "expect": {"target": "overwatch"}
+  }
+]

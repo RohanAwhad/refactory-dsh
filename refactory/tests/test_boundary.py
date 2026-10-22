@@ -251,6 +251,9 @@ def test_no_core_imports_product_static():
 # ---------------------------------------------------------------------------
 def test_resolve_module():
     """_resolve_module handles plain modules and __init__ relative imports correctly."""
+    # __init__.py self-as-package: when refactory_dsh/nn/__init__.py does
+    # `from . import graph`, package="refactory_dsh.nn" (the module name itself,
+    # not its parent), so it resolves to refactory_dsh.nn.graph.
     # level=1 from . import X — stays in current package
     assert _resolve_module("graph", 1, "refactory_dsh.nn") == "refactory_dsh.nn.graph"
     assert _resolve_module("validate", 1, "refactory_dsh.nn") == "refactory_dsh.nn.validate"

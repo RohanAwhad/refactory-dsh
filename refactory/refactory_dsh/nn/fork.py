@@ -170,11 +170,14 @@ def run_fork(executor: Executor, node: Node) -> str | None:
         children.append(child)
 
     def walk(index: int) -> str | None:
+        from .executor import GateStop, HaltStop
+
         target, child = node.targets[index], children[index]
         if cancelled.is_set():
             record(target, "not-started")
             return f"{target}: fork cancelled before dispatch"
         record(target, "running")
+        branch_state: str | None = None
         try:
             error = child._walk_branch(target, barrier)
             allowed = {key for member in branches[index] for key in member.produces}
@@ -184,10 +187,17 @@ def run_fork(executor: Executor, node: Node) -> str | None:
                        or ctx.facts[key] != child.ctx.facts[key]}
             if changed - allowed:
                 raise ExecutionError(f"branch {target!r} changed undeclared facts: {sorted(changed - allowed)}")
+        except GateStop:
+            branch_state = "refused"
+            error = f"{target}: gate stop"
+        except HaltStop:
+            branch_state = "halted"
+            error = f"{target}: halted"
         except Exception as exc:
             error = f"{target}: {type(exc).__name__}: {exc}"
-        state = "cancelled" if error and cancelled.is_set() else "failed" if error else "completed"
-        record(target, state, error)
+        if branch_state is None:
+            branch_state = "cancelled" if error and cancelled.is_set() else "failed" if error else "completed"
+        record(target, branch_state, error)
         return error
 
     errors: list[str | None] = [None] * len(children)

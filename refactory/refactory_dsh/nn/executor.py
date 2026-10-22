@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
-from .graph import Graph, Node
+from .graph import Edge, Graph, Node
 from .loops import loop_edges
 from .mode import RunResult
 from .resolve import resolve
@@ -83,6 +83,55 @@ class OpTimeoutError(RuntimeError):
         super().__init__(f"op '{node_id}' timed out after {timeout_s:.1f}s")
 
 
+class GateStop(Exception):
+    """The walker stopped at a user gate that needs a person's answer."""
+
+    def __init__(self, gate: str, reads: list[str], edges: list[Edge]):
+        self.gate = gate
+        self.reads = reads
+        self.edges = edges
+        super().__init__(f"gate {gate!r} is waiting for a person")
+
+
+class HaltStop(Exception):
+    """A halt verdict ended the run."""
+
+    def __init__(self, gate: str, reason: str = "verdict"):
+        self.gate = gate
+        self.reason = reason
+        super().__init__(f"gate {gate!r} halted the run")
+
+
+def route_verdict(verdict: str, edges: list[Edge], gate_kind: str) -> tuple[Edge | None, str]:
+    """Route a verdict to an edge, matching the spine's ``Spine.verdict()``.
+
+    Returns ``(edge, reason)``. When the edge is ``None``, the run is halted
+    with the given reason (``"verdict"``).
+
+    - Match labels case-insensitively.
+    - ``proceed`` with no proceed edge falls through to the unconditional edge.
+    - ``halt`` follows a halt edge if there is one; otherwise returns
+      ``(None, "verdict")`` — terminal halt.
+    - An unknown verdict raises :class:`ExecutionError`.
+    """
+    lower = verdict.lower()
+    # Direct match (case-insensitive)
+    for edge in edges:
+        if (edge.condition or "").lower() == lower:
+            return edge, ""
+    # proceed falls through to unconditional
+    if lower == "proceed":
+        for edge in edges:
+            if not edge.condition:
+                return edge, ""
+    # halt with no halt edge is terminal
+    if lower == "halt":
+        return None, "verdict"
+    raise ExecutionError(
+        f"verdict {verdict!r} is not one of {sorted(e.condition or '' for e in edges)}"
+    )
+
+
 class ModelClient(Protocol):
     """The one thing an agent node needs: text in, text out."""
 
@@ -128,7 +177,7 @@ class RunContext:
         self.knobs: dict[str, Any] = dict(knobs or {})
         self.facts: dict[str, Any] = dict(facts or {})
         #: Verdicts for gates a person or an agent answers, by node id. Empty in a
-        #: headless run, which is why such a gate refuses rather than deciding.
+        #: headless run, which is why such a gate stops rather than deciding.
         self.verdicts: dict[str, str] = dict(verdicts or {})
         self.model = model
         from refactory_dsh.budgets import RunBudget
@@ -566,6 +615,12 @@ class Executor:
                 self.steps.append(Step(node.id, node.kind, 0.0))
                 try:
                     error = run_fork(self, node)
+                except GateStop as exc:
+                    error = str(exc)
+                    self._record(node.id, error=error, outcome="refused")
+                except HaltStop as exc:
+                    error = str(exc)
+                    self._record(node.id, error=error, outcome="halted")
                 except Exception as exc:
                     error = f"{node.id}: {type(exc).__name__}: {exc}"
                     self._record(node.id, error=error)
@@ -610,9 +665,16 @@ class Executor:
                     self.ctx._declared_facts = node.produces  # noqa: SLF001
                     self.ctx._produced = set()  # noqa: SLF001
                     self.ctx.write_json(CURRENT_ITEM, item)
-                    branch_error = self._walk_branch(
-                        node.subgraph_entry, node.subgraph_exit, include_barrier=True, iterations={}
-                    )
+                    try:
+                        branch_error = self._walk_branch(
+                            node.subgraph_entry, node.subgraph_exit, include_barrier=True, iterations={}
+                        )
+                    except GateStop as exc:
+                        branch_error = str(exc)
+                        self._record(node.id, error=branch_error, outcome="refused")
+                    except HaltStop as exc:
+                        branch_error = str(exc)
+                        self._record(node.id, error=branch_error, outcome="halted")
                     if branch_error is not None:
                         error = branch_error
                         break
@@ -644,6 +706,16 @@ class Executor:
                 current, verdict = self._try_visit(node, step_started)
                 self.ctx._check_produces()  # noqa: SLF001
                 self._count_retry(node, current, verdict, retries, visits)
+            except GateStop as exc:
+                error = str(exc)
+                self._record(exc.gate, error=error, outcome="refused")
+                current = None
+                break
+            except HaltStop as exc:
+                error = str(exc)
+                self._record(exc.gate, error=error, outcome="halted")
+                current = None
+                break
             except Exception as exc:  # a failing node ends the run, visibly
                 self.steps.append(
                     Step(node.id, node.kind, time.time() - step_started,
@@ -687,6 +759,16 @@ class Executor:
             except BudgetExhausted as exc:
                 error = str(exc)
 
+        gate_stop_id = None
+        halted = False
+        if isinstance(error, str) and "is waiting for a person" in error:
+            # Extract gate id from the GateStop message pattern.
+            import re as _re
+            m = _re.search(r"gate '([^']+)' is waiting", error)
+            if m:
+                gate_stop_id = m.group(1)
+        if isinstance(error, str) and "halted the run" in error:
+            halted = True
         return RunResult(
             facts=dict(self.ctx.facts),
             iterations=len(self.steps),
@@ -695,6 +777,8 @@ class Executor:
             error=error,
             workdir=self.ctx.workdir,
             model_calls=self.model_calls,
+            gate_stop=gate_stop_id,
+            halted=halted,
         )
 
     # ── one branch of a fork, or one pass of a data node ───────────────────
@@ -734,6 +818,8 @@ class Executor:
                 current, verdict = self._try_visit(node, started)
                 self.ctx._check_produces()  # noqa: SLF001
                 self._count_retry(node, current, verdict, retries, visits)
+            except (GateStop, HaltStop):
+                raise
             except Exception as exc:  # a failing branch ends the run, visibly
                 self.steps.append(
                     Step(node.id, node.kind, time.time() - started,
@@ -994,7 +1080,7 @@ class Executor:
     def _answered_verdict(self, node: Node) -> str:
         """The verdict for a gate a person or an agent answers.
 
-        A headless walk has nobody to ask, so it **refuses** rather than inventing an
+        A headless walk has nobody to ask, so it **stops** rather than inventing an
         answer. That is the whole point of :attr:`Node.gate_kind`: a run that pauses
         for a person cannot quietly decide for them, and a run that did would be a
         result nobody can account for. The answer is supplied through
@@ -1009,6 +1095,12 @@ class Executor:
             labels = [str(edge.condition) for edge in self.graph.out_edges(node.id)]
             verdict = ledger.take_verdict(node.id, ledger.visit(node.id, node.reads), labels)
         if not verdict:
+            if node.gate_kind == "user":
+                raise GateStop(
+                    node.id,
+                    list(node.reads),
+                    self.graph.out_edges(node.id),
+                )
             raise ExecutionError(
                 f"gate {node.id!r} is answered by {node.gate_kind!r} and this run has "
                 "no verdict for it. A headless run cannot answer a gate meant for a "
@@ -1032,15 +1124,14 @@ class Executor:
             raise ExecutionError(
                 f"gate {node.id!r} returned {verdict!r}; a gate must return a verdict label"
             )
-        out = self.graph.out_edges(node.id, condition=verdict)
-        if not out:
-            labels = sorted(e.condition or "" for e in self.graph.out_edges(node.id))
-            raise ExecutionError(
-                f"gate {node.id!r} returned {verdict!r}, which is not one of its "
-                f"verdicts {labels}"
-            )
-        self.ctx._internal_fact(f"{node.id}_verdict", verdict)  # noqa: SLF001
-        return out[0].target, verdict
+        edges = self.graph.out_edges(node.id)
+        selected, reason = route_verdict(verdict, edges, node.gate_kind)
+        if selected is None:
+            # Terminal halt
+            self.ctx._internal_fact(f"{node.id}_verdict", verdict.lower())  # noqa: SLF001
+            raise HaltStop(node.id, reason=reason)
+        self.ctx._internal_fact(f"{node.id}_verdict", verdict.lower())  # noqa: SLF001
+        return selected.target, Verdict(selected.condition or "", reason=getattr(verdict, "reason", "") or "")
 
 
 def execute(

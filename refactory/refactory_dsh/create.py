@@ -290,8 +290,8 @@ class CreateMode(Mode):
         ))
         # create-v2 puts a person here (`gate_strategy`), and it is the one v2 gate
         # this port keeps as-is: the strategy is a decision the person owns, and a
-        # run that can approve its own strategy is not reviewed at all. A headless
-        # run refuses it, exactly as it refuses any `user` gate.
+        # run that can approve its own strategy is not reviewed at all. A walker run
+        # stops at it; a headless DSH run stops and prints the steer and resume commands.
         graph.add(Node(
             "gate_strategy", "gate", gate_kind="user",
             reads=("strategy.json",),
@@ -631,8 +631,8 @@ class CreateConfig:
     #: The explicit special case: one run of one thing, with no Task binding. Without
     #: it or a `task_ref`, `create` refuses before its first model call.
     single_shot: bool = False
-    #: Verdicts for gates a person answers. `gate_strategy` is one, so a headless
-    #: run has to be given the person's answer explicitly rather than inventing it.
+    #: Verdicts for gates a person answers. `gate_strategy` is one, so a walker
+    #: run stops at it; a headless DSH run stops and prints the steer and resume commands.
     verdicts: dict[str, str] = field(default_factory=dict)
     fast: bool = False
     repair_attempts: int = 1
@@ -713,23 +713,55 @@ def create(config: CreateConfig, client: Any = None, *, enable_recovery: bool = 
 
     workdir = Path(config.workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    run = mode.run(
-        workdir,
-        model=client,
-        task={
-            "name": config.name,
-            "brief": config.brief,
-            "extends": config.extends,
-            "task_ref": config.task_ref,
-            "single_shot": config.single_shot,
-            "data_node": config.data_node,
-            "requires_input": config.requires_input,
-        },
-        max_steps=config.max_steps,
-        verdicts=dict(config.verdicts),
-        enable_recovery=enable_recovery,
-        resource_limits=config.resource_limits,
-    )
+    mode_name = "create_fast" if config.fast else "create"
+    from refactory_dsh.run_ownership import ownership
+    from refactory_dsh.nn.executor import GateStop, HaltStop
+
+    with ownership(workdir):
+        # Run preparation.
+        from refactory_dsh.run_preparation import prepare_run
+        from refactory_dsh import steering
+        from refactory_dsh.paths import project_root
+
+        prepare_run(
+            state, workdir,
+            invocation_name=f"default_pack-{mode_name}",
+            mode_id=f"default_pack/{mode_name}",
+            intent=config.brief,
+            transform=lambda workflow, stage_dir=None: steering.for_run(workflow, stage_dir or workdir),
+            runtime="walker",
+            command=f"python -m refactory_dsh.create",
+            resume_command=f"python -m refactory_dsh.create --resume {workdir}",
+            fast=config.fast,
+            worker_backend=client.route().get("worker_backend", "") if client and callable(getattr(client, "route", None)) else "",
+            project=project_root(),
+        )
+
+        # Persist up-front verdicts as run-scoped ledger entries.
+        ledger = steering.Ledger(workdir)
+        for gate, value in config.verdicts.items():
+            ledger.verdict(gate, value, approval=True)
+
+        run = mode.run(
+            workdir,
+            model=client,
+            task={
+                "name": config.name,
+                "brief": config.brief,
+                "extends": config.extends,
+                "task_ref": config.task_ref,
+                "single_shot": config.single_shot,
+                "data_node": config.data_node,
+                "requires_input": config.requires_input,
+            },
+            max_steps=config.max_steps,
+            resource_limits=config.resource_limits,
+            enable_recovery=enable_recovery,
+        )
+    if run.gate_stop:
+        return RunResult(exit_ok=False, error=run.error, gate_stop=run.gate_stop, workdir=workdir)
+    if run.halted:
+        return RunResult(exit_ok=False, error=run.error, halted=True, workdir=workdir)
     if not run.exit_ok:
         raise CreateError(f"creating {config.name!r} failed: {run.error}")
 
@@ -766,8 +798,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m refactory_dsh.create",
         description="Create a package of modes from a brief.",
     )
-    parser.add_argument("--name", required=True, help="the package name")
-    parser.add_argument("--brief", required=True, help="what the package should do")
+    parser.add_argument("--name", required=False, default="", help="the package name")
+    parser.add_argument("--brief", required=False, default="", help="what the package should do")
     parser.add_argument("--extends", default="", help="a <package>/<mode> to use as a reference")
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--fast", action="store_true", help="use the inspectable create_fast graph with focused QA")
@@ -833,6 +865,11 @@ def main(argv: list[str] | None = None) -> int:
              "gate_strategy is one, so a headless run must be told the answer",
     )
     args = parser.parse_args(argv)
+    if not args.resume:
+        if not args.name:
+            parser.error("--name is required when not resuming")
+        if not args.brief:
+            parser.error("--brief is required when not resuming")
 
     from refactory_dsh.model import DshModelClient
     from refactory_dsh.paths import project_root
@@ -842,22 +879,38 @@ def main(argv: list[str] | None = None) -> int:
         timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
     )
     if args.resume:
-        # A resume re-runs the node that failed with the facts its predecessors
-        # produced. The knobs and the task come from the run's own record, so the
-        # command needs only the directory — nothing has to be remembered or retyped.
-        try:
-            from refactory_dsh.fast import CreateFastMode
+        workdir = Path(args.resume)
+        fast = args.fast
+        config_path = workdir / '.refactory/run-config.json'
+        if config_path.exists():
+            try:
+                run_config = json.loads(config_path.read_text())
+                fast = run_config.get('fast', fast)
+            except (json.JSONDecodeError, OSError):
+                pass
+        from refactory_dsh.run_ownership import ownership
 
-            run = (CreateFastMode if args.fast else CreateMode).resume(
-                Path(args.resume), model=client, max_steps=200, resource_limits=arguments(args),
-                enable_recovery=True,
-            )
+        try:
+            with ownership(workdir):
+                from refactory_dsh.fast import CreateFastMode
+
+                run = (CreateFastMode if fast else CreateMode).resume(
+                    workdir, model=client, max_steps=200, resource_limits=arguments(args),
+                    enable_recovery=True,
+                )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
+        if run.gate_stop:
+            from refactory_dsh.run_preparation import print_gate_stop
+            print_gate_stop(run.gate_stop, workdir, graph=(CreateFastMode if fast else CreateMode)().build())
+            return 2
+        if run.halted:
+            print(json.dumps({"halted": True, "error": run.error}), file=sys.stderr)
+            return 2
         name = str(run.facts.get("name") or args.name)
         print(json.dumps({
-            "resumed": str(Path(args.resume)),
+            "resumed": str(workdir),
             "name": name,
             "exit_ok": run.exit_ok,
             "error": run.error,
@@ -891,6 +944,17 @@ def main(argv: list[str] | None = None) -> int:
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
+    from refactory_dsh.nn.mode import RunResult
+    if isinstance(result, RunResult):
+        if result.gate_stop:
+            from refactory_dsh.run_preparation import print_gate_stop
+            from refactory_dsh.fast import CreateFastMode
+            print_gate_stop(result.gate_stop, Path(args.workdir or f".factory/create/{args.name}"),
+                            graph=(CreateFastMode if args.fast else CreateMode)().build())
+            return 2
+        if result.halted:
+            print(json.dumps({"halted": True, "error": result.error}), file=sys.stderr)
+            return 2
     print(json.dumps(result.describe(), indent=2, default=str))
     return 0
 
