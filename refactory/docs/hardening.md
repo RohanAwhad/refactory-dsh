@@ -1521,6 +1521,7 @@ fingerprints (the run's graphs, project packages) are still validated and
 raise the "prepared configuration … changed" refusal as on main.  The
 re-exec'd owner child validates against the pin's files after re-exec.
 
+<<<<<<< HEAD
 ---
 
 ## 28. Target write protection for worktree runs (dm-159)
@@ -1593,3 +1594,116 @@ tracker dm-164, a follow-up, not this run.
 | `_execution_contract` path rebase + worktree instructions (Python, `agent_delivery.py`) | Both runtimes |
 | `amendPrompt` placeholder guard (TypeScript, `spine.ts`) | Spine runtime only (the walker has no `wf_edit`) |
 | CEO instructions and `${toolPrefix}_edit` description update (TypeScript, `index.ts`) | Spine runtime only |
+=======
+
+## Fail-fast targeted pre-pass (dm-128)
+
+When the previous check recorded failing tests that were not inherited from
+the base, the next check runs those tests first through the
+targeted-command builder (`build_probe_command`), with a short timeout of
+`min(check_timeout_s // 3, 120)`.
+
+**Early stop**: the pre-pass stops early — skipping the full check — only
+when **all** of the following hold:
+
+1. `result.prep_failure is None` (no install/generate/setup failure).
+2. `check_failure_kind(result) == "code_failure"` (structural classification).
+3. Exit code is not 4 or 5 (pytest "no tests collected" / "no tests matched").
+4. `parse_test_failures` on the targeted output, minus the inherited set,
+   includes at least one of the targeted test IDs.
+
+**Fall-through**: any other outcome runs the full check, as before.  This
+includes: all targeted tests passing, pytest exit 4 or 5 (renamed/removed
+test), a timeout, no targeted command being possible, a preparation step
+failure (install, generate, setup), vitest "No test files found", and a
+signal kill.
+
+**Timeout**: the pre-pass never shortens the full run's time limit.  The
+full check always receives the original `check_timeout_s`.
+
+**Evidence**: `check-record.json` gains `check_mode` (`"targeted"` or
+`"full"`) and `targeted_command` (the targeted command string, or `null`).
+The outcome dict passed to `evidence.record()` also includes these fields.
+
+**Convergence exclusion**: targeted runs are excluded from
+`check_failures_history` and `check_blocker_history` via
+`record_check_history()`, which guards on `check_mode != "targeted"`.
+A targeted early stop also prevents `repair()` / `_repair()` from granting
+convergence extras via the `early_stop` parameter.
+
+The pre-pass is a second call to `run_check` within the same node.  The
+existing check envelope budgets `3 × INSTALL_TIMEOUT_S + 3 × budget`.  The
+pre-pass uses at most `min(budget // 3, 120)` plus one install (normally a
+cache hit), which the `3 × INSTALL_TIMEOUT_S` slack absorbs.  The total of
+pre-pass + full check ≤ `4/3 × budget`, well within the `3 × budget` in the
+envelope.  b33b extracts the envelope and will adjust if needed.
+
+
+## Stuck detection (dm-128)
+
+When the same non-inherited test fails with the same assertion on two
+consecutive checks of either kind (targeted or full), compared on the tests
+both checks ran, the builder's feedback includes a stuck notice naming the
+test and showing its last change (`git diff HEAD^..HEAD`) from the attempt's
+worktree.
+
+"Same assertion" means the same `>` source line from the assertion block,
+even when the values on that line differ.  When no `>` line exists, the full
+assertion string is compared.
+
+The diff is retrieved from the worktree (`worktree.recorded(ctx.workdir).path`),
+never from the run directory.  If the per-file diff is empty, the whole
+`HEAD^..HEAD` diff is shown, bounded to 200 lines.  The exact `path:NN:`
+lookup for per-file targeting is documented as a known limitation — the
+whole `HEAD^..HEAD` fallback is the documented behaviour (dm-166).
+
+Guards:
+
+- No previous failure (status ≠ "fail"): no notice.
+- Same commit (retry/resume): no notice.
+
+After a refused emission, the next check runs in full because the refused
+record has `status: "refused"` (not `"fail"`).  Preserving the prior failing
+record across a refused emission is tracked as dm-166.
+
+
+## pnpm test targeting (dm-128)
+
+`build_probe_command` now targets `pnpm test` commands when
+`package.json`'s `test` script contains `vitest`.  The command is built as
+`{step} {files} {pattern_args}` with:
+
+- **No `--` separator** — with `--`, vitest ignores the file filters.
+- **Single `-t` with `|`-joined patterns** — vitest supports regex in `-t`,
+  so multiple test names are joined with `|`.
+
+If the `test` script is not vitest (e.g. jest), the function returns a
+refusal and the pre-pass falls through to a full check.
+
+The `root` parameter (defaulting to the process's cwd) specifies where to
+read `package.json`, so the function works correctly on DSH where the
+process's cwd is the run directory, not the worktree.
+
+The existing vitest branch also uses a single `-t` with `|`-joined patterns
+instead of multiple `-t` flags (vitest exits 1 when given several `-t` options).
+
+
+### Behaviour changes
+
+All three changes (fail-fast pre-pass, stuck detection, pnpm test targeting)
+apply to both runtimes — the TS spine runs the same Python functions as
+subprocesses.
+
+**Scope**: design and design_fast only.  create_fast / edit_fast /
+fix_pack's check gate and package check keep today's behaviour.  They become
+a follow-up, filed separately.
+
+**New optional fields in `check-record.json`**:
+
+- `check_mode` (`"targeted"` or `"full"`)
+- `targeted_command` (string or null)
+- `inherited` (sorted list of inherited test IDs, on failure)
+- `commit` (the current commit hash)
+
+No new CLI flags or environment variables.
+>>>>>>> bbd1a63a0f0b830f418618650285f1652ed9ea0d

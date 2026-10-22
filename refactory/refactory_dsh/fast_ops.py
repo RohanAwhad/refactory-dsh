@@ -118,7 +118,8 @@ def _advisories(ctx: Any) -> list[str]:
     return [f for f in findings if str(f).startswith(evidence.ADVISORY_REPO_QUESTIONS)]
 
 
-def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
+def _repair(ctx: Any, findings: list[str], *, kind: str = "check",
+            early_stop: bool = False) -> str:
     used = int(ctx.facts.get("repairs_used", 0))
     limit = int(ctx.knob("repair_attempts", 1))
     feedback = "\n".join(findings)
@@ -138,38 +139,47 @@ def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
         # Repeats at every attempt past the regular limit, up to
         # check_attempt_cap total check attempts (counting regular ones).
         if kind == "check":
-            from refactory_dsh import base_check as _bc
-            history = list(ctx.facts.get("check_failures_history", []))
-            extras_used = int(ctx.facts.get("convergence_extras_used", 0))
-            cap = int(ctx.knob("check_attempt_cap", 8))
-            kind_used = int(ctx.facts.get("check_repairs_used", 0))
-            # 0 or a value at or below the regular limit disables extension.
-            if cap > limit and kind_used < cap and len(history) >= 2:
-                current = set(history[-1])
-                previous = set(history[-2])
-                # R6 correction 3: judge from the recorded check output.
-                blocker_history = list(ctx.facts.get("check_blocker_history", []))
-                if blocker_history:
-                    blocker = blocker_history[-1]
-                else:
-                    check_command = str(ctx.facts.get("check") or "").strip()
-                    blocker = _bc.excusal_blocker(
-                        check_command, feedback, current
-                    ) if current else "empty failure set"
-                all_prior = set().union(*(set(h) for h in history[:-1]))
-                if (current
-                        and current < previous
-                        and current <= all_prior
-                        and blocker is None):
-                    ctx.set_fact("convergence_extras_used", extras_used + 1)
-                    ctx.set_fact("convergence_granted", True)
-                    ctx.set_fact("repairs_used", used + 1)
-                    ctx.write_json("fast-report.json", _report(ctx, "repairing", findings))
-                    return Verdict("reloop", feedback)
-            if cap > limit and kind_used >= cap:
+            if not early_stop:
+                from refactory_dsh import base_check as _bc
+                history = list(ctx.facts.get("check_failures_history", []))
+                extras_used = int(ctx.facts.get("convergence_extras_used", 0))
+                cap = int(ctx.knob("check_attempt_cap", 8))
+                kind_used = int(ctx.facts.get("check_repairs_used", 0))
+                # 0 or a value at or below the regular limit disables extension.
+                if cap > limit and kind_used < cap and len(history) >= 2:
+                    current = set(history[-1])
+                    previous = set(history[-2])
+                    # R6 correction 3: judge from the recorded check output.
+                    blocker_history = list(ctx.facts.get("check_blocker_history", []))
+                    if blocker_history:
+                        blocker = blocker_history[-1]
+                    else:
+                        check_command = str(ctx.facts.get("check") or "").strip()
+                        blocker = _bc.excusal_blocker(
+                            check_command, feedback, current
+                        ) if current else "empty failure set"
+                    all_prior = set().union(*(set(h) for h in history[:-1]))
+                    if (current
+                            and current < previous
+                            and current <= all_prior
+                            and blocker is None):
+                        ctx.set_fact("convergence_extras_used", extras_used + 1)
+                        ctx.set_fact("convergence_granted", True)
+                        ctx.set_fact("repairs_used", used + 1)
+                        ctx.write_json("fast-report.json", _report(ctx, "repairing", findings))
+                        return Verdict("reloop", feedback)
+                if cap > limit and kind_used >= cap:
+                    ctx.write_json("fast-report.json", _report(ctx, "unresolved", findings))
+                    raise ValueError(
+                        f"check attempt cap ({cap}) reached after {kind_used} "
+                        f"repair(s) (check failure): {feedback}"
+                    )
+            else:
+                # Early stop: do not grant convergence.
+                kind_used = int(ctx.facts.get("check_repairs_used", 0))
                 ctx.write_json("fast-report.json", _report(ctx, "unresolved", findings))
                 raise ValueError(
-                    f"check attempt cap ({cap}) reached after {kind_used} "
+                    f"check attempts exhausted after {kind_used} "
                     f"repair(s) (check failure): {feedback}"
                 )
 
@@ -219,8 +229,18 @@ def validate_package(ctx: Any) -> str:
 
 
 def focused_check(ctx: Any) -> dict[str, Any]:
+    # Initialise pre-pass state so names are always defined (correction item 7).
+    from refactory_dsh.failfast import PrepassResult, targeted_prepass, detect_stuck, record_check_history
+    prepass = PrepassResult(
+        ran=False, early_stop=False, targeted_command=None,
+        check_mode="full", result=None, digest_text="", runners=[], raw_tail="",
+    )
+    prev_record: dict[str, Any] = {}
+
     # R2: clear base_unavailable at the start of each attempt so the PR
     # reflects the final attempt's base comparison.
+    # Read base_unavailable before clearing (correction item 8).
+    _saved_base_unavailable = ctx.facts.get("base_unavailable") or ""
     ctx.set_fact("base_unavailable", "")
 
     output = str(ctx.facts.get("artifact") or ctx.facts.get("package_path") or "")
@@ -237,6 +257,93 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             if remaining is not None:
                 timeout = min(timeout, remaining)
         if ctx.facts.get("artifact"):
+            # ── Targeted pre-pass ──────────────────────────────────────
+            prev_record = ctx.read_json("check-record.json", {})
+
+            prepass = targeted_prepass(
+                prev_record, command,
+                lambda cmd, t: repo_change.run_check(ctx, cmd, t),
+                timeout,
+                root=(worktree.recorded(ctx.workdir).path
+                      if worktree.recorded(ctx.workdir) is not None else None),
+            )
+
+            if prepass.early_stop:
+                payload.update(
+                    status="fail", returncode=prepass.result.returncode,
+                    stdout=prepass.result.stdout, stderr=prepass.result.stderr,
+                    timed_out=prepass.result.timed_out, elapsed_s=prepass.result.elapsed_s,
+                )
+                payload["digest"] = prepass.digest_text
+                payload["runners"] = prepass.runners
+                payload["check_mode"] = "targeted"
+                payload["targeted_command"] = prepass.targeted_command
+
+                # R5: keep design-constraint lines (correction item 10)
+                from refactory_dsh import design_contract as _dc
+                _run_name = str(ctx.facts.get("name") or "")
+                _parsed = _dc.parse(
+                    ctx.read_text("design.md") if ctx.exists("design.md") else "", _run_name
+                )
+                _left_lines = [
+                    f"Design constraint: {_site['path']} [left: {_site['reason']}] "
+                    "— do not change this; fix the tests or callers instead."
+                    for _site in _parsed.rule_sites
+                    if _site.get("status") == "left" and _site.get("reason")
+                ]
+                if _left_lines:
+                    payload["robustness_notes"] = "\n".join(_left_lines)
+
+                # base_unavailable note (correction item 8: read before cleared)
+                _base_note = _saved_base_unavailable
+                if _base_note:
+                    existing_notes = payload.get("robustness_notes", "")
+                    payload["robustness_notes"] = (existing_notes + "\n\n" + _base_note).strip()
+
+                # Stuck detection on early-stop path (correction items 4, 11)
+                found_wt = worktree.recorded(ctx.workdir)
+                stuck_notice = detect_stuck(
+                    prev_record, prepass.runners,
+                    "\n".join(filter(None, [
+                        getattr(prepass.result, "stdout", None) or "",
+                        getattr(prepass.result, "stderr", None) or "",
+                    ])).strip(),
+                    found_wt.path if found_wt else None,
+                    prev_record.get("commit"),
+                    str(ctx.facts.get("commit", "")),
+                )
+                if stuck_notice:
+                    existing_notes = payload.get("robustness_notes", "")
+                    payload["robustness_notes"] = (stuck_notice + "\n\n" + existing_notes).strip()
+
+                ctx.write_json("focused-check.json", payload)
+                ctx.write_json("check-record.json", {
+                    "status": "fail",
+                    "command": prepass.targeted_command,
+                    "digest": prepass.digest_text,
+                    "validation": prepass.digest_text[:4000],
+                    "runners": prepass.runners,
+                    "check_mode": "targeted",
+                    "targeted_command": prepass.targeted_command,
+                    "inherited": list(prev_record.get("inherited", [])),
+                    "commit": str(ctx.facts.get("commit", "")),
+                })
+                outcome = {"status": "code_failure", "focused_check": payload,
+                            "check_mode": "targeted", "targeted_command": prepass.targeted_command}
+                evidence.record(ctx, outcome)
+                # Compute review_files inside the early-stop return (correction item 1).
+                if worktree.recorded(ctx.workdir) is not None:
+                    review_files = sorted(ctx.facts.get("files") or [])
+                else:
+                    review_files = sorted(create_ops.parse_files(ctx.read_text("emit.txt")))
+                # Write focused-source.json for completeness.
+                ctx.write_json("focused-source.json", {"root": output, "files": _checked_files(Path(output)),
+                                                       "review_files": review_files})
+                # Do NOT write focused-source.json here; it is written after this block.
+                # Return immediately — no convergence history append.
+                return {"focused_check": json.dumps(payload), "output_path": output,
+                        "review_files": json.dumps(review_files)}
+
             # Where design checks: the run's worktree, in its own environment, or the
             # artifact directory.
             result = repo_change.run_check(ctx, command, timeout)
@@ -272,6 +379,8 @@ def focused_check(ctx: Any) -> dict[str, Any]:
     cr_record: dict[str, Any] = {
         "status": cr_status,
         "command": command or None,
+        "check_mode": "full",
+        "targeted_command": prepass.targeted_command if prepass.ran else None,
     }
     if payload.get("digest"):
         cr_record["digest"] = payload["digest"]
@@ -347,6 +456,13 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                 ctx.set_fact("inherited_failures", sorted(filtered.inherited))
                 if unbuilt_msg:
                     ctx.write_text("check.txt", f"(the check passed; inherited failures excused)\n\n{unbuilt_msg}\n")
+                # Rewrite check-record.json so the next reloop sees status=pass (correction item 2).
+                cr_record.update({
+                    "status": "pass",
+                    "inherited": sorted(filtered.inherited),
+                    "commit": str(ctx.facts.get("commit", "")),
+                })
+                ctx.write_json("check-record.json", cr_record)
                 ctx.write_json("focused-check.json", payload)
                 # ── enforce guardedness on excused pass too (R3) ──
                 unexempted = enforce_guardedness(ctx)
@@ -416,21 +532,30 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                     _notes_text = "\n".join(_left_lines + _guarantee_lines)
                     payload["robustness_notes"] = _notes_text
 
+                # Stuck detection on the full-check path (correction item 11 — after R5).
+                _stuck_notice = detect_stuck(
+                    prev_record, digest.to_dict()["runners"],
+                    "\n".join((result.stdout or "", result.stderr or "")).strip(),
+                    found.path if found else None,
+                    prev_record.get("commit"),
+                    str(ctx.facts.get("commit", "")),
+                )
+                if _stuck_notice:
+                    payload["robustness_notes"] = (
+                        _stuck_notice + "\n\n" + (payload.get("robustness_notes") or "")
+                    ).strip()
+
+                # Write inherited and commit to check-record.json (correction item 2).
+                cr_record.update({
+                    "inherited": sorted(filtered.inherited),
+                    "commit": str(ctx.facts.get("commit", "")),
+                })
+                ctx.write_json("check-record.json", cr_record)
+
                 # R6: store failure history and blocker for convergence detection.
                 _attempt_out_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
-                _cur_failures = sorted(base_check.parse_test_failures(_attempt_out_r6))
-                _hist = list(ctx.facts.get("check_failures_history", []))
-                _hist.append(_cur_failures)
-                ctx.set_fact("check_failures_history", _hist)
-
-                # R6 correction 3: record blocker from the full check output.
                 _check_cmd = str(ctx.facts.get("check") or "").strip()
-                _blocker = base_check.excusal_blocker(
-                    _check_cmd, _attempt_out_r6, set(_cur_failures)
-                ) if _cur_failures else "empty failure set"
-                _blk_hist = list(ctx.facts.get("check_blocker_history", []))
-                _blk_hist.append(_blocker)
-                ctx.set_fact("check_blocker_history", _blk_hist)
+                record_check_history(ctx, "full", _attempt_out_r6, _check_cmd)
 
                 # Write base_unavailable note into check.txt (R2 correction 5).
                 _base_note = ctx.facts.get("base_unavailable")
@@ -626,7 +751,8 @@ def gate_verification(ctx: Any) -> str:
         robustness_notes = check_data.get("robustness_notes", "")
         if robustness_notes:
             findings.insert(0, robustness_notes)
-        return _repair(ctx, findings, kind="check")
+        early_stop = check_data.get("check_mode") == "targeted"
+        return _repair(ctx, findings, kind="check", early_stop=early_stop)
 
     # 2. Guardedness block → _repair (spends a repair_attempts slot).
     if check_data.get("guardedness_blocked"):

@@ -1143,7 +1143,7 @@
           "arguments": {
             "mode": "counting_pack/fixed_step"
           },
-          "explanation": "Preview a scored mode’s effective optimization settings, immutable contract and worker provenance without launching a search."
+          "explanation": "Preview a scored mode\u2019s effective optimization settings, immutable contract and worker provenance without launching a search."
         }
       ],
       "interfaces": {
@@ -1151,7 +1151,7 @@
         "cli": "python -m refactory_dsh.console profile-resolve",
         "panel": "Preview resolved configuration button."
       },
-      "purpose": "Preview a scored mode’s effective optimization settings, immutable contract and worker provenance without launching a search.",
+      "purpose": "Preview a scored mode\u2019s effective optimization settings, immutable contract and worker provenance without launching a search.",
       "reviewed_schema": "17102bf328d155cddd7605188e1ee9e6239d15c594ccff3971225ed817bb3141"
     },
     "profile-save": {
@@ -1430,7 +1430,7 @@
             "note": "Keep the output text unchanged",
             "run": "/tmp/example-run"
           },
-          "explanation": "Read or append to the run’s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed. Use --source ceo for the CEO’s own observations (context only, not auditable); the CLI default is user-relayed (the person’s words, auditable)."
+          "explanation": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed. Use --source ceo for the CEO\u2019s own observations (context only, not auditable); the CLI default is user-relayed (the person\u2019s words, auditable)."
         }
       ],
       "interfaces": {
@@ -1438,7 +1438,7 @@
         "cli": "python -m refactory_dsh.console steer",
         "panel": "Steering and user gate controls."
       },
-      "purpose": "Read or append to the run’s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
+      "purpose": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
       "reviewed_schema": "1cd553bcc1982fe5717a19d9a0dfd396ab3e3037efef6f634d15f165afa921df"
     },
     "stop": {
