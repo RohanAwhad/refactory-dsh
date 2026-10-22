@@ -203,7 +203,11 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     const s = new Spine(graph)
     // Advance through the graph until fork_qa
     while (!ids(s).includes('fork_qa')) {
-      for (const n of ids(s)) s.complete(n)
+      for (const n of ids(s)) {
+        const view = s.view(n)
+        if (view._type === 'GateNode') s.verdict(n, 'proceed')
+        else s.complete(n)
+      }
     }
     s.complete('fork_qa')
     const branches = ids(s)
