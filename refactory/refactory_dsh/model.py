@@ -318,7 +318,9 @@ class DshModelClient:
             "role_routes": copy.deepcopy(self._role_routes), "node_routes": copy.deepcopy(self._node_routes),
             "provider_config": copy.deepcopy(self._provider_config),
             "budget_ledger": str(self._budget.path) if self._budget is not None else "",
-            **({"node_wall_s": self._node_wall_s} if self._node_wall_s is not None else {}),
+            # getattr: a client built without __init__ (as a boundary test does) has none.
+            **({"node_wall_s": wall} if (wall := getattr(self, "_node_wall_s", None)) is not None
+               else {}),
         }
 
     def _environment(self, *, target_workdir: "Path | None" = None) -> dict[str, str]:
@@ -511,8 +513,9 @@ class DshModelClient:
         else:
             budget_s = self._timeout_s
             stop_at = None
-        if self._node_wall_s is not None and self._node_wall_s < budget_s:
-            budget_s = self._node_wall_s
+        wall = getattr(self, "_node_wall_s", None)
+        if wall is not None and wall < budget_s:
+            budget_s = wall
             stop_at = time.monotonic() + budget_s
         for attempt in range(1, self._attempts + 1):
             self._raise_if_cancelled()

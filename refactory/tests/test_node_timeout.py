@@ -39,11 +39,13 @@ def test_the_verifier_declares_its_bound_in_both_modes(mode):
     assert mode().build().nodes["verifier"].timeout_s == VERIFIER_TIMEOUT_S
 
 
-def test_a_custom_wired_verifier_is_bounded_too():
+def test_an_inline_verifier_keeps_the_route_envelope():
+    # fix_pack's verifier is on the main path, not an optional fork branch: running out
+    # of time there would fail the run, so it has no bound of its own.
     from refactory_dsh import registry
     from refactory_dsh.paths import REPO_ROOT
     graph = registry.resolve(REPO_ROOT, "fix_pack/make_pass")[1]().graph()
-    assert graph.nodes["verifier"].timeout_s == VERIFIER_TIMEOUT_S
+    assert graph.nodes["verifier"].timeout_s is None
 
 
 def test_the_spine_gives_the_session_the_bound_and_the_command_its_overhead(tmp_path):
@@ -66,20 +68,25 @@ def _budget_of(client, monkeypatch, tmp_path):
     seen = {}
 
     def capture(self, cmd, run_dir, stop_at=None, budget_s=None, task=None, target_workdir=None):
+        import time
         seen["budget_s"] = budget_s
+        seen["deadline_in"] = stop_at - time.monotonic() if stop_at is not None else None
         return subprocess.CompletedProcess(cmd, 0, "ok", "")
 
     monkeypatch.setenv("REFACTORY_MODEL_SCRATCH", str(tmp_path))
     monkeypatch.setattr(DshModelClient, "_run_completion", capture)
     client.complete("hello", workdir=tmp_path)
-    return seen["budget_s"]
+    return seen
 
 
 def test_a_node_wall_caps_the_model_session(monkeypatch, tmp_path):
     node_client = DshModelClient().for_node("verifier", role="code_reviewer")
     unbounded = _budget_of(node_client, monkeypatch, tmp_path)
-    assert unbounded > VERIFIER_TIMEOUT_S
-    assert _budget_of(node_client.with_wall(VERIFIER_TIMEOUT_S), monkeypatch, tmp_path) == VERIFIER_TIMEOUT_S
+    assert unbounded["budget_s"] > VERIFIER_TIMEOUT_S
+    bounded = _budget_of(node_client.with_wall(VERIFIER_TIMEOUT_S), monkeypatch, tmp_path)
+    assert bounded["budget_s"] == VERIFIER_TIMEOUT_S
+    # The deadline the session is actually stopped at, not only the reported budget.
+    assert VERIFIER_TIMEOUT_S - 5 < bounded["deadline_in"] <= VERIFIER_TIMEOUT_S
 
 
 def test_the_walker_gives_a_bounded_node_its_wall(tmp_path):

@@ -1088,24 +1088,31 @@ needed the design; the rest were found by design-blind methods:
 - **M13** Boundary values
 - **M15** Weakened tests
 
-The three code reviewers apply M2, M3, M11 and M12 to every changed function
-(`REPO_CHANGE_REVIEW_INSTRUCTIONS`). The verifier applies the design-blind methods no
-reviewer applies, M1, M2, M13 and M15, so its time goes to what only a reader without
-the design finds.
+For a change to an existing repository the three code reviewers apply M2, M3, M11 and
+M12 to every changed function (`REPO_CHANGE_REVIEW_INSTRUCTIONS`), so the verifier
+applies only M1, M2, M13 and M15 there, and its time goes to what only a reader
+without the design finds. A new artifact's reviewers do not apply M3, M11 or M12, and
+fix_pack has no reviewers, so in those the verifier applies all seven.
+`prepare_design` sets the `verification_methods` fact by `deliverable_kind`.
 
 The verifier is given the brief, the diff and the repository — never
 design.md. It runs in parallel with the reviews as an optional branch of
 the review fork, bounded at `VERIFIER_TIMEOUT_S` (600 s) on both runtimes: the
 node declares `timeout_s`, the spine gives its dispatched session that wall
 (`node_wall_s`) plus the usual dispatch overhead, and the walker gives its model
-client the same wall. A verifier that fails, returns nothing or runs out of time is
-recorded as missing.
+client the same wall. Its prompt asks it to finish in about seven minutes and to write
+each finding as it finds it, since a session stopped at the wall leaves nothing. A
+verifier that fails, returns nothing or runs out of time is recorded as missing.
+fix_pack's verifier is inline on the main path, where running out of time would fail
+the run, so it keeps the route's envelope.
 
 **It never gets a builder round of its own.** When a review finds a core defect, the
 verifier's findings ride along in the same feedback, with the instruction to answer
 each under `## Verifier findings` in emit.txt (fixed, or rebutted with a cited
 file:line). Otherwise `gate_qa` writes them, with any rebuttal, to
-`reviews/verification-unresolved.md`. Overwatch reads that file and makes a finding
+`reviews/verification-unresolved.md`. Overwatch reads that file when it exists (it is
+not a declared input, because on the spine a declared input must exist, and it does
+not in a run whose verifier found nothing) and makes a finding
 that breaks an ask or existing behaviour, unrebutted, its own core finding, which
 sends the build back; the pull request lists the rest. In the fast modes, with no
 Overwatch, the pull request lists them. A round with no verifier finding empties the

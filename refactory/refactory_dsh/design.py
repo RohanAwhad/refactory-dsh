@@ -104,7 +104,7 @@ class DesignMode(Mode):
                     "check-record.json", "feedback-initial.json"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
-                      "deliverable_kind", "review_instructions",
+                      "deliverable_kind", "review_instructions", "verification_methods",
                       *repo_change.produces(), "delivery", "delivery_plan",
                       "has_pitfalls_step", "pitfalls", "pitfalls_review",
                       "claims_check_feedback", "claims_check_attempts_used", "design_review_status"),
@@ -648,8 +648,10 @@ class DesignMode(Mode):
                 "line that is exactly `VERDICT: PASS` or `VERDICT: FAIL`, and name every "
                 "ask with no evidence behind it."
             ),
-            reads=("brief.json", "design.md", "reviews/qa-synthesized.md", "test-guardedness.json",
-                   "reviews/verification-unresolved.md"),
+            # verification-unresolved.md is read when present (the prompt says so) and
+            # not declared: a declared input must exist on the spine, and it does not
+            # in a run whose verifier found nothing.
+            reads=("brief.json", "design.md", "reviews/qa-synthesized.md", "test-guardedness.json"),
             writes=("reviews/overwatch.md",),
             produces=("overwatch",),
             notes="audit the evidence behind the reviews",

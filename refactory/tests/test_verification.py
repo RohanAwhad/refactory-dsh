@@ -52,13 +52,31 @@ def test_verifier_reads_changes_diff():
 
 
 def test_the_verifier_applies_only_the_methods_no_reviewer_applies():
-    from refactory_dsh.authoring_evidence import REPO_CHANGE_REVIEW_INSTRUCTIONS
+    from refactory_dsh.authoring_evidence import (ARTIFACT_REVIEW_INSTRUCTIONS,
+                                                  REPO_CHANGE_REVIEW_INSTRUCTIONS)
+    from refactory_dsh.verification import (FULL_VERIFICATION_METHODS, FULL_VERIFIER_PROMPT,
+                                            verification_methods)
+    # A repository change: callers, claims and shared state are the code reviewers'.
+    repo = verification_methods("repository_change")
     for method in ("M1 ", "M2 ", "M13 ", "M15 "):
-        assert method in VERIFICATION_METHODS
-    # Callers, claims and shared state are the code reviewers' (every changed function).
+        assert method in repo
     for method in ("M3 ", "M11 ", "M12 "):
-        assert method not in VERIFICATION_METHODS
+        assert method not in repo
         assert method in REPO_CHANGE_REVIEW_INSTRUCTIONS
+    # A new artifact's reviewers do not apply them, so the verifier keeps them.
+    artifact = verification_methods("artifact")
+    assert artifact == FULL_VERIFICATION_METHODS
+    for method in ("M3 ", "M11 ", "M12 "):
+        assert method in artifact and method not in ARTIFACT_REVIEW_INSTRUCTIONS
+    # The review fork's prompt takes the run's set; fix_pack's has all of them.
+    assert "{{verification_methods}}" in VERIFIER_PROMPT
+    assert "M12 " in FULL_VERIFIER_PROMPT
+
+
+def test_overwatch_does_not_declare_the_verifier_findings_as_an_input():
+    # On the spine a declared input must exist, and in a run whose verifier found
+    # nothing it does not.
+    assert "reviews/verification-unresolved.md" not in DesignMode().build().nodes["overwatch"].reads
 
 
 def test_verifier_prompt_instructs_output_format():
@@ -230,6 +248,9 @@ def test_verifier_only_findings_go_to_overwatch_and_the_pr_not_a_round(tmp_path,
     assert result.exit_ok, result.error
     assert len([p for p in model.prompts if "What went wrong last time" in p]) == 1
     assert int(result.facts.get("review_attempts_used", 0)) == 0
+    # A new artifact: the verifier was given every method.
+    verifier = next(p for p in model.prompts if "design.md is in the run directory" in p)
+    assert "M12 Shared state" in verifier
     unresolved = (tmp_path / "run" / "reviews" / "verification-unresolved.md").read_text()
     assert "negative values accepted" in unresolved
     overwatch = next(p for p in model.prompts if "You are the overwatch" in p)
@@ -602,3 +623,29 @@ def test_rebuttal_fate_fast_mode(tmp_path, monkeypatch):
     assert len(verifier_entries) >= 1, "verifier finding must be in finding-sources.json"
     assert verifier_entries[0]["fate"] == "rebutted", (
         f"verifier finding fate should be 'rebutted', got {verifier_entries[0]['fate']!r}")
+
+
+def test_a_repository_change_gives_the_verifier_only_the_unshared_methods(tmp_path, monkeypatch):
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    import sys
+    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+                               RESEARCH_ANSWER, VERIFICATION_ANSWER, FakeModel, git_repo,
+                               render)
+    model = FakeModel([RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+                       DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                       render({"tool.py": "def build():\n    print('built')\n"}),
+                       "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER,
+                       "VERDICT: PASS"])
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["pr"]["value"] = False
+    mode.load_state_dict(state)
+    result = mode.run(tmp_path / "run", model=model, verdicts={"gate_strategy": "proceed"},
+                      task={"name": "repo_verify", "brief": "a tool",
+                            "check": f"{sys.executable} tool.py",
+                            "target": str(git_repo(tmp_path / "repo"))})
+    assert result.exit_ok, result.error
+    verifier = next(p for p in model.prompts if "design.md is in the run directory" in p)
+    assert "M15 Weakened tests" in verifier
+    assert "M12 Shared state" not in verifier
+    assert "Aim to finish within about seven minutes" in verifier
