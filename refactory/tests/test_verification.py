@@ -264,7 +264,7 @@ def test_joint_fix_round(tmp_path, monkeypatch):
     emit_prompts = [p for p in model.prompts if "What went wrong last time" in p]
     assert len(emit_prompts) >= 2
     second_emit = emit_prompts[1]
-    assert "missing feature" in second_emit or "noise" in second_emit
+    assert "missing feature" in second_emit and "noise" in second_emit
 
 
 def test_verifier_branch_failure(tmp_path, monkeypatch):

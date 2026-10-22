@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Spine, validateGraph } from '../src/spine.ts'
 import type { WorkflowGraph } from '../src/types.ts'
@@ -180,6 +182,48 @@ describe('four-branch fork with optional verifier', () => {
     // Check optional_targets is visible
     const forkView = s.view('fork_qa')
     expect(forkView.optional_targets).toEqual(['verifier'])
+  })
+})
+
+describe('design-graph fixture fork_qa carries optional_targets', () => {
+  const graph = JSON.parse(
+    readFileSync(join(__dirname, 'fixtures', 'design-graph.json'), 'utf8'),
+  ) as WorkflowGraph
+
+  it('fork_qa in the regenerated fixture has optional_targets: ["verifier"]', () => {
+    const s = new Spine(graph)
+    const forkView = s.view('fork_qa')
+    expect(forkView.optional_targets).toEqual(['verifier'])
+    expect(forkView.targets).toEqual(
+      expect.arrayContaining(['health_checker', 'code_reviewer', 'qa_director', 'verifier']),
+    )
+  })
+
+  it('four branches drain before join_qa, then gate_qa follows', () => {
+    const s = new Spine(graph)
+    // Advance through the graph until fork_qa
+    while (!ids(s).includes('fork_qa')) {
+      for (const n of ids(s)) s.complete(n)
+    }
+    s.complete('fork_qa')
+    const branches = ids(s)
+    expect(branches).toContain('health_checker')
+    expect(branches).toContain('code_reviewer')
+    expect(branches).toContain('qa_director')
+    expect(branches).toContain('verifier')
+    // Complete three reviewers — verifier still pending, join not reached
+    s.complete('health_checker')
+    s.complete('code_reviewer')
+    s.complete('qa_director')
+    expect(ids(s)).toContain('verifier')
+    expect(ids(s)).not.toContain('join_qa')
+    // Complete verifier (simulating "missing" status at the app level)
+    s.complete('verifier')
+    expect(ids(s)).toContain('join_qa')
+    s.complete('join_qa')
+    expect(ids(s)).toContain('synthesize_qa')
+    s.complete('synthesize_qa')
+    expect(ids(s)).toContain('gate_qa')
   })
 })
 

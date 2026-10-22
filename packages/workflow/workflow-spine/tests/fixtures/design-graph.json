@@ -66,6 +66,9 @@
         "qa_director",
         "verifier"
       ],
+      "optional_targets": [
+        "verifier"
+      ],
       "_type": "ForkNode"
     },
     "gate_design_review": {
