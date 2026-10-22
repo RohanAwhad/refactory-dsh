@@ -86,3 +86,12 @@ def outer_loop_hanging_op(ctx: Any) -> dict[str, Any]:
     """Hang forever for outer-loop timeout testing."""
     threading.Event().wait()
     return {}  # pragma: no cover
+
+
+def sandbox_sleep_op(ctx: Any) -> dict[str, Any]:
+    """Start a long sleep through sandbox.run_command, as a check's tools run, recording its pid."""
+    from refactory_dsh import sandbox
+
+    pid_file = ctx.workdir / "_sleep_pid.txt"
+    sandbox.run_command(f"echo $$ > {pid_file}; exec sleep 600", workdir=ctx.workdir, timeout_s=900)
+    return {}

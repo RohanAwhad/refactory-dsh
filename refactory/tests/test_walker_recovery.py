@@ -373,3 +373,47 @@ def test_outer_loop_evaluation_hung_op_stops_next_trial_starts_clean(tmp_path):
     import multiprocessing
     leaked = [c for c in multiprocessing.active_children() if c.is_alive()]
     assert not leaked, f"leaked child processes: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# A node with no derived limit gets DSH's 3600 s default
+# ---------------------------------------------------------------------------
+def test_unclassified_op_gets_the_dsh_default_limit(tmp_path):
+    from refactory_dsh.nn.executor import DEFAULT_OP_TIMEOUT_S, Executor, RunContext
+
+    graph = nn.Graph()
+    graph.add(nn.Node("plain", "op", call="walker_recovery_ops:succeed_op"))
+    executor = Executor(graph, RunContext(tmp_path), enable_recovery=True)
+    assert DEFAULT_OP_TIMEOUT_S == 3600
+    assert executor._effective_timeout(graph.nodes["plain"]) == 3600.0
+
+
+# ---------------------------------------------------------------------------
+# A check's own tools die at the op's limit, not only the op's child
+# ---------------------------------------------------------------------------
+def test_a_checks_own_tools_die_at_the_limit(tmp_path):
+    from refactory_dsh.invocations import CHECK_PRODUCES
+
+    graph = nn.Graph()
+    graph.add(nn.Node(
+        "slow_tools", "op",
+        call="walker_recovery_ops:sandbox_sleep_op",
+        produces=(*CHECK_PRODUCES,),
+        knobs=("check_timeout_s",),
+    ))
+    result = nn.execute(graph, tmp_path, knobs={"check_timeout_s": 2},
+                        enable_recovery=True, resource_limits={"max_elapsed_s": 8})
+
+    assert result.exit_ok is False
+    assert "timed out" in (result.error or "").lower()
+    pid = int((tmp_path / "_sleep_pid.txt").read_text())
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.2)
+    else:
+        os.kill(pid, 9)
+        pytest.fail(f"the check's sleep (pid {pid}) outlived the op's time limit")

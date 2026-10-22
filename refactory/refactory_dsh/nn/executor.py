@@ -70,6 +70,10 @@ class ExecutionError(RuntimeError):
     """A run could not be carried out."""
 
 
+#: DSH's command limit for a node with no derived limit (cordis.patch.yml:86).
+DEFAULT_OP_TIMEOUT_S = 3600
+
+
 class OpTimeoutError(RuntimeError):
     """An op or fn gate exceeded its per-node timeout."""
 
@@ -803,7 +807,9 @@ class Executor:
             state = {"knobs": {n: {"value": v} for n, v in self.ctx.knobs.items()}}
             raw = _cmd_timeout_s(node, state)
             if raw is None:
-                return None  # unclassified: no child-process timeout, retry only
+                # DSH's default for a node with no derived limit (cordis.patch.yml:86,
+                # commandTimeoutMs 3600000), so a hung unclassified op cannot hang the run.
+                raw = DEFAULT_OP_TIMEOUT_S
             remaining = self.ctx.budget.remaining_s() if self.ctx.budget is not None else None
             if remaining is not None:
                 raw = min(raw, remaining)
