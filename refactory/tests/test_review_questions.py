@@ -231,13 +231,13 @@ def test_design_mode_has_review_reloop_edges():
 
 
 def test_design_fast_mode_has_review_reloop_edge():
-    """DesignFastMode's graph has gate_qa -> focused_qa review_reloop edge."""
+    """DesignFastMode's graph has gate_qa -> fork_qa review_reloop edge."""
     from refactory_dsh.fast import DesignFastMode
 
     mode = DesignFastMode()
     graph = mode.build()
     edges = [(e.source, e.target, e.condition) for e in graph.edges]
-    assert ("gate_qa", "focused_qa", "review_reloop") in edges
+    assert ("gate_qa", "fork_qa", "review_reloop") in edges
 
 
 # ── changed_functions module tests ──
