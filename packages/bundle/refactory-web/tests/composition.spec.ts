@@ -53,21 +53,34 @@ const templateLayers = boot.PROFILE_TEMPLATES.web.bundles.flatMap((b: string) =>
 /** packages/bundle/refactory */
 const refactoryLayers = loadBundleLayers(join(repoRoot, 'packages/bundle/refactory'))
 
-/** packages/bundle/refactory-web (the layer under test) */
-const refactoryWebLayers = loadBundleLayers(
-  join(repoRoot, 'packages/bundle/refactory-web'),
-)
+const refactoryWebDir = join(repoRoot, 'packages/bundle/refactory-web')
 
-const allLayers = [...templateLayers, ...refactoryLayers, ...refactoryWebLayers]
+/**
+ * Load the refactory-web layers inside the test body so that a YAML parse
+ * error (e.g. from a partial revert of the disabled entry) becomes a test
+ * failure, not a module-load error that the coverage audit cannot attribute
+ * to a specific site.
+ */
+function allLayersWithWeb() {
+  const webLayers = loadBundleLayers(refactoryWebDir)
+  return [...templateLayers, ...refactoryLayers, ...webLayers]
+}
 
 /* ------------------------------------------------------------------ */
 /*  Tests                                                             */
 /* ------------------------------------------------------------------ */
 
 describe('client-hmr composition', () => {
+  it('refactory-web layer patches client-hmr with disabled: true', () => {
+    const webPatches = loadBundleLayers(refactoryWebDir).flat()
+    const hmrPatch = webPatches.find((e: Record<string, unknown>) => e.id === 'client-hmr')
+    expect(hmrPatch, 'cordis.patch.yml must contain an id-based client-hmr override outside the insert block').toBeDefined()
+    expect(hmrPatch!.disabled).toBe(true)
+  })
+
   it('client-hmr is disabled after full GUI profile composition', () => {
     const warn = vi.fn()
-    const composed = boot.composeEntries(allLayers, warn)
+    const composed = boot.composeEntries(allLayersWithWeb(), warn)
 
     const hmr = composed.filter((e) => e.id === 'client-hmr')
     expect(hmr).toHaveLength(1)
@@ -79,7 +92,7 @@ describe('client-hmr composition', () => {
   it('user-layer disabled: false re-enables client-hmr', () => {
     const userLayer = [{ id: 'client-hmr', disabled: false }]
     const warn = vi.fn()
-    const composed = boot.composeEntries([...allLayers, userLayer], warn)
+    const composed = boot.composeEntries([...allLayersWithWeb(), userLayer], warn)
 
     const hmr = composed.find((e) => e.id === 'client-hmr')
     expect(hmr).toBeDefined()
