@@ -1080,42 +1080,134 @@ SITE_REVERT_PAIR_S = 60
 #: gate measures it; the audit reports it as advisory, never as a failure.
 NOT_RUN = "not_run"
 
-_HASH_COMMENT = (".py", ".pyi", ".sh", ".bash", ".zsh", ".yml", ".yaml", ".toml",
-                 ".cfg", ".ini", ".conf", ".rb", ".r", ".pl")
-_HASH_COMMENT_NAMES = ("Makefile", "Dockerfile", ".gitignore", ".gitattributes")
-_SLASH_COMMENT = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".go",
-                  ".rs", ".java", ".c", ".h", ".cc", ".cpp", ".hpp", ".swift", ".kt",
-                  ".scala", ".css", ".scss")
+#: Languages whose comments can be told from code exactly: Python by its own tokenizer,
+#: and JavaScript/TypeScript without JSX by a scan that follows strings, template literals
+#: and regular expressions. In any other file no line is taken as comment-only.
+_PYTHON_SOURCE = (".py", ".pyi")
+_SCRIPT_SOURCE = (".ts", ".mts", ".cts", ".mjs", ".cjs")
+_REGEX_AFTER = set("(,=:[!&|?{};+-*%<>~^")
+_REGEX_KEYWORD = re.compile(r"(?:^|[^\w$])(?:return|typeof|case|in|of|delete|void|throw|new|yield|await)\s*$")
 
 
-def _comment_markers(path: str) -> tuple[str, ...]:
-    """The line-comment prefixes of *path*'s language, or () when it is not known."""
-    p = Path(path)
-    if p.suffix in _HASH_COMMENT or p.name in _HASH_COMMENT_NAMES:
-        return ("#",)
-    if p.suffix in _SLASH_COMMENT:
-        return ("//", "/*", "*", "*/")
-    return ()
+def _python_code_lines(text: str) -> set[int] | None:
+    import io
+    import tokenize
+
+    quiet = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
+             tokenize.DEDENT, tokenize.ENCODING, tokenize.ENDMARKER}
+    code: set[int] = set()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type not in quiet:
+                code.update(range(tok.start[0], tok.end[0] + 1))
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    return code
 
 
-def is_comment_only(path: str, added_lines: list[str]) -> bool:
-    """Whether every added line is blank or a comment in *path*'s language.
-
-    At least one line must be a comment. A file whose comment syntax is not
-    known is never comment-only.
-    """
-    markers = _comment_markers(path)
-    if not markers:
-        return False
-    seen = False
-    for line in added_lines:
-        stripped = line.strip()
-        if not stripped:
+def _script_code_lines(text: str) -> set[int] | None:
+    """Lines of JS/TS *text* holding anything outside a comment; None when it does not scan."""
+    code: set[int] = set()
+    line, i, n = 1, 0, len(text)
+    state, braces, prev, line_start = "code", [], "", 0
+    while i < n:
+        c, nxt = text[i], text[i + 1] if i + 1 < n else ""
+        if c == "\n":
+            line, line_start = line + 1, i + 1
+            state = "code" if state in ("line", "sq", "dq") else state
+            i += 1
             continue
-        if not stripped.startswith(markers):
-            return False
-        seen = True
-    return seen
+        if state == "line":
+            i += 1
+        elif state == "block":
+            if c == "*" and nxt == "/":
+                state = "code"
+                i += 1
+            i += 1
+        elif state in ("sq", "dq", "tpl"):
+            code.add(line)
+            if c == "\\":
+                if nxt == "\n":
+                    line, line_start = line + 1, i + 2
+                i += 2
+                continue
+            if (state, c) in (("sq", "'"), ("dq", '"'), ("tpl", "`")):
+                state, prev = "code", c
+            elif state == "tpl" and c == "$" and nxt == "{":
+                braces.append(0)
+                state = "code"
+                i += 1
+            i += 1
+        elif c in " \t\r":
+            i += 1
+        elif c == "/" and nxt in "/*":
+            state = "line" if nxt == "/" else "block"
+            i += 2
+        else:
+            code.add(line)
+            if c == "/" and (prev in _REGEX_AFTER or not prev
+                             or _REGEX_KEYWORD.search(text[line_start:i])):
+                i, in_class = i + 1, False
+                while i < n and text[i] != "\n" and (text[i] != "/" or in_class):
+                    if text[i] == "\\":
+                        i += 1
+                    elif text[i] in "[]":
+                        in_class = text[i] == "["
+                    i += 1
+                prev = "/"
+                i += 1
+                continue
+            if c in "'\"`":
+                state = {"'": "sq", '"': "dq", "`": "tpl"}[c]
+            elif c == "{" and braces:
+                braces[-1] += 1
+            elif c == "}" and braces:
+                if braces[-1] == 0:
+                    braces.pop()
+                    state = "tpl"
+                else:
+                    braces[-1] -= 1
+            elif c == "\\":
+                i += 1
+            prev = c
+            i += 1
+    if state in ("block", "sq", "dq", "tpl") or braces:
+        return None
+    return code
+
+
+def _code_lines(path: str, text: str) -> set[int] | None:
+    """The 1-based lines of *text* that hold anything but comments, in *path*'s language,
+    or None when the language is not one read exactly here."""
+    suffix = Path(path).suffix
+    if suffix in _PYTHON_SOURCE:
+        return _python_code_lines(text)
+    if suffix in _SCRIPT_SOURCE:
+        return _script_code_lines(text)
+    return None
+
+
+def is_comment_only(path: str, added_lines: list[str], *, text: str | None = None,
+                    numbers: list[int] | None = None) -> bool:
+    """Whether every added line is blank or wholly a comment in *path*'s language.
+
+    Given the post-image *text* and the added lines' 1-based *numbers*, each line is
+    judged where it stands, so a ``#`` line inside a Python string or a ``//`` line in a
+    template literal is code; without them the added lines are read on their own. At
+    least one line must be a comment. A language not read exactly is never comment-only.
+    """
+    if text is None:
+        text = "\n".join(added_lines) + "\n"
+        numbers = list(range(1, len(added_lines) + 1))
+    lines = text.splitlines()
+    if not numbers or any(n < 1 or n > len(lines) for n in numbers):
+        return False
+    if [lines[n - 1] for n in numbers] != [line.rstrip("\r\n") for line in added_lines]:
+        return False
+    code = _code_lines(path, text)
+    if code is None or any(n in code for n in numbers):
+        return False
+    return any(lines[n - 1].strip() for n in numbers)
 
 
 def _site_range(site: str) -> tuple[str, int, int] | None:
@@ -1173,18 +1265,42 @@ def _added(hunk_lines: list[str]) -> list[str]:
     return [line[1:] for line in hunk_lines if line.startswith("+") and not line.startswith("+++")]
 
 
-def site_added_lines(ctx: Any, site: str) -> list[str] | None:
-    """The lines a site's overlapping hunks add, or None when the site is not in the diff."""
+def _added_numbers(hunk_lines: list[str]) -> list[int]:
+    """The post-image line numbers of the lines ``-U0`` hunks add."""
+    numbers: list[int] = []
+    for line in hunk_lines:
+        m = re.match(r'@@ -\S+ \+(\d+)(?:,(\d+))? @@', line)
+        if m:
+            start = int(m.group(1))
+            numbers.extend(range(start, start + (int(m.group(2)) if m.group(2) else 1)))
+    return numbers
+
+
+def _hunks_comment_only(attempt_path: Path, file_path: str, hunk_lines: list[str]) -> bool:
+    """Whether the lines *hunk_lines* add to HEAD's *file_path* are all comments, in place."""
+    import subprocess as _sp
+
+    try:
+        text = _sp.run(["git", "-C", str(attempt_path), "show", f"HEAD:{file_path}"],
+                       capture_output=True, text=True, timeout=10, check=True).stdout
+    except Exception:
+        return False
+    return is_comment_only(file_path, _added(hunk_lines), text=text,
+                           numbers=_added_numbers(hunk_lines))
+
+
+def site_is_comment_only(ctx: Any, site: str) -> bool:
+    """Whether every line a site's hunks add is a comment; False when it is not in the diff."""
     found = worktree.recorded(ctx.workdir)
     parsed = _site_range(site)
     if found is None or parsed is None:
-        return None
+        return False
     file_path, line_start, line_end = parsed
     try:
         _, hunks = _overlapping_hunks(Path(found.path), found.base, file_path, line_start, line_end)
     except Exception:
-        return None
-    return _added(hunks) if hunks else None
+        return False
+    return bool(hunks) and _hunks_comment_only(Path(found.path), file_path, hunks)
 
 
 def compute_site_reverts(
@@ -1242,15 +1358,15 @@ def compute_site_reverts(
 
     for site, test_name, scope in pairs:
         cache_key_str = f"{head}|{site}|{test_name}"
+        if not isinstance(test_name, str) or not test_name.strip():
+            # A citation that names no test: a wrong test id, measured without a run.
+            record({"site": site, "test": test_name,
+                    "result": "no_tests", "catches_site": False}, cache_key_str)
+            continue
         cached = cache.get(cache_key_str)
         # "unavailable" is what earlier versions cached for an unmeasured pair.
         if cached and cached.get("result") not in (NOT_RUN, "unavailable"):
             record(cached, cache_key_str)
-            continue
-
-        # Time cap
-        if _time.monotonic() - start_time > SITE_REVERT_TOTAL_S:
-            record(not_run(site, test_name, "time cap reached"), cache_key_str)
             continue
 
         parsed = _site_range(site)
@@ -1260,8 +1376,10 @@ def compute_site_reverts(
             continue
         file_path, line_start, line_end = parsed
 
-        # Check if file exists in the worktree
-        if not (attempt_path / file_path).exists():
+        # The file must exist inside the worktree: a path into another checkout is not
+        # in this diff (git diff would refuse it, which is not a measurement gap).
+        target = (attempt_path / file_path).resolve()
+        if not target.is_relative_to(attempt_path.resolve()) or not target.exists():
             record({"site": site, "test": test_name,
                     "result": "not_in_diff", "catches_site": False}, cache_key_str)
             continue
@@ -1287,7 +1405,7 @@ def compute_site_reverts(
 
         all_added = _added(overlapping_hunks)
         # A comment changes no behaviour, so no test can catch its revert.
-        if is_comment_only(file_path, all_added):
+        if _hunks_comment_only(attempt_path, file_path, overlapping_hunks):
             record({"site": site, "test": test_name,
                     "result": "comment_only", "catches_site": False}, cache_key_str)
             continue
@@ -1307,6 +1425,11 @@ def compute_site_reverts(
         if is_new_file:
             record({"site": site, "test": test_name,
                     "result": "new_file", "catches_site": False}, cache_key_str)
+            continue
+
+        # Time cap: it bounds test runs only, so every check above is made for every pair.
+        if _time.monotonic() - start_time > SITE_REVERT_TOTAL_S:
+            record(not_run(site, test_name, "time cap reached"), cache_key_str)
             continue
 
         # Build a reverse patch containing only overlapping hunks
@@ -1337,16 +1460,16 @@ def compute_site_reverts(
 
             if test_path.endswith(".py"):
                 if fn_name:
-                    cmd = f"python -m pytest -x -q {test_name}"
+                    cmd = f"python -B -m pytest -x -q {test_name}"
                 else:
-                    cmd = f"python -m pytest -x -q {test_path}"
+                    cmd = f"python -B -m pytest -x -q {test_path}"
             elif test_path.endswith(".ts") or test_path.endswith(".spec.ts"):
                 if fn_name:
                     cmd = f"npx vitest run {test_path} -t {fn_name}"
                 else:
                     cmd = f"npx vitest run {test_path}"
             else:
-                cmd = f"python -m pytest -x -q {test_name}"
+                cmd = f"python -B -m pytest -x -q {test_name}"
 
             home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
             env = worktree.check_environment(attempt_path, home)
@@ -1373,7 +1496,7 @@ def compute_site_reverts(
                 test_path_for_coll = test_name.split("::")[0] if "::" in test_name else test_name
                 # pytest names the module by its absolute path, the citation by a
                 # path relative to the worktree.
-                has_collection = (any(e == test_path_for_coll
+                has_collection = rc != 0 and (any(e == test_path_for_coll
                                       or e.endswith("/" + test_path_for_coll)
                                       or test_path_for_coll.startswith(e) for e in coll_files)
                                   or has_unlocatable)

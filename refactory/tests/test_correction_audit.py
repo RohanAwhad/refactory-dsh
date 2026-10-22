@@ -1097,11 +1097,82 @@ def test_is_comment_only_by_language():
     from refactory_dsh.base_check import is_comment_only
 
     assert is_comment_only("a.py", ["# note", "", "    # more"])
-    assert is_comment_only("a.yaml", ["# disabled: client-hmr"])
     assert is_comment_only("a.ts", ["// note", "/**", " * doc", " */"])
     assert not is_comment_only("a.py", ["# note", "x = 1"])
     assert not is_comment_only("a.py", [""])
     assert not is_comment_only("a.md", ["# A heading"])
+    # Only languages whose comments can be told from code exactly: a YAML '#' line may
+    # sit in a block scalar, a shell one in a heredoc.
+    assert not is_comment_only("a.yaml", ["# disabled: client-hmr"])
+    assert not is_comment_only("a.sh", ["# written into the config"])
+
+
+@pytest.mark.parametrize("path,lines", [
+    ("a.c", ["*p = 0;"]),
+    ("a.go", ["*count += 1"]),
+    ("a.ts", ["*[Symbol.iterator]() {"]),
+    ("a.ts", ["  * factor;"]),
+    ("a.ts", ["/** @type {number} */ const limit = compute();"]),
+    ("a.js", ["/* istanbul ignore next */ if (x) run();"]),
+    ("a.ts", ["*/ run();"]),
+    ("a.tsx", ["// shown as text"]),
+])
+def test_is_comment_only_never_passes_code(path, lines):
+    from refactory_dsh.base_check import is_comment_only
+
+    assert not is_comment_only(path, lines)
+
+
+@pytest.mark.parametrize("path,text,numbers,expected", [
+    # a '#' line inside a triple-quoted string is part of the string
+    ("a.py", 'T = """\n# Title\n"""\n', [2], False),
+    ("a.py", 'def f():\n    # why\n    return 1\n', [2], True),
+    # a '//' line inside a template literal, also inside ${...}
+    ("a.ts", "const h = `\n// generated\n`;\n", [2], False),
+    ("a.ts", "const h = `${f(`\n// inner\n`)}`;\n", [2], False),
+    ("a.ts", "/**\n * doc\n */\nexport const x = 1;\n", [1, 2, 3], True),
+    # a regular expression holding '/*' does not open a comment
+    ("a.ts", "const re = /[/*]/;\nrun();\n// note\n", [2], False),
+    ("a.ts", "const re = /[/*]/;\nrun();\n// note\n", [3], True),
+])
+def test_is_comment_only_judges_a_line_in_place(path, text, numbers, expected):
+    from refactory_dsh.base_check import is_comment_only
+
+    lines = [text.splitlines()[n - 1] for n in numbers]
+    assert is_comment_only(path, lines, text=text, numbers=numbers) is expected
+
+
+def test_a_hash_line_added_inside_a_string_is_reverted_like_code(tmp_path):
+    """A '#' line added to a triple-quoted string changes the string: it is reverted and
+    measured, and a test that does not read it does not reach it."""
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    repo = git_repo(tmp_path / "repo")
+    (repo / "calc.py").write_text('TEMPLATE = """\nTitle\n"""\n')
+    git(repo, "add", "calc.py")
+    git(repo, "commit", "-q", "-m", "add calc.py")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "run-branch")
+    (repo / "calc.py").write_text('TEMPLATE = """\n# Title\nTitle\n"""\n')
+    (repo / "test_calc.py").write_text("def test_unrelated():\n    assert True\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "title")
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base, "head": git(repo, "rev-parse", "HEAD"),
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir)}))
+    ctx = nn.RunContext(run_dir, facts={"brief": "test", "artifact": str(run_dir / "art")})
+    (run_dir / "art").mkdir()
+    (run_dir / "art" / "a.txt").write_text("42")
+    Ledger.seed(run_dir, "test")
+    Ledger(run_dir).note("correction", "Title the template")
+    Ledger(run_dir).note("correction", "Title it, untested")
+    _deliver_overwatch(ctx, {
+        "Title the template": [{"site": "calc.py:2", "tests": ["test_calc.py::test_unrelated"],
+                                "scope": "local"}],
+        "Title it, untested": [{"site": "calc.py:2", "tests": [], "scope": "local"}]})
+    problems = evidence.correction_audit_problems(ctx)
+    assert any("site calc.py:2 not reached by any test" in p for p in problems), problems
+    assert any("site calc.py:2 has no tests" in p for p in problems), problems
 
 
 def test_design_fast_past_the_cap_proceeds_with_an_advisory(tmp_path, monkeypatch):
@@ -1121,3 +1192,117 @@ def test_design_fast_past_the_cap_proceeds_with_an_advisory(tmp_path, monkeypatc
     report = json.dumps(ctx.read_json("fast-report.json"))
     assert evidence.ADVISORY_CORRECTION_AUDIT in report
     assert report.count("revert not run (time cap reached)") == 25
+    # The completed report, which design.json carries, keeps them.
+    assert any(evidence.ADVISORY_CORRECTION_AUDIT in a for a in fast_ops._advisories(ctx))
+
+
+# ── review #476: measured misses beside unmeasured results ───────────────
+
+
+@pytest.mark.parametrize("results,message", [
+    (["no_tests", "not_run"], "ran no tests"),
+    (["not_run", "no_tests"], "ran no tests"),
+    (["unavailable", "not_run"], "revert unavailable"),
+    (["unavailable", "collection_error"], "revert unavailable"),
+])
+def test_a_measured_miss_is_not_hidden_by_an_unmeasured_test(tmp_path, monkeypatch, results, message):
+    """A wrong test id, or an unknown result, blocks even when another test of the same
+    site was not measured."""
+    from refactory_dsh import base_check
+
+    ctx, _ = _gate_run(tmp_path)
+    tests = [f"test_calc.py::t{i}" for i in range(len(results))]
+    monkeypatch.setattr(base_check, "compute_site_reverts", lambda ctx_, pairs: {"pairs": [
+        {"site": s, "test": t, "result": results[tests.index(t)], "catches_site": False}
+        for s, t, _ in pairs]})
+    Ledger(ctx.workdir).note("correction", "Zero is valid")
+    _deliver_overwatch(ctx, {"Zero is valid": [{"site": "calc.py:3", "tests": tests, "scope": "local"}]})
+    problems = evidence.correction_audit_problems(ctx)
+    assert any(message in p for p in problems), problems
+
+
+@pytest.mark.parametrize("site", ["calc.py:40", "nosuch.py:2"])
+def test_the_time_cap_does_not_hide_a_site_outside_the_diff(tmp_path, monkeypatch, site):
+    """Whether a site is in the diff needs no test run, so the cap never makes it advisory."""
+    from refactory_dsh import base_check
+
+    ctx, _ = _gate_run(tmp_path)
+    monkeypatch.setattr(base_check, "SITE_REVERT_TOTAL_S", -1)
+    Ledger(ctx.workdir).note("correction", "Zero is valid")
+    _deliver_overwatch(ctx, {"Zero is valid": [
+        {"site": site, "tests": ["test_calc.py::test_validate"], "scope": "local"}]})
+    problems = evidence.correction_audit_problems(ctx)
+    assert any(f"site {site} is not in the diff" in p for p in problems), problems
+    assert evidence.correction_audit_advisories(ctx) == []
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_a_site_in_another_checkout_is_not_in_the_diff(tmp_path, relative):
+    ctx, found = _gate_run(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "calc.py").write_text("# Validation helpers.\ndef validate(x):\n    return x >= 0\n")
+    site = ("../other/calc.py:3" if relative else f"{other}/calc.py:3")
+    Ledger(ctx.workdir).note("correction", "Zero is valid")
+    _deliver_overwatch(ctx, {"Zero is valid": [
+        {"site": site, "tests": ["test_calc.py::test_validate"], "scope": "local"}]})
+    problems = evidence.correction_audit_problems(ctx)
+    assert any("is not in the diff" in p for p in problems), problems
+
+
+def test_a_passing_test_is_not_a_collection_error_whatever_it_prints(tmp_path):
+    """The cited test passes with the site reverted, and warns with text naming
+    ImportError from the test file: a measured miss, not a collection error."""
+    ctx, found = _gate_run(tmp_path)
+    repo = Path(found.path)
+    (repo / "test_calc.py").write_text(
+        "import warnings\nfrom calc import validate\n"
+        "def test_validate():\n    assert validate(0) is True\n"
+        "def test_unrelated():\n"
+        "    warnings.warn('fast path unavailable (ImportError: no module named fastcalc)')\n"
+        "    assert True\n")
+    git(repo, "commit", "-qam", "warn")
+    wt = json.loads((ctx.workdir / ".refactory" / "worktree.json").read_text())
+    wt["head"] = git(repo, "rev-parse", "HEAD")
+    (ctx.workdir / ".refactory" / "worktree.json").write_text(json.dumps(wt))
+    Ledger(ctx.workdir).note("correction", "Zero is valid")
+    _deliver_overwatch(ctx, {"Zero is valid": [
+        {"site": "calc.py:3", "tests": ["test_calc.py::test_unrelated"], "scope": "local"}]})
+    problems = evidence.correction_audit_problems(ctx)
+    assert any("site calc.py:3 not reached by any test" in p for p in problems), problems
+
+
+def test_a_cited_test_that_is_not_a_test_id_blocks(tmp_path):
+    ctx, _ = _gate_run(tmp_path)
+    Ledger(ctx.workdir).note("correction", "Zero is valid")
+    _deliver_overwatch(ctx, {"Zero is valid": [
+        {"site": "calc.py:3", "tests": [{"name": "test_calc.py::test_validate"}], "scope": "local"}]})
+    problems = evidence.correction_audit_problems(ctx)
+    assert any("ran no tests" in p for p in problems), problems
+
+
+def test_reverts_in_one_file_never_run_stale_bytecode(tmp_path):
+    """Six same-size reverts of one module within a second: each pair's test must see its
+    own revert, not the bytecode an earlier pair's run cached."""
+    from refactory_dsh import base_check
+
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    repo = git_repo(tmp_path / "repo")
+    (repo / "m.py").write_text("".join(f"def f{i}():\n    return {i}\n\n\n" for i in range(6)))
+    git(repo, "add", "m.py")
+    git(repo, "commit", "-q", "-m", "m")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "run-branch")
+    (repo / "m.py").write_text("".join(f"def f{i}():\n    return {i + 100}\n\n\n" for i in range(6)))
+    (repo / "test_m.py").write_text("import m\n" + "".join(
+        f"def test_f{i}():\n    assert m.f{i}() == {i + 100}\n" for i in range(6)))
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "change")
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base, "head": git(repo, "rev-parse", "HEAD"),
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir)}))
+    ctx = nn.RunContext(run_dir, facts={"brief": "test"})
+    pairs = [(f"m.py:{4 * i + 2}", f"test_m.py::test_f{i}", "local") for i in range(6)]
+    results = base_check.compute_site_reverts(ctx, pairs)["pairs"]
+    assert [p["result"] for p in results] == ["fail"] * 6

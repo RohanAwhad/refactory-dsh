@@ -761,6 +761,12 @@ def check_review_questions(
     return problems
 
 
+#: Every per-test result compute_site_reverts gives; anything else fails the site.
+_KNOWN_REVERT_RESULTS = frozenset({
+    "fail", "pass", "not_in_diff", "no_tests", "collection_error", "import_only",
+    "new_file", "comment_only", "test_file", "not_run"})
+
+
 def correction_audit_problems(ctx: Any) -> list[str]:
     """Compute per-correction audit: check sites, reverts and scope.
 
@@ -1060,10 +1066,8 @@ def correction_audit_problems(ctx: Any) -> list[str]:
 
                 # A code site with an empty tests list fails the clause, unless its
                 # change is comments only: no test can catch a comment.
-                site_file = site.split(":")[0] if ":" in site else site
                 if not tests:
-                    added = base_check.site_added_lines(ctx, site)
-                    if added is not None and base_check.is_comment_only(site_file, added):
+                    if base_check.site_is_comment_only(ctx, site):
                         sr["status"] = "pass"
                         sr["comment_only"] = True
                         site_results.append(sr)
@@ -1157,6 +1161,14 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                 if any(r == "fail" for r in test_results):
                     sr["status"] = "pass"
                     has_sibling_pass = True
+                elif any(r not in _KNOWN_REVERT_RESULTS for r in test_results):
+                    # any unknown status — fail closed, whatever else the site's tests say
+                    sr["status"] = "fail"
+                    if site not in exempted_sites:
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: site {site} revert unavailable"
+                        )
                 elif any(r in ("comment_only", "test_file") for r in test_results):
                     sr["status"] = "pass"
                 elif all(r in ("new_file", "import_only") for r in test_results):
@@ -1168,6 +1180,15 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         problems.append(
                             f"{key} clause {ci + 1}: site {site} is not in the diff"
                         )
+                elif any(r == "no_tests" for r in test_results):
+                    sr["status"] = "fail"
+                    if site not in exempted_sites:
+                        clause_status = "fail"
+                        missing = [t["name"] for t in sr["tests"] if t.get("revert_result") == "no_tests"]
+                        problems.append(
+                            f"{key} clause {ci + 1}: site {site}: cited test "
+                            f"{', '.join(str(m) for m in missing)} ran no tests (check the test id)"
+                        )
                 elif any(r == base_check.NOT_RUN for r in test_results):
                     sr["status"] = "advisory"
                     reasons = sorted({t["detail"] for t in revert_entries
@@ -1177,15 +1198,6 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         f"{key} clause {ci + 1}: site {site}: revert not run"
                         + (f" ({'; '.join(reasons)})" if reasons else "")
                     )
-                elif any(r == "no_tests" for r in test_results):
-                    sr["status"] = "fail"
-                    if site not in exempted_sites:
-                        clause_status = "fail"
-                        missing = [t["name"] for t in sr["tests"] if t.get("revert_result") == "no_tests"]
-                        problems.append(
-                            f"{key} clause {ci + 1}: site {site}: cited test "
-                            f"{', '.join(missing)} ran no tests (check the test id)"
-                        )
                 elif any(r == "pass" for r in test_results):
                     # test passed = site not caught
                     sr["status"] = "fail"
@@ -1201,14 +1213,6 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         f"{key} clause {ci + 1}: site {site}: the revert broke test "
                         "collection, so it measured nothing"
                     )
-                else:
-                    # any unknown status — fail closed
-                    sr["status"] = "fail"
-                    if site not in exempted_sites:
-                        clause_status = "fail"
-                        problems.append(
-                            f"{key} clause {ci + 1}: site {site} revert unavailable"
-                        )
 
                 site_results.append(sr)
 
