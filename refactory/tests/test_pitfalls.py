@@ -235,14 +235,16 @@ def test_design_graph_has_pitfalls_nodes():
     graph = DesignMode().build()
     assert "pitfalls_researcher" in graph.nodes
     assert "gate_pitfalls" in graph.nodes
-    # Wiring: gate_research → pitfalls_researcher → gate_pitfalls → strategy_director
+    # Wiring: gate_research → pitfalls_researcher → gate_pitfalls → route_strategy, which
+    # goes on to strategy_director for a full design (test_design_short_path.py).
     proceed_edges = graph.out_edges("gate_research", condition="proceed")
     assert len(proceed_edges) == 1
     assert proceed_edges[0].target == "pitfalls_researcher"
     pit_edges = graph.out_edges("pitfalls_researcher")
     assert pit_edges[0].target == "gate_pitfalls"
     gp_proceed = graph.out_edges("gate_pitfalls", condition="proceed")
-    assert gp_proceed[0].target == "strategy_director"
+    assert gp_proceed[0].target == "route_strategy"
+    assert graph.out_edges("route_strategy", condition="proceed")[0].target == "strategy_director"
     gp_reloop = graph.out_edges("gate_pitfalls", condition="reloop")
     assert gp_reloop[0].target == "pitfalls_researcher"
 
@@ -409,8 +411,9 @@ def test_new_project_design_run_passes_pitfalls_gate(tmp_path):
         design_doc,
         DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
     result = DesignMode().run(
         tmp_path / "run",

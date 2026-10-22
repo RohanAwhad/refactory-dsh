@@ -212,6 +212,7 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         REPO_CHANGE_REVIEW_INSTRUCTIONS if deliverable_kind == "repository_change"
         else ARTIFACT_REVIEW_INSTRUCTIONS
     )
+    from refactory_dsh.verification import verification_methods
 
     claims_facts = {
         "claims_check_feedback": "",
@@ -224,9 +225,58 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
             "design_review_findings": "(no findings yet)",
             "deliverable_kind": deliverable_kind,
             "review_instructions": review_instructions,
+            "verification_methods": verification_methods(deliverable_kind),
             **pitfalls_facts,
             **claims_facts,
             **UNREFUSED, **located, **planned}
+
+
+#: What a scoped change's plan is compiled from, in place of the perspectives step.
+SCOPED_STRATEGY_PLAN = (
+    "(no perspectives: this is a scoped change, so plan directly from the research and "
+    "the pitfalls — the simplest thing that could pass the check — and say what the "
+    "check will not catch)"
+)
+
+
+def route_strategy(ctx: Any) -> Any:
+    """Send a scoped change straight to the plan; a full design weighs perspectives first.
+
+    The perspectives step chooses between ways to build the artifact. A scoped change
+    has one sensible way, and one perspective summarised by the plan step is the same
+    work done twice.
+    """
+    from refactory_dsh.nn import Verdict
+
+    if ctx.facts.get("research_scope") == "scoped":
+        ctx.set_fact("strategy_plan", SCOPED_STRATEGY_PLAN)
+        # What the perspectives step would leave, empty: the plan and design steps
+        # declare them as inputs, and the spine refuses a declared input that is not
+        # on disk.
+        ctx.write_text("strategy-plan.json", "[]\n")
+        ctx.path("strategy").mkdir(parents=True, exist_ok=True)
+        return Verdict("scoped", "a scoped change is planned straight from the research")
+    # `proceed` rather than a label of its own: a person's skip of this gate sends
+    # proceed on the spine, and the full path is the one that loses nothing.
+    return Verdict("proceed", "a full design weighs perspectives before the plan")
+
+
+def route_design_review(ctx: Any) -> Any:
+    """Send a scoped change's design to the automatic checks; a full design is reviewed.
+
+    For a scoped change the design-review gate's own checks (an Ask mapping present,
+    citations and quotes true, high-risk pitfalls answered, required sections present)
+    and the person's approval are the review; the review agent adds a round to a change
+    whose design is a page long. The gate learns which from `design_review_by`, so a
+    run whose graph predates this gate keeps its agent's review.
+    """
+    from refactory_dsh.nn import Verdict
+
+    if ctx.facts.get("research_scope") == "scoped":
+        ctx.set_fact("design_review_by", "automatic")
+        return Verdict("scoped", "a scoped change's design is checked automatically")
+    ctx.set_fact("design_review_by", "agent")
+    return Verdict("proceed", "a full design is reviewed by the design-review agent")
 
 
 def gate_design_review(ctx: Any) -> str:
@@ -234,18 +284,27 @@ def gate_design_review(ctx: Any) -> str:
 
     Never raises ValueError: when attempts are exhausted, it proceeds to
     gate_strategy with the remaining findings in the design_review_findings
-    fact, so the person decides.
+    fact, so the person decides. A design `route_design_review` sent here without the
+    review agent (`design_review_by` is ``automatic``) has only the mechanical checks;
+    any review file is not its review.
     """
     from refactory_dsh.create_ops import PASS_MARK, blocking_findings
     from refactory_dsh.nn import Verdict
 
+    scoped = ctx.facts.get("design_review_by") == "automatic"
     # ── read the agent's review ──
     review_text = ctx.read_text("reviews/design-review.md") if ctx.exists(
-        "reviews/design-review.md") else ""
+        "reviews/design-review.md") and not scoped else ""
     problems: list[str] = []
+    # What the gate notices that does not change what gets built. It is shown to the
+    # person and never costs a round: a design goes back only for a problem in `problems`.
+    advisories: list[str] = []
 
-    # Verdict and blocking findings, same parsing as gate_overwatch.
-    if review_text.strip():
+    # Verdict and blocking findings, same parsing as gate_overwatch. A scoped change's
+    # design had no review agent, so any review file is not its review.
+    if scoped:
+        pass
+    elif review_text.strip():
         verdict_line = review_text.strip().splitlines()[-1].strip()
         problems.extend(blocking_findings(review_text))
         if verdict_line != PASS_MARK:
@@ -327,10 +386,19 @@ def gate_design_review(ctx: Any) -> str:
                 quoted = match.group(1)
                 quoted_collapsed = _re.sub(r'\s+', ' ', quoted).strip()
                 if quoted_collapsed not in brief_collapsed:
-                    problems.append(
-                        f"the design attributes {quoted!r} to the brief, but "
-                        f"that text does not appear verbatim in the brief"
-                    )
+                    # Differing only in punctuation, case, spacing or markdown is a
+                    # quoting slip, not a claim the brief does not make.
+                    quoted_words = _quote_words(quoted)
+                    if quoted_words and f" {quoted_words} " in f" {_quote_words(brief_text)} ":
+                        advisories.append(
+                            f"the design's quote {quoted!r} differs from the brief only "
+                            f"in punctuation or formatting"
+                        )
+                    else:
+                        problems.append(
+                            f"the design attributes {quoted!r} to the brief, but "
+                            f"that text does not appear verbatim in the brief"
+                        )
 
     # ── mechanical check 3: design-document contract ──
     from refactory_dsh import design_contract
@@ -345,7 +413,7 @@ def gate_design_review(ctx: Any) -> str:
             )
         left_no_reason = design_contract.left_without_reason(parsed)
         if left_no_reason:
-            problems.append(
+            advisories.append(
                 "rule-site(s) marked [left] without a reason: "
                 + ", ".join(left_no_reason)
             )
@@ -361,19 +429,19 @@ def gate_design_review(ctx: Any) -> str:
                     parts.append(f"{site['path']} ({'; '.join(near)})")
                 else:
                     parts.append(site["path"])
-            problems.append(
+            advisories.append(
                 "rule-site(s) with no [changed] or [left: <reason>] marker: "
                 + ", ".join(parts)
             )
         if design_contract.title_is_run_name(design_text, run_name):
-            problems.append(
+            advisories.append(
                 "the design's title is the run name; it must say what the change does"
             )
 
     # ── mechanical check 3a: failure trace section ──
     if design_text:
         if not design_contract.has_non_empty_section(design_text, design_contract.FAILURE_TRACE):
-            problems.append(
+            advisories.append(
                 "the design is missing the required ## Failure trace section (or it is empty)"
             )
 
@@ -413,7 +481,11 @@ def gate_design_review(ctx: Any) -> str:
                         elif pid in aside:
                             coverage_lines.append(f"  {pid} ({risk}): set aside")
                         else:
-                            coverage_lines.append(f"  {pid} ({risk}): MISSING")
+                            # Only a high-risk pitfall must be answered; the others
+                            # appear in a design only where they change a decision.
+                            coverage_lines.append(f"  {pid} ({risk}): "
+                                                  + ("MISSING" if risk == "high"
+                                                     else "not mentioned"))
                     if coverage_lines:
                         ctx.set_fact("pitfall_coverage",
                                      "Pitfall coverage:\n" + "\n".join(coverage_lines))
@@ -427,12 +499,18 @@ def gate_design_review(ctx: Any) -> str:
                      "pitfalls check skipped: no pitfalls_researcher in this graph")
 
     # ── mechanical check 5: finding coverage ──
+    # Research and perspective findings are read by the design writer and the reviewer.
+    # A design cites only the ones that change a decision, so an uncited finding is
+    # recorded in the finding_coverage fact, never listed at the gate or sent back.
     from refactory_dsh import findings_coverage
-    problems.extend(findings_coverage.gate_problems(ctx))
+    findings_coverage.gate_problems(ctx)
+
+    # The review agent's notes do not send the design back; the person sees them.
+    advisories.extend(f"review note: {note}" for note in _review_notes(review_text))
 
     # ── mechanical check 6: repository questions and brief-example trace ──
     deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
-    if deliverable_kind_value == "repository_change" and design_text:
+    if deliverable_kind_value == "repository_change" and design_text and not scoped:
         from refactory_dsh.authoring_evidence import check_review_questions
         from refactory_dsh.changed_functions import is_generated, is_test_path
         from refactory_dsh import design_contract
@@ -462,100 +540,110 @@ def gate_design_review(ctx: Any) -> str:
                 require_brief_trace=True,
                 target=target,
             )
-            problems.extend(rq_problems)
-
-    # ── reviewer re-run routing (before attempt increment) ──
-    advisory = ""
-    if problems:
-        from refactory_dsh.authoring_evidence import advisory_repo_questions, repo_question_rerun_due
-
-        rq_problems_only = [p for p in problems if p.startswith("[repo-questions]")]
-        non_rq_problems = [p for p in problems if not p.startswith("[repo-questions]")]
-        if rq_problems_only and not non_rq_problems:
-            # Only repo-questions problems: re-run the reviewer once, naming what is missing,
-            # without spending an attempt. After that they are advisory and the review passes.
-            if repo_question_rerun_due(ctx, "design_review_reruns_used"):
-                rq_report = "\n".join(f"- {p}" for p in rq_problems_only)
-                ctx.write_text("reviews/design-review-feedback.txt", rq_report + "\n")
-                ctx.set_fact("design_review_feedback", rq_report)
-                return Verdict("review_reloop", rq_report)
-            advisory = advisory_repo_questions(rq_problems_only)
-            problems = []
+            # Repository questions are the code reviewers' bookkeeping; at design time
+            # they are listed, never a round of their own.
+            advisories.extend(rq_problems)
 
     # ── decide: proceed, reloop, or exhaust ──
+    # A scoped change gets one review round; a full design the configured number.
     allowed = int(ctx.knob("design_review_attempts", 2))
+    if ctx.facts.get("research_scope") == "scoped":
+        allowed = min(allowed, 1)
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
     ctx.set_fact("design_review_attempts_used", used)
+    ctx.set_fact("design_review_advisory", "\n".join(f"- {a}" for a in advisories))
+    advisory_block = _advisory_block(advisories)
+    coverage = ctx.facts.get("pitfall_coverage", "")
 
     if not problems:
         ctx.write_text("reviews/design-review-feedback.txt",
-                       "the design review passed\n")
+                       "the design review passed\n" + advisory_block)
         ctx.set_fact("design_review_feedback", "(the design review passed)")
+        ctx.set_fact("design_review_blocking", "")
         ctx.set_fact("design_review_findings",
-                     "(none: the design review passed)")
-        if advisory:
-            ctx.set_fact("design_review_findings",
-                         ctx.facts["design_review_findings"] + "\n\n" + advisory)
-        coverage = ctx.facts.get("pitfall_coverage", "")
-        if coverage:
-            ctx.set_fact("design_review_findings",
-                         ctx.facts["design_review_findings"] + "\n\n" + coverage)
+                     "(none: the design review passed)" + advisory_block
+                     + (f"\n\n{coverage}" if coverage else ""))
         ctx.set_fact("design_review_status", design_review_status(ctx.facts))
         return "proceed"
 
     report = "\n".join(f"- {p}" for p in problems)
-
-    # In the mixed case, send only non-repo-questions problems to design_doc
-    non_rq = [p for p in problems if not p.startswith("[repo-questions]")]
-    if non_rq and len(non_rq) < len(problems):
-        # Mixed case: write only non-rq problems as design_review_feedback for design_doc
-        non_rq_report = "\n".join(f"- {p}" for p in non_rq)
-        ctx.write_text("reviews/design-review-feedback.txt", non_rq_report + "\n")
-        ctx.set_fact("design_review_feedback", non_rq_report)
+    ctx.set_fact("design_review_blocking", report)
+    ctx.write_text("reviews/design-review-feedback.txt", report + "\n" + advisory_block)
+    ctx.set_fact("design_review_feedback", report)
 
     if used >= allowed:
-        # Exhausted: proceed to gate_strategy with findings shown.
-        ctx.set_fact("design_review_feedback", report)
-        ctx.set_fact("design_review_findings", report)
-        coverage = ctx.facts.get("pitfall_coverage", "")
-        if coverage:
-            ctx.set_fact("design_review_findings", report + "\n\n" + coverage)
-        ctx.write_text("reviews/design-review-feedback.txt", report + "\n")
+        # Out of rounds: proceed to gate_strategy with the findings shown.
+        ctx.set_fact("design_review_findings",
+                     report + advisory_block + (f"\n\n{coverage}" if coverage else ""))
         ctx.set_fact("design_review_status", design_review_status(ctx.facts))
         return "proceed"
 
-    # Reloop to design_doc with the findings.
-    ctx.write_text("reviews/design-review-feedback.txt", report + "\n")
-    ctx.set_fact("design_review_feedback", report)
-    ctx.set_fact("design_review_findings",
-                 "(no findings yet)")
+    # Reloop to design_doc with the blocking findings.
+    ctx.set_fact("design_review_findings", "(no findings yet)")
     return Verdict("reloop", report)
 
 
 def design_review_status(facts: dict) -> str:
     """One-line status for the approval gate, from the run's facts.
 
-    Returns '' when no review has run, 'Design review: PASS' on pass,
-    or 'Design review: FAIL, N unresolved' plus one line per finding.
+    Returns '' when no review has run; 'Design review: PASS' on pass, with
+    ', N advisory' when the gate listed items that do not change the build; or
+    'Design review: FAIL, N unresolved' plus one line per blocking finding. Advisory
+    items never count toward FAIL.
     """
     used = int(facts.get("design_review_attempts_used", 0))
     if used == 0:
         return ""
     findings = str(facts.get("design_review_findings", ""))
-    if "(none: the design review" in findings:
-        return "Design review: PASS"
     if findings == "(no findings yet)":
         return ""
+    advisory_n = sum(1 for ln in str(facts.get("design_review_advisory", "")).splitlines()
+                     if ln.startswith("- "))
+    advisory = f", {advisory_n} advisory" if advisory_n else ""
+    # A scoped change's design had no review agent; the person is told so.
+    automatic = (" (automatic checks; scoped change)"
+                 if facts.get("design_review_by") == "automatic" else "")
+    if "(none: the design review" in findings:
+        return f"Design review{automatic}: PASS{advisory}"
+    blocking = facts.get("design_review_blocking")
+    source = str(blocking) if blocking is not None else findings
     lines = [
-        ln for ln in findings.splitlines()
+        ln for ln in source.splitlines()
         if ln.startswith("- ")
         and not ln.startswith("- the review did not state 'VERDICT: PASS'")
     ]
     n = len(lines)
     return (
-        f"Design review: FAIL, {n} unresolved\n"
+        f"Design review{automatic}: FAIL, {n} unresolved{advisory}\n"
         + "\n".join(lines)
     )
+
+
+def _quote_words(text: str) -> str:
+    """Text reduced to its words: case, punctuation, markdown and spacing dropped."""
+    return " ".join(_re.findall(r"[^\W_]+", text.lower()))
+
+
+def _review_notes(review_text: str) -> list[str]:
+    """The bullets under the review's ``## Notes`` heading, without an empty 'none'."""
+    section = _re.search(r"(?im)^##\s+notes\s*$(.*?)(?=^#{1,2}\s|^\s*VERDICT:|\Z)",
+                         review_text, _re.S | _re.M)
+    if section is None:
+        return []
+    notes = []
+    for line in section[1].splitlines():
+        bullet = _re.match(r"\s*(?:[-*\u2022]|\d+[.)])\s+(.*\S)", line)
+        if bullet and not _re.fullmatch(r"(?i)none\.?", bullet[1].strip()):
+            notes.append(bullet[1].strip())
+    return notes
+
+
+def _advisory_block(advisories: list[str]) -> str:
+    """The gate's advisory items as a section, or '' when there are none."""
+    if not advisories:
+        return ""
+    return ("\n\n## Advisory (does not change the build; no round needed)\n"
+            + "\n".join(f"  · {a}" for a in advisories))
 
 
 def gate_pitfalls(ctx: Any) -> str:
@@ -945,7 +1033,8 @@ def check_artifact(ctx: Any) -> str:
 
     # Record exactly what the builder will be given (feedback re-fill reads it).
     _inherited_list = sorted(filtered.inherited) if found is not None else []
-    ctx.write_json("check-record.json", {
+    _base_reset_list = getattr(ctx, '_base_reset', [])
+    _cr_fail: dict[str, Any] = {
         "status": "fail",
         "validation": detail[:4000],
         "digest": digest_text,
@@ -957,42 +1046,12 @@ def check_artifact(ctx: Any) -> str:
         "targeted_command": prepass.targeted_command if prepass.ran else None,
         "inherited": _inherited_list,
         "commit": str(ctx.facts.get("commit", "")),
-    })
+    }
+    if _base_reset_list:
+        _cr_fail["base_reset"] = _base_reset_list
+    ctx.write_json("check-record.json", _cr_fail)
 
     return repair(ctx, [detail])
-
-
-def gate_verification(ctx: Any) -> str:
-    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise.
-
-    Verifier findings do NOT spend ``review_attempts``: the verifier's noise
-    is unmeasured, so it must not end a run on its own.  The gate tracks its
-    own iteration count via ``verification_iterations_used`` and proceeds
-    after ``VERIFIER_GATE_LIMIT`` advisory reloops, recording unresolved
-    findings in ``reviews/verification-unresolved.md`` for the reviews,
-    overwatch audit and PR Verification section.
-    """
-    from refactory_dsh.verification import VERIFIER_GATE_LIMIT, parse_verification_findings
-
-    findings = parse_verification_findings(ctx)
-    if not findings:
-        ctx.write_text("reviews/verification-gate.txt", "proceed: no blocking finding\n")
-        return "proceed"
-
-    feedback = "\n".join(findings)
-    ctx.write_text("reviews/verification-gate.txt", feedback + "\n")
-
-    used = int(ctx.facts.get("verification_iterations_used", 0))
-    ctx.set_fact("verification_iterations_used", used + 1)
-
-    if used + 1 >= VERIFIER_GATE_LIMIT:
-        # Proceed with unresolved findings — never end a run on verifier noise.
-        ctx.write_text("reviews/verification-unresolved.md", feedback + "\n")
-        return "proceed"
-
-    ctx.write_text("validation.txt", feedback + "\n")
-    ctx.set_fact("validation", feedback)
-    return Verdict("reloop", feedback)
 
 
 def enforce_guardedness(ctx: Any) -> list[str]:

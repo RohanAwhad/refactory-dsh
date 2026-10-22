@@ -1214,8 +1214,8 @@ def _answers(*emits: str) -> list[str]:
     and apply_corrections does not run — no model answer consumed.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
-            *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 
 def _mode(**knobs) -> DesignMode:
@@ -2409,8 +2409,7 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
                tricky_design, DESIGN_REVIEW_ANSWER,
                tricky_design,
                render({"tool.py": "print('built')\n"}),
-               VERIFICATION_ANSWER,
-               *REVIEW_ANSWERS]
+               *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
     model = FakeModel(answers)
     result = _mode(pr=False).run(
         run, model=model, verdicts={"gate_strategy": "proceed"},
@@ -3262,8 +3261,9 @@ def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
     # so: emit (conflict resolution) + reviews (4 answers)
     reloop_answers = [
         resolution_emit,
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
 
     run2 = tmp_path / "run2"
@@ -3482,8 +3482,9 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
         # pick_corrections is a gate — no model answer needed
         corrected_design,      # apply_corrections rewrites design.md to "websockets"
         render({"tool.py": "print('built')\n"}),  # emit
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
 
     model = FakeModel(answers)

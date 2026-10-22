@@ -47,6 +47,7 @@ _NODE_FIELDS = frozenset(
         "blocking",
         "score_effect",
         "targets",
+        "optional_targets",
         "sources",
         "subgraph_entry",
         "subgraph_exit",
@@ -56,6 +57,7 @@ _NODE_FIELDS = frozenset(
         "inline_items",
         "limit",
         "feedback_keys",
+        "timeout_s",
     }
 )
 
@@ -104,6 +106,11 @@ class Node:
     #: through this list rather than through edges, because one out-edge per branch
     #: would schedule the successor as soon as the first branch finished.
     targets: tuple[str, ...] = ()
+    #: `fork`: targets whose failure does not fail the fork.  Must be a subset
+    #: of ``targets``.  A failed optional branch is skipped in the fact merge;
+    #: the lowered graph marks these nodes ``optional: true`` in their worker
+    #: spec so DSH and run.py also tolerate the failure.
+    optional_targets: tuple[str, ...] = ()
     #: `join`: the nodes this barrier waits for. Declared for the same reason.
     sources: tuple[str, ...] = ()
     #: `data`: the subgraph it runs once per item, and where the items come from.
@@ -118,6 +125,11 @@ class Node:
     #: enclosing phase, except the legacy validation role enters validation.
     resource_role: str | None = None
     feedback_keys: tuple[str, ...] = ()
+    #: `agent`: the most wall time the node's model work may take, in seconds, on
+    #: either runtime. Unset, the selected route's envelope applies. A node that
+    #: runs over fails like any other failed node, so an optional fork branch is
+    #: then missing rather than late.
+    timeout_s: int | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in NODE_KINDS:
@@ -153,6 +165,11 @@ class Node:
                     f"data node {self.id!r} needs subgraph_entry and subgraph_exit, "
                     "which say which part of the graph runs once per item"
                 )
+        if self.optional_targets:
+            if self.kind != "fork":
+                raise GraphError(f"node {self.id!r} is not a fork but declares optional_targets")
+            if set(self.optional_targets) - set(self.targets):
+                raise GraphError("optional_targets must be a subset of targets")
         if self.kind != "fork" and self.targets:
             raise GraphError(f"node {self.id!r} is not a fork but declares targets")
         if self.kind != "join" and self.sources:
@@ -166,6 +183,11 @@ class Node:
             )
         if self.resource_role not in (None, "work", "final_validation"):
             raise GraphError(f"node {self.id!r}: unknown resource_role {self.resource_role!r}")
+        if self.timeout_s is not None:
+            if self.kind != "agent":
+                raise GraphError(f"node {self.id!r} is not an agent but declares timeout_s")
+            if self.timeout_s < 1:
+                raise GraphError(f"node {self.id!r}: timeout_s must be >= 1")
 
     @property
     def resource_phase(self) -> str | None:
@@ -196,6 +218,7 @@ class Node:
             "blocking": self.blocking,
             "score_effect": self.score_effect,
             **({"targets": list(self.targets)} if self.targets else {}),
+            **({"optional_targets": list(self.optional_targets)} if self.optional_targets else {}),
             **({"sources": list(self.sources)} if self.sources else {}),
             **({"subgraph_entry": self.subgraph_entry} if self.subgraph_entry else {}),
             **({"subgraph_exit": self.subgraph_exit} if self.subgraph_exit else {}),
@@ -206,6 +229,7 @@ class Node:
                if self.inline_items else {}),
             **({"limit": self.limit} if self.limit else {}),
             **({"feedback_keys": list(self.feedback_keys)} if self.feedback_keys else {}),
+            **({"timeout_s": self.timeout_s} if self.timeout_s is not None else {}),
         }
 
     @classmethod
@@ -234,6 +258,7 @@ class Node:
             blocking=bool(state.get("blocking", True)),
             score_effect=str(state.get("score_effect", "affects")),
             targets=tuple(state.get("targets") or ()),
+            optional_targets=tuple(state.get("optional_targets") or ()),
             sources=tuple(state.get("sources") or ()),
             subgraph_entry=str(state.get("subgraph_entry", "")),
             subgraph_exit=str(state.get("subgraph_exit", "")),
@@ -243,6 +268,7 @@ class Node:
             inline_items=tuple(state.get("inline_items") or ()),
             limit=int(state.get("limit", 0)),
             feedback_keys=tuple(state.get("feedback_keys") or ()),
+            timeout_s=(int(state["timeout_s"]) if state.get("timeout_s") is not None else None),
         )
 
     def with_field(self, field_name: str, value: Any) -> "Node":
@@ -250,7 +276,7 @@ class Node:
         if field_name not in _NODE_FIELDS:
             raise GraphError(f"node {self.id!r} has no field {field_name!r}")
         if field_name in ("knobs", "reads", "writes", "produces", "tools", "targets",
-                          "sources", "inline_items", "feedback_keys") and isinstance(value, list):
+                          "optional_targets", "sources", "inline_items", "feedback_keys") and isinstance(value, list):
             value = tuple(value)
         return replace(self, **{field_name: value})
 

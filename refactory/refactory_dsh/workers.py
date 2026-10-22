@@ -227,12 +227,18 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         if budget_ledger:
             selected_context['budget_ledger'] = budget_ledger
         selected_context.update(role_routes={}, node_routes={})
+        if node.timeout is not None:
+            # The node's own bound is its model session's wall (`Node.timeout_s`).
+            selected_context['node_wall_s'] = node.timeout
+        is_optional = bool((declarations or {}).get(name, {}).get('optional'))
         payload = {'schema_version': 1, 'node_id': name,
                                     'prompt': node.prompt_template, 'reads': sorted(node.reads),
                                     'writes': sorted(node.writes),
                                     'produces': list((declarations or {}).get(name, {}).get('produces', [])),
                                     'post_checks': [check.model_dump() for check in node.post_checks],
                                     'model_context': selected_context}
+        if is_optional:
+            payload['optional'] = True
         serialized = json.dumps(payload, indent=2, sort_keys=True) + '\n'
         spec = directory / (hashlib.sha256(serialized.encode()).hexdigest() + '.json')
         spec.write_text(serialized)
@@ -242,10 +248,15 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         # timeout left unset derives from the selected route: the same envelope the
         # dispatched session runs under, computed once so the layers cannot
         # disagree about when a node's work ends (#307).
-        from refactory_dsh.model import DEFAULT_TIMEOUT_S, node_session_budget_s
+        from refactory_dsh.model import DEFAULT_TIMEOUT_S, NODE_DISPATCH_OVERHEAD_S, node_session_budget_s
         attempts = max(1, int(selected_context.get('attempts') or 1))
         per_completion = int(selected_context.get('timeout_s') or DEFAULT_TIMEOUT_S)
-        command_timeout_s = node.timeout if node.timeout is not None else node_session_budget_s(attempts, per_completion)
+        if node.timeout is not None:
+            # The session inside stops at the node's own bound; the dispatch keeps
+            # the overhead a derived envelope has, so the session ends first.
+            command_timeout_s = node.timeout + NODE_DISPATCH_OVERHEAD_S
+        else:
+            command_timeout_s = node_session_budget_s(attempts, per_completion)
         node.dispatch_command = f'{sys.executable} -m refactory_dsh.worker_node ' + shlex.quote(str(spec))
         node.command_timeout_s = command_timeout_s
     return result

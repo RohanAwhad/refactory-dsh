@@ -191,9 +191,20 @@ def main() -> int:
             if hashlib.sha256(serialized.encode()).hexdigest() != path.stem:
                 raise ValueError('worker spec was modified after graph preparation; refusing execution')
         spec = json.loads(serialized)
-        receipt = execute(spec, Path.cwd())
-        print(json.dumps({'node': receipt['node'], 'status': receipt['status']}))
-        return 0
+        try:
+            receipt = execute(spec, Path.cwd())
+            print(json.dumps({'node': receipt['node'], 'status': receipt['status']}))
+            return 0
+        except Exception as error:
+            if spec.get('optional'):
+                node_id = spec.get('node_id', 'unknown')
+                reviews_dir = workdir / 'reviews'
+                reviews_dir.mkdir(parents=True, exist_ok=True)
+                (reviews_dir / f'{node_id}-missing.txt').write_text(
+                    f'{type(error).__name__}: {error}\n')
+                print(json.dumps({'node': node_id, 'status': 'missing'}))
+                return 0
+            raise
     except Exception as error:
         print(f'worker: {error}', file=sys.stderr)
         return 1

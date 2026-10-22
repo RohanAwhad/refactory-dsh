@@ -717,15 +717,15 @@ def test_prep_failure_never_reported_as_unbuilt(tmp_path, monkeypatch):
     )
 
 
-# ── Integration: fast-mode gate_verification prep_triage routing ───────────
+# ── Integration: fast-mode gate_check prep_triage routing ──────────────────
 
 
-def test_gate_verification_routes_prep_triage_without_wrapping(tmp_path, monkeypatch):
-    """gate_verification uses the digest directly for prep_triage, without
+def test_gate_check_routes_prep_triage_without_wrapping(tmp_path, monkeypatch):
+    """gate_check uses the digest directly for prep_triage, without
     the 'requested runtime check failed' wrapping.
 
-    Covers fast_ops.py:772 (check_data.get("prep_triage")) and :774
-    (check_data.get("digest")).
+    Covers fast_ops.gate_check's check_data.get("prep_triage") branch and its
+    check_data.get("digest") detail.
     """
     from refactory_dsh import lowering, fast_ops, repo_change
     from refactory_dsh.run import run_node
@@ -764,9 +764,9 @@ def test_gate_verification_routes_prep_triage_without_wrapping(tmp_path, monkeyp
     check_data = json.loads((run_dir / "focused-check.json").read_text())
     assert check_data.get("prep_triage") is True
 
-    # Run gate_verification and check the repair_feedback fact.
-    verdict = run_node(f"{fast_ops.__name__}:gate_verification", workdir=run_dir,
-                       node_id="gate_verification")
+    # Run gate_check and check the repair_feedback fact.
+    verdict = run_node(f"{fast_ops.__name__}:gate_check", workdir=run_dir,
+                       node_id="gate_check")
     facts = json.loads((run_dir / "facts.json").read_text())
     repair_fb = facts.get("repair_feedback", "")
     assert "coverage error: uncovered schema" in repair_fb, (
@@ -775,3 +775,34 @@ def test_gate_verification_routes_prep_triage_without_wrapping(tmp_path, monkeyp
     assert "requested runtime check failed" not in repair_fb, (
         f"prep_triage should not be wrapped with 'requested runtime check failed': {repair_fb!r}"
     )
+
+
+# ── Unit: base_clean guard on _read_prep_cache (dm-162) ──────────────────
+
+
+def test_read_prep_cache_rejects_dirty_base(tmp_path):
+    """_read_prep_cache rejects entries without base_clean=True (dm-162)."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    key = "test_dirty_guard_key"
+
+    # Write a valid prep-cache entry with base_clean=True.
+    base_check._write_prep_cache(run_dir, key, {
+        "base_ok": True, "base_step": None,
+        "base_error": None, "base_returncode": None,
+    }, base_clean=True)
+    assert base_check._read_prep_cache(run_dir, key) is not None
+
+    # Tamper: set base_clean to False.
+    path = run_dir / base_check.PREP_CACHE_FILE
+    data = json.loads(path.read_text())
+    data["base_clean"] = False
+    path.write_text(json.dumps(data))
+    assert base_check._read_prep_cache(run_dir, key) is None, \
+        "prep cache with base_clean=False should be a miss"
+
+    # Tamper: remove base_clean entirely (old format).
+    del data["base_clean"]
+    path.write_text(json.dumps(data))
+    assert base_check._read_prep_cache(run_dir, key) is None, \
+        "prep cache without base_clean should be a miss"

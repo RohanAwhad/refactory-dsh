@@ -26,7 +26,9 @@ from typing import Any
 
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
-from refactory_dsh.create_ops import CREATION_DIRECTIVE, RESEARCH_SCHEMA, STRATEGY_SCHEMA
+from refactory_dsh.create_ops import (
+    CREATION_DIRECTIVE, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE, STRATEGY_SCHEMA,
+)
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
@@ -427,6 +429,7 @@ class CreateMode(Mode):
                 "If `staging/package-diff.json` exists, use it to focus checks on what changed from the source package. "
                 "A check you did not run is not a check that passed — say which ones you "
                 "skipped."
+                + " " + SEVERITY_RULE
             ),
             reads=("brief.json", "design.md", "staging/package-diff.json"),
             writes=("reviews/health-check.md",),
@@ -448,6 +451,7 @@ class CreateMode(Mode):
                 "If `staging/package-diff.json` exists, review the diff between the source and the staged package. "
                 "Record findings in `reviews/code-review.md`. A defect that "
                 "would stop the package working is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. Style is not blocking."
+                + " " + SEVERITY_RULE
             ),
             reads=("design.md", "emit.txt", "staging/package-diff.json"),
             writes=("reviews/code-review.md",),
@@ -479,6 +483,7 @@ class CreateMode(Mode):
                 "Write `reviews/qa.md` with each check and its exact result. Every "
                 "acceptance criterion in the strategy must have a check. Anything that "
                 "breaks an acceptance criterion is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
+                + " " + SEVERITY_RULE
             ),
             reads=("brief.json", "strategy.json", "staging/package-diff.json"),
             writes=("reviews/qa.md",),
@@ -499,10 +504,12 @@ class CreateMode(Mode):
             "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
             reads=("reviews/qa-synthesized.md", "reviews/health-check.md",
                    "reviews/code-review.md", "reviews/qa.md"),
-            writes=("reviews/qa-gate.txt",),
+            writes=("reviews/qa-gate.txt", "reviews/finding-sources.json",
+                    "reviews/follow-ups.json", "reviews/follow-ups.md"),
             produces=("qa_gate",),
             max_iterations=4,
-            notes="proceed only when every review ran and none is blocking",
+            notes="proceed when every review ran and none found a core defect; "
+                  "non-core findings become follow-ups",
         ))
 
         # ── create-v2: the overwatch pass ──────────────────────────────────
@@ -521,6 +528,7 @@ class CreateMode(Mode):
                 "against the brief and latest intent ledger. Required behavior without "
                 "adequate evidence is failed or unverified with a precise reason. "
                 "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
+                + SEVERITY_RULE + " " + OVERWATCH_VERDICT_RULE + " "
                 "Write `reviews/overwatch.md` ending with exactly `VERDICT: PASS` or "
                 "`VERDICT: FAIL`. A missing required check cannot pass."
             ),
@@ -532,10 +540,12 @@ class CreateMode(Mode):
         graph.add(Node(
             "gate_overwatch", "gate", evaluator=f"{OPS}:gate_overwatch",
             reads=("reviews/overwatch.md",),
-            writes=("reviews/overwatch-gate.txt",),
+            writes=("reviews/overwatch-gate.txt", "reviews/follow-ups.json",
+                    "reviews/follow-ups.md"),
             produces=("overwatch_review",),
             max_iterations=4,
-            notes="proceed only on a stated PASS verdict",
+            notes="proceed on a stated PASS verdict with no core finding; "
+                  "non-core findings become follow-ups",
         ))
 
         graph.add(Node(

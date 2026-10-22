@@ -15,7 +15,7 @@ from refactory_dsh.lowering import to_workflow
 
 
 TOPOLOGY_NODE_FIELDS = {
-    '_type', 'id', 'targets', 'sources', 'subgraph_entry', 'subgraph_exit',
+    '_type', 'id', 'targets', 'optional_targets', 'sources', 'subgraph_entry', 'subgraph_exit',
     'evaluator_type', 'max_iterations', 'role', 'expand',
 }
 

@@ -205,8 +205,9 @@ def _design_answers(emit: list[str]) -> list[str]:
         DESIGN_DOC_ANSWER,
         DESIGN_REVIEW_ANSWER,
         *emit,
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
 
 
@@ -217,11 +218,11 @@ def test_the_design_graph_is_a_different_shape_from_a_package_one():
         "delivery_gate", "design_doc", "design_review", "done",
         "emit", "fork_qa", "gate_design_review", "gate_overwatch",
         "gate_pitfalls", "gate_qa", "gate_research", "gate_strategy",
-        "gate_verification",
         "health_checker", "join_qa",
         "materialise", "overwatch", "pick_corrections", "pitfalls_researcher",
         "prepare", "qa_director", "record_findings",
-        "report", "research_director", "strategy_director", "synthesize_qa",
+        "report", "research_director", "route_design_review", "route_strategy",
+        "strategy_director", "synthesize_qa",
         "synthesize_strategy", "verifier",
     ], "the graph is design-v2's phases, not v1's"
     assert graph.nodes["check"].evaluator.endswith("check_artifact")
@@ -609,7 +610,7 @@ def test_design_review_gate_accepts_colon_description_marker(tmp_path):
 
 
 def test_design_review_gate_catches_misspelled_marker(tmp_path):
-    """A site with ``[chnaged]`` gets the typo-detection message."""
+    """A site with ``[chnaged]`` gets the typo-detection message, as an advisory item."""
     ctx = nn.RunContext(tmp_path)
     ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
     (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
@@ -618,6 +619,8 @@ def test_design_review_gate_catches_misspelled_marker(tmp_path):
     design = (
         "# Do the thing\n\n"
         "## Summary\n\nFix it.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n"
+        "| \"do a thing\" | § Changes | test_tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `file.py:1` — [chnaged]\n\n"
         "## Docs\n\n- docs/models.md\n\n"
@@ -627,9 +630,10 @@ def test_design_review_gate_catches_misspelled_marker(tmp_path):
     ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "possible misspelled marker" in verdict.reason
-    assert "chnaged" in verdict.reason
+    assert verdict == "proceed"
+    advisory = ctx.facts["design_review_advisory"]
+    assert "possible misspelled marker" in advisory
+    assert "chnaged" in advisory
 
 
 def test_design_review_gate_marked_site_with_bracket_words_no_problem(tmp_path):

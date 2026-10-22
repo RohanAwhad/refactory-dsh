@@ -63,7 +63,11 @@
       "targets": [
         "health_checker",
         "code_reviewer",
-        "qa_director"
+        "qa_director",
+        "verifier"
+      ],
+      "optional_targets": [
+        "verifier"
       ],
       "_type": "ForkNode"
     },
@@ -101,12 +105,6 @@
       "id": "gate_strategy",
       "evaluator_type": "user",
       "max_iterations": 4,
-      "_type": "GateNode"
-    },
-    "gate_verification": {
-      "id": "gate_verification",
-      "evaluator_type": "fn",
-      "max_iterations": 5,
       "_type": "GateNode"
     },
     "health_checker": {
@@ -170,6 +168,18 @@
       "max_iterations": 1,
       "_type": "AgentNode"
     },
+    "route_design_review": {
+      "id": "route_design_review",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
+    "route_strategy": {
+      "id": "route_strategy",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
     "strategy_director": {
       "id": "strategy_director",
       "role": "ceo",
@@ -206,7 +216,7 @@
     },
     {
       "source": "check",
-      "target": "verifier",
+      "target": "fork_qa",
       "condition": "proceed"
     },
     {
@@ -216,7 +226,7 @@
     },
     {
       "source": "check_design_claims",
-      "target": "design_review",
+      "target": "route_design_review",
       "condition": "proceed"
     },
     {
@@ -261,11 +271,6 @@
     },
     {
       "source": "gate_design_review",
-      "target": "design_review",
-      "condition": "review_reloop"
-    },
-    {
-      "source": "gate_design_review",
       "target": "gate_strategy",
       "condition": "proceed"
     },
@@ -291,7 +296,7 @@
     },
     {
       "source": "gate_pitfalls",
-      "target": "strategy_director",
+      "target": "route_strategy",
       "condition": "proceed"
     },
     {
@@ -328,16 +333,6 @@
       "source": "gate_strategy",
       "target": "synthesize_strategy",
       "condition": "reloop"
-    },
-    {
-      "source": "gate_verification",
-      "target": "emit",
-      "condition": "reloop"
-    },
-    {
-      "source": "gate_verification",
-      "target": "fork_qa",
-      "condition": "proceed"
     },
     {
       "source": "join_qa",
@@ -390,6 +385,26 @@
       "condition": null
     },
     {
+      "source": "route_design_review",
+      "target": "design_review",
+      "condition": "proceed"
+    },
+    {
+      "source": "route_design_review",
+      "target": "gate_design_review",
+      "condition": "scoped"
+    },
+    {
+      "source": "route_strategy",
+      "target": "strategy_director",
+      "condition": "proceed"
+    },
+    {
+      "source": "route_strategy",
+      "target": "synthesize_strategy",
+      "condition": "scoped"
+    },
+    {
       "source": "strategy_director",
       "target": "synthesize_strategy",
       "condition": null
@@ -406,7 +421,7 @@
     },
     {
       "source": "verifier",
-      "target": "gate_verification",
+      "target": "join_qa",
       "condition": null
     }
   ]

@@ -112,10 +112,15 @@ def _report(ctx: Any, status: str, findings: list[str]) -> dict[str, Any]:
     }
 
 
+#: How the fast report marks a non-core finding the run delivered with.
+FOLLOW_UP = "follow-up: "
+
+
 def _advisories(ctx: Any) -> list[str]:
-    """The advisory notes gate_qa recorded, carried into the final report."""
+    """The advisory notes and follow-ups gate_qa recorded, carried into the final report."""
     findings = ctx.read_json("fast-report.json", {}).get("findings") or []
-    return [f for f in findings if str(f).startswith(evidence.ADVISORY_REPO_QUESTIONS)]
+    return [f for f in findings if str(f).startswith(
+        (evidence.ADVISORY_REPO_QUESTIONS, evidence.ADVISORY_CORRECTION_AUDIT, FOLLOW_UP))]
 
 
 def _repair(ctx: Any, findings: list[str], *, kind: str = "check",
@@ -583,10 +588,13 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                     ).strip()
 
                 # Write inherited and commit to check-record.json (correction item 2).
+                _base_reset_list = getattr(ctx, '_base_reset', [])
                 cr_record.update({
                     "inherited": sorted(filtered.inherited),
                     "commit": str(ctx.facts.get("commit", "")),
                 })
+                if _base_reset_list:
+                    cr_record["base_reset"] = _base_reset_list
                 ctx.write_json("check-record.json", cr_record)
 
                 # R6: store failure history and blocker for convergence detection.
@@ -620,6 +628,8 @@ def gate_qa(ctx: Any) -> str:
     qa = ctx.read_json("focused-qa.json", None)
     check = ctx.read_json("focused-check.json", {})
     findings = []
+    non_core: list[str] = []
+    non_core_checks: list[str] = []
     checked_source = ctx.read_json("focused-source.json", {})
     output = str(ctx.facts.get("artifact") or ctx.facts.get("package_path") or "")
     try:
@@ -643,13 +653,21 @@ def gate_qa(ctx: Any) -> str:
                 if not isinstance(entry, dict) or not all(entry.get(key) for key in ("name", "command", "status", "evidence")):
                     findings.append("focused QA check lacks its command/status/evidence")
                 elif entry["status"] != "pass":
-                    findings.append(f"focused QA check did not pass: {entry['name']}")
-        if qa.get("status") != "pass":
+                    failed = f"focused QA check did not pass: {entry['name']}"
+                    # A check of something outside the core is named with its tag.
+                    (non_core_checks if create_ops.is_non_core(str(entry["name"]))
+                     else findings).append(failed)
+        listed = isinstance(qa.get("findings"), list) and isinstance(qa.get("not_run"), list)
+        core, non_core = create_ops.split_core(
+            [str(item) for item in qa["findings"] if str(item).strip()] if listed else [])
+        non_core = non_core_checks + non_core
+        # A fail that rests only on non-core findings is no core defect.
+        if qa.get("status") != "pass" and (core or not non_core):
             findings.append("focused QA did not pass")
-        if not isinstance(qa.get("findings"), list) or not isinstance(qa.get("not_run"), list):
+        if not listed:
             findings.append("focused QA must explicitly list findings and checks not run")
         else:
-            findings.extend(str(item) for item in qa["findings"] if str(item).strip())
+            findings.extend(core)
     check_failed = check.get("status") == "fail"
     if check_failed:
         check_output = check.get("stderr") or check.get("stdout") or ""
@@ -703,6 +721,17 @@ def gate_qa(ctx: Any) -> str:
             return Verdict("review_reloop", rq_report)
         advisory = [evidence.advisory_repo_questions(rq_findings)]
         findings = []
+    # ── verifier advisory handling (design_fast only) ──
+    from refactory_dsh.verification import parse_verification_findings
+    verifier_raw = parse_verification_findings(ctx) if ctx.exists("reviews/verification.md") else []
+    verifier_filtered = [f for f in verifier_raw
+                         if f != "reviews/verification.md is empty or missing"]
+    verifier_text = "\n".join(verifier_filtered) if verifier_filtered else ""
+
+    # Case 1: QA blocking + verifier findings → combine into one repair round
+    if findings and verifier_text:
+        findings.append("[verifier] " + verifier_text + "\n\n" + create_ops.VERIFIER_RESPONSE)
+
     if findings:
         # Classify only refactory's own text; check stderr/stdout is target text
         # and must not be word-scanned (correction 1: gate_qa classifies target text).
@@ -714,19 +743,126 @@ def gate_qa(ctx: Any) -> str:
                 f for f in findings
                 if not f.startswith("requested runtime check failed")
                 and not f.startswith("[repo-questions]")
+                and not f.startswith("[verifier]")
                 and f != robustness_notes
                 and f not in correction_problems
             ]
         else:
             refactory_findings = [f for f in non_rq_findings
-                                  if f != robustness_notes and f not in correction_problems]
+                                  if f != robustness_notes and f not in correction_problems
+                                  and not f.startswith("[verifier]")]
         if refactory_findings:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
+        _write_finding_sources_fast(ctx, qa, verifier_filtered)
+        if non_core:
+            findings.append(create_ops.non_core_ride_along(non_core))
         return _repair(ctx, findings, kind='check' if check_failed else 'review')
+
+    # Case 2: Only verifier findings, QA passed. The verifier never gets a builder
+    # round of its own; the pull request lists what it found.
+    verifier_rebuttals = _parse_verifier_rebuttals(ctx) if verifier_filtered else []
+    create_ops.record_verification_unresolved(ctx, verifier_filtered, verifier_rebuttals)
+
+    # Case 3: No core defect — proceed, with any non-core findings as follow-ups
+    create_ops.record_follow_ups(ctx, "focused_qa", non_core)
+    not_measured = evidence.correction_audit_advisories(ctx)
+    if not_measured:
+        advisory.append(evidence.advisory_correction_audit(not_measured))
     ctx.set_fact("qa_passed", True)
-    ctx.write_json("fast-report.json", _report(ctx, "qa_passed", advisory))
+    _write_finding_sources_fast(ctx, qa, verifier_filtered,
+                                rebuttals=verifier_rebuttals, proceeding=True)
+    ctx.write_json("fast-report.json", _report(
+        ctx, "qa_passed", advisory + [FOLLOW_UP + finding for finding in non_core]))
     return "proceed"
+
+
+def _finding_description(finding: str) -> str:
+    """Strip the optional file:line: prefix from a verifier finding for matching."""
+    m = re.match(r'\S+:\d+:\s*', finding)
+    return finding[m.end():] if m else finding
+
+
+def _parse_verifier_rebuttals(ctx: Any) -> list[str]:
+    """Parse ## Verifier findings section from emit.txt for rebuttals."""
+    if not ctx.exists("emit.txt"):
+        return []
+    text = ctx.read_text("emit.txt")
+    lines = text.splitlines()
+    in_section = False
+    rebuttals: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## Verifier findings"):
+            in_section = True
+            continue
+        if in_section:
+            if stripped.startswith("## ") or stripped.startswith("===FILE:"):
+                break
+            if "rebutted:" in stripped.lower() or "fixed" in stripped.lower():
+                rebuttals.append(stripped)
+    return rebuttals
+
+
+def _write_finding_sources_fast(ctx: Any, qa: Any, verifier_findings: list[str],
+                                rebuttals: list[str] | None = None,
+                                proceeding: bool = False) -> None:
+    """Write reviews/finding-sources.json on every gate_qa visit (fast mode)."""
+    existing: list[dict[str, Any]] = []
+    if ctx.exists("reviews/finding-sources.json"):
+        try:
+            existing = json.loads(ctx.read_text("reviews/finding-sources.json"))
+        except (json.JSONDecodeError, ValueError):
+            existing = []
+
+    round_num = max((e.get("last_round", 0) for e in existing), default=0) + 1
+    rebuttals = rebuttals or []
+
+    # Current QA findings from focused-qa.json
+    current: dict[tuple[str, str], str] = {}
+    if isinstance(qa, dict):
+        for check_entry in (qa.get("checks") or []):
+            if isinstance(check_entry, dict) and check_entry.get("status") != "pass":
+                finding_text = f"focused QA check did not pass: {check_entry.get('name', '')}"
+                current[("focused_qa", finding_text)] = "focused-qa.json"
+        for finding_text in (qa.get("findings") or []):
+            if str(finding_text).strip():
+                current[("focused_qa", str(finding_text))] = "focused-qa.json"
+
+    for finding in verifier_findings:
+        current[("verifier", finding)] = "reviews/verification.md"
+
+    entries: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in existing:
+        key = (entry["source"], entry["finding"])
+        seen.add(key)
+        entry = dict(entry)
+        if key in current:
+            entry["last_round"] = round_num
+            if entry["source"] == "verifier" and any(_finding_description(entry["finding"]).lower() in r.lower() for r in rebuttals):
+                entry["fate"] = "rebutted"
+            else:
+                entry["fate"] = "unresolved"
+        else:
+            entry["fate"] = "fixed"
+        entries.append(entry)
+
+    for key, review_path in current.items():
+        if key not in seen:
+            source, finding = key
+            fate = "unresolved"
+            if source == "verifier" and any(_finding_description(finding).lower() in r.lower() for r in rebuttals):
+                fate = "rebutted"
+            entries.append({
+                "source": source, "review_path": review_path,
+                "finding": finding, "first_round": round_num,
+                "last_round": round_num, "fate": fate,
+            })
+
+    ctx.write_text("reviews/finding-sources.json",
+                   json.dumps(create_ops.classify_finding_sources(entries, round_num, proceeding),
+                              indent=2) + "\n")
 
 
 def smoke(ctx: Any) -> dict[str, Any]:
@@ -746,23 +882,19 @@ def report_package(ctx: Any) -> dict[str, Any]:
     return {"created": json.dumps(payload)}
 
 
-def gate_verification(ctx: Any) -> str:
-    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise.
+def gate_check(ctx: Any) -> str:
+    """Route check failures and guardedness blocks before the review fork.
 
-    Handles three cases from focused_check (an op node that cannot return Verdicts):
+    Handles two cases from focused_check (an op node that cannot return Verdicts):
 
     1. **Check failure** — the check failed; route to _repair with the check
        failure detail so a repair_attempts slot is spent and emit receives the
-       check failure (not the verifier's noise).
+       check failure.
     2. **Guardedness block** — new tests pass on the base; route to _repair
        with kind='check'.
-    3. **Verifier findings** — advisory reloop that does NOT spend
-       repair_attempts.  After ``VERIFIER_GATE_LIMIT`` advisory reloops the
-       gate proceeds and records unresolved findings in
-       ``reviews/verification-unresolved.md``.
-    """
-    from refactory_dsh.verification import VERIFIER_GATE_LIMIT, parse_verification_findings
 
+    When neither applies, proceed to the review fork.
+    """
     check_data = ctx.read_json("focused-check.json", {})
 
     # 1. Check failure → _repair (spends a repair_attempts slot).
@@ -803,24 +935,7 @@ def gate_verification(ctx: Any) -> str:
         detail = ctx.read_text("check.txt") if ctx.exists("check.txt") else "non-guarding tests"
         return _repair(ctx, [detail.strip()], kind="check")
 
-    # 3. Verifier findings — advisory, never spend repair_attempts.
-    findings = parse_verification_findings(ctx)
-    if not findings:
-        return "proceed"
-
-    feedback = "\n".join(findings)
-
-    used = int(ctx.facts.get("verification_iterations_used", 0))
-    ctx.set_fact("verification_iterations_used", used + 1)
-
-    if used + 1 >= VERIFIER_GATE_LIMIT:
-        # Proceed with unresolved findings — never end a run on verifier noise.
-        ctx.write_text("reviews/verification-unresolved.md", feedback + "\n")
-        return "proceed"
-
-    ctx.write_text("repair.txt", feedback + "\n")
-    ctx.set_fact("repair_feedback", feedback)
-    return Verdict("reloop", feedback)
+    return "proceed"
 
 
 def report_artifact(ctx: Any) -> dict[str, Any]:

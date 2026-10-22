@@ -52,8 +52,9 @@ PRE_GATE = [
 
 POST_GATE_PROCEED = [
     render({"tool.py": "print('built')\n"}),
+    *REVIEW_ANSWERS[:3],
     VERIFICATION_ANSWER,
-    *REVIEW_ANSWERS,
+    REVIEW_ANSWERS[3],
 ]
 
 POST_GATE_RELOOP = [
