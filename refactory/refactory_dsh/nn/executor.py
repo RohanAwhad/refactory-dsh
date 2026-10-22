@@ -1040,6 +1040,9 @@ class Executor:
         client = self.ctx.model
         if callable(getattr(client, "for_node", None)):
             client = client.for_node(node.id, role=node.role)
+        # The node's own bound on its session, as the spine applies it (#307).
+        if node.timeout_s is not None and callable(getattr(client, "with_wall", None)):
+            client = client.with_wall(node.timeout_s)
         # Re-fill feedback keys before rendering — a failure to re-derive
         # a declared key refuses the dispatch (dm-120).
         values = {**self.ctx.knobs, **self.ctx.facts}

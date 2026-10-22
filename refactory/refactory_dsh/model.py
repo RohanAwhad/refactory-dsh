@@ -181,6 +181,7 @@ class DshModelClient:
         project: Path | None = None,
         routes_resolved: bool = False,
         routing_provenance: dict[str, Any] | None = None,
+        node_wall_s: int | None = None,
     ) -> None:
         from refactory_dsh.workers import validate_route
         inherited = json.loads(os.environ.get("REFACTORY_WORKER_CONTEXT") or "{}")
@@ -233,6 +234,9 @@ class DshModelClient:
         self._routing_provenance = copy.deepcopy(routing_provenance or {})
         self._node_id = ""
         self._role = "worker"
+        #: A node's own bound on its whole model session (`Node.timeout_s`), when
+        #: it declares one: the session stops there whatever the route allows.
+        self._node_wall_s = int(node_wall_s) if node_wall_s is not None else None
         self._worker_receipt: Path | None = None
         ledger = budget_ledger or os.environ.get("REFACTORY_BUDGET_LEDGER")
         self._budget = None
@@ -265,6 +269,12 @@ class DshModelClient:
         client._node_id, client._role = node, role
         for key, value in route.items():
             setattr(client, "_" + key, value)
+        return client
+
+    def with_wall(self, seconds: int) -> DshModelClient:
+        """A copy whose node session ends after ``seconds``, however the route is set."""
+        client = copy.copy(self)
+        client._node_wall_s = int(seconds)
         return client
 
     def with_budget(self, budget: Any) -> DshModelClient:
@@ -308,6 +318,7 @@ class DshModelClient:
             "role_routes": copy.deepcopy(self._role_routes), "node_routes": copy.deepcopy(self._node_routes),
             "provider_config": copy.deepcopy(self._provider_config),
             "budget_ledger": str(self._budget.path) if self._budget is not None else "",
+            **({"node_wall_s": self._node_wall_s} if self._node_wall_s is not None else {}),
         }
 
     def _environment(self, *, target_workdir: "Path | None" = None) -> dict[str, str]:
@@ -500,6 +511,9 @@ class DshModelClient:
         else:
             budget_s = self._timeout_s
             stop_at = None
+        if self._node_wall_s is not None and self._node_wall_s < budget_s:
+            budget_s = self._node_wall_s
+            stop_at = time.monotonic() + budget_s
         for attempt in range(1, self._attempts + 1):
             self._raise_if_cancelled()
             self._checkpoint()

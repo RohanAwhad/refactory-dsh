@@ -1,10 +1,13 @@
 """Independent verification step: design-blind, running in parallel with the reviewers.
 
 The verifier is given the brief, the diff and the repository — never design.md.
-It applies the evidence log's design-blind methods (M1, M2, M3, M11, M12, M13, M15)
-and reports each finding with a runnable counterexample or a cited file:line.
-It runs as an optional branch of the review fork, so its findings are advisory
-and a failure does not block the run.
+It applies the evidence log's design-blind methods that no other reviewer applies
+(M1, M2, M13, M15) and reports each finding with a runnable counterexample or a
+cited file:line. The code reviewers already apply M2, M3, M11 and M12 to every
+changed function (`REPO_CHANGE_REVIEW_INSTRUCTIONS`), so the verifier spends its
+bounded time (`VERIFIER_TIMEOUT_S`) on what only a reader without the design finds.
+It runs as an optional branch of the review fork: a verifier that fails or runs out
+of time is missing, and its findings never get a builder round of their own.
 
 See docs/hardening.md §15 for why the verifier is design-blind.
 """
@@ -13,9 +16,16 @@ from __future__ import annotations
 
 from typing import Any
 
+#: The most wall time the verifier's session may take, on either runtime. It runs
+#: beside the three reviews, which take about eight minutes, so a verifier inside
+#: this bound adds little or nothing to the round.
+VERIFIER_TIMEOUT_S = 600
+
 _METHODS_HEADER = """
 Apply each of these design-blind verification methods to the brief, the diff
-and the repository. Do not read design.md or strategy.json.
+and the repository. Do not read design.md or strategy.json. The code reviewers
+already check callers, shared state and the diff's own claims; do not repeat
+that work. You have about ten minutes: report what you have found by then.
 """
 
 M1_METHOD = """M1  Adversarial inputs — find inputs the change accepts that would produce
@@ -46,9 +56,6 @@ VERIFICATION_METHODS = (
     _METHODS_HEADER + "\n"
     + M1_METHOD + "\n"
     + M2_METHOD + "\n"
-    + M3_METHOD + "\n"
-    + M11_METHOD + "\n"
-    + M12_METHOD + "\n"
     + M13_METHOD + "\n"
     + M15_METHOD + "\n"
 )
@@ -131,6 +138,7 @@ def wire_verification(graph: Any, *, check_node: str, proceed_target: str,
     graph.add(Node(
         "verifier", "agent",
         prompt_template=VERIFIER_PROMPT,
+        timeout_s=VERIFIER_TIMEOUT_S,
         reads=("brief.json", "test-guardedness.json", "changes.diff"),
         writes=("reviews/verification.md",),
         produces=("verification",),

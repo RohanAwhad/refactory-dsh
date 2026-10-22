@@ -1088,11 +1088,32 @@ needed the design; the rest were found by design-blind methods:
 - **M13** Boundary values
 - **M15** Weakened tests
 
+The three code reviewers apply M2, M3, M11 and M12 to every changed function
+(`REPO_CHANGE_REVIEW_INSTRUCTIONS`). The verifier applies the design-blind methods no
+reviewer applies, M1, M2, M13 and M15, so its time goes to what only a reader without
+the design finds.
+
 The verifier is given the brief, the diff and the repository — never
 design.md. It runs in parallel with the reviews as an optional branch of
-the review fork. Its findings are advisory: they never spend review
-attempts, never fail or halt a run on their own. A verifier branch that
-fails or returns nothing is recorded as missing.
+the review fork, bounded at `VERIFIER_TIMEOUT_S` (600 s) on both runtimes: the
+node declares `timeout_s`, the spine gives its dispatched session that wall
+(`node_wall_s`) plus the usual dispatch overhead, and the walker gives its model
+client the same wall. A verifier that fails, returns nothing or runs out of time is
+recorded as missing.
+
+**It never gets a builder round of its own.** When a review finds a core defect, the
+verifier's findings ride along in the same feedback, with the instruction to answer
+each under `## Verifier findings` in emit.txt (fixed, or rebutted with a cited
+file:line). Otherwise `gate_qa` writes them, with any rebuttal, to
+`reviews/verification-unresolved.md`. Overwatch reads that file and makes a finding
+that breaks an ask or existing behaviour, unrebutted, its own core finding, which
+sends the build back; the pull request lists the rest. In the fast modes, with no
+Overwatch, the pull request lists them. A round with no verifier finding empties the
+file, so an earlier round's findings are never reported as current.
+
+This replaced an advisory builder round (#475) that the verifier took whenever the
+reviews passed and it did not: a full emit, check and review cycle spent on findings
+no other gate judged.
 
 ### Why design-blind
 
@@ -1453,12 +1474,8 @@ What a gate proceeds with is recorded by `record_follow_ups` and reaches the pul
 request through `delivery._body`.
 
 **The cap.** A full-mode run has `attempts` builder rounds (`check_attempts` in design;
-three by default),
-shared by check failures and review reloops. The verifier's advisory round used to
-come on top of it; `take_advisory_round` now spends a round from the same cap, never
-the last one (a repair must remain for whatever the advisory rebuild breaks), and
-otherwise sends the verifier's findings to the pull request's unresolved verification
-list instead.
+three by default), shared by check failures and review reloops. The verifier never
+adds a round of its own (§15).
 
 **Held by.** `test_follow_ups.py`.
 

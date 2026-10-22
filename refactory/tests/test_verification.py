@@ -51,9 +51,14 @@ def test_verifier_reads_changes_diff():
     assert "changes.diff" in graph.nodes["verifier"].reads
 
 
-def test_verification_methods_constant():
-    for method in ("M1", "M2", "M3", "M11", "M12", "M13", "M15"):
+def test_the_verifier_applies_only_the_methods_no_reviewer_applies():
+    from refactory_dsh.authoring_evidence import REPO_CHANGE_REVIEW_INSTRUCTIONS
+    for method in ("M1 ", "M2 ", "M13 ", "M15 "):
         assert method in VERIFICATION_METHODS
+    # Callers, claims and shared state are the code reviewers' (every changed function).
+    for method in ("M3 ", "M11 ", "M12 "):
+        assert method not in VERIFICATION_METHODS
+        assert method in REPO_CHANGE_REVIEW_INSTRUCTIONS
 
 
 def test_verifier_prompt_instructs_output_format():
@@ -107,10 +112,10 @@ def test_verifier_has_final_validation_resource_role_full_mode():
 # ── gate_qa verifier handling ─────────────────────────────────────────────
 
 
-def test_gate_qa_declares_verification_advisory_used():
-    graph = DesignMode().build()
-    gate = graph.nodes["gate_qa"]
-    assert "verification_advisory_used" in gate.produces
+def test_the_verifier_never_gets_a_round_of_its_own():
+    # No gate counts verifier rounds, because there are none to count.
+    assert "verification_advisory_used" not in DesignMode().build().nodes["gate_qa"].produces
+    assert "verification_advisory_used" not in DesignFastMode().build().nodes["gate_qa"].produces
 
 
 def test_gate_qa_max_iterations_raised():
@@ -196,9 +201,9 @@ def test_verification_pass_proceeds_to_reviews_full_mode(tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
 
-def test_advisory_fix_round_full_mode(tmp_path, monkeypatch):
-    """Verifier FAIL with QA PASS → one advisory reloop → proceed.
-    review_attempts_used unchanged, verification-unresolved.md written."""
+def test_verifier_only_findings_go_to_overwatch_and_the_pr_not_a_round(tmp_path, monkeypatch):
+    """Verifier FAIL with QA PASS: no builder round. Overwatch reads the finding, and
+    the pull request lists it."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
@@ -207,29 +212,64 @@ def test_advisory_fix_round_full_mode(tmp_path, monkeypatch):
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-        # Round 1
         render({"tool.py": "print('built')\n"}),
         "health: passed", "code: passed", "qa: passed",
         VERIFICATION_FAIL,
-        # Advisory reloop → emit (round 2): builder rebuts the finding
-        "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
+        "VERDICT: PASS",
+    ]
+    model = FakeModel(answers)
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["pr"]["value"] = False
+    mode.load_state_dict(state)
+    result = mode.run(
+        tmp_path / "run", model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "advisory_full", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+    assert len([p for p in model.prompts if "What went wrong last time" in p]) == 1
+    assert int(result.facts.get("review_attempts_used", 0)) == 0
+    unresolved = (tmp_path / "run" / "reviews" / "verification-unresolved.md").read_text()
+    assert "negative values accepted" in unresolved
+    overwatch = next(p for p in model.prompts if "You are the overwatch" in p)
+    assert "reviews/verification-unresolved.md" in overwatch
+    assert "is your own BLOCKING finding tagged `[core]`" in overwatch
+    assert "negative values accepted" in (tmp_path / "run" / "pull-request.md").read_text()
+
+
+def test_overwatch_sends_back_a_verifier_finding_that_breaks_an_ask(tmp_path, monkeypatch):
+    """The verifier's finding costs a round only when Overwatch finds it breaks an ask."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                               PITFALLS_ANSWER, RESEARCH_ANSWER,
+                               FakeModel, render)
+    VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
+    OVERWATCH_FAIL = ("BLOCKING: tool.py: negative values accepted, which the brief forbids "
+                      "[core: brief]\n\nVERDICT: FAIL")
+    answers = [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        render({"tool.py": "print('built')\n"}),
+        "health: passed", "code: passed", "qa: passed", VERIFICATION_FAIL,
+        OVERWATCH_FAIL,
         render({"tool.py": "print('built v2')\n"}),
         "health: passed", "code: passed", "qa: passed",
-        VERIFICATION_FAIL,
-        # gate_qa: advisory_used >= 1 → proceed
+        "No blocking findings.\n\nVERDICT: PASS",
         "VERDICT: PASS",
     ]
     model = FakeModel(answers)
     result = DesignMode().run(
         tmp_path / "run", model=model,
         verdicts={"gate_strategy": "proceed"},
-        task={"name": "advisory_full", "brief": "a tool", "check": "python tool.py"},
+        task={"name": "overwatch_verifier", "brief": "a tool", "check": "python tool.py"},
     )
     assert result.exit_ok, result.error
-    # review_attempts_used must NOT have been incremented by the verifier advisory
-    assert int(result.facts.get("review_attempts_used", 0)) == 0
-    assert int(result.facts.get("verification_advisory_used", 0)) >= 1
-    assert (tmp_path / "run" / "reviews" / "verification-unresolved.md").exists()
+    builders = [p for p in model.prompts if "What went wrong last time" in p]
+    assert len(builders) == 2
+    assert "which the brief forbids" in builders[1]
+    # The second round's verifier found nothing, so nothing stale is reported.
+    assert (tmp_path / "run" / "reviews" / "verification-unresolved.md").read_text() == ""
 
 
 def test_joint_fix_round(tmp_path, monkeypatch):
@@ -265,6 +305,7 @@ def test_joint_fix_round(tmp_path, monkeypatch):
     assert len(emit_prompts) >= 2
     second_emit = emit_prompts[1]
     assert "missing feature" in second_emit and "noise" in second_emit
+    assert "respond in emit.txt under ## Verifier findings" in second_emit
 
 
 def test_verifier_branch_failure(tmp_path, monkeypatch):
@@ -359,9 +400,9 @@ def test_crashed_branch_fast_mode(tmp_path, monkeypatch, crash, survives):
 
 
 def test_finding_sources_json(tmp_path, monkeypatch):
-    """Three-round test: round 1 QA+verifier findings, round 2 QA fixed
-    and verifier rebutted, round 3 proceed.  Asserts each entry's fate
-    and first_round/last_round."""
+    """Round 1: QA and verifier findings, sent back together. Round 2: QA fixed, the
+    builder rebuts the verifier's finding, and the run proceeds. Asserts each entry's
+    fate and first_round/last_round."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
@@ -375,24 +416,15 @@ def test_finding_sources_json(tmp_path, monkeypatch):
         render({"tool.py": "print('v1')\n"}),
         "health: passed", "code: passed", QA_FAIL,
         VERIFICATION_FAIL,
-        # Round 2: QA fixed, verifier still fails
-        render({"tool.py": "print('v2')\n"}),
-        "health: passed", "code: passed", "qa: passed",
-        VERIFICATION_FAIL,
-        # Round 3: builder rebuts verifier finding
+        # Round 2: QA fixed; the builder rebuts the verifier's finding, which stands
         "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
-        render({"tool.py": "print('v3')\n"}),
+        render({"tool.py": "print('v2')\n"}),
         "health: passed", "code: passed", "qa: passed",
         VERIFICATION_FAIL,
         "VERDICT: PASS",
     ]
     model = FakeModel(answers)
-    # The verifier's advisory round never takes the last builder round. Round 1's core
-    # repair leaves one of the default three, so this run allows a fourth for round 2's.
     mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["check_attempts"]["value"] = 4
-    mode.load_state_dict(state)
     result = mode.run(
         tmp_path / "run", model=model,
         verdicts={"gate_strategy": "proceed"},
@@ -426,11 +458,11 @@ def test_finding_sources_json(tmp_path, monkeypatch):
     assert verifier_entries[0]["fate"] == "rebutted", (
         f"verifier finding fate should be 'rebutted', got {verifier_entries[0]['fate']!r}")
     assert verifier_entries[0]["first_round"] == 1
-    assert verifier_entries[0]["last_round"] >= 3
+    assert verifier_entries[0]["last_round"] == 2
 
 
-def test_advisory_fix_round_fast_mode(tmp_path, monkeypatch):
-    """Same advisory round through DesignFastMode."""
+def test_verifier_only_findings_cost_no_repair_fast_mode(tmp_path, monkeypatch):
+    """Verifier FAIL with focused QA PASS: no builder round; the finding is listed."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import FakeModel, render
     FAST_PLAN = "Change only the requested file."
@@ -444,12 +476,6 @@ def test_advisory_fix_round_fast_mode(tmp_path, monkeypatch):
         # fork: focused_qa, verifier
         FAST_QA,
         VERIFICATION_FAIL,
-        # Advisory reloop → emit: builder rebuts the finding
-        "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
-        render({"tool.py": "print('built v2')\n"}),
-        FAST_QA,
-        VERIFICATION_FAIL,
-        # advisory_used >= 1 → proceed
     ]
     mode = DesignFastMode()
     state = mode.state_dict()
@@ -461,10 +487,10 @@ def test_advisory_fix_round_fast_mode(tmp_path, monkeypatch):
         task={"name": "advisory_fast", "brief": "a tool", "check": "python tool.py"},
     )
     assert result.exit_ok, result.error
-    assert int(result.facts.get("repairs_used", 0)) == 0, (
-        "verifier advisory reloops must not spend repair_attempts")
-    assert int(result.facts.get("verification_advisory_used", 0)) >= 1
-    assert (tmp_path / "run" / "reviews" / "verification-unresolved.md").exists()
+    assert int(result.facts.get("repairs_used", 0)) == 0
+    assert len(model.prompts) == 4, "plan, emit, focused QA, verifier: no second build"
+    unresolved = (tmp_path / "run" / "reviews" / "verification-unresolved.md").read_text()
+    assert "negative values accepted" in unresolved
 
 
 def test_verification_pass_proceeds_fast_mode(tmp_path, monkeypatch):
@@ -536,7 +562,8 @@ def test_rebuttal_matching_works_without_prefix():
 
 
 def test_rebuttal_fate_fast_mode(tmp_path, monkeypatch):
-    """Fast-mode advisory round records 'rebutted' fate in finding-sources.json."""
+    """A verifier finding that rode along with a core repair and was rebutted is
+    recorded with the 'rebutted' fate in finding-sources.json."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import FakeModel, render
     FAST_PLAN = "Change only the requested file."
@@ -544,10 +571,13 @@ def test_rebuttal_fate_fast_mode(tmp_path, monkeypatch):
                                                          "status": "pass", "evidence": "exit 0"}],
                           "findings": [], "not_run": []})
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
+    FAST_QA_FAIL = json.dumps({"status": "fail", "checks": [
+        {"name": "runs", "command": "python tool.py", "status": "pass", "evidence": "exit 0"}],
+        "findings": ["tool.py: prints the wrong greeting"], "not_run": []})
     answers = [
         FAST_PLAN,
         render({"tool.py": "print('built')\n"}),
-        FAST_QA,
+        FAST_QA_FAIL,
         VERIFICATION_FAIL,
         "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
         render({"tool.py": "print('built v2')\n"}),

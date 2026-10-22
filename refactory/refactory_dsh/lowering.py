@@ -255,6 +255,9 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 prompt_template=node.prompt_template,
                 tools=list(node.tools),
                 max_iterations=node.max_iterations,
+                # The spine's whole-node wall (`workers.lower_workflow` makes it
+                # the node's command_timeout_s); the walker applies the same value.
+                **({"timeout": node.timeout_s} if node.timeout_s is not None else {}),
             )
 
     edges = [

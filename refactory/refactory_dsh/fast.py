@@ -142,7 +142,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
     gate_qa_produces = (
         ("repair_feedback", "repairs_used", "check_repairs_used",
          "review_repairs_used", "qa_passed")
-        + (("review_reruns_used", "verification_advisory_used") if design else ())
+        + (("review_reruns_used",) if design else ())
     )
     gate_qa_writes = (
         ("fast-report.json", "repair.txt",
@@ -163,10 +163,11 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
     ))
 
     if design:
-        from refactory_dsh.verification import VERIFIER_PROMPT
+        from refactory_dsh.verification import VERIFIER_PROMPT, VERIFIER_TIMEOUT_S
         graph.add(Node(
             "verifier", "agent",
             prompt_template=VERIFIER_PROMPT,
+            timeout_s=VERIFIER_TIMEOUT_S,
             reads=("brief.json", "test-guardedness.json", "changes.diff"),
             writes=("reviews/verification.md",),
             produces=("verification",),
