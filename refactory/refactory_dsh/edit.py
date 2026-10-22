@@ -60,7 +60,7 @@ def _digest(state: dict[str, Any]) -> str:
     return candidate_id(state)
 
 
-def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
+def edit(config: EditConfig, client: Any = None, *, enable_recovery: bool = False) -> dict[str, Any]:
     """Revise a mode and report the before and after scores.
 
     The graph owns validation, smoke and comparison on every entry point. This
@@ -143,6 +143,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
             },
             max_steps=config.max_steps,
             resource_limits=config.resource_limits,
+            enable_recovery=enable_recovery,
         )
     if run.gate_stop:
         return {"exit_ok": False, "error": run.error, "gate_stop": run.gate_stop}
@@ -243,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 run = (EditFastMode if fast else EditMode).resume(
                     workdir, model=client, resource_limits=arguments(args),
+                    enable_recovery=True,
                 )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
@@ -281,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
                 project=None if args.resume else project_root(),
                 timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
             ),
+            enable_recovery=True,
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

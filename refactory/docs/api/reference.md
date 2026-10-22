@@ -441,6 +441,7 @@ Lower a mode state to refactory's IR, so DSH can run it.
 | kind | name | signature |
 |---|---|---|
 | class | `LoweringError` | `` |
+| function | `command_timeout_s` | `(node: 'Any', state: 'dict[str, Any]') -> 'int \| None'` |
 | function | `knob_environment` | `(state: 'dict[str, Any]', *, extra: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `knob_specs` | `(state: 'dict[str, Any]') -> 'dict[str, Knob]'` |
 | function | `node_declarations` | `(state: 'dict[str, Any]') -> 'dict[str, dict[str, Any]]'` |
@@ -452,6 +453,7 @@ Lower a mode state to refactory's IR, so DSH can run it.
 | function | `write_mode_graph` | `(state: 'dict[str, Any]', out_dir: 'Path', *, name: 'str', description: 'str' = '', transform: 'Any' = None) -> 'tuple[Path, Workflow]'` |
 
 - **`LoweringError`** — A state cannot be expressed in the IR, and saying why is more useful than a traceback.
+- **`command_timeout_s`** — The per-node command_timeout_s for ops and fn gates, or None.
 - **`knob_environment`** — The environment a node command runs under: the knobs, and whatever else.
 - **`node_declarations`** — Every node's kind and declared reads, writes and facts, keyed by node id.
 - **`node_manifest`** — What a node command is told about itself, mirroring `DSH_WORKFLOW_NODE`.
@@ -618,7 +620,7 @@ create-mode: a mode whose output is a whole package.
 | class | `CreateError` | `` |
 | class | `CreateMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | class | `CreateResult` | `(package: 'str', mode: 'str', path: 'Path', files: 'list[str]' = <factory>, smoke_score: 'float \| None' = None, iterations: 'int' = 0, duration_s: 'float' = 0.0) -> None` |
-| function | `create` | `(config: 'CreateConfig', client: 'Any' = None) -> 'CreateResult'` |
+| function | `create` | `(config: 'CreateConfig', client: 'Any' = None, *, enable_recovery: 'bool' = False) -> 'CreateResult'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `parse_verdicts` | `(pairs: 'list[str]') -> 'dict[str, str]'` |
 | function | `result_from_run` | `(run: 'RunResult') -> 'dict[str, Any]'` |
@@ -643,7 +645,7 @@ Revise an existing mode from a brief.
 |---|---|---|
 | class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, smoke_timeout_s: 'int' = 3600, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, fast: 'bool' = False, repair_attempts: 'int' = 1, check: 'str' = '', check_timeout_s: 'int' = 60, resource_limits: 'dict[str, Any] \| None' = None, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
 | class | `EditMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
-| function | `edit` | `(config: 'EditConfig', client: 'Any' = None) -> 'dict[str, Any]'` |
+| function | `edit` | `(config: 'EditConfig', client: 'Any' = None, *, enable_recovery: 'bool' = False) -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 
 - **`EditConfig`** — A revision: what to change, and what to do about a regression.

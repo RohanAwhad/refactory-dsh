@@ -394,7 +394,7 @@ def test_a_nodes_model_call_cannot_background_its_own_work(monkeypatch):
 
     seen: dict[str, object] = {}
 
-    def fake_completion(self, cmd, run_dir, stop_at=None, budget_s=None, task=None):  # type: ignore[no-untyped-def]
+    def fake_completion(self, cmd, run_dir, stop_at=None, budget_s=None, task=None, target_workdir=None):  # type: ignore[no-untyped-def]
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, "answer", "")
 

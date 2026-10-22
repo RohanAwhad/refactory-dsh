@@ -1,0 +1,97 @@
+"""Module-level op/gate functions for walker recovery tests.
+
+Under ``multiprocessing.get_context("forkserver")``, the child process imports
+by name, so every callable must be a plain module-level function.
+"""
+from __future__ import annotations
+
+import threading
+from typing import Any
+
+
+def transient_op(ctx: Any) -> dict[str, Any]:
+    """Fail on the first call, succeed on the second.  File-based counter."""
+    counter_file = ctx.workdir / "_attempt_counter.txt"
+    attempt = 1
+    if counter_file.exists():
+        attempt = int(counter_file.read_text().strip()) + 1
+    counter_file.write_text(str(attempt))
+    if attempt == 1:
+        raise RuntimeError("transient failure")
+    return {"success": True}
+
+
+def hanging_op(ctx: Any) -> dict[str, Any]:
+    """Hang forever on a threading Event."""
+    threading.Event().wait()
+    return {}  # pragma: no cover
+
+
+def hanging_gate(ctx: Any) -> str:
+    """A fn-gate evaluator that hangs forever."""
+    threading.Event().wait()
+    return "proceed"  # pragma: no cover
+
+
+def succeed_op(ctx: Any) -> dict[str, Any]:
+    """An op that always succeeds."""
+    return {"done": True}
+
+
+def noop_gate(ctx: Any) -> str:
+    """A fn-gate evaluator that always proceeds."""
+    return "proceed"
+
+
+def custom_exception_op(ctx: Any) -> dict[str, Any]:
+    """Raise a custom exception for round-trip testing."""
+    raise _CustomTestError("custom message from child")
+
+
+class _CustomTestError(RuntimeError):
+    """A test-only exception class that the parent can rebuild."""
+    pass
+
+
+# Alias so resolve() finds it at module level (the class itself is private).
+CustomTestError = _CustomTestError
+
+
+def check_declared_reads_gate(ctx: Any) -> str:
+    """A gate that asserts declared_reads is populated."""
+    if not ctx.declared_reads:
+        raise RuntimeError("declared_reads is empty in child")
+    return "proceed"
+
+
+def check_memory_op(ctx: Any) -> dict[str, Any]:
+    """An op that asserts memory is present."""
+    # Just check that ctx.memory is not None (if declarations are set up).
+    return {"has_memory": ctx.memory is not None}
+
+
+def outer_loop_transient_op(ctx: Any) -> dict[str, Any]:
+    """Fail transiently, using file counter."""
+    counter_file = ctx.workdir / "_ol_attempt.txt"
+    attempt = 1
+    if counter_file.exists():
+        attempt = int(counter_file.read_text().strip()) + 1
+    counter_file.write_text(str(attempt))
+    if attempt == 1:
+        raise RuntimeError("outer loop transient failure")
+    return {"ol_done": True}
+
+
+def outer_loop_hanging_op(ctx: Any) -> dict[str, Any]:
+    """Hang forever for outer-loop timeout testing."""
+    threading.Event().wait()
+    return {}  # pragma: no cover
+
+
+def sandbox_sleep_op(ctx: Any) -> dict[str, Any]:
+    """Start a long sleep through sandbox.run_command, as a check's tools run, recording its pid."""
+    from refactory_dsh import sandbox
+
+    pid_file = ctx.workdir / "_sleep_pid.txt"
+    sandbox.run_command(f"echo $$ > {pid_file}; exec sleep 600", workdir=ctx.workdir, timeout_s=900)
+    return {}

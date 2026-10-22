@@ -159,7 +159,8 @@ def run_fork(executor: Executor, node: Node) -> str | None:
             verdicts=copy.deepcopy(ctx.verdicts), task=copy.deepcopy(ctx.task),
             model=branch_model, memory=ctx.memory, enforce_writes=ctx.enforce_writes,
         )
-        child = Executor(executor.graph, child_ctx, max_steps=executor.max_steps)
+        child = Executor(executor.graph, child_ctx, max_steps=executor.max_steps,
+                         enable_recovery=executor.enable_recovery)
         child_ctx.budget = ctx.budget
         # Branch gate IDs are disjoint. Keep their own counters across a later
         # outer re-entry of this fork, as the DSH spine does; a new child object
@@ -264,5 +265,6 @@ def run_fork(executor: Executor, node: Node) -> str | None:
                     ctx.facts.pop(key, None)
     # On failure, facts remain the pre-fork snapshot and resume replays the fork.
     # File side effects and completed delivery receipts remain available for audit.
-    executor._record(node.id if error else barrier, error=error, branches=status, schedule=schedule)
+    executor._record(node.id if error else barrier, error=error, branches=status, schedule=schedule,
+                     outcome="failed" if error else "pending")
     return error

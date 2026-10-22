@@ -129,6 +129,7 @@ class WalkerEvaluator(Evaluator):
             result = mode.evaluate(
                 workdir, model=self.model, memory=store, max_steps=self.max_steps,
                 **({"shared_budget": self.budget} if self.budget is not None else {}),
+                enable_recovery=True,
             )
         finally:
             # Also on a crash or a stop: a namespace that outlives the run it was

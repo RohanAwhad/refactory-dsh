@@ -831,6 +831,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 run = (DesignFastMode if fast else DesignMode).resume(
                     workdir, model=client, resource_limits=arguments(args),
+                    enable_recovery=True,
                 )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
@@ -923,6 +924,7 @@ def main(argv: list[str] | None = None) -> int:
                       "target": args.target, "base": args.base, "setup": args.setup, "generate": args.generate,
                       "refine": args.refine},
                 resource_limits=arguments(args),
+                enable_recovery=True,
             )
     except Exception as exc:
         print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)

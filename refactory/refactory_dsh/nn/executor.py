@@ -14,8 +14,14 @@ are.
 
 from __future__ import annotations
 
+import copy
 import json
+import multiprocessing
+import os
+import signal
+import sys
 import time
+import traceback as traceback_mod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol
@@ -28,9 +34,49 @@ from .resolve import resolve
 if TYPE_CHECKING:
     from refactory_dsh.task import Task
 
+# ── forkserver context (module-level, shared across all Executor instances) ──
+_forkserver_ctx = multiprocessing.get_context("forkserver")
+_forkserver_modules: set[str] = set()
+
+
+def _ensure_forkserver_preload(graph: Graph) -> None:
+    """Collect modules from the graph's ops and fn gates and preload them.
+
+    The forkserver is a separate single-threaded process; forking from it is
+    safe while the walker runs fork branches on threads.  It has the same
+    picklable-arguments contract as spawn.
+
+    ``set_forkserver_preload`` is idempotent before the server starts and is a
+    hint afterwards (the server restarts with the updated list if it dies).
+    """
+    global _forkserver_modules
+    modules: set[str] = {"refactory_dsh.nn.executor", "refactory_dsh.run"}
+    for node in graph.nodes.values():
+        for target in (node.call, node.evaluator):
+            if not target:
+                continue
+            if ":" in target:
+                mod_name = target.partition(":")[0]
+            else:
+                mod_name = target.rpartition(".")[0]
+            if mod_name:
+                modules.add(mod_name)
+    if not modules.issubset(_forkserver_modules):
+        _forkserver_modules = _forkserver_modules | modules
+        _forkserver_ctx.set_forkserver_preload(sorted(_forkserver_modules))
+
 
 class ExecutionError(RuntimeError):
     """A run could not be carried out."""
+
+
+class OpTimeoutError(RuntimeError):
+    """An op or fn gate exceeded its per-node timeout."""
+
+    def __init__(self, node_id: str, timeout_s: float):
+        self.node_id = node_id
+        self.timeout_s = timeout_s
+        super().__init__(f"op '{node_id}' timed out after {timeout_s:.1f}s")
 
 
 class GateStop(Exception):
@@ -417,6 +463,77 @@ def _ask_model(model: Any, prompt: str, *, system: str, workdir: Path) -> str:
 PROGRESS = ".refactory/progress.json"
 
 
+def _op_child_target(conn: Any, args_dict: dict[str, Any]) -> None:
+    """Target function for the spawned child process running an op or fn gate."""
+    os.setsid()
+
+    def _sigterm_handler(signum: int, frame: Any) -> None:
+        raise SystemExit(f"terminated by signal {signum}")
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    # Restore parent's sys.path so resolve() finds the same modules.
+    sys.path[:] = args_dict["sys_path"]
+
+    try:
+        from refactory_dsh.run import build_op_context
+
+        model: Any = None
+        model_info = args_dict.get("model_info")
+        if model_info:
+            kind = model_info.get("kind")
+            if kind == "dsh":
+                from refactory_dsh.model import DshModelClient
+                model = DshModelClient(**model_info["context"])
+            elif kind is not None:
+                # Stand-in for non-DSH clients: not None so prepare/create_ops
+                # skip readiness, and every method raises so nothing silently proceeds.
+                class _StandIn:
+                    def __getattr__(self, name: str) -> Any:
+                        raise RuntimeError(f"model.{name}() called in child process")
+                    def complete(self, *a: Any, **kw: Any) -> str:
+                        raise RuntimeError("model.complete() called in child process")
+                model = _StandIn()
+
+        ctx = build_op_context(
+            Path(args_dict["workdir"]),
+            args_dict["node_id"],
+            knobs=args_dict.get("knobs"),
+            facts=args_dict.get("facts"),
+            task=args_dict.get("task"),
+        )
+        # Override declarations with the node's own (not from disk).
+        ctx._declared = tuple(args_dict.get("writes", ()))
+        ctx._declared_reads = tuple(args_dict.get("reads", ()))
+        ctx._declared_facts = tuple(args_dict.get("produces", ()))
+
+        # Set model AFTER context creation so RunBudget.inherited sees None,
+        # not the stand-in.  The stand-in is only for ops that check ctx.model.
+        model_info_2 = args_dict.get("model_info")
+        if model_info_2 and model_info_2.get("kind") == "other":
+            ctx.model = model
+        elif model is not None:
+            ctx.model = model
+
+        fn = resolve(args_dict["callable_target"])
+        result = fn(ctx)
+
+        conn.send(("ok", {
+            "result": result,
+            "facts": dict(ctx.facts),
+            "writes_made": list(ctx.writes_made),
+            "_produced": list(ctx._produced),
+        }))
+    except BaseException as exc:
+        conn.send(("error", {
+            "type": type(exc).__qualname__,
+            "module": type(exc).__module__,
+            "message": str(exc),
+            "traceback": "".join(traceback_mod.format_exception(exc)),
+        }))
+    finally:
+        conn.close()
+
+
 @dataclass
 class Executor:
     """Walk a graph from its start node to a terminal."""
@@ -424,6 +541,7 @@ class Executor:
     graph: Graph
     ctx: RunContext
     max_steps: int = 2000
+    enable_recovery: bool = False
     steps: list[Step] = field(default_factory=list)
     model_calls: int = 0
     _reserve_step: Callable[[], bool] | None = field(default=None, repr=False)
@@ -581,7 +699,7 @@ class Executor:
             step_started = time.time()
             verdict: str | None = None
             try:
-                current, verdict = self._visit(node)
+                current, verdict = self._try_visit(node, step_started)
                 self.ctx._check_produces()  # noqa: SLF001
                 self._count_retry(node, current, verdict, retries, visits)
             except GateStop as exc:
@@ -606,6 +724,8 @@ class Executor:
 
                 if isinstance(exc, BudgetExhausted) and self._outcome == "completed":
                     self._record(self._next_after_completion or "", error=error, outcome="pending")
+                elif isinstance(exc, OpTimeoutError):
+                    self._record(node.id, error=error, outcome="failed")
                 else:
                     unknown = self._outcome == "running" and (
                         isinstance(exc, (BudgetExhausted, CancelledError, subprocess.TimeoutExpired))
@@ -691,7 +811,7 @@ class Executor:
             started = time.time()
             verdict: str | None = None
             try:
-                current, verdict = self._visit(node)
+                current, verdict = self._try_visit(node, started)
                 self.ctx._check_produces()  # noqa: SLF001
                 self._count_retry(node, current, verdict, retries, visits)
             except (GateStop, HaltStop):
@@ -723,6 +843,152 @@ class Executor:
                 f"retry {verdict!r} was refused before dispatching {target!r}"
             )
 
+    # ── retry wrapper ──────────────────────────────────────────────────────
+    def _try_visit(self, node: Node, step_started: float) -> tuple[str | None, str | None]:
+        """Wrap ``_visit`` with FnNode-only one-retry under ``enable_recovery``."""
+        if not self.enable_recovery or node.kind != "op":
+            return self._visit(node)
+
+        from refactory_dsh.budgets import BudgetExhausted
+
+        facts_snapshot = copy.deepcopy(self.ctx.facts)
+        writes_mark = len(self.ctx.writes_made)
+
+        try:
+            return self._visit(node)
+        except BudgetExhausted:
+            raise
+        except OpTimeoutError:
+            raise
+        except Exception:
+            # Restore state to pre-attempt snapshot.
+            self.ctx.facts = facts_snapshot
+            self.ctx._produced = set()  # noqa: SLF001
+            self.ctx.writes_made = self.ctx.writes_made[:writes_mark]
+            self._outcome = "pending"
+            self._next_after_completion = None
+
+            # Retry once.
+            result = self._visit(node)
+
+            # Record the successful retry.
+            self.steps.append(
+                Step(node.id, node.kind, time.time() - step_started,
+                     verdict="retried", error=None)
+            )
+            return result
+
+    # ── effective timeout ──────────────────────────────────────────────────
+    def _effective_timeout(self, node: Node) -> float | None:
+        """Derive per-op timeout from the shared formula and clamp to budget."""
+        if not self.enable_recovery:
+            return None
+        if node.kind == "op" or (node.kind == "gate" and node.gate_kind == "fn"):
+            from refactory_dsh.lowering import command_timeout_s as _cmd_timeout_s
+
+            state = {"knobs": {n: {"value": v} for n, v in self.ctx.knobs.items()}}
+            raw = _cmd_timeout_s(node, state)
+            if raw is None:
+                # Unclassified ops stay in-process, with the run's budget: an op that
+                # records usage through ctx.budget needs it, and a child gets none.
+                # Giving them DSH's 3600 s default needs budget forwarding (dm-173).
+                return None
+            remaining = self.ctx.budget.remaining_s() if self.ctx.budget is not None else None
+            if remaining is not None:
+                raw = min(raw, remaining)
+            return max(1.0, float(raw))
+        return None
+
+    # ── child-process-based op timeout ─────────────────────────────────────
+    def _run_op_timed(self, callable_target: str, node: Node, timeout: float) -> Any:
+        """Run a callable in a forkserver child process, killed at *timeout*."""
+        _ensure_forkserver_preload(self.graph)
+        parent_conn, child_conn = _forkserver_ctx.Pipe()
+
+        model_info: dict[str, Any] | None = None
+        if self.ctx.model is not None:
+            from refactory_dsh.model import DshModelClient
+
+            if isinstance(self.ctx.model, DshModelClient):
+                model_info = {"kind": "dsh", "context": self.ctx.model.context()}
+            else:
+                model_info = {"kind": "other"}
+
+        args_dict: dict[str, Any] = {
+            "sys_path": list(sys.path),
+            "workdir": str(self.ctx.workdir),
+            "facts": dict(self.ctx.facts),
+            "knobs": dict(self.ctx.knobs),
+            "task": dict(self.ctx.task),
+            "callable_target": callable_target,
+            "node_id": node.id,
+            "writes": tuple(node.writes),
+            "reads": tuple(node.reads),
+            "produces": tuple(node.produces),
+            "model_info": model_info,
+        }
+
+        child = _forkserver_ctx.Process(target=_op_child_target, args=(child_conn, args_dict))
+        child.start()
+        child_conn.close()
+
+        if parent_conn.poll(timeout):
+            status, payload = parent_conn.recv()
+            parent_conn.close()
+            child.join(timeout=5)
+        else:
+            parent_conn.close()
+            # Kill escalation: SIGTERM → grace → SIGKILL, matching DSH.
+            try:
+                os.killpg(child.pid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                try:
+                    child.kill()
+                except OSError:
+                    pass
+            child.join(timeout=5)
+            if child.is_alive():
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    try:
+                        child.kill()
+                    except OSError:
+                        pass
+                child.join(timeout=5)
+            raise OpTimeoutError(node.id, timeout)
+
+        if status == "ok":
+            # Merge child state back into the parent's context.
+            child_facts = payload.get("facts", {})
+            for key, value in child_facts.items():
+                if key not in self.ctx.facts or self.ctx.facts[key] != value:
+                    self.ctx.facts[key] = value
+            self.ctx._produced.update(payload.get("_produced", []))  # noqa: SLF001
+            self.ctx.writes_made.extend(payload.get("writes_made", []))
+            return payload.get("result")
+
+        # Exception from child: reconstruct and re-raise.
+        exc_type_name = payload.get("type", "RuntimeError")
+        exc_msg = payload.get("message", "")
+        exc_tb = payload.get("traceback", "")
+        exc_module = payload.get("module", "builtins")
+
+        reconstructed: BaseException | None = None
+        try:
+            import importlib as _il
+
+            mod = _il.import_module(exc_module)
+            cls = getattr(mod, exc_type_name, None)
+            if cls is not None and isinstance(cls, type) and issubclass(cls, BaseException):
+                reconstructed = cls(exc_msg)
+        except Exception:
+            pass
+
+        if reconstructed is not None:
+            raise reconstructed
+        raise RuntimeError(f"{exc_type_name}: {exc_msg}\n{exc_tb}")
+
     # ── one node ───────────────────────────────────────────────────────────
     def _visit(self, node: Node) -> tuple[str | None, str | None]:
         """Run one node and return ``(next node id, verdict)``."""
@@ -750,8 +1016,12 @@ class Executor:
     def _dispatch(self, node: Node) -> tuple[str | None, str | None]:
         """Execute a node after resource admission and the durable start marker."""
         if node.kind == "op":
-            fn = resolve(node.call)
-            produced = fn(self.ctx)
+            timeout = self._effective_timeout(node)
+            if timeout is not None:
+                produced = self._run_op_timed(node.call, node, timeout)
+            else:
+                fn = resolve(node.call)
+                produced = fn(self.ctx)
             if isinstance(produced, dict):
                 for key, value in produced.items():
                     self.ctx.set_fact(key, value)
@@ -841,8 +1111,12 @@ class Executor:
         if node.gate_kind != "fn":
             verdict = self._answered_verdict(node)
         else:
-            fn: Callable[[RunContext], Any] = resolve(node.evaluator)
-            verdict = fn(self.ctx)
+            timeout = self._effective_timeout(node)
+            if timeout is not None:
+                verdict = self._run_op_timed(node.evaluator, node, timeout)
+            else:
+                fn: Callable[[RunContext], Any] = resolve(node.evaluator)
+                verdict = fn(self.ctx)
         if not isinstance(verdict, str) or not verdict:
             raise ExecutionError(
                 f"gate {node.id!r} returned {verdict!r}; a gate must return a verdict label"
@@ -872,6 +1146,7 @@ def execute(
     start: str | None = None,
     resource_limits: Any = None,
     shared_budget: Any = None,
+    enable_recovery: bool = False,
 ) -> RunResult:
     """Build a context and run the graph once.
 
@@ -916,7 +1191,7 @@ def execute(
     )
     ctx.budget = budget
     try:
-        result = Executor(graph, ctx, max_steps=max_steps).run(start=start)
+        result = Executor(graph, ctx, max_steps=max_steps, enable_recovery=enable_recovery).run(start=start)
         if budget is not None:
             result.facts["resources"] = budget.snapshot()
         return result
