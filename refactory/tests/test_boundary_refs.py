@@ -20,17 +20,19 @@ def _load_references() -> list[dict]:
 
 
 def test_references_exact():
-    """boundary.json's references list contains exactly four entries."""
+    """boundary.json's references list contains exactly three entries."""
     refs = _load_references()
-    assert len(refs) == 4, (
-        f"expected exactly 4 references, got {len(refs)}:\n"
+    assert len(refs) == 3, (
+        f"expected exactly 3 references, got {len(refs)}:\n"
         + "\n".join(f"  {r['source']} -> {r['target']}" for r in refs)
     )
 
-    # Assert exact source/target pairs
+    # Assert exact source/target pairs.  Each remaining reference and why:
+    #   1. spine wf_open error message mentioning console open command (until the split)
+    #   2. invocations.py DELIVER_ENTRY_POINTS names the product callable (until the split)
+    #   3. registry discovery imports every refactory_packages.* (until the split)
     pairs = {(r["source"], r["target"]) for r in refs}
     expected = {
-        ("packages/bundle/graph/cordis.patch.yml", "refactory_dsh.console"),
         ("packages/workflow/workflow-spine/src/index.ts", "refactory_dsh.console"),
         ("refactory/refactory_dsh/invocations.py", "refactory_dsh.delivery"),
         ("refactory/refactory_dsh/registry.py", "refactory_packages"),
@@ -43,7 +45,7 @@ def test_references_exact():
 
 
 def test_removed_references_do_not_return():
-    """The three references removed by this PR must not reappear."""
+    """The four references removed by earlier PRs and this one must not reappear."""
     refs = _load_references()
     pairs = {(r["source"], r["target"]) for r in refs}
 
@@ -51,6 +53,7 @@ def test_removed_references_do_not_return():
         ("refactory/refactory_dsh/lowering.py", "refactory_dsh.create_ops"),
         ("refactory/refactory_dsh/lowering.py", "refactory_dsh.fast_ops"),
         ("refactory/refactory_dsh/supervisor.py", "refactory_dsh.interactive"),
+        ("packages/bundle/graph/cordis.patch.yml", "refactory_dsh.console"),
     ]
     for source, target in removed:
         assert (source, target) not in pairs, (

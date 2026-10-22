@@ -81,8 +81,11 @@
         agentCommand: !!js ctx.graphStartup.agentCommand
         personAttached: !!js ctx.graphStartup.chat
         gateCommand: !!js ctx.graphStartup.gateCommand
-        steerCommand: !!js ctx.graphStartup.pythonBin + '/python'
-        steerArgs: ['-m', 'refactory_dsh.console', 'steer', '--run']
+        # The flag name must start with `_`: Cordis passes _-prefixed context
+        # properties straight through (reflect.ts:86-91). Any other name throws
+        # "cannot set property … without provide" inside a running fiber.
+        steerCommand: !!js (ctx.graphStartup.steerCommand === undefined && !ctx._steerWarnedOnce && (ctx._steerWarnedOnce = true, console.warn('steerCommand not published by graph-startup; run pnpm run build')), ctx.graphStartup.steerCommand || '')
+        steerArgs: !!js ctx.graphStartup.steerArgs || []
         commandTimeoutMs: 3600000
         ceoDeny:
           - bash

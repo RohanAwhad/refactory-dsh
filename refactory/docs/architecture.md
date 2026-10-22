@@ -463,6 +463,24 @@ down before each evaluation. Without that copy an `optimize --intent` or a
 place steering is most wanted, because a search is what runs for hours. The copy is
 per candidate so the directory says what the person had said when it ran.
 
+**Steering command supply (product/core boundary).** The workflow spine's
+`wf_steer` tool requires a `steerCommand` and `steerArgs`. These are product
+values — the product module `refactory_dsh.console` owns the steer verb. To
+keep core clean, the product registers a `refactory.steer` Python entry point
+(in `pyproject.toml`); the core module `refactory_dsh.steer_probe` discovers it
+at import time via `importlib.metadata.entry_points`. At graph startup,
+`startup.ts` runs `python -m refactory_dsh.steer_probe` and publishes the
+result through the `graphStartup` Cordis service. The core YAML
+(`cordis.patch.yml`) reads the steer fields via `!!js` expressions, so no core
+file names a product Python module as a literal string. A core-only deploy
+(without the entry point) boots successfully: startup publishes `steerCommand:
+''` and logs a warning; `wf_steer` is not registered, and the spine degrades
+gracefully. A stale build (new YAML, old startup.ts) is detected by the YAML's
+own `!!js` comma expression, which warns once naming `pnpm run build`. The
+interactive driver's preflight (`interactive.py`) calls the same `find_steer_module()`
+helper in-process; a fresh start without the entry point refuses before the run
+directory is created, naming `uv sync`.
+
 **A person's gate answer is recorded and consumed for that review.** The ledger
 keeps the decision and the hashes of the gate's declared review inputs. An
 interactive answer or public `steer --verdict` authorizes one matching gate visit;
