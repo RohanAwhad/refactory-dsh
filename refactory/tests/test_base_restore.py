@@ -399,6 +399,10 @@ def test_dirty_base_through_run_base_check(base_worktree_env, monkeypatch, capsy
     captured = capsys.readouterr()
     assert "run warning:" in captured.err
 
+    # Cache skipped when base was dirty (base_clean_flag=False).
+    assert not (env.run_dir / base_check.CACHE_FILE).exists(), \
+        "base-check cache should not be written when base was dirty"
+
 
 def test_dirty_base_through_compare_prep_failure(base_worktree_env, monkeypatch, capsys):
     """Layer 2 fires before compare_prep_failure uses the base."""
@@ -434,6 +438,10 @@ def test_dirty_base_through_compare_prep_failure(base_worktree_env, monkeypatch,
     captured = capsys.readouterr()
     assert "run warning:" in captured.err
 
+    # Prep cache skipped when base was dirty (prep_base_clean=False).
+    assert not (env.run_dir / base_check.PREP_CACHE_FILE).exists(), \
+        "base-prep cache should not be written when base was dirty"
+
 
 # ── Test 4b: reset failure rebuilds, not environment failure ────────────
 
@@ -464,6 +472,80 @@ def test_reset_failure_rebuilds_not_environment_failure(base_worktree_env, monke
     # No cache entries should exist
     assert not (env.run_dir / base_check.CACHE_FILE).exists()
     assert not (env.run_dir / base_check.PREP_CACHE_FILE).exists()
+
+
+def test_fast_ops_base_reset_in_check_record(base_worktree_env, monkeypatch):
+    """fast_ops writes base_reset to check-record.json when ctx._base_reset is set."""
+    from refactory_dsh import fast_ops, repo_change
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh import unbuilt_check
+
+    env = base_worktree_env
+
+    # Set up ctx with necessary facts and declarations for focused_check.
+    env.ctx.facts["artifact"] = str(env.attempt_path)
+    env.ctx.facts["check"] = "python -m pytest -q"
+    env.ctx.facts["name"] = "test"
+    env.ctx.facts["brief"] = "test"
+    env.ctx.facts["files"] = []
+    env.ctx.knobs_dict["check_timeout_s"] = 60
+    env.ctx.knobs_dict["repair_attempts"] = 1
+    env.ctx._declared = (
+        "focused-check.json", "focused-source.json",
+        "authoring-evidence.json", "check-record.json",
+        "check.txt", "test-guardedness.json",
+    )
+    env.ctx._declared_facts = (
+        "focused_check", "output_path", "review_files",
+        "runtime_evidence", "inherited_failures", "base_unavailable",
+    )
+    env.ctx.enforce_writes = False
+
+    # Pre-set _base_reset to simulate dirty base repair from an earlier call.
+    env.ctx._base_reset = ["tests/test_math.py"]
+
+    # Provide required files.
+    (env.run_dir / "focused-check.json").write_text("{}")
+    (env.run_dir / "focused-source.json").write_text("{}")
+    (env.run_dir / "authoring-evidence.json").write_text("{}")
+
+    # Mock run_check to return a failing result.
+    fail_result = sandbox.SandboxResult(
+        ok=False, returncode=1,
+        stdout="FAILED tests/test_math.py::test_add\n1 failed in 0.1s\n",
+        stderr="",
+    )
+    monkeypatch.setattr(repo_change, "run_check", lambda *a, **kw: fail_result)
+
+    # Mock evidence functions.
+    monkeypatch.setattr(evidence, "record", lambda *a, **kw: None)
+    monkeypatch.setattr(evidence, "check_failure_kind", lambda *a, **kw: "code_failure")
+
+    # Mock filter_check to return new failures (not all excused).
+    filtered = base_check.FilteredCheckResult(
+        all_excused=False,
+        inherited=set(),
+        new_failures={"tests/test_math.py::test_add"},
+        new_failure_detail="FAILED tests/test_math.py::test_add",
+        inherited_detail="",
+        base_environment_failure=None,
+        guardedness=None,
+        base_failures=set(),
+        base_complete=True,
+    )
+    monkeypatch.setattr(base_check, "filter_check", lambda *a, **kw: filtered)
+    monkeypatch.setattr(base_check, "compute_test_guardedness", lambda *a, **kw: None)
+
+    # Mock unbuilt_check.
+    monkeypatch.setattr(unbuilt_check, "scan_unbuilt_packages", lambda *a, **kw: [])
+
+    fast_ops.focused_check(env.ctx)
+
+    # Check that check-record.json has base_reset.
+    cr = json.loads((env.run_dir / "check-record.json").read_text())
+    assert cr.get("base_reset") == ["tests/test_math.py"], (
+        f"check-record.json should have base_reset, got: {cr}"
+    )
 
 
 # ── Test 5: dirty base cache miss ──────────────────────────────────────
