@@ -609,7 +609,7 @@ def test_design_review_gate_accepts_colon_description_marker(tmp_path):
 
 
 def test_design_review_gate_catches_misspelled_marker(tmp_path):
-    """A site with ``[chnaged]`` gets the typo-detection message."""
+    """A site with ``[chnaged]`` gets the typo-detection message, as an advisory item."""
     ctx = nn.RunContext(tmp_path)
     ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
     (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
@@ -618,6 +618,8 @@ def test_design_review_gate_catches_misspelled_marker(tmp_path):
     design = (
         "# Do the thing\n\n"
         "## Summary\n\nFix it.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n"
+        "| \"do a thing\" | § Changes | test_tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `file.py:1` — [chnaged]\n\n"
         "## Docs\n\n- docs/models.md\n\n"
@@ -627,9 +629,10 @@ def test_design_review_gate_catches_misspelled_marker(tmp_path):
     ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "possible misspelled marker" in verdict.reason
-    assert "chnaged" in verdict.reason
+    assert verdict == "proceed"
+    advisory = ctx.facts["design_review_advisory"]
+    assert "possible misspelled marker" in advisory
+    assert "chnaged" in advisory
 
 
 def test_design_review_gate_marked_site_with_bracket_words_no_problem(tmp_path):
