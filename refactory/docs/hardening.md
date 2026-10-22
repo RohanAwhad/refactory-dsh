@@ -1314,13 +1314,34 @@ things for every clause:
    patches the project's own modules on the tested path. A test that does
    is `local`, not `connected`.
 
-**Fail closed.** Any status other than a known catch (`fail`) is a failure,
-never a pass. This includes `not_in_diff`, `unavailable`, `collection_error`,
-`import_only` (without a caught sibling) and `pass` (the test did not catch
-the revert).
+**Measured failures block; unmeasured checks are advisory.** A clause is BLOCKING
+when the audit measured a miss:
+- the site is `not_in_diff`;
+- the test still passes after the revert (`pass`: it does not reach the site);
+- the cited test ran no tests (`no_tests`: a wrong test id);
+- a code site has no tests and its change is not comments only;
+- the test patches the changed function (§26);
+- any status the audit does not know.
 
-A clause that fails any check is BLOCKING. The message names the correction id,
-the clause, the site and the test.
+The message names the correction id, the clause, the site and the test.
+
+A check the audit could not measure is advisory instead. The run proceeds, and
+the pull request's Verification section lists it under "Correction-audit checks
+not measured (advisory)" for a reviewer to check by hand. It is also in
+`correction-audit.json` (clause status `advisory`) and `reviews/overwatch-gate.txt`
+or `fast-report.json`. These cases are:
+- `not_run`: the time cap ran out, the test timed out or was killed, the patch
+  did not apply, or git failed;
+- `collection_error`: the revert broke test collection, so it measured nothing;
+- `import_only` or `new_file` with no caught sibling: the hunk only adds new
+  definitions, so reverting it can only break an import;
+- a `doc` clause naming a changed file that is not documentation (wording in a
+  code file).
+
+A site whose change is comments only passes without a test, since no test can
+catch a comment (`comment_only`). Comment syntax is known for `#` languages
+(Python, shell, YAML, TOML and similar) and `//` languages (TypeScript,
+JavaScript and similar); a file of any other kind is never comment-only.
 
 **Withdrawn corrections.** A correction whose audit row has `status == "excluded"`
 with a `user_change` pointing to a later ledger entry is skipped — it was
@@ -1330,21 +1351,29 @@ withdrawn. This reuses the existing exclusion validation path.
 - **prohibition:** requires a `pattern` field; code confirms the pattern is
   absent from the `+` lines of the diff. Missing `pattern` fails the clause.
 - **doc:** requires a `path` field naming a changed documentation file
-  (`.md`, `.rst`, `.txt`, or under `docs/`). A path to a non-doc file fails.
+  (`.md`, `.rst`, `.txt`, or under `docs/`). A path to a non-doc file passes as
+  advisory when that file changed, and fails when it did not.
 - **design:** requires a non-empty `heading` field that exists in the current
   `design.md`. Missing or unknown heading fails the clause.
 - **test:** cites a code site plus the test; the revert runs against the code
-  site, not the test file. A site inside a test file is not a code site.
+  site, not the test file. A site inside a test file is not a code site: it
+  passes when it is in the diff (`test_file`) and fails when it is not.
 
 A clause whose `sites` is not a list fails with "sites must be a list".
 
 **New-file sites.** A site in a file the base lacks (`new_file` result) or a
 site whose revert fails only with an import error on a name the reverted hunks
-define (`import_only` result) passes only when the same clause has a sibling
-site in an existing file whose revert fails its test.
+define (`import_only` result) passes when the same clause has a sibling site in
+an existing file whose revert fails its test. Without one it is advisory.
 
 **Test.** `test_correction_audit.py::test_correction_audit_unbuilt_blocks`,
-`test_correction_audit_no_base_does_not_block`.
+`test_correction_audit_no_base_does_not_block`,
+`test_large_ledger_past_the_cap_proceeds_with_an_advisory` (full design, through
+`gate_overwatch` and the pull-request text),
+`test_design_fast_past_the_cap_proceeds_with_an_advisory`,
+`test_a_measured_miss_still_blocks_beside_unmeasured_pairs`,
+`test_a_comment_only_site_needs_no_test`,
+`test_a_doc_clause_on_a_changed_code_file_is_advisory`.
 
 ## 26. Evidence scope enforcement (#431)
 
@@ -1398,21 +1427,28 @@ it catches the change.
    - `collection_error` → import/collection error, not a catch
    - `import_only` → fails only due to import of a name the reverted hunk
      defines, not a catch
-   - `unavailable` → timed out, signalled, test-file site, no tests ran
+   - `no_tests` → the cited test does not exist (pytest exit 4 or 5)
+   - `not_run` → the time cap ran out, the test timed out or was killed, the
+     patch did not apply, or git failed
+
+   Before any revert, a site in a test file is recorded as `test_file`, and a site
+   whose added lines are all comments as `comment_only`. Neither is reverted.
 8. Restore the file with `git checkout HEAD -- <file>` in a `finally` block.
 
 **Test-file exclusion.** A site inside a test file (`test_*.py`, `*_test.py`,
-`*.spec.ts`, or under a `tests/` directory) is not a code site.
+`*.spec.ts`, or under a `tests/` directory) is not a code site. It is checked
+against the diff and never reverted.
 
-**Cache.** Results are cached per `(HEAD, path:line, test_name)` in
+**Cache.** Measured results are cached per `(HEAD, path:line, test_name)` in
 `.refactory/site-revert-cache.json`, a dedicated file separate from
-`base-check.json`.
+`base-check.json`. A `not_run` result is never cached, so a later gate measures
+the pair. An `unavailable` entry cached by an earlier version is measured again.
 
-**Time cap.** Total revert time is capped below the gate's DSH timeout (240 s
-default). Past the cap, remaining pairs are reported as `unavailable`.
+**Time cap.** Total revert time is capped below the gate's DSH timeout
+(`SITE_REVERT_TOTAL_S`, 240 s; `SITE_REVERT_PAIR_S`, 60 s per pair). Past the cap,
+the remaining pairs are `not_run`, which is advisory (§25).
 
-**Blocking rule.** Missing or unavailable revert results are BLOCKING. The only
-exemptions are:
+**Blocking rule.** A measured miss is BLOCKING (§25). The only exemptions are:
 1. A `## Site revert exemptions` section in `design.md`.
 2. An explicit no-base record (`{"no_base": true}`) — modes without a base skip
    diff and revert checks.

@@ -724,6 +724,9 @@ def gate_qa(ctx: Any) -> str:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
         return _repair(ctx, findings, kind='check' if check_failed else 'review')
+    not_measured = evidence.correction_audit_advisories(ctx)
+    if not_measured:
+        advisory.append(evidence.advisory_correction_audit(not_measured))
     ctx.set_fact("qa_passed", True)
     ctx.write_json("fast-report.json", _report(ctx, "qa_passed", advisory))
     return "proceed"

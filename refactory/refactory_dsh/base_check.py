@@ -1054,7 +1054,10 @@ def _is_import_only_failure(output: str, defined_names: set[str]) -> bool:
         for error_type in error_types:
             if error_type not in stripped:
                 continue
-            m = re.match(rf'(?:E\s+)?({error_type}):?\s+(.*)', stripped)
+            # A pytest E-line, or a plain "ErrorType: message" line. pytest's
+            # "ImportError while importing test module '...'" header is neither.
+            m = (re.match(rf'E\s+({error_type}):?\s+(.*)', stripped)
+                 or re.match(rf'({error_type}):\s+(.*)', stripped))
             if not m:
                 continue
             found_errors = True
@@ -1068,6 +1071,122 @@ def _is_import_only_failure(output: str, defined_names: set[str]) -> bool:
     return found_errors and all_names_defined
 
 
+#: Total and per-pair time for the site-revert pass, below the gate's DSH timeout.
+SITE_REVERT_TOTAL_S = 240
+SITE_REVERT_PAIR_S = 60
+
+#: A pair the pass could not measure: the time cap ran out, the test timed out or
+#: was killed, the patch did not apply, or git failed. Never cached, so a later
+#: gate measures it; the audit reports it as advisory, never as a failure.
+NOT_RUN = "not_run"
+
+_HASH_COMMENT = (".py", ".pyi", ".sh", ".bash", ".zsh", ".yml", ".yaml", ".toml",
+                 ".cfg", ".ini", ".conf", ".rb", ".r", ".pl")
+_HASH_COMMENT_NAMES = ("Makefile", "Dockerfile", ".gitignore", ".gitattributes")
+_SLASH_COMMENT = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".go",
+                  ".rs", ".java", ".c", ".h", ".cc", ".cpp", ".hpp", ".swift", ".kt",
+                  ".scala", ".css", ".scss")
+
+
+def _comment_markers(path: str) -> tuple[str, ...]:
+    """The line-comment prefixes of *path*'s language, or () when it is not known."""
+    p = Path(path)
+    if p.suffix in _HASH_COMMENT or p.name in _HASH_COMMENT_NAMES:
+        return ("#",)
+    if p.suffix in _SLASH_COMMENT:
+        return ("//", "/*", "*", "*/")
+    return ()
+
+
+def is_comment_only(path: str, added_lines: list[str]) -> bool:
+    """Whether every added line is blank or a comment in *path*'s language.
+
+    At least one line must be a comment. A file whose comment syntax is not
+    known is never comment-only.
+    """
+    markers = _comment_markers(path)
+    if not markers:
+        return False
+    seen = False
+    for line in added_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith(markers):
+            return False
+        seen = True
+    return seen
+
+
+def _site_range(site: str) -> tuple[str, int, int] | None:
+    """``(path, first line, last line)`` of a ``path:line[-line]`` site, or None."""
+    parts = site.split(":")
+    if len(parts) < 2:
+        return None
+    spec = parts[1]
+    try:
+        if "-" in spec:
+            start, end = spec.split("-", 1)
+            return parts[0], int(start), int(end)
+        return parts[0], int(spec), int(spec)
+    except ValueError:
+        return parts[0], 0, 0
+
+
+def _overlapping_hunks(attempt_path: Path, base: str, file_path: str,
+                       line_start: int, line_end: int) -> tuple[str, list[str]]:
+    """The ``-U0`` diff of *file_path* from *base* to HEAD, and the hunk lines whose
+    added range overlaps the site. Raises when git fails."""
+    import subprocess as _sp
+
+    diff_output = _sp.run(
+        ["git", "-C", str(attempt_path), "diff", "-U0", base, "HEAD", "--", file_path],
+        capture_output=True, text=True, timeout=15, check=True,
+    ).stdout
+    overlapping: list[str] = []
+    current: list[str] = []
+    overlaps = False
+    for line in diff_output.splitlines():
+        if line.startswith("@@"):
+            if current and overlaps:
+                overlapping.extend(current)
+            current = [line]
+            m = re.search(r'\+(\d+)(?:,(\d+))?', line)
+            if m:
+                hunk_start = int(m.group(1))
+                hunk_count = int(m.group(2)) if m.group(2) else 1
+                if hunk_count == 0:
+                    # Pure deletion hunk: site line is the position or next
+                    overlaps = line_start <= hunk_start + 1 and line_end >= hunk_start
+                else:
+                    overlaps = line_start <= hunk_start + hunk_count - 1 and line_end >= hunk_start
+            else:
+                overlaps = False
+        elif current:
+            current.append(line)
+    if current and overlaps:
+        overlapping.extend(current)
+    return diff_output, overlapping
+
+
+def _added(hunk_lines: list[str]) -> list[str]:
+    return [line[1:] for line in hunk_lines if line.startswith("+") and not line.startswith("+++")]
+
+
+def site_added_lines(ctx: Any, site: str) -> list[str] | None:
+    """The lines a site's overlapping hunks add, or None when the site is not in the diff."""
+    found = worktree.recorded(ctx.workdir)
+    parsed = _site_range(site)
+    if found is None or parsed is None:
+        return None
+    file_path, line_start, line_end = parsed
+    try:
+        _, hunks = _overlapping_hunks(Path(found.path), found.base, file_path, line_start, line_end)
+    except Exception:
+        return None
+    return _added(hunks) if hunks else None
+
+
 def compute_site_reverts(
     ctx: Any, pairs: list[tuple[str, str, str]],
 ) -> dict[str, Any]:
@@ -1076,7 +1195,9 @@ def compute_site_reverts(
     *pairs* is a list of ``(site_path_line, test_file_and_name, scope)`` tuples.
     Operates on the run's own worktree (the attempt path), applies a reverse
     patch of only the overlapping hunks, runs the named test, and restores
-    the file in a ``finally`` block.  Results are cached in a dedicated file.
+    the file in a ``finally`` block. A site whose added lines are all comments,
+    or that sits in a test file, is checked against the diff and not reverted.
+    Measured results are cached in a dedicated file; ``not_run`` never is.
     """
     found = worktree.recorded(ctx.workdir)
     if found is None:
@@ -1095,81 +1216,80 @@ def compute_site_reverts(
         cache = {}
 
     results: list[dict[str, Any]] = []
-    summary = {"caught": 0, "not_caught": 0, "collection_error": 0, "unavailable": 0}
+    summary = {"caught": 0, "not_caught": 0, "collection_error": 0, NOT_RUN: 0}
 
     import subprocess as _sp
     import time as _time
 
-    total_timeout = 240  # cap total revert time (< gate DSH timeout)
     start_time = _time.monotonic()
-    per_pair_timeout = 60
+
+    def record(entry: dict[str, Any], key: str) -> None:
+        results.append(entry)
+        if entry["result"] != NOT_RUN:
+            cache[key] = entry
+        if entry.get("catches_site"):
+            summary["caught"] += 1
+        elif entry["result"] == "collection_error":
+            summary["collection_error"] += 1
+        elif entry["result"] == NOT_RUN:
+            summary[NOT_RUN] += 1
+        else:
+            summary["not_caught"] += 1
+
+    def not_run(site: str, test_name: str, detail: str) -> dict[str, Any]:
+        return {"site": site, "test": test_name, "result": NOT_RUN,
+                "catches_site": False, "detail": detail}
 
     for site, test_name, scope in pairs:
-        # Time cap
-        elapsed = _time.monotonic() - start_time
-        if elapsed > total_timeout:
-            results.append({
-                "site": site, "test": test_name,
-                "result": "unavailable", "catches_site": False,
-            })
-            summary["unavailable"] += 1
-            continue
-
         cache_key_str = f"{head}|{site}|{test_name}"
-        if cache_key_str in cache:
-            cached = cache[cache_key_str]
-            results.append(cached)
-            if cached.get("catches_site"):
-                summary["caught"] += 1
-            elif cached.get("result") == "collection_error":
-                summary["collection_error"] += 1
-            elif cached.get("result") == "unavailable":
-                summary["unavailable"] += 1
-            else:
-                summary["not_caught"] += 1
+        cached = cache.get(cache_key_str)
+        # "unavailable" is what earlier versions cached for an unmeasured pair.
+        if cached and cached.get("result") not in (NOT_RUN, "unavailable"):
+            record(cached, cache_key_str)
             continue
 
-        # Test-file exclusion: a site inside a test file is not a code site
-        site_path = site.split(":")[0] if ":" in site else site
-        if _is_test_file(site_path):
-            entry = {"site": site, "test": test_name,
-                     "result": "unavailable", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["unavailable"] += 1
+        # Time cap
+        if _time.monotonic() - start_time > SITE_REVERT_TOTAL_S:
+            record(not_run(site, test_name, "time cap reached"), cache_key_str)
             continue
 
-        # Parse site line range
-        parts = site.split(":")
-        if len(parts) < 2:
-            entry = {"site": site, "test": test_name,
-                     "result": "not_in_diff", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["not_caught"] += 1
+        parsed = _site_range(site)
+        if parsed is None:
+            record({"site": site, "test": test_name,
+                    "result": "not_in_diff", "catches_site": False}, cache_key_str)
             continue
-        file_path = parts[0]
-        line_spec = parts[1]
-        if "-" in line_spec:
-            line_start, line_end = line_spec.split("-", 1)
-            try:
-                line_start, line_end = int(line_start), int(line_end)
-            except ValueError:
-                line_start = line_end = 0
-        else:
-            try:
-                line_start = line_end = int(line_spec)
-            except ValueError:
-                line_start = line_end = 0
+        file_path, line_start, line_end = parsed
 
         # Check if file exists in the worktree
-        full_file = attempt_path / file_path
-        if not full_file.exists():
-            entry = {"site": site, "test": test_name,
-                     "result": "not_in_diff", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["not_caught"] += 1
+        if not (attempt_path / file_path).exists():
+            record({"site": site, "test": test_name,
+                    "result": "not_in_diff", "catches_site": False}, cache_key_str)
+            continue
+
+        try:
+            diff_output, overlapping_hunks = _overlapping_hunks(
+                attempt_path, base, file_path, line_start, line_end)
+        except Exception as exc:
+            record(not_run(site, test_name, f"git diff failed: {exc}"), cache_key_str)
+            continue
+
+        if not overlapping_hunks:
+            record({"site": site, "test": test_name,
+                    "result": "not_in_diff", "catches_site": False}, cache_key_str)
+            continue
+
+        # A site inside a test file is not a code site: it is in the diff, which is
+        # all a revert of a test could show.
+        if _is_test_file(file_path):
+            record({"site": site, "test": test_name,
+                    "result": "test_file", "catches_site": False}, cache_key_str)
+            continue
+
+        all_added = _added(overlapping_hunks)
+        # A comment changes no behaviour, so no test can catch its revert.
+        if is_comment_only(file_path, all_added):
+            record({"site": site, "test": test_name,
+                    "result": "comment_only", "catches_site": False}, cache_key_str)
             continue
 
         # Check if file exists on base (new file)
@@ -1185,62 +1305,8 @@ def compute_site_reverts(
             is_new_file = False
 
         if is_new_file:
-            entry = {"site": site, "test": test_name,
-                     "result": "new_file", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["not_caught"] += 1
-            continue
-
-        # Get diff hunks for overlapping site
-        try:
-            diff_output = _sp.run(
-                ["git", "-C", str(attempt_path), "diff", "-U0", base, "HEAD", "--", file_path],
-                capture_output=True, text=True, timeout=15,
-            ).stdout
-        except Exception:
-            entry = {"site": site, "test": test_name,
-                     "result": "unavailable", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["unavailable"] += 1
-            continue
-
-        # Parse hunks and find overlapping ones
-        overlapping_hunks: list[str] = []
-        current_hunk_lines: list[str] = []
-        hunk_overlaps = False
-
-        for line in diff_output.splitlines():
-            if line.startswith("@@"):
-                if current_hunk_lines and hunk_overlaps:
-                    overlapping_hunks.extend(current_hunk_lines)
-                current_hunk_lines = [line]
-                # Parse hunk header for new-file line range
-                m = re.search(r'\+(\d+)(?:,(\d+))?', line)
-                if m:
-                    hunk_start = int(m.group(1))
-                    hunk_count = int(m.group(2)) if m.group(2) else 1
-                    if hunk_count == 0:
-                        # Pure deletion hunk: site line is the position or next
-                        hunk_overlaps = (line_start <= hunk_start + 1 and line_end >= hunk_start)
-                    else:
-                        hunk_end = hunk_start + hunk_count - 1
-                        hunk_overlaps = (line_start <= hunk_end and line_end >= hunk_start)
-                else:
-                    hunk_overlaps = False
-            elif current_hunk_lines:
-                current_hunk_lines.append(line)
-
-        if current_hunk_lines and hunk_overlaps:
-            overlapping_hunks.extend(current_hunk_lines)
-
-        if not overlapping_hunks:
-            entry = {"site": site, "test": test_name,
-                     "result": "not_in_diff", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["not_caught"] += 1
+            record({"site": site, "test": test_name,
+                    "result": "new_file", "catches_site": False}, cache_key_str)
             continue
 
         # Build a reverse patch containing only overlapping hunks
@@ -1251,12 +1317,6 @@ def compute_site_reverts(
             header_lines.append(line)
 
         reverse_patch = "\n".join(header_lines + overlapping_hunks) + "\n"
-
-        # Extract defined names from the added lines
-        all_added = []
-        for line in overlapping_hunks:
-            if line.startswith("+") and not line.startswith("+++"):
-                all_added.append(line[1:])
         defined_names = _extract_defined_names(all_added)
 
         # Apply reverse patch and run the test
@@ -1266,14 +1326,10 @@ def compute_site_reverts(
                 input=reverse_patch, capture_output=True, text=True, timeout=10, check=True,
             )
         except Exception as exc:
-            entry = {"site": site, "test": test_name,
-                     "result": "unavailable", "catches_site": False,
-                     "detail": f"patch apply failed: {exc}"}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["unavailable"] += 1
+            record(not_run(site, test_name, f"patch apply failed: {exc}"), cache_key_str)
             continue
 
+        detail = ""
         try:
             # Pick runner and build command
             test_path = test_name.split("::")[0] if "::" in test_name else test_name
@@ -1297,7 +1353,8 @@ def compute_site_reverts(
 
             test_result = sandbox.run_command(
                 cmd, workdir=attempt_path,
-                timeout_s=min(per_pair_timeout, total_timeout - (_time.monotonic() - start_time)),
+                timeout_s=max(1.0, min(SITE_REVERT_PAIR_S,
+                                       SITE_REVERT_TOTAL_S - (_time.monotonic() - start_time))),
                 env=env, home=home, exact_env=True,
             )
 
@@ -1308,20 +1365,28 @@ def compute_site_reverts(
 
             # Classify result
             if getattr(test_result, "timed_out", False):
-                result = "unavailable"
+                result, detail = NOT_RUN, "the test timed out"
             elif rc is not None and rc < 0:
-                result = "unavailable"
-            elif rc in (4, 5) or "no tests ran" in test_output.lower():
-                # pytest exit 4 = no tests collected, 5 = no tests ran
-                result = "unavailable"
+                result, detail = NOT_RUN, f"the test was killed by signal {-rc}"
             else:
                 coll_files, has_unlocatable = _parse_collection_errors(test_output)
                 test_path_for_coll = test_name.split("::")[0] if "::" in test_name else test_name
-                has_collection = (test_path_for_coll in coll_files
-                                  or any(test_path_for_coll.startswith(e) for e in coll_files)
+                # pytest names the module by its absolute path, the citation by a
+                # path relative to the worktree.
+                has_collection = (any(e == test_path_for_coll
+                                      or e.endswith("/" + test_path_for_coll)
+                                      or test_path_for_coll.startswith(e) for e in coll_files)
                                   or has_unlocatable)
+                # A module that no longer imports after the revert is a collection
+                # error (pytest then also reports the test as not found), and an
+                # import-only one when it names a definition the hunks removed.
                 if has_collection:
-                    result = "collection_error"
+                    result = ("import_only" if _is_import_only_failure(test_output, defined_names)
+                              else "collection_error")
+                elif rc in (4, 5) or "no tests ran" in test_output.lower():
+                    # pytest exit 4 = no tests collected, 5 = no tests ran: the cited
+                    # test does not exist, a wrong citation rather than a measurement gap.
+                    result = "no_tests"
                 elif rc != 0:
                     # Test failed — check if it's import-only
                     if _is_import_only_failure(test_output, defined_names):
@@ -1331,8 +1396,8 @@ def compute_site_reverts(
                 else:
                     result = "pass"  # test still passes = site NOT caught
 
-        except Exception:
-            result = "unavailable"
+        except Exception as exc:
+            result, detail = NOT_RUN, f"the test could not be run: {exc}"
         finally:
             # Restore the worktree
             try:
@@ -1343,20 +1408,11 @@ def compute_site_reverts(
             except Exception:
                 pass
 
-        catches = result == "fail"
         entry = {"site": site, "test": test_name,
-                 "result": result, "catches_site": catches}
-        results.append(entry)
-        cache[cache_key_str] = entry
-
-        if catches:
-            summary["caught"] += 1
-        elif result == "collection_error":
-            summary["collection_error"] += 1
-        elif result == "unavailable":
-            summary["unavailable"] += 1
-        else:
-            summary["not_caught"] += 1
+                 "result": result, "catches_site": result == "fail"}
+        if detail:
+            entry["detail"] = detail
+        record(entry, cache_key_str)
 
     # Write cache
     try:

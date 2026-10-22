@@ -2326,7 +2326,9 @@ def gate_overwatch(ctx: Any) -> str:
 
     if (verdict == PASS_MARK and not evidence_problems and not audit_problems_list
             and not review_findings and not correction_problems):
-        ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
+        not_measured = evidence.correction_audit_advisories(ctx)
+        ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n" + (
+            evidence.advisory_correction_audit(not_measured) + "\n" if not_measured else ""))
         ctx.set_fact("overwatch_review", "(overwatch passed)")
         ctx.write_text("validation.txt", "(overwatch passed)\n")
         ctx.set_fact("validation", "(overwatch passed)")

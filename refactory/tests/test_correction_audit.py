@@ -687,8 +687,8 @@ def test_correction_audit_design_form_without_heading_blocks(tmp_path):
     )
 
 
-def test_correction_audit_test_file_site_blocks(tmp_path):
-    """A site inside a test file is refused."""
+def test_correction_audit_test_file_site_is_checked_against_the_diff(tmp_path):
+    """A site inside a test file is not reverted: in the diff it passes, outside it blocks."""
     from refactory_dsh import authoring_evidence as ae
 
     run_dir = tmp_path / "tfs"
@@ -727,15 +727,22 @@ def test_correction_audit_test_file_site_blocks(tmp_path):
         i["id"] for i in ctx.read_json(ae.EVIDENCE)["requirements"]
         if i.get("kind") == "correction"
     )
-    # Cite a test file as the site — this should be refused
+    # The added test is the correction's site: it is in the diff, so it passes.
     _write_audit_with_corrections(ctx, [{
         "id": corr_id, "clause": "Add test",
         "sites": [{"site": "test_calc.py:2", "tests": ["test_calc.py::test_validate"], "scope": "local"}],
     }])
+    assert ae.correction_audit_problems(ctx) == []
+    reverts = ctx.read_json("site-revert-results.json")["pairs"]
+    assert [p["result"] for p in reverts] == ["test_file"]
+
+    # A test-file line the change did not touch is not in the diff.
+    _write_audit_with_corrections(ctx, [{
+        "id": corr_id, "clause": "Add test",
+        "sites": [{"site": "test_calc.py:40", "tests": ["test_calc.py::test_validate"], "scope": "local"}],
+    }])
     problems = ae.correction_audit_problems(ctx)
-    # The test-file exclusion in compute_site_reverts makes the revert unavailable,
-    # which should block (fail closed).
-    assert problems, f"expected blocking for test-file site: {problems}"
+    assert any("test_calc.py:40 is not in the diff" in p for p in problems), problems
 
 
 def test_correction_audit_import_only_sibling(tmp_path):
@@ -793,6 +800,8 @@ def test_correction_audit_import_only_sibling(tmp_path):
         "sites": [{"site": "calc.py:4", "tests": ["test_helper.py::test_helper"], "scope": "local"}],
     }])
     problems_no_sibling = ae.correction_audit_problems(ctx)
+    advisories = ae.correction_audit_advisories(ctx)
+    assert len(advisories) == 1 and "site calc.py:4: not measurable by revert" in advisories[0]
 
     # With sibling: definition site + call site → should pass
     _write_audit_with_corrections(ctx, [{
@@ -804,11 +813,11 @@ def test_correction_audit_import_only_sibling(tmp_path):
     }])
     problems_with_sibling = ae.correction_audit_problems(ctx)
 
-    # The definition-only case should have more problems than the sibling case
-    assert len(problems_no_sibling) > len(problems_with_sibling) or problems_no_sibling, (
-        f"expected import-only without sibling to block: no_sibling={problems_no_sibling}, "
-        f"with_sibling={problems_with_sibling}"
-    )
+    # Without a sibling the revert can only break an import: advisory, not blocking.
+    assert problems_no_sibling == []
+    # (the advisories were read before the second audit overwrote them)
+    assert problems_with_sibling == []
+    assert ae.correction_audit_advisories(ctx) == []
 
 
 def test_is_import_only_from_pytest_e_lines():
@@ -913,3 +922,202 @@ def test_parse_collection_errors_failed_to_load_url():
     )
     files, has_unlocatable = _parse_collection_errors(output)
     assert "tests/config.spec.ts" in files
+
+
+# ── unmeasured checks are advisory, measured misses block (dm-183, dm-184) ──
+
+
+def _gate_run(tmp_path):
+    """A run whose worktree changes calc.validate in two hunks: a comment at line 1
+    and the comparison at line 3. Returns (ctx, found)."""
+    from types import SimpleNamespace
+
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    repo = git_repo(tmp_path / "repo")
+    (repo / "calc.py").write_text("def validate(x):\n    return x > 0\n")
+    git(repo, "add", "calc.py")
+    git(repo, "commit", "-q", "-m", "add calc.py")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "run-branch")
+    (repo / "calc.py").write_text(
+        "# Validation helpers.\ndef validate(x):\n    return x >= 0\n")
+    (repo / "test_calc.py").write_text(
+        "from calc import validate\n"
+        "def test_validate():\n    assert validate(0) is True\n"
+        "def test_unrelated():\n    assert True\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "change validate")
+    head = git(repo, "rev-parse", "HEAD")
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base, "head": head,
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir)}))
+    ctx = nn.RunContext(run_dir, facts={"brief": "test", "artifact": str(run_dir / "art")})
+    (run_dir / "art").mkdir()
+    (run_dir / "art" / "a.txt").write_text("42")
+    Ledger.seed(run_dir, "test")
+    return ctx, SimpleNamespace(path=str(repo), base=base, head=head, branch="run-branch")
+
+
+def _deliver_overwatch(ctx, sites_by_text, kinds=None, *, worker="overwatch"):
+    """Current evidence, and an overwatch pass citing *sites_by_text* for each correction.
+
+    With ``worker="focused_qa"`` the design_fast reviewer delivers the audit instead,
+    with a passing focused-qa.json.
+    """
+    from refactory_dsh import fast_ops
+    from refactory_dsh.agent_delivery import begin, finish
+
+    evidence.record(ctx, {"status": "pass", "command": "true", "stdout": "ok"})
+    report = "reviews/overwatch.md" if worker == "overwatch" else "focused-qa.json"
+    begin(ctx.workdir, worker, "Audit each ask", [report, evidence.AUDIT])
+    rows = []
+    for item in ctx.read_json(evidence.EVIDENCE)["requirements"]:
+        row = {"id": item["id"], "requirement": item.get("text", ""), "status": "pass",
+               "evidence": [{"path": "art/a.txt", "detail": "read the answer: 42"}]}
+        if item.get("kind") in ("correction", "constraint"):
+            clause = {"clause": item["text"],
+                      "evidence": [{"path": "art/a.txt", "detail": "verified"}],
+                      "sites": sites_by_text.get(item["text"], [])}
+            clause.update((kinds or {}).get(item["text"], {}))
+            row["clauses"] = [clause]
+        rows.append(row)
+    ctx.write_json(evidence.AUDIT, {"requirements": rows})
+    if worker == "overwatch":
+        ctx.write_text("reviews/overwatch.md", "VERDICT: PASS")
+    else:
+        art = ctx.facts["artifact"]
+        ctx.write_json("focused-qa.json", {
+            "status": "pass", "findings": [], "not_run": [],
+            "checks": [{"name": "answer", "command": "cat a.txt", "status": "pass",
+                        "evidence": "read 42"}]})
+        ctx.write_json("focused-source.json", {
+            "root": art, "files": fast_ops._checked_files(Path(art))})
+    finish(ctx.workdir, worker)
+
+
+_CAUGHT = [{"site": "calc.py:3", "tests": ["test_calc.py::test_validate"], "scope": "local"}]
+
+
+def test_large_ledger_past_the_cap_proceeds_with_an_advisory(tmp_path, monkeypatch):
+    """A 25-correction ledger whose revert pass runs out of time: the gate proceeds, the
+    gate note and the pull request list every unmeasured pair, nothing unmeasured is
+    cached, and the next audit measures them."""
+    from refactory_dsh import base_check, create_ops, delivery
+
+    ctx, found = _gate_run(tmp_path)
+    texts = [f"Correction {n}" for n in range(1, 26)]
+    for text in texts:
+        Ledger(ctx.workdir).note("correction", text)
+    _deliver_overwatch(ctx, {text: _CAUGHT for text in texts})
+
+    monkeypatch.setattr(base_check, "SITE_REVERT_TOTAL_S", -1)
+    assert create_ops.gate_overwatch(ctx) == "proceed", ctx.facts.get("validation")
+
+    advisories = evidence.correction_audit_advisories(ctx)
+    assert len(advisories) == 25
+    assert all("site calc.py:3: revert not run (time cap reached)" in a for a in advisories)
+    gate = ctx.read_text("reviews/overwatch-gate.txt")
+    assert gate.startswith("proceed: overwatch passed")
+    assert evidence.ADVISORY_CORRECTION_AUDIT in gate
+    body = delivery._body(ctx, found)
+    assert "Correction-audit checks not measured (advisory)" in body
+    assert "revert not run (time cap reached)" in body
+    cache = json.loads((ctx.workdir / ".refactory" / "site-revert-cache.json").read_text())
+    assert cache == {}
+
+    monkeypatch.setattr(base_check, "SITE_REVERT_TOTAL_S", 240)
+    assert evidence.correction_audit_problems(ctx) == []
+    assert evidence.correction_audit_advisories(ctx) == []
+    assert [p["result"] for p in ctx.read_json("site-revert-results.json")["pairs"]] == ["fail"] * 25
+
+
+def test_a_measured_miss_still_blocks_beside_unmeasured_pairs(tmp_path, monkeypatch):
+    """A site its test does not reach blocks even when the pairs around it are capped."""
+    from refactory_dsh import base_check, create_ops
+
+    ctx, _ = _gate_run(tmp_path)
+    miss = [{"site": "calc.py:3", "tests": ["test_calc.py::test_unrelated"], "scope": "local"}]
+    Ledger(ctx.workdir).note("correction", "Zero is valid")
+    _deliver_overwatch(ctx, {"Zero is valid": miss})
+    assert create_ops.gate_overwatch(ctx) != "proceed"
+    assert "site calc.py:3 not reached by any test" in ctx.facts["validation"]
+
+    # A later round adds 24 corrections, and the revert pass runs out of time on them.
+    texts = [f"Correction {n}" for n in range(1, 25)]
+    for text in texts:
+        Ledger(ctx.workdir).note("correction", text)
+    _deliver_overwatch(ctx, {"Zero is valid": miss, **{text: _CAUGHT for text in texts}})
+    monkeypatch.setattr(base_check, "SITE_REVERT_TOTAL_S", -1)
+    assert create_ops.gate_overwatch(ctx) != "proceed"
+    validation = ctx.facts["validation"]
+    assert "site calc.py:3 not reached by any test" in validation
+    assert "revert not run" not in validation.split("\n", 1)[0]
+    assert len(evidence.correction_audit_advisories(ctx)) == 24
+
+
+def test_a_comment_only_site_needs_no_test(tmp_path):
+    """No test can catch a comment, so a comment-only site passes with no tests; a code
+    site with no tests still blocks."""
+    from refactory_dsh import authoring_evidence as ae
+
+    ctx, _ = _gate_run(tmp_path)
+    Ledger(ctx.workdir).note("correction", "Say what the module is for")
+    Ledger(ctx.workdir).note("correction", "Accept zero")
+    _deliver_overwatch(ctx, {
+        "Say what the module is for": [{"site": "calc.py:1", "tests": [], "scope": "artifact"}],
+        "Accept zero": [{"site": "calc.py:3", "tests": [], "scope": "local"}],
+    })
+    problems = ae.correction_audit_problems(ctx)
+    assert problems and all("calc.py:3 has no tests" in p for p in problems), problems
+    audit = {item["text_preview"]: item for item in ctx.read_json("correction-audit.json")}
+    assert audit["Say what the module is for"]["status"] == "pass"
+    assert audit["Say what the module is for"]["clauses"][0]["sites"][0]["comment_only"] is True
+
+
+def test_a_doc_clause_on_a_changed_code_file_is_advisory(tmp_path):
+    """Wording in a code file can only be checked as changed: advisory when the file
+    changed, blocking when it did not."""
+    from refactory_dsh import authoring_evidence as ae
+
+    ctx, _ = _gate_run(tmp_path)
+    Ledger(ctx.workdir).note("correction", "Fix the module comment")
+    Ledger(ctx.workdir).note("correction", "Fix the other comment")
+    _deliver_overwatch(ctx, {}, kinds={
+        "Fix the module comment": {"kind": "doc", "path": "calc.py"},
+        "Fix the other comment": {"kind": "doc", "path": "other.py"},
+    })
+    problems = ae.correction_audit_problems(ctx)
+    assert len(problems) == 1 and "doc file 'other.py' is not in the diff" in problems[0], problems
+    advisories = ae.correction_audit_advisories(ctx)
+    assert len(advisories) == 1 and "doc clause names calc.py" in advisories[0], advisories
+
+
+def test_is_comment_only_by_language():
+    from refactory_dsh.base_check import is_comment_only
+
+    assert is_comment_only("a.py", ["# note", "", "    # more"])
+    assert is_comment_only("a.yaml", ["# disabled: client-hmr"])
+    assert is_comment_only("a.ts", ["// note", "/**", " * doc", " */"])
+    assert not is_comment_only("a.py", ["# note", "x = 1"])
+    assert not is_comment_only("a.py", [""])
+    assert not is_comment_only("a.md", ["# A heading"])
+
+
+def test_design_fast_past_the_cap_proceeds_with_an_advisory(tmp_path, monkeypatch):
+    """design_fast's gate_qa runs the same audit: a capped 25-correction ledger proceeds,
+    and fast-report.json carries the unmeasured pairs."""
+    from refactory_dsh import base_check, fast_ops
+
+    ctx, _ = _gate_run(tmp_path)
+    ctx.knobs["repair_attempts"] = 3
+    texts = [f"Correction {n}" for n in range(1, 26)]
+    for text in texts:
+        Ledger(ctx.workdir).note("correction", text)
+    _deliver_overwatch(ctx, {text: _CAUGHT for text in texts}, worker="focused_qa")
+
+    monkeypatch.setattr(base_check, "SITE_REVERT_TOTAL_S", -1)
+    assert fast_ops.gate_qa(ctx) == "proceed", ctx.facts.get("repair_feedback")
+    report = json.dumps(ctx.read_json("fast-report.json"))
+    assert evidence.ADVISORY_CORRECTION_AUDIT in report
+    assert report.count("revert not run (time cap reached)") == 25
