@@ -387,7 +387,13 @@ def test_finding_sources_json(tmp_path, monkeypatch):
         "VERDICT: PASS",
     ]
     model = FakeModel(answers)
-    result = DesignMode().run(
+    # The verifier's advisory round never takes the last builder round. Round 1's core
+    # repair leaves one of the default three, so this run allows a fourth for round 2's.
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["check_attempts"]["value"] = 4
+    mode.load_state_dict(state)
+    result = mode.run(
         tmp_path / "run", model=model,
         verdicts={"gate_strategy": "proceed"},
         task={"name": "sources", "brief": "a tool", "check": "python tool.py"},
@@ -403,6 +409,7 @@ def test_finding_sources_json(tmp_path, monkeypatch):
         assert "finding" in entry
         assert "fate" in entry
         assert entry["fate"] in ("fixed", "rebutted", "unresolved")
+        assert entry["class"] == "core"
         assert "first_round" in entry
         assert "last_round" in entry
     # QA finding: fixed (present in round 1, absent in rounds 2-3)

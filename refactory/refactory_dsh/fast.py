@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from refactory_dsh import delivery, repo_change
+from refactory_dsh.create_ops import SEVERITY_RULE
 from refactory_dsh.create import CreateMode
 from refactory_dsh.design import DesignMode
 from refactory_dsh.edit import EditMode
@@ -110,7 +111,9 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
             '"callers":"...", "shared_state":"..."}]}',
         )
     focused_qa_prompt = (
-        qa_prompt + (ARTIFACT_QA if artifact else "")
+        qa_prompt + "\nEach entry in `findings` is a BLOCKING finding. " + SEVERITY_RULE
+        + " A check of something non-core that fails ends its name with `[non-core]`.\n"
+        + (ARTIFACT_QA if artifact else "")
         + ("{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\n"
            if design else "")
         + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS
@@ -144,7 +147,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
     gate_qa_writes = (
         ("fast-report.json", "repair.txt",
          "site-revert-results.json", "correction-audit.json",
-         "reviews/finding-sources.json")
+         "reviews/finding-sources.json", "reviews/follow-ups.json", "reviews/follow-ups.md")
         + (("reviews/verification-unresolved.md",) if design else ())
     )
 
