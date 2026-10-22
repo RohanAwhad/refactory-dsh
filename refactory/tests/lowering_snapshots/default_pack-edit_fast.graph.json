@@ -79,6 +79,7 @@
         "correction-audit.json",
         "fast-report.json",
         "repair.txt",
+        "reviews/finding-sources.json",
         "site-revert-results.json"
       ],
       "blocking": true,

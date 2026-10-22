@@ -470,9 +470,22 @@ class DesignMode(Mode):
         ))
 
         # ── design-v2's three reviews, in parallel, and the overwatch pass ──
+        from refactory_dsh.verification import VERIFIER_PROMPT
+        graph.add(Node(
+            "verifier", "agent",
+            prompt_template=VERIFIER_PROMPT,
+            reads=("brief.json", "test-guardedness.json", "changes.diff"),
+            writes=("reviews/verification.md",),
+            produces=("verification",),
+            role="code_reviewer",
+            resource_role="final_validation",
+            notes="design-blind verification: apply the evidence log's methods "
+                  "to the brief, diff and repo",
+        ))
         graph.add(Node("fork_qa", "fork",
-                       targets=("health_checker", "code_reviewer", "qa_director"),
-                       notes="start the three reviews"))
+                       targets=("health_checker", "code_reviewer", "qa_director", "verifier"),
+                       optional_targets=("verifier",),
+                       notes="start the three reviews and the verifier"))
         graph.add(Node(
             "health_checker", "agent",
             prompt_template=(
@@ -491,11 +504,8 @@ class DesignMode(Mode):
                 "check you did not run is not a check that passed.\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
-                "Read reviews/verification.md. For each verifier finding that concerns a "
-                "changed function, address it in that function's repo_questions entry.\n"
             ),
-            reads=("brief.json", "design.md", "changed-functions.json",
-                   "reviews/verification.md"),
+            reads=("brief.json", "design.md", "changed-functions.json"),
             writes=("reviews/health-check.md",),
             produces=("health_check",),
             notes="run the artifact and record what happened, command by command",
@@ -526,14 +536,12 @@ class DesignMode(Mode):
                 "is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
-                "Read reviews/verification.md. For each verifier finding that concerns a "
-                "changed function, address it in that function's repo_questions entry.\n\n"
                 "When a false claim about design.md is found, report it against the code file "
                 "that relies on the claim, not against design.md, because BLOCKING: design.md "
                 "is downgraded by scope_filter_findings.\n"
             ),
             reads=("brief.json", "design.md", "emit.txt", "pitfalls.json",
-                   "changed-functions.json", "reviews/verification.md"),
+                   "changed-functions.json"),
             writes=("reviews/code-review.md",),
             produces=("code_review",),
             notes="review the emitted files against the design",
@@ -559,11 +567,9 @@ class DesignMode(Mode):
                 "breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
-                "Read reviews/verification.md. For each verifier finding that concerns a "
-                "changed function, address it in that function's repo_questions entry.\n"
             ),
             reads=("brief.json", "design.md", "strategy.json",
-                   "changed-functions.json", "reviews/verification.md"),
+                   "changed-functions.json"),
             writes=("reviews/qa.md",),
             produces=("qa_review",),
             notes="attack the artifact against the brief",
@@ -573,7 +579,8 @@ class DesignMode(Mode):
                        notes="wait for all three reviews"))
         graph.add(Node(
             "synthesize_qa", "op", call="refactory_dsh.create_ops:synthesize_qa",
-            reads=("reviews/health-check.md", "reviews/code-review.md", "reviews/qa.md"),
+            reads=("reviews/health-check.md", "reviews/code-review.md", "reviews/qa.md",
+                   "reviews/verification.md"),
             writes=("reviews/qa-synthesized.md",),
             produces=("qa", "qa_blocking", "qa_missing"),
             notes="merge the three reviews; an absent review is not a passed one",
@@ -582,11 +589,13 @@ class DesignMode(Mode):
             "gate_qa", "gate", evaluator="refactory_dsh.create_ops:gate_qa",
             reads=("reviews/qa-synthesized.md", "reviews/health-check.md",
                    "reviews/code-review.md", "reviews/qa.md",
+                   "reviews/verification.md", "emit.txt",
                    "changed-functions.json"),
-            writes=("reviews/qa-gate.txt",),
-            produces=("qa_gate", "review_reruns_used"),
-            max_iterations=4,
-            notes="proceed only when every review ran and none is blocking",
+            writes=("reviews/qa-gate.txt", "reviews/verification-unresolved.md",
+                    "reviews/finding-sources.json"),
+            produces=("qa_gate", "review_reruns_used", "verification_advisory_used"),
+            max_iterations=5,
+            notes="proceed only when every review ran and none is blocking; verifier findings are advisory",
         ))
         graph.add(Node(
             "overwatch", "agent",
@@ -616,6 +625,8 @@ class DesignMode(Mode):
                 "and keep that requirement unverified. Do not prescribe re-authoring "
                 "or repeating an unchanged probe to resolve an unavailable tool. "
                 "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
+                "Read reviews/verification-unresolved.md if it exists. Check whether the "
+                "builder addressed or rebutted each finding with a cited file:line.\n\n"
                 "Write `reviews/overwatch.md` ending with a "
                 "line that is exactly `VERDICT: PASS` or `VERDICT: FAIL`, and name every "
                 "ask with no evidence behind it."
@@ -716,6 +727,7 @@ class DesignMode(Mode):
         graph.connect("check", "emit", condition="reloop")
         graph.connect("check", "fork_qa", condition="proceed")
         graph.connect("fork_qa", "join_qa")
+        graph.connect("verifier", "join_qa")
         graph.connect("join_qa", "synthesize_qa")
         graph.connect("synthesize_qa", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
@@ -729,8 +741,6 @@ class DesignMode(Mode):
         graph.connect("deliver", "delivery_gate")
         graph.connect("delivery_gate", "emit", condition="reloop")
         graph.connect("delivery_gate", "done", condition="proceed")
-        from refactory_dsh.verification import wire_verification
-        wire_verification(graph)
         from refactory_dsh.authoring_evidence import wire_reviews
         wire_reviews(graph)
         return graph

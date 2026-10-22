@@ -366,7 +366,7 @@ class TestScriptedModeRuns:
         bad = f"===FILE: answer.py===\nassert False, 'test_bar'\n"
         good = f"===FILE: answer.py===\nassert True\n"
 
-        client = FakeModel([PLAN, bad, VERIFICATION_ANSWER, good, VERIFICATION_ANSWER, QA_PASS])
+        client = FakeModel([PLAN, bad, good, QA_PASS, VERIFICATION_ANSWER])
         state = mode.state_dict()
         state["knobs"]["repair_attempts"]["value"] = 2
         mode.load_state_dict(state)
@@ -391,7 +391,7 @@ class TestScriptedModeRuns:
 
         bad = f"===FILE: answer.py===\nassert False, 'test_bar'\n"
 
-        client = FakeModel([PLAN, bad, VERIFICATION_ANSWER, bad, VERIFICATION_ANSWER, QA_PASS])
+        client = FakeModel([PLAN, bad, bad, QA_PASS, VERIFICATION_ANSWER])
         state = mode.state_dict()
         state["knobs"]["repair_attempts"]["value"] = 2
         mode.load_state_dict(state)
@@ -415,7 +415,7 @@ class TestScriptedModeRuns:
         # Both attempts produce the same failing code.
         bad = f"===FILE: answer.py===\nassert False, 'test_bar'\n"
 
-        client = FakeModel([PLAN, bad, VERIFICATION_ANSWER, bad, VERIFICATION_ANSWER, QA_PASS])
+        client = FakeModel([PLAN, bad, bad, QA_PASS, VERIFICATION_ANSWER])
         state = mode.state_dict()
         state["knobs"]["repair_attempts"]["value"] = 2
         mode.load_state_dict(state)

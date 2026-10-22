@@ -60,6 +60,8 @@ export interface WorkflowNode {
   gate_prompt?: string
   /** `ForkNode`: the branch entry nodes, which are reached through this list and not through edges. */
   targets?: string[]
+  /** `ForkNode`: targets whose failure does not fail the fork. */
+  optional_targets?: string[]
   /** `JoinNode`: the branch exits this barrier waits for. */
   sources?: string[]
   /** `AgentNode`: the annotation that lets a director hot-plug its planned children. */

@@ -52,6 +52,7 @@ EXTENSION_FIELDS: frozenset[str] = frozenset({
     "resource_role",
     "command_timeout_s",
     "dispatch_command",
+    "optional_targets",
 })
 
 #: Whether the dev-only reference is importable by this interpreter.

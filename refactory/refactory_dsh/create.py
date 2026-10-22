@@ -499,7 +499,7 @@ class CreateMode(Mode):
             "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
             reads=("reviews/qa-synthesized.md", "reviews/health-check.md",
                    "reviews/code-review.md", "reviews/qa.md"),
-            writes=("reviews/qa-gate.txt",),
+            writes=("reviews/qa-gate.txt", "reviews/finding-sources.json"),
             produces=("qa_gate",),
             max_iterations=4,
             notes="proceed only when every review ran and none is blocking",

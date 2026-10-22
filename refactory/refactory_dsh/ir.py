@@ -141,6 +141,7 @@ class ForkNode(Node):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     targets: list[str]
+    optional_targets: list[str] = Field(default_factory=list)
 
 
 class JoinNode(Node):

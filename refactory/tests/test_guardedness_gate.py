@@ -213,9 +213,9 @@ def test_focused_check_declares_check_txt_write():
     assert "check.txt" in node.writes
 
 
-def test_gate_verification_fast_blocks_on_guardedness():
-    """gate_verification in fast mode returns reloop when guardedness is blocked."""
-    from refactory_dsh.fast_ops import gate_verification
+def test_gate_check_fast_blocks_on_guardedness():
+    """gate_check in fast mode returns reloop when guardedness is blocked."""
+    from refactory_dsh.fast_ops import gate_check
 
     ctx = FakeCtx(
         files={
@@ -224,19 +224,18 @@ def test_gate_verification_fast_blocks_on_guardedness():
                 "guardedness_blocked": True,
             }),
             "check.txt": "BLOCKING: these new tests pass without the change: test_foo.py",
-            "reviews/verification.md": "No blocking findings.\n\nVERDICT: PASS",
         }
     )
     ctx._knobs = {"repair_attempts": "2"}
-    result = gate_verification(ctx)
+    result = gate_check(ctx)
     assert isinstance(result, Verdict)
     assert str(result) == "reloop"
     assert "test_foo.py" in result.reason
 
 
-def test_gate_verification_fast_handles_check_failure():
-    """gate_verification in fast mode routes check failures to _repair."""
-    from refactory_dsh.fast_ops import gate_verification
+def test_gate_check_fast_handles_check_failure():
+    """gate_check in fast mode routes check failures to _repair."""
+    from refactory_dsh.fast_ops import gate_check
 
     ctx = FakeCtx(
         files={
@@ -245,11 +244,10 @@ def test_gate_verification_fast_handles_check_failure():
                 "returncode": 1,
             }),
             "check.txt": "requested runtime check failed (exit 1): assert False",
-            "reviews/verification.md": "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL",
         }
     )
     ctx._knobs = {"repair_attempts": "2"}
-    result = gate_verification(ctx)
+    result = gate_check(ctx)
     assert isinstance(result, Verdict)
     assert str(result) == "reloop"
     # Must carry the check failure, not the verifier noise.
@@ -295,8 +293,9 @@ def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):
                 "test_foo.py": "def test_foo():\n    assert True\n"}),  # first emit: test_foo.py in added_files
         render({"tool.py": "print('v2')\n",
                 "test_foo.py": "def test_foo():\n    import tool\n    assert hasattr(tool, '__file__')\n"}),  # second emit: guarding test
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
     result = DesignMode().run(
         tmp_path / "run", model=FakeModel(answers),
@@ -312,8 +311,8 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
     """Guardedness enforcement in fast mode reloops through the real executor.
 
     This exercises the full pipeline: focused_check detects non-guarding tests,
-    writes check.txt and sets guardedness_blocked in focused-check.json, the
-    verifier runs, then gate_verification reads the flag and reloops to emit.
+    writes check.txt and sets guardedness_blocked in focused-check.json, then
+    gate_check reads the flag and reloops to emit.
     On the second attempt guardedness passes and the run completes.
     """
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
@@ -351,12 +350,11 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
         "Change only the requested file.",          # strategy
         render({"tool.py": "print('v1')\n",
                 "test_foo.py": "def test_foo():\n    assert True\n"}),  # first emit
-        VERIFICATION_ANSWER,                         # verifier after first check
-        # gate_verification sees guardedness_blocked → reloops to emit
+        # gate_check sees guardedness_blocked → reloops to emit
         render({"tool.py": "print('v2')\n",
                 "test_foo.py": "def test_foo():\n    import tool\n    assert hasattr(tool, '__file__')\n"}),  # second emit
-        VERIFICATION_ANSWER,                         # verifier after second check
-        FAST_QA,                                     # focused QA
+        FAST_QA,                                     # focused QA (in fork_qa)
+        VERIFICATION_ANSWER,                         # verifier (in fork_qa)
     ]
 
     mode = DesignFastMode()

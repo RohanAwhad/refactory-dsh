@@ -1,8 +1,10 @@
-"""Independent verification step: design-blind methods applied after the build's check passes.
+"""Independent verification step: design-blind, running in parallel with the reviewers.
 
 The verifier is given the brief, the diff and the repository — never design.md.
 It applies the evidence log's design-blind methods (M1, M2, M3, M11, M12, M13, M15)
 and reports each finding with a runnable counterexample or a cited file:line.
+It runs as an optional branch of the review fork, so its findings are advisory
+and a failure does not block the run.
 
 See docs/hardening.md §15 for why the verifier is design-blind.
 """
@@ -107,47 +109,24 @@ def gate_verification_generic(ctx: Any) -> str:
     return "proceed"
 
 
-def wire_verification(graph: Any, *, fast: bool = False,
-                      check_node: str = "", proceed_target: str = "",
+def wire_verification(graph: Any, *, check_node: str, proceed_target: str,
                       evaluator: str = "") -> None:
-    """Add verifier and gate_verification nodes; rewire edges accordingly.
+    """Add verifier and gate_verification nodes for custom wiring (fix_pack).
 
-    In full mode (``fast=False``, default names):
-      check →(proceed) verifier → gate_verification →(proceed) fork_qa
-                                                      →(reloop) emit
+    Full-mode and fast-mode graphs add the verifier directly to the review fork;
+    only the custom form (``check_node`` and ``proceed_target`` required) remains::
 
-    In fast mode (``fast=True``, default names):
-      focused_check → verifier → gate_verification →(proceed) focused_qa
-                                                     →(reloop) emit
-
-    Custom wiring (``check_node`` and ``proceed_target`` given):
       check_node →(proceed) verifier → gate_verification →(proceed) proceed_target
-                                                           →(reloop) emit
-
-    Any mode that uses ``repo_change`` should call this to get the verifier.
+                                                            →(reloop) emit
     """
     from refactory_dsh.nn import Node
 
-    OPS_FULL = "refactory_dsh.design_ops"
-    OPS_FAST = "refactory_dsh.fast_ops"
     OPS_GENERIC = "refactory_dsh.verification"
 
-    # Determine node names and evaluator based on mode.
-    if check_node and proceed_target:
-        src = check_node
-        dst = proceed_target
-        gate_eval = evaluator or f"{OPS_GENERIC}:gate_verification_generic"
-        src_condition = "proceed"
-    elif fast:
-        src = "focused_check"
-        dst = "focused_qa"
-        gate_eval = f"{OPS_FAST}:gate_verification"
-        src_condition = None
-    else:
-        src = "check"
-        dst = "fork_qa"
-        gate_eval = f"{OPS_FULL}:gate_verification"
-        src_condition = "proceed"
+    src = check_node
+    dst = proceed_target
+    gate_eval = evaluator or f"{OPS_GENERIC}:gate_verification_generic"
+    src_condition = "proceed"
 
     graph.add(Node(
         "verifier", "agent",
@@ -160,46 +139,16 @@ def wire_verification(graph: Any, *, fast: bool = False,
         notes="design-blind verification: apply the evidence log's methods to the brief, diff and repo",
     ))
 
-    if fast:
-        graph.add(Node(
-            "gate_verification", "gate",
-            evaluator=gate_eval,
-            resource_role="final_validation",
-            reads=("reviews/verification.md", "focused-check.json", "check.txt", "check-record.json"),
-            writes=("reviews/verification-gate.txt", "reviews/verification-unresolved.md",
-                    "fast-report.json", "repair.txt"),
-            produces=("verification_gate", "repair_feedback", "repairs_used",
-                      "check_repairs_used", "verification_iterations_used",
-                      "convergence_extras_used", "convergence_granted"),
-            knobs=("repair_attempts", "check_attempt_cap"),
-            max_iterations=15,  # check_attempt_cap(8) + VERIFIER_GATE_LIMIT(3) + review_budget(3) + 1
-            notes="proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
-        ))
-    elif check_node and proceed_target:
-        graph.add(Node(
-            "gate_verification", "gate",
-            evaluator=gate_eval,
-            resource_role="final_validation",
-            reads=("reviews/verification.md",),
-            writes=("reviews/verification-gate.txt", "reviews/verification-unresolved.md"),
-            produces=("verification_gate",),
-            max_iterations=2,
-            notes="advisory verification gate; always proceeds",
-        ))
-    else:
-        graph.add(Node(
-            "gate_verification", "gate",
-            evaluator=gate_eval,
-            resource_role="final_validation",
-            reads=("reviews/verification.md",),
-            writes=("reviews/verification-gate.txt", "reviews/verification-unresolved.md",
-                    "validation.txt"),
-            produces=("verification_gate", "validation",
-                      "verification_iterations_used"),
-            knobs=("review_attempts",),
-            max_iterations=VERIFIER_GATE_LIMIT + 2,
-            notes="proceed on PASS; advisory reloop on FAIL (does not spend review_attempts)",
-        ))
+    graph.add(Node(
+        "gate_verification", "gate",
+        evaluator=gate_eval,
+        resource_role="final_validation",
+        reads=("reviews/verification.md",),
+        writes=("reviews/verification-gate.txt", "reviews/verification-unresolved.md"),
+        produces=("verification_gate",),
+        max_iterations=2,
+        notes="advisory verification gate; always proceeds",
+    ))
 
     # Remove the existing edge — raise when it does not exist.
     old_edges = [e for e in graph.edges
@@ -215,10 +164,7 @@ def wire_verification(graph: Any, *, fast: bool = False,
                    if not (e.source == src and e.target == dst
                            and e.condition == src_condition)]
 
-    if src_condition:
-        graph.connect(src, "verifier", condition=src_condition)
-    else:
-        graph.connect(src, "verifier")
+    graph.connect(src, "verifier", condition=src_condition)
     graph.connect("verifier", "gate_verification")
     graph.connect("gate_verification", dst, condition="proceed")
     graph.connect("gate_verification", "emit", condition="reloop")
