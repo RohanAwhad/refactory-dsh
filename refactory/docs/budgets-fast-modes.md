@@ -140,9 +140,9 @@ role-based/inherited behavior.
 Elapsed limits are checked at graph boundaries and while owned model/check
 processes run. Under `enable_recovery` (the default for walker authoring runs
 and outer-loop evaluations), ops and fn gates with a derived timeout run in a
-spawned child process and are killed at the limit via session-grouped
-SIGTERM→SIGKILL escalation; ops in the child get no `ctx.budget`, and the
-parent's kill is the enforcement. Token limits are enforced
+child process forked from a preloaded forkserver and are killed at the limit
+via session-grouped SIGTERM→SIGKILL escalation; ops in the child get no
+`ctx.budget`, and the parent's kill is the enforcement. Token limits are enforced
 at provider usage boundaries. Each worker's in-flight provider request may
 overshoot; this is not an exact provider-side token cap. A backend without token
 telemetry refuses a token-limited launch. Missing usage or pricing is shown as

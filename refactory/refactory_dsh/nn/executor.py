@@ -34,6 +34,37 @@ from .resolve import resolve
 if TYPE_CHECKING:
     from refactory_dsh.task import Task
 
+# ── forkserver context (module-level, shared across all Executor instances) ──
+_forkserver_ctx = multiprocessing.get_context("forkserver")
+_forkserver_modules: set[str] = set()
+
+
+def _ensure_forkserver_preload(graph: Graph) -> None:
+    """Collect modules from the graph's ops and fn gates and preload them.
+
+    The forkserver is a separate single-threaded process; forking from it is
+    safe while the walker runs fork branches on threads.  It has the same
+    picklable-arguments contract as spawn.
+
+    ``set_forkserver_preload`` is idempotent before the server starts and is a
+    hint afterwards (the server restarts with the updated list if it dies).
+    """
+    global _forkserver_modules
+    modules: set[str] = {"refactory_dsh.nn.executor", "refactory_dsh.run"}
+    for node in graph.nodes.values():
+        for target in (node.call, node.evaluator):
+            if not target:
+                continue
+            if ":" in target:
+                mod_name = target.partition(":")[0]
+            else:
+                mod_name = target.rpartition(".")[0]
+            if mod_name:
+                modules.add(mod_name)
+    if not modules.issubset(_forkserver_modules):
+        _forkserver_modules = _forkserver_modules | modules
+        _forkserver_ctx.set_forkserver_preload(sorted(_forkserver_modules))
+
 
 class ExecutionError(RuntimeError):
     """A run could not be carried out."""
@@ -781,9 +812,9 @@ class Executor:
 
     # ── child-process-based op timeout ─────────────────────────────────────
     def _run_op_timed(self, callable_target: str, node: Node, timeout: float) -> Any:
-        """Run a callable in a spawned child process, killed at *timeout*."""
-        mp_ctx = multiprocessing.get_context("spawn")
-        parent_conn, child_conn = mp_ctx.Pipe()
+        """Run a callable in a forkserver child process, killed at *timeout*."""
+        _ensure_forkserver_preload(self.graph)
+        parent_conn, child_conn = _forkserver_ctx.Pipe()
 
         model_info: dict[str, Any] | None = None
         if self.ctx.model is not None:
@@ -808,7 +839,7 @@ class Executor:
             "model_info": model_info,
         }
 
-        child = mp_ctx.Process(target=_op_child_target, args=(child_conn, args_dict))
+        child = _forkserver_ctx.Process(target=_op_child_target, args=(child_conn, args_dict))
         child.start()
         child_conn.close()
 

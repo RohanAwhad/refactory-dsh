@@ -1,7 +1,7 @@
 """Module-level op/gate functions for walker recovery tests.
 
-Under ``multiprocessing.get_context("spawn")``, the child process imports by name,
-so every callable must be a plain module-level function.
+Under ``multiprocessing.get_context("forkserver")``, the child process imports
+by name, so every callable must be a plain module-level function.
 """
 from __future__ import annotations
 

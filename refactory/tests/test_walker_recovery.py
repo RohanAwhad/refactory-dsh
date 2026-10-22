@@ -300,6 +300,35 @@ def test_child_exception_roundtrip(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Test 12: the executor's op context uses forkserver with refactory preloaded
+# ---------------------------------------------------------------------------
+def test_forkserver_context_with_preload(tmp_path):
+    """Structural: the executor uses forkserver, not spawn, with refactory preloaded."""
+    from refactory_dsh.nn import executor as ex_mod
+
+    # The module-level context must be a ForkServerContext.
+    ctx = ex_mod._forkserver_ctx
+    assert ctx.get_start_method() == "forkserver", (
+        f"expected forkserver, got {ctx.get_start_method()!r}"
+    )
+
+    # After ensuring preload for a graph that uses a refactory_dsh op,
+    # the preload modules must include 'refactory_dsh.nn.executor' and
+    # 'refactory_dsh.run'.
+    graph = nn.Graph()
+    graph.add(nn.Node(
+        "op1", "op",
+        call="walker_recovery_ops:succeed_op",
+        produces=("done",),
+    ))
+    ex_mod._ensure_forkserver_preload(graph)
+    preloaded = ex_mod._forkserver_modules
+    assert "refactory_dsh.nn.executor" in preloaded
+    assert "refactory_dsh.run" in preloaded
+    assert "walker_recovery_ops" in preloaded
+
+
+# ---------------------------------------------------------------------------
 # Test 11: outer-loop evaluation — hung op stops, next trial starts clean
 # ---------------------------------------------------------------------------
 def test_outer_loop_evaluation_hung_op_stops_next_trial_starts_clean(tmp_path):

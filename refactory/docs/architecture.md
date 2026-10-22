@@ -291,12 +291,17 @@ outer-loop evaluations):
 - **Per-op timeout.** Derived from the shared `command_timeout_s()` formula in
   `lowering.py` (matching the DSH spine's lowering classification) clamped to
   the remaining budget with a 1 s floor. Nodes without a classification get
-  DSH's 3600 s default. Ops and fn gates with a timeout run in a spawned child
-  process (via `multiprocessing.get_context("spawn").Process`); the parent kills
-  the child at the limit via session-grouped SIGTERM→SIGKILL escalation (SIGTERM
-  process group, ≥5 s grace, SIGKILL process group). An op that exceeds its
-  timeout raises `OpTimeoutError` naming the node id with outcome `"failed"`
-  (not `"unknown"`).
+  DSH's 3600 s default. Ops and fn gates with a timeout run in a child process
+  forked from a preloaded forkserver (via a module-level
+  `multiprocessing.get_context("forkserver")` context whose
+  `set_forkserver_preload` is called with `refactory_dsh.nn.executor`,
+  `refactory_dsh.run`, and the modules the graph's ops and fn gates name).
+  The forkserver is a separate single-threaded process, so forking from it is
+  safe while the walker runs fork branches on threads; it has the same
+  picklable-arguments contract as spawn. The parent kills the child at the
+  limit via session-grouped SIGTERM→SIGKILL escalation (SIGTERM process group,
+  ≥5 s grace, SIGKILL process group). An op that exceeds its timeout raises
+  `OpTimeoutError` naming the node id with outcome `"failed"` (not `"unknown"`).
 
 - **Child-process context.** The child gets the same context DSH's runner
   builds, via the shared `build_op_context()` helper: memory store, declared
