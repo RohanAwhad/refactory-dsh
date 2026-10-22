@@ -352,7 +352,12 @@ def test_scripted_design_run_verifier_writes_into_target(tmp_path):
 
     result = _design(tmp_path / "run", Verifier(_answers(render({"tool.py": "print('built')\n"}))),
                      target=str(repo))
-    assert result.exit_ok is False
-    assert "changed while agent 'verifier' ran" in (result.error or ""), result.error
+    # The verifier is an optional review branch (#475): the guard still refuses its write and
+    # restores the target, and its refused delivery is a failed node, not a failed run.
+    assert result.exit_ok, result.error
     assert _tree_with_modes(repo) == before
     assert ad.receipts_in(tmp_path / "run")["verifier"]["status"] == "failed"
+    events = [json.loads(line) for line in
+              (tmp_path / "run" / ".refactory" / "events.jsonl").read_text().splitlines() if line.strip()]
+    assert any(e.get("kind") == "node_failed" and e.get("node_id") == "verifier"
+               and "changed while agent 'verifier' ran" in e.get("summary", "") for e in events)

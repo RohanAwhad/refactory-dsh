@@ -1055,7 +1055,7 @@ def test_a_bolded_blocking_finding_is_not_invisible_to_the_qa_gate():
         produced = create_ops.synthesize_qa(ctx)
         assert produced["qa_blocking"] == 1, f"{marker!r} counted as {produced['qa_blocking']}"
         assert "1 blocking finding(s)" in produced["qa"]
-        ctx._declared = ("reviews/qa-gate.txt",)
+        ctx._declared = ("reviews/qa-gate.txt", "reviews/finding-sources.json")
         assert create_ops.gate_qa(ctx) == "reloop"
 
 
@@ -1109,7 +1109,7 @@ def test_a_review_that_reloops_the_build_says_why_into_the_rebuild(tmp_path):
     for name in create_ops.QA_REVIEWS:
         ctx.write_text(name, "BLOCKING: adding pytest.ini makes it score 1.0")
     create_ops.synthesize_qa(ctx)
-    ctx._declared = ("reviews/qa-gate.txt", "validation.txt")
+    ctx._declared = ("reviews/qa-gate.txt", "validation.txt", "reviews/finding-sources.json")
     ctx._declared_facts = ("qa_gate", "validation")
     verdict = create_ops.gate_qa(ctx)
     assert verdict == "reloop"

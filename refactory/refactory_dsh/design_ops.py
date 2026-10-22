@@ -973,39 +973,6 @@ def check_artifact(ctx: Any) -> str:
     return repair(ctx, [detail])
 
 
-def gate_verification(ctx: Any) -> str:
-    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise.
-
-    Verifier findings do NOT spend ``review_attempts``: the verifier's noise
-    is unmeasured, so it must not end a run on its own.  The gate tracks its
-    own iteration count via ``verification_iterations_used`` and proceeds
-    after ``VERIFIER_GATE_LIMIT`` advisory reloops, recording unresolved
-    findings in ``reviews/verification-unresolved.md`` for the reviews,
-    overwatch audit and PR Verification section.
-    """
-    from refactory_dsh.verification import VERIFIER_GATE_LIMIT, parse_verification_findings
-
-    findings = parse_verification_findings(ctx)
-    if not findings:
-        ctx.write_text("reviews/verification-gate.txt", "proceed: no blocking finding\n")
-        return "proceed"
-
-    feedback = "\n".join(findings)
-    ctx.write_text("reviews/verification-gate.txt", feedback + "\n")
-
-    used = int(ctx.facts.get("verification_iterations_used", 0))
-    ctx.set_fact("verification_iterations_used", used + 1)
-
-    if used + 1 >= VERIFIER_GATE_LIMIT:
-        # Proceed with unresolved findings — never end a run on verifier noise.
-        ctx.write_text("reviews/verification-unresolved.md", feedback + "\n")
-        return "proceed"
-
-    ctx.write_text("validation.txt", feedback + "\n")
-    ctx.set_fact("validation", feedback)
-    return Verdict("reloop", feedback)
-
-
 def enforce_guardedness(ctx: Any) -> list[str]:
     """Return the names of non-guarding **added** tests that are not exempted.
 
