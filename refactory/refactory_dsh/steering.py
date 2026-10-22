@@ -430,6 +430,27 @@ def render_entries(entries: list[dict[str, Any]]) -> str:
     return "\n\n".join(sections)
 
 
+def _is_gate_node(n: Any) -> bool:
+    """True for gate nodes in both pre-lowered workflow and IR.
+
+    Pre-lowered: ``kind == "gate"``.
+    IR (GateNode from ir.py ~124-136): class name ``GateNode``, no ``kind``.
+    """
+    return getattr(n, 'kind', None) == 'gate' or type(n).__name__ == 'GateNode'
+
+
+def _is_user_gate(n: Any) -> bool:
+    """True for user gates across both representations.
+
+    Pre-lowered: ``gate_kind == "user"``.
+    IR: ``evaluator_type == "user"`` (no ``gate_kind``).
+    """
+    return _is_gate_node(n) and (
+        getattr(n, 'gate_kind', None) == 'user'
+        or getattr(n, 'evaluator_type', None) == 'user'
+    )
+
+
 def _is_agent_node(node: Any) -> bool:
     """A node that makes a model call, on either side of the lowering.
 
@@ -487,14 +508,113 @@ def annotate(workflow: Any, ledger: Ledger) -> Any:
     return workflow
 
 
+def design_probe_steps(workflow: Any) -> dict[str, str]:
+    """Find the design-writing and design-review nodes from graph declarations.
+
+    Pattern: an agent writer whose outputs include a file F, connected via a
+    gate with a 'reloop' conditioned edge back to the writer, and an agent
+    reviewer that reads F and precedes a gate that also has a 'reloop' edge
+    to the writer.  A downstream user gate must also read F.
+
+    Works on both the pre-lowered workflow (``build()``) and the IR
+    (``to_workflow()``), using ``_is_gate_node`` / ``_is_user_gate``.
+
+    Returns a dict mapping node_id -> role ('writer' or 'reviewer').
+    """
+    nodes = workflow.nodes  # dict[str, Node]
+    edges = workflow.edges  # list of edge objects
+
+    def _edge_condition(edge: Any) -> str:
+        """Normalise edge condition to a plain string across both representations."""
+        cond = getattr(edge, 'condition', None)
+        if cond is None:
+            return ""
+        # IR edges may store VerdictType enum values.
+        return cond.value if hasattr(cond, 'value') else str(cond)
+
+    # Build edge index: from -> list[(to, condition)]
+    outgoing: dict[str, list[tuple[str, str]]] = {}
+    for edge in edges:
+        src = getattr(edge, 'source', None)
+        dst = getattr(edge, 'target', None)
+        if src is None or dst is None:
+            continue
+        cond = _edge_condition(edge)
+        outgoing.setdefault(src, []).append((dst, cond))
+
+    result: dict[str, str] = {}
+
+    # For each agent node (potential writer): check if it writes a file F,
+    # and there exists a gate with a reloop edge back to it.
+    for nid, node in nodes.items():
+        if not _is_agent_node(node):
+            continue
+        writes = set(getattr(node, 'writes', ()) or ())
+        if not writes:
+            continue
+
+        # Find gates that have a reloop edge back to this writer
+        for gate_id, gate_node in nodes.items():
+            if not _is_gate_node(gate_node):
+                continue
+            gate_outs = outgoing.get(gate_id, [])
+            reloops_to_writer = any(
+                dst == nid and cond == 'reloop'
+                for dst, cond in gate_outs
+            )
+            if not reloops_to_writer:
+                continue
+
+            # Find agent reviewers that precede this gate and read F
+            for rev_id, rev_node in nodes.items():
+                if rev_id == nid or not _is_agent_node(rev_node):
+                    continue
+                rev_reads = set(getattr(rev_node, 'reads', ()) or ())
+                shared_files = writes & rev_reads
+                if not shared_files:
+                    continue
+                # The reviewer must connect to this gate
+                rev_to_gate = any(
+                    dst == gate_id for dst, _ in outgoing.get(rev_id, [])
+                )
+                if not rev_to_gate:
+                    continue
+
+                # Check that a downstream user gate also reads F
+                has_user_gate = False
+                for ug_id, ug_node in nodes.items():
+                    if not _is_user_gate(ug_node):
+                        continue
+                    ug_reads = set(getattr(ug_node, 'reads', ()) or ())
+                    if shared_files & ug_reads:
+                        has_user_gate = True
+                        break
+
+                if has_user_gate:
+                    result[nid] = 'writer'
+                    result[rev_id] = 'reviewer'
+
+    return result
+
+
 def for_run(workflow: Any, workdir: Path) -> Any:
     """Fold the run directory's ledger into a workflow about to run.
 
-    Called by **both** runtimes. A mode lowered for DSH and one executed by the
+    Called by **both** runtimes.  A mode lowered for DSH and one executed by the
     walker have to carry the same ledger; annotating in one path only is a
     difference between the runtimes that nothing would report.
     """
-    return annotate(workflow, Ledger(workdir))
+    workflow = annotate(workflow, Ledger(workdir))
+    # Inject design probe fact references into structurally identified nodes.
+    probe_nodes = design_probe_steps(workflow)
+    for nid, role in probe_nodes.items():
+        node = workflow.nodes[nid]
+        existing = getattr(node, "prompt_template", "") or ""
+        if "{{design_probe_instruction}}" not in existing:
+            node.prompt_template = existing + "\n\n{{design_probe_instruction}}"
+        if role == "reviewer" and "{{design_probe_review}}" not in existing:
+            node.prompt_template = node.prompt_template + "\n\n{{design_probe_review}}"
+    return workflow
 
 
 def citations(text: str) -> list[str]:

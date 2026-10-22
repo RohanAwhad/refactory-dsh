@@ -145,7 +145,8 @@ def knob_names() -> tuple[str, ...]:
 
 def produces() -> tuple[str, ...]:
     """The facts `locate` returns, for the prepare node's ``produces``."""
-    return ("target", "worktree", "branch", "base", "source", "check_root", "emit_scope", "setup", "generate", "probe_instruction")
+    return ("target", "worktree", "branch", "base", "source", "check_root", "emit_scope", "setup", "generate", "probe_instruction",
+            "design_probe_instruction", "design_probe_review")
 
 
 def materialise_node(**fields: Any) -> Node:
@@ -483,7 +484,55 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
     else:
         probe_instruction = ""
 
-    return {**located, "setup": setup, "generate": generate, "probe_instruction": probe_instruction}
+    # Design probe instruction: for design_doc and design_review nodes
+    if in_worktree and located.get("worktree") and located["worktree"] != NO_WORKTREE:
+        design_probe_instruction = (
+            "\n## Design probe\n\n"
+            "You can probe the current codebase to verify a mechanism your design "
+            "relies on. The probe runs in a throwaway clone at the run's base — "
+            "not your proposed changes — with hooks disabled and an isolated HOME.\n\n"
+            "To run a probe:\n"
+            "```bash\n"
+            f"{python} -m refactory_dsh.builder_probe "
+            f"--workdir {abs_workdir} "
+            '--command "<shell command>" '
+            "--timeout 30\n"
+            "```\n\n"
+            "Examples:\n"
+            '- Named test: `--command "python -m pytest tests/test_foo.py::test_bar -x"`\n'
+            '- Mode lowering: `--command "python -c \\"from refactory_dsh.design import '
+            "DesignMode; print(DesignMode().to_workflow())\\\"\"` \n"
+            '- Python snippet: `--command "python -c \\"import ast; print(ast.dump(...))\\\""`\n\n'
+            "- `--command` takes a single shell string (double-quote it).\n"
+            "- The output is a JSON object with `id`, `status`, `digest` and `raw_tail` fields.\n"
+            "- The `id` is the probe's verifiable identifier. Cite it next to the claim "
+            "it supports as `(probe <id>: <status>)` on the claim line itself.\n"
+            "- The default timeout is 30 seconds; pass `--timeout <higher>` for slow "
+            "operations, and pass a matching `timeoutMs` to the bash tool.\n"
+            "- Installs (dependencies) are bounded separately by INSTALL_TIMEOUT_S (30 min), "
+            "not by the probe's deadline.\n"
+            "- A cold-cache probe may time out on the first run; retry.\n"
+            "- The probe's filesystem inside the clone is not restricted; "
+            "target_guard refuses and restores a write to the target.\n"
+            "- The CLI exits 0 for successful dispatch; argparse errors exit 2.\n"
+        )
+        design_probe_review = (
+            "\n## Design probe — call-site verification\n\n"
+            "When the design relies on a call site, import path, or integration "
+            "point in the existing code, use the design probe to verify it exists "
+            "and is reachable. If a probe shows a call site the design wires into "
+            "is never reached, report it as:\n"
+            "BLOCKING: <path>: call site unreached — "
+            "probe `<command>` showed <result>\n"
+        )
+    else:
+        design_probe_instruction = ""
+        design_probe_review = ""
+
+    return {**located, "setup": setup, "generate": generate,
+            "probe_instruction": probe_instruction,
+            "design_probe_instruction": design_probe_instruction,
+            "design_probe_review": design_probe_review}
 
 
 # ── what lands: emit.txt, applied ─────────────────────────────────────────────
