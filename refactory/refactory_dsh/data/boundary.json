@@ -82,6 +82,7 @@
     "refactory_dsh.discovery",
     "refactory_dsh.edit",
     "refactory_dsh.fast",
+    "refactory_dsh.failfast",
     "refactory_dsh.fast_ops",
     "refactory_dsh.findings_coverage",
     "refactory_dsh.interactive",

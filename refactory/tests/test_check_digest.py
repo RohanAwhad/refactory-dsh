@@ -250,13 +250,52 @@ def test_build_probe_command_pnpm_skipped_for_pytest_ids():
     assert "pnpm test" not in cmd
 
 
-def test_build_probe_command_pnpm_refused_with_vitest_ids():
-    """build_probe_command refuses pnpm test when vitest IDs are targeted."""
+def test_build_probe_command_pnpm_vitest_targeting(tmp_path, monkeypatch):
+    """build_probe_command targets pnpm test with vitest IDs (no -- separator)."""
+    (tmp_path / "package.json").write_text('{"scripts": {"test": "vitest run"}}')
+    from pathlib import Path
     cmd, refusal = build_probe_command(
-        "pnpm test", ["src/foo.test.ts > suite > test_add"]
+        "pnpm test", ["src/foo.test.ts > suite > test_add"], root=tmp_path,
+    )
+    assert refusal is None
+    assert "pnpm test" in cmd
+    assert "src/foo.test.ts" in cmd
+    assert "-t" in cmd
+    assert "--" not in cmd  # No -- separator
+    assert cmd.count("-t") == 1  # Single -t flag
+
+
+def test_build_probe_command_pnpm_not_vitest(tmp_path):
+    """pnpm test with non-vitest script is refused."""
+    (tmp_path / "package.json").write_text('{"scripts": {"test": "jest"}}')
+    cmd, refusal = build_probe_command(
+        "pnpm test", ["src/foo.test.ts > suite > test_add"], root=tmp_path,
     )
     assert cmd == ""
-    assert "pnpm test" in refusal
+    assert "vitest" in refusal
+
+
+def test_build_probe_command_pnpm_and_pytest_mixed(tmp_path):
+    """Mixed pnpm test && pytest with failures from both runners."""
+    (tmp_path / "package.json").write_text('{"scripts": {"test": "vitest run"}}')
+    cmd, refusal = build_probe_command(
+        "pnpm test && .venv/bin/python -m pytest -q tests",
+        ["src/foo.test.ts > suite > test_add", "tests/test_bar.py::test_baz"],
+        root=tmp_path,
+    )
+    assert refusal is None
+    assert "pnpm test" in cmd
+    assert "src/foo.test.ts" in cmd
+    assert "test_bar.py::test_baz" in cmd
+
+
+def test_build_probe_command_pnpm_no_package_json(tmp_path):
+    """pnpm test with missing package.json is refused."""
+    cmd, refusal = build_probe_command(
+        "pnpm test", ["src/foo.test.ts > suite > test_add"], root=tmp_path,
+    )
+    assert cmd == ""
+    assert "vitest" in refusal
 
 
 def test_build_probe_command_pytest_drops_positional_paths():
