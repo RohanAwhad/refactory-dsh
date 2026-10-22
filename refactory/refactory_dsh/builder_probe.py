@@ -393,7 +393,10 @@ def run_probe(
     if not check_command:
         return ProbeResult(status="error", refusal="no check command found in facts")
 
-    command, refusal = build_probe_command(check_command, test_ids)
+    from refactory_dsh import worktree as _wt
+    _found_wt = _wt.recorded(workdir)
+    _probe_root = Path(_found_wt.path) if _found_wt else None
+    command, refusal = build_probe_command(check_command, test_ids, root=_probe_root)
     if refusal:
         return ProbeResult(status="refused", refusal=refusal)
 

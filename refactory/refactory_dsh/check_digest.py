@@ -316,12 +316,19 @@ def _strip_pytest_positional_paths(step: str) -> str:
     return shlex.join(kept)
 
 
-def build_probe_command(check_command: str, test_ids: list[str]) -> tuple[str, str | None]:
+def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path | None' = None) -> tuple[str, str | None]:
     """Build a targeted command per runner from the check command and failing test IDs.
 
     Returns (command, None) on success or ("", refusal_reason) on failure.
     Classifies each test id by runner so a mixed check gets only its own ids per step.
+
+    Parameters
+    ----------
+    root:
+        Directory to read ``package.json`` from for the pnpm/vitest check.
+        Defaults to ``Path(".")`` (the process's cwd).
     """
+    from pathlib import Path
     if not test_ids:
         return "", "no test IDs to target"
 
@@ -371,16 +378,33 @@ def build_probe_command(check_command: str, test_ids: list[str]) -> tuple[str, s
                 if len(parts) > 1:
                     patterns.add(re.escape(parts[-1].strip()))
             file_args = " ".join(shlex.quote(f) for f in sorted(files))
-            pattern_args = " ".join(f"-t {shlex.quote(p)}" for p in sorted(patterns))
+            pattern_args = f"-t {shlex.quote('|'.join(sorted(patterns)))}" if patterns else ""
             targeted_parts.append(f"{step} {file_args} {pattern_args}".strip())
         elif "pnpm test" in step:
-            # Treat pnpm test as a JS test step: skip when no vitest ids, refuse
-            # only when a vitest id targets it and we cannot decompose the command.
             found_recognized = True
-            if vitest_ids:
-                return "", "targeting pnpm test with vitest IDs is deferred to the fail-fast run"
-            # No vitest ids target this step — skip it silently
-            continue
+            if not vitest_ids:
+                continue  # No vitest IDs target this step — skip silently
+            # Target only when package.json's "test" script is vitest.
+            import json as _json
+            pkg_root = root if root is not None else Path(".")
+            try:
+                pkg = _json.loads((pkg_root / "package.json").read_text())
+                test_script = (pkg.get("scripts") or {}).get("test", "")
+            except (OSError, _json.JSONDecodeError):
+                test_script = ""
+            if "vitest" not in test_script:
+                return "", "pnpm test targeting requires vitest as the test script"
+            files: set[str] = set()
+            patterns: set[str] = set()
+            for vid in vitest_ids:
+                parts = vid.split(" > ")
+                if parts:
+                    files.add(parts[0].strip())
+                if len(parts) > 1:
+                    patterns.add(re.escape(parts[-1].strip()))
+            file_args = " ".join(shlex.quote(f) for f in sorted(files))
+            pattern_args = f"-t {shlex.quote('|'.join(sorted(patterns)))}" if patterns else ""
+            targeted_parts.append(f"{step} {file_args} {pattern_args}".strip())
         elif "node " in step and ("--test" in step or "node_modules" not in step):
             found_recognized = True
             return "", "targeting node's test runner is not supported"
