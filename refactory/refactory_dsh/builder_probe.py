@@ -435,22 +435,92 @@ def run_probe(
         return ProbeResult(status="error", refusal=f"{type(e).__name__}: {e}")
 
 
+# ── design probe ─────────────────────────────────────────────────────────────
+
+def run_design_probe(
+    workdir: Path,
+    *,
+    command: str,
+    timeout: float = 30,
+) -> tuple[ProbeResult, str]:
+    """Run a command inside a throwaway clone for design-phase probing.
+
+    Like run_probe but with no emission: the clone is at the run's base.
+    Records the probe result to probes.jsonl so claims can cite a verifiable id.
+    """
+    workdir = Path(workdir)
+    probe_id = uuid.uuid4().hex[:12]
+    try:
+        with prepared_clone(workdir, emission=None, deadline=timeout) as (clone_root, env, clone_found):
+            remaining = max(5, timeout - 10)
+            probe_dir = clone_root.parent
+            result = sandbox.run_command(
+                command, workdir=clone_root, timeout_s=int(remaining),
+                env=env, home=Path(env.get("HOME", str(probe_dir / "home"))),
+                exact_env=True,
+            )
+            output = "\n".join(filter(None, [result.stdout, result.stderr]))
+            if result.timed_out:
+                status = "timed_out"
+                digest_text = "the probe timed out"
+            else:
+                status = "pass" if result.ok else "fail"
+                digest_text = format_digest(digest_check_output(output))[:2000]
+            probe_result = ProbeResult(
+                status=status,
+                digest=digest_text,
+                raw_tail=output[-500:] if output else "",
+            )
+    except TimeoutError as e:
+        status = "timed_out"
+        probe_result = ProbeResult(status=status, digest=str(e))
+    except Exception as e:
+        status = "error"
+        probe_result = ProbeResult(status=status, refusal=f"{type(e).__name__}: {e}")
+    # Record the probe result to probes.jsonl (outside the context manager,
+    # so the probe directory is cleaned up first, but the record persists).
+    probes_path = workdir / ".refactory" / "probes.jsonl"
+    probes_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"id": probe_id, "command": command, "status": probe_result.status}
+    with probes_path.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+    return probe_result, probe_id
+
+
 # ── CLI entry point ──────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Sandboxed builder probe")
+    parser.prog = "builder_probe"
     parser.add_argument("--workdir", required=True, help="Run directory (absolute)")
-    parser.add_argument("--emission", default="emit.txt", help="Emission file name")
-    parser.add_argument("--test", nargs="+", required=True, dest="test_ids", help="Test IDs to run")
     parser.add_argument("--timeout", type=float, default=90, help="Timeout in seconds")
 
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--test", nargs="+", dest="test_ids", help="Test IDs to run")
+    group.add_argument("--command", dest="command", help="Shell command to run in the clone")
+
+    parser.add_argument("--emission", default=None, help="Emission file name (required with --test)")
+
     args = parser.parse_args()
-    result = run_probe(
-        Path(args.workdir),
-        args.emission,
-        args.test_ids,
-        timeout=args.timeout,
-    )
-    print(json.dumps(result.to_dict()))
+
+    if args.command is not None:
+        if args.emission is not None:
+            parser.error("--emission cannot be used with --command")
+        probe_result, probe_id = run_design_probe(
+            Path(args.workdir),
+            command=args.command,
+            timeout=args.timeout,
+        )
+        output = {**probe_result.to_dict(), "id": probe_id}
+        print(json.dumps(output))
+    else:
+        emission = args.emission if args.emission is not None else "emit.txt"
+        result = run_probe(
+            Path(args.workdir),
+            emission,
+            args.test_ids,
+            timeout=args.timeout,
+        )
+        print(json.dumps(result.to_dict()))

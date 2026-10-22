@@ -262,7 +262,7 @@ def focused_check(ctx: Any) -> dict[str, Any]:
 
             prepass = targeted_prepass(
                 prev_record, command,
-                lambda cmd, t: repo_change.run_check(ctx, cmd, t),
+                lambda cmd, t: repo_change.run_check(ctx, cmd, t, triage_prep=False),
                 timeout,
                 root=(worktree.recorded(ctx.workdir).path
                       if worktree.recorded(ctx.workdir) is not None else None),
@@ -423,6 +423,43 @@ def focused_check(ctx: Any) -> dict[str, Any]:
         if kind != "code_failure":
             evidence.record(ctx, {**payload, "status": kind})
             evidence.stop_unrepairable(kind, detail)
+
+        # Route change-caused preparation failures to the builder for repair.
+        _ccp = getattr(result, "change_caused_prep", None)
+        if _ccp:
+            from refactory_dsh.check_digest import _clean as _strip_noise
+            _error_text = _strip_noise(_ccp["error_text"])
+            _prep_detail = (
+                f"the {_ccp['step_label']} command `{_ccp['command']}` "
+                f"failed (exit {_ccp['returncode']}):\n{_error_text}"
+            )
+            payload["status"] = "fail"
+            payload["prep_triage"] = True
+            payload["digest"] = _prep_detail
+            payload["validation"] = _prep_detail[:4000]
+            ctx.write_json("focused-check.json", payload)
+            _check_cmd = str(ctx.facts.get("check") or "").strip()
+            record_check_history(ctx, "full", _prep_detail, _check_cmd)
+            ctx.write_json("check-record.json", {
+                "status": "fail",
+                "validation": _prep_detail[:4000],
+                "check_mode": "prep_triage",
+                "command": _ccp.get("command"),
+                "commit": str(ctx.facts.get("commit", "")),
+            })
+            if worktree.recorded(ctx.workdir) is not None:
+                _review_files = sorted(ctx.facts.get("files") or [])
+            else:
+                _review_files = sorted(create_ops.parse_files(ctx.read_text("emit.txt")))
+            ctx.write_json("focused-source.json", {
+                "root": output, "files": _checked_files(Path(output)),
+                "review_files": _review_files,
+            })
+            _outcome = {"status": "code_failure", "focused_check": payload,
+                        "check_mode": "prep_triage"}
+            evidence.record(ctx, _outcome)
+            return {"focused_check": json.dumps(payload), "output_path": output,
+                    "review_files": json.dumps(_review_files)}
 
         # A failure the unchanged base has too is not the attempt's.
         found = worktree.recorded(ctx.workdir) if ctx.facts.get("artifact") else None
@@ -856,21 +893,31 @@ def gate_check(ctx: Any) -> str:
 
     # 1. Check failure → _repair (spends a repair_attempts slot).
     if check_data.get("status") == "fail":
-        # Use the digest from check-record.json when available
-        cr_path = ctx.workdir / "check-record.json" if hasattr(ctx, 'workdir') else None
-        digest_text = check_data.get("digest", "")
-        if not digest_text and cr_path:
-            try:
-                cr = json.loads(cr_path.read_text()) if cr_path and cr_path.is_file() else {}
-                digest_text = cr.get("digest", "")
-            except (json.JSONDecodeError, OSError):
-                pass
-        if digest_text:
-            detail = f"requested runtime check failed (exit {check_data.get('returncode')}):\n{digest_text}"
+        # Change-caused preparation failure: use the prep detail directly,
+        # matching the format design_ops.check_artifact sends to repair().
+        if check_data.get("prep_triage"):
+            _pt_detail = check_data.get("digest") or ""
+            findings = [_pt_detail.strip()] if _pt_detail.strip() else [
+                f"preparation failed (exit {check_data.get('returncode')})"]
         else:
-            check_output = check_data.get("stderr") or check_data.get("stdout") or ""
-            detail = f"requested runtime check failed (exit {check_data.get('returncode')}): {check_output}"
-        findings = [detail.strip()]
+            # Use the digest from check-record.json when available
+            cr_path = ctx.workdir / "check-record.json" if hasattr(ctx, 'workdir') else None
+            digest_text = check_data.get("digest", "")
+            if not digest_text and cr_path:
+                try:
+                    cr = json.loads(cr_path.read_text()) if cr_path and cr_path.is_file() else {}
+                    digest_text = cr.get("digest", "")
+                except (json.JSONDecodeError, OSError):
+                    pass
+            if digest_text:
+                detail = f"requested runtime check failed (exit {check_data.get('returncode')}):\n{digest_text}"
+            else:
+                check_output = check_data.get("stderr") or check_data.get("stdout") or ""
+                detail = f"requested runtime check failed (exit {check_data.get('returncode')}): {check_output}"
+            findings = [detail.strip()]
+        # R5: prepend robustness_notes ([left] sites and broken guarantees)
+        # so the builder sees them first.  Kept out of anything failure_kind
+        # classifies — _repair's feedback is never word-scanned.
         robustness_notes = check_data.get("robustness_notes", "")
         if robustness_notes:
             findings.insert(0, robustness_notes)

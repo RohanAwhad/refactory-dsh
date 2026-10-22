@@ -572,7 +572,7 @@ Running code we did not write.
 | kind | name | signature |
 |---|---|---|
 | class | `SandboxError` | `` |
-| class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False, timeout_s: 'int \| None' = None, elapsed_s: 'float \| None' = None, progress: 'dict[str, Any]' = <factory>, prep_failure: 'dict[str, Any] \| None' = None, cwd_outside: 'str \| None' = None) -> None` |
+| class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False, timeout_s: 'int \| None' = None, elapsed_s: 'float \| None' = None, progress: 'dict[str, Any]' = <factory>, prep_failure: 'dict[str, Any] \| None' = None, cwd_outside: 'str \| None' = None, change_caused_prep: 'dict[str, Any] \| None' = None) -> None` |
 | function | `ast_check` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, include_contracts: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `is_secret` | `(name: 'str') -> 'bool'` |
@@ -689,7 +689,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 | function | `refuse_truncated` | `(path: 'Path', text: 'str') -> 'None'` |
 | function | `refused` | `(ctx: 'Any') -> 'str'` |
 | function | `report` | `(ctx: 'Any', name: 'str', payload: 'dict[str, Any]') -> 'dict[str, Any]'` |
-| function | `run_check` | `(ctx: 'Any', command: 'str', timeout: 'float') -> 'Any'` |
+| function | `run_check` | `(ctx: 'Any', command: 'str', timeout: 'float', *, triage_prep: 'bool' = True) -> 'Any'` |
 | function | `wants_worktree` | `(ctx: 'Any') -> 'bool'` |
 
 - **`apply_emission`** — Parse emit.txt and resolve edits against the run worktree, read-only.
