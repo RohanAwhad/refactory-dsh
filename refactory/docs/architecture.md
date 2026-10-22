@@ -451,6 +451,30 @@ parallel**, merge into one synthesis whose blocking findings the QA gate reads, 
 are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs in parallel with the reviews as a branch of the review fork, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. A **failure digest** is built from the check output per runner (pytest, vitest, node's test runner) and stored in `check-record.json`, which survives redo; the builder receives the digest rather than the raw output. A **builder probe** is available during emit, design_doc, and design_review: the builder can test named failing tests in a throwaway standalone clone before making its final emission, and design agents can run commands (`--command`) in the clone to verify mechanisms the design relies on. At the post-build gates, **per-correction audit** checks each gate correction item by item: for every correction in the ledger it records the site in the diff, the test that reaches that site (via mechanical hunk-level revert), and the evidence scope (via AST-based patch-target detection); see docs/hardening.md §25-27. A QA or
 overwatch reloop goes back to the emit step, not to the plan a person approved.
 
+**Core and non-core findings.** Every post-build reviewer (the three reviews, Overwatch,
+and the fast modes' focused QA) ends the first line of each BLOCKING finding with `[core]` when it breaks
+an ask in the brief, an acceptance criterion, a correction or constraint the person
+gave, or existing behaviour, and with `[non-core]` otherwise: extra tests, docs, edge
+cases beyond the asks, refactors and style. An untagged finding, or one whose tag is
+anywhere but the end of its first line, is core, so a missing or misplaced tag never
+lets a core defect through; a finding one reviewer calls core is core even if another
+calls it non-core. A fast-mode check of something non-core that fails names itself
+with the tag. Only a core defect sends the build back; the
+round's non-core findings ride along in the same feedback, for the builder to fix if
+it is cheap. A round whose findings are all non-core proceeds without spending a
+review attempt. Overwatch is told to state `VERDICT: PASS` when only non-core
+findings remain, so its FAIL always blocks; a PASS with non-core findings proceeds
+only when the intent audit passes every requirement and the evidence and correction
+audits hold. The non-core findings a gate proceeded with are
+the run's **follow-ups**: `reviews/follow-ups.json` and `reviews/follow-ups.md` list
+them, `reviews/finding-sources.json` gives each finding its `class` and the fate
+`follow-up`, and the pull request carries a "Follow-ups (non-core findings)" section
+while its Verification says the reviews found no core defect. The delivery result
+reads "…, with N follow-up(s)". The verifier's one advisory round is a builder round
+too: it counts against the same cap as a repair (`attempts`, or `check_attempts` in
+design; three rounds by default), it never takes the last repair, and when it cannot
+be taken the verifier's findings go to the pull request instead of back to the builder.
+
 **Finding coverage.** Each research and perspective file carries finding ids in the format `FND-<slug>-<n>` (e.g. `FND-api-surface-1`). `gate_design_review` records, in the `finding_coverage` fact, which finding ids from `research/*.md` and `strategy/*.md` the design cites, read from the detail files rather than the summaries (`research-plan.json`, `strategy-plan.json`). A design cites a finding only where it changes a decision, so an uncited finding is neither listed at the person's gate nor a reason to send the design back; the findings stay in their files for the reviewer. Create mode's `review_design` gate runs the same check against the `findings` field of `strategy.json`; create's review raises when its attempts run out.
 
 All authoring review uses the original brief, approved design and explicit user steering

@@ -112,10 +112,15 @@ def _report(ctx: Any, status: str, findings: list[str]) -> dict[str, Any]:
     }
 
 
+#: How the fast report marks a non-core finding the run delivered with.
+FOLLOW_UP = "follow-up: "
+
+
 def _advisories(ctx: Any) -> list[str]:
-    """The advisory notes gate_qa recorded, carried into the final report."""
+    """The advisory notes and follow-ups gate_qa recorded, carried into the final report."""
     findings = ctx.read_json("fast-report.json", {}).get("findings") or []
-    return [f for f in findings if str(f).startswith(evidence.ADVISORY_REPO_QUESTIONS)]
+    return [f for f in findings
+            if str(f).startswith((evidence.ADVISORY_REPO_QUESTIONS, FOLLOW_UP))]
 
 
 def _repair(ctx: Any, findings: list[str], *, kind: str = "check",
@@ -620,6 +625,8 @@ def gate_qa(ctx: Any) -> str:
     qa = ctx.read_json("focused-qa.json", None)
     check = ctx.read_json("focused-check.json", {})
     findings = []
+    non_core: list[str] = []
+    non_core_checks: list[str] = []
     checked_source = ctx.read_json("focused-source.json", {})
     output = str(ctx.facts.get("artifact") or ctx.facts.get("package_path") or "")
     try:
@@ -643,13 +650,21 @@ def gate_qa(ctx: Any) -> str:
                 if not isinstance(entry, dict) or not all(entry.get(key) for key in ("name", "command", "status", "evidence")):
                     findings.append("focused QA check lacks its command/status/evidence")
                 elif entry["status"] != "pass":
-                    findings.append(f"focused QA check did not pass: {entry['name']}")
-        if qa.get("status") != "pass":
+                    failed = f"focused QA check did not pass: {entry['name']}"
+                    # A check of something outside the core is named with its tag.
+                    (non_core_checks if create_ops.is_non_core(str(entry["name"]))
+                     else findings).append(failed)
+        listed = isinstance(qa.get("findings"), list) and isinstance(qa.get("not_run"), list)
+        core, non_core = create_ops.split_core(
+            [str(item) for item in qa["findings"] if str(item).strip()] if listed else [])
+        non_core = non_core_checks + non_core
+        # A fail that rests only on non-core findings is no core defect.
+        if qa.get("status") != "pass" and (core or not non_core):
             findings.append("focused QA did not pass")
-        if not isinstance(qa.get("findings"), list) or not isinstance(qa.get("not_run"), list):
+        if not listed:
             findings.append("focused QA must explicitly list findings and checks not run")
         else:
-            findings.extend(str(item) for item in qa["findings"] if str(item).strip())
+            findings.extend(core)
     check_failed = check.get("status") == "fail"
     if check_failed:
         check_output = check.get("stderr") or check.get("stdout") or ""
@@ -737,6 +752,8 @@ def gate_qa(ctx: Any) -> str:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
         _write_finding_sources_fast(ctx, qa, verifier_filtered)
+        if non_core:
+            findings.append(create_ops.non_core_ride_along(non_core))
         return _repair(ctx, findings, kind='check' if check_failed else 'review')
 
     # Case 2: Only verifier findings, QA passed
@@ -749,6 +766,8 @@ def gate_qa(ctx: Any) -> str:
                   "\n\nFor each verifier finding, respond in emit.txt under "
                   "## Verifier findings with the finding, then: fixed, or "
                   "rebutted: <reason> <file:line>")
+            if non_core:
+                fb += "\n\n" + create_ops.non_core_ride_along(non_core)
             ctx.write_text("repair.txt", fb + "\n")
             ctx.set_fact("repair_feedback", fb)
             _write_finding_sources_fast(ctx, qa, verifier_filtered)
@@ -765,14 +784,16 @@ def gate_qa(ctx: Any) -> str:
                 ctx.write_text("reviews/verification-unresolved.md",
                                "\n".join(lines) + "\n")
 
-    # Case 3: Neither blocking
+    # Case 3: No core defect — proceed, with any non-core findings as follow-ups
+    create_ops.record_follow_ups(ctx, "focused_qa", non_core)
     not_measured = evidence.correction_audit_advisories(ctx)
     if not_measured:
         advisory.append(evidence.advisory_correction_audit(not_measured))
     ctx.set_fact("qa_passed", True)
     _write_finding_sources_fast(ctx, qa, verifier_filtered,
-                                rebuttals=verifier_rebuttals)
-    ctx.write_json("fast-report.json", _report(ctx, "qa_passed", advisory))
+                                rebuttals=verifier_rebuttals, proceeding=True)
+    ctx.write_json("fast-report.json", _report(
+        ctx, "qa_passed", advisory + [FOLLOW_UP + finding for finding in non_core]))
     return "proceed"
 
 
@@ -804,7 +825,8 @@ def _parse_verifier_rebuttals(ctx: Any) -> list[str]:
 
 
 def _write_finding_sources_fast(ctx: Any, qa: Any, verifier_findings: list[str],
-                                rebuttals: list[str] | None = None) -> None:
+                                rebuttals: list[str] | None = None,
+                                proceeding: bool = False) -> None:
     """Write reviews/finding-sources.json on every gate_qa visit (fast mode)."""
     existing: list[dict[str, Any]] = []
     if ctx.exists("reviews/finding-sources.json"):
@@ -859,7 +881,8 @@ def _write_finding_sources_fast(ctx: Any, qa: Any, verifier_findings: list[str],
             })
 
     ctx.write_text("reviews/finding-sources.json",
-                   json.dumps(entries, indent=2) + "\n")
+                   json.dumps(create_ops.classify_finding_sources(entries, round_num, proceeding),
+                              indent=2) + "\n")
 
 
 def smoke(ctx: Any) -> dict[str, Any]:

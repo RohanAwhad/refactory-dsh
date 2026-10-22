@@ -2159,6 +2159,87 @@ def blocking_findings(text: str) -> list[str]:
     return findings
 
 
+# ── core and non-core findings ────────────────────────────────────────────
+#
+# A build is held back only by a defect in its core: an ask in the brief, an
+# accepted criterion, a correction or constraint the person gave, or existing
+# behaviour it breaks. Every other blocking finding is real work for later, and
+# the run delivers with it listed as a follow-up instead of spending a round.
+
+#: What every post-build reviewer is told about classifying its blocking findings.
+SEVERITY_RULE = (
+    "End the first line of each BLOCKING finding with `[core]` when it breaks an ask in "
+    "the brief, an acceptance criterion, a correction or constraint the person gave, or "
+    "existing behaviour (a regression: name the test or file:line that shows it), and "
+    "with `[non-core]` otherwise: extra tests, docs, edge cases beyond the asks, "
+    "refactors and style. A finding with no tag counts as core. Non-core findings do "
+    "not hold the change back; its pull request lists them as follow-ups."
+)
+
+#: What the overwatch pass is told about its verdict, beside SEVERITY_RULE.
+OVERWATCH_VERDICT_RULE = (
+    "State `VERDICT: FAIL` only for a core defect or an ask with no evidence; when every "
+    "finding left is non-core, state `VERDICT: PASS`."
+)
+
+_CORE_TAG = re.compile(r"\[\s*core\b[^\]]*\]", re.I)
+_NON_CORE_END = re.compile(r"\[\s*non[\s_-]?core\s*\][\s*_`.]*$", re.I)
+
+
+def is_non_core(finding: str) -> bool:
+    """Whether a finding's first line ends with the non-core tag, and nothing in it is
+    tagged core. A tag anywhere else, an untagged finding and a doubly tagged one are
+    core, so a missing or misplaced tag never lets a core defect through."""
+    lines = finding.strip().splitlines()
+    return (bool(lines) and bool(_NON_CORE_END.search(lines[0].strip()))
+            and not _CORE_TAG.search(finding))
+
+
+def split_core(findings: list[str]) -> tuple[list[str], list[str]]:
+    """``(core, non_core)``, each in the order given."""
+    return ([f for f in findings if not is_non_core(f)],
+            [f for f in findings if is_non_core(f)])
+
+
+def non_core_ride_along(non_core: list[str]) -> str:
+    """The part of a repair's feedback that carries the round's non-core findings."""
+    if not non_core:
+        return ""
+    return ("Non-core findings (fix them if it is cheap; otherwise leave them, and the "
+            "pull request lists them as follow-ups):\n"
+            + "\n".join(f"- {finding}" for finding in non_core))
+
+
+#: The run's non-core findings at the point each gate let the build through.
+FOLLOW_UPS = "reviews/follow-ups.json"
+
+
+def record_follow_ups(ctx: Any, gate: str, findings: list[str]) -> None:
+    """Replace ``gate``'s follow-ups with the findings it proceeded with.
+
+    Called only when the gate proceeds, so a finding a later round fixed is not
+    listed, and ``reviews/follow-ups.md`` always says what the delivered change leaves.
+    """
+    recorded = ctx.read_json(FOLLOW_UPS, {}) if ctx.exists(FOLLOW_UPS) else {}
+    if not isinstance(recorded, dict):
+        recorded = {}
+    recorded[gate] = list(findings)
+    ctx.write_json(FOLLOW_UPS, recorded)
+    lines = [f"- {item}" for item in follow_ups(ctx)]
+    ctx.write_text("reviews/follow-ups.md",
+                   "# Follow-ups (non-core findings)\n\n"
+                   + ("\n".join(lines) if lines else "None.") + "\n")
+
+
+def follow_ups(ctx: Any) -> list[str]:
+    """Every recorded follow-up, each with the gate that let it through."""
+    recorded = ctx.read_json(FOLLOW_UPS, {}) if ctx.exists(FOLLOW_UPS) else {}
+    if not isinstance(recorded, dict):
+        return []
+    return [f"{finding} ({source})" for source, items in recorded.items()
+            if isinstance(items, list) for finding in items]
+
+
 def _review_snapshot(ctx: Any) -> dict[str, Any]:
     reviews: list[dict[str, Any]] = []
     missing: list[str] = []
@@ -2242,6 +2323,7 @@ def gate_qa(ctx: Any) -> str:
         if unavailable:
             evidence.stop_unrepairable("unavailable", unavailable[0])
     scope_notes: list[str] = []
+    non_core: list[str] = []
     stale = evidence.current_problems(ctx, ("health_checker", "code_reviewer", "qa_director"))
     if stale:
         reason = "reloop: " + "; ".join(stale)
@@ -2263,7 +2345,11 @@ def gate_qa(ctx: Any) -> str:
                     blocking_indexed.append(f"{review['path']}: {finding}")
                     filtered.remove(finding)  # consume first match
                 idx += 1
-        reason = "reloop: " + "\n".join(blocking_indexed) if blocking_indexed else ""
+        # Only a core defect sends the build back; non-core findings ride along with it.
+        core, non_core = split_core(blocking_indexed)
+        reason = "reloop: " + "\n".join(core) if core else ""
+        if reason and non_core:
+            reason += "\n" + non_core_ride_along(non_core)
         if scope_notes:
             note_text = "\n".join(scope_notes)
             if reason:
@@ -2329,11 +2415,13 @@ def gate_qa(ctx: Any) -> str:
     if verifier_text:
         advisory_used = int(ctx.facts.get("verification_advisory_used", 0))
         ctx.set_fact("verification_advisory_used", advisory_used + 1)
-        if advisory_used == 0:
+        if advisory_used == 0 and take_advisory_round(ctx):
             fb = ("[verifier] " + verifier_text +
                   "\n\nFor each verifier finding, respond in emit.txt under "
                   "## Verifier findings with the finding, then: fixed, or "
                   "rebutted: <reason> <file:line>")
+            if non_core:
+                fb += "\n\n" + non_core_ride_along(non_core)
             ctx.write_text("validation.txt", fb + "\n")
             ctx.set_fact("validation", fb)
             ctx.write_text("reviews/qa-gate.txt", "advisory verifier reloop\n")
@@ -2352,14 +2440,21 @@ def gate_qa(ctx: Any) -> str:
                 ctx.write_text("reviews/verification-unresolved.md",
                                "\n".join(lines) + "\n")
 
-    # Case 3: Neither blocking — proceed
-    notes = "".join(f"{note}\n" for note in (*scope_notes, advisory) if note)
-    ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n" + notes)
-    ctx.set_fact("qa_gate", "(the reviews found nothing blocking)" + (f"\n{advisory}" if advisory else ""))
+    # Case 3: No core defect — proceed, with any non-core findings as follow-ups
+    record_follow_ups(ctx, "qa", non_core)
+    found = (f"no core defect; {len(non_core)} non-core finding(s) are follow-ups"
+             if non_core else "nothing blocking")
+    # Before the advisory: delivery reads the repository-question advisory to the end.
+    notes = "".join(f"{note}\n" for note in (
+        *scope_notes, *(f"follow-up: {finding}" for finding in non_core), advisory) if note)
+    ctx.write_text("reviews/qa-gate.txt",
+                   ("proceed: no core finding\n" if non_core else "proceed: no blocking finding\n")
+                   + notes)
+    ctx.set_fact("qa_gate", f"(the reviews found {found})" + (f"\n{advisory}" if advisory else ""))
     ctx.write_text("validation.txt", "(reviews passed)\n")
     ctx.set_fact("validation", "(reviews passed)")
     _write_finding_sources_full(ctx, snapshot, verifier_filtered,
-                                rebuttals=verifier_rebuttals)
+                                rebuttals=verifier_rebuttals, proceeding=True)
     return "proceed"
 
 
@@ -2399,7 +2494,8 @@ _FULL_REVIEW_FILE_TO_NODE = {
 
 def _write_finding_sources_full(ctx: Any, snapshot: dict[str, Any],
                                 verifier_findings: list[str],
-                                rebuttals: list[str] | None = None) -> None:
+                                rebuttals: list[str] | None = None,
+                                proceeding: bool = False) -> None:
     """Write reviews/finding-sources.json on every gate_qa visit (full mode)."""
     existing: list[dict[str, Any]] = []
     if ctx.exists("reviews/finding-sources.json"):
@@ -2452,11 +2548,45 @@ def _write_finding_sources_full(ctx: Any, snapshot: dict[str, Any],
             })
 
     ctx.write_text("reviews/finding-sources.json",
-                   json.dumps(entries, indent=2) + "\n")
+                   json.dumps(classify_finding_sources(entries, round_num, proceeding),
+                              indent=2) + "\n")
+
+
+def classify_finding_sources(entries: list[dict[str, Any]], round_num: int,
+                             proceeding: bool) -> list[dict[str, Any]]:
+    """Give each finding record its class, and its fate when the gate let the build through.
+
+    A non-core finding still open in the round the gate proceeded on is a follow-up.
+    """
+    for entry in entries:
+        entry["class"] = "non-core" if is_non_core(entry["finding"]) else "core"
+        if (proceeding and entry["class"] == "non-core" and entry["last_round"] == round_num
+                and entry["fate"] == "unresolved"):
+            entry["fate"] = "follow-up"
+    return entries
+
+
+def take_advisory_round(ctx: Any) -> bool:
+    """Whether the builder has a round left for an advisory reloop, spending it if so.
+
+    An advisory round is still a builder round, so it counts against the same cap
+    (``attempts``) as a repair, and it never takes the last one: a repair must remain
+    for whatever the advisory rebuild breaks. With no round to spare, its findings go
+    to the pull request instead. The fast modes' one repair plus one advisory round is
+    already within the cap.
+    """
+    used = int(ctx.facts.get("attempts_used", 0)) + 1
+    limit = (int(ctx.knob("attempts", ctx.knob("check_attempts", 3)))
+             + int(ctx.facts.get("convergence_extras_used", 0)))
+    if used + 1 >= limit:
+        return False
+    ctx.set_fact("attempts_used", used)
+    return True
 
 
 def gate_overwatch(ctx: Any) -> str:
-    """Proceed only when the overwatch pass stated a PASS verdict."""
+    """Proceed when the overwatch pass stated PASS, raised no core finding, and the
+    evidence, intent audit and correction audit all hold."""
     text = ctx.read_text("reviews/overwatch.md")
     from refactory_dsh import authoring_evidence as evidence
 
@@ -2470,20 +2600,27 @@ def gate_overwatch(ctx: Any) -> str:
     correction_problems = evidence.correction_audit_problems(ctx)
     review_findings_raw = blocking_findings(text)
     review_findings, ow_scope_notes = scope_filter_findings(review_findings_raw, ctx.workdir)
+    # Non-core findings never block; a FAIL verdict always does, because the overwatch
+    # is told to state PASS when only non-core findings remain.
+    review_findings, ow_non_core = split_core(review_findings)
     verdict = text.strip().splitlines()[-1].strip() if text.strip() else ""
+    passed = verdict == PASS_MARK
 
-    if (verdict == PASS_MARK and not evidence_problems and not audit_problems_list
+    if (passed and not evidence_problems and not audit_problems_list
             and not review_findings and not correction_problems):
+        record_follow_ups(ctx, "overwatch", ow_non_core)
         not_measured = evidence.correction_audit_advisories(ctx)
-        ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n" + (
-            evidence.advisory_correction_audit(not_measured) + "\n" if not_measured else ""))
+        ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n"
+                       + "".join(f"follow-up: {finding}\n" for finding in ow_non_core)
+                       + (evidence.advisory_correction_audit(not_measured) + "\n"
+                          if not_measured else ""))
         ctx.set_fact("overwatch_review", "(overwatch passed)")
         ctx.write_text("validation.txt", "(overwatch passed)\n")
         ctx.set_fact("validation", "(overwatch passed)")
         return "proceed"
 
     # ── Correction-audit path: route to repair, not back to overwatch ────
-    if (verdict == PASS_MARK and not review_findings
+    if (passed and not review_findings
             and not evidence_problems and not audit_problems_list
             and correction_problems):
         reason = ("correction audit: " + "; ".join(correction_problems)
@@ -2498,7 +2635,7 @@ def gate_overwatch(ctx: Any) -> str:
     # When VERDICT: PASS, no blocking findings and no evidence problems,
     # but audit_problems exist, route back to overwatch without spending
     # an attempt.  gate_overwatch's max_iterations bounds this.
-    if (verdict == PASS_MARK and not review_findings
+    if (passed and not review_findings
             and not evidence_problems and audit_problems_list):
         reason = ("intent audit problems: "
                   + "; ".join(audit_problems_list)
@@ -2519,14 +2656,16 @@ def gate_overwatch(ctx: Any) -> str:
         parts.append("correction audit: " + "; ".join(correction_problems))
     if review_findings:
         parts.append("blocking review findings: " + "; ".join(review_findings))
-    if verdict != PASS_MARK:
+    if not passed:
         parts.append(
             f"overwatch verdict is missing or not {PASS_MARK!r}"
             f" (last line: {verdict!r})"
         )
     if ow_scope_notes:
         parts.append("non-blocking notes: " + "; ".join(ow_scope_notes))
-    reason = "reloop: " + "; ".join(parts) + "\n" + _excerpt(text, 2000)
+    reason = ("reloop: " + "; ".join(parts) + "\n"
+              + (non_core_ride_along(ow_non_core) + "\n" if ow_non_core else "")
+              + _excerpt(text, 2000))
     ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
     ctx.set_fact("overwatch_review", reason)
     ctx.write_text("validation.txt", reason + "\n")
