@@ -143,8 +143,9 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
     )
     gate_qa_writes = (
         ("fast-report.json", "repair.txt",
-         "site-revert-results.json", "correction-audit.json")
-        + (("reviews/verification-unresolved.md", "reviews/finding-sources.json") if design else ())
+         "site-revert-results.json", "correction-audit.json",
+         "reviews/finding-sources.json")
+        + (("reviews/verification-unresolved.md",) if design else ())
     )
 
     graph.add(Node(
@@ -197,7 +198,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
         graph.connect("verifier", "join_qa")
         graph.connect("join_qa", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
-        graph.connect("gate_qa", "focused_qa", condition="review_reloop")
+        graph.connect("gate_qa", "fork_qa", condition="review_reloop")
     else:
         graph.connect("focused_check", "focused_qa")
         graph.connect("focused_qa", "gate_qa")

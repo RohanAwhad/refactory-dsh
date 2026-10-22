@@ -361,8 +361,9 @@ def test_scripted_design_run_dropped_finding(tmp_path):
         second_design_doc,       # second attempt — addresses FND-extra-1
         DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
     model = FakeModel(answers)
     model._write_extra_research = True

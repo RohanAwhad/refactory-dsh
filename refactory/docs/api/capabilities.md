@@ -8510,7 +8510,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     {
       "condition": "review_reloop",
       "source": "gate_qa",
-      "target": "focused_qa"
+      "target": "fork_qa"
     },
     {
       "condition": "proceed",
@@ -8878,7 +8878,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "f90fa1faef60005ae6056cb6bd1f591d2bcd67e60bfc74b1bfffd925271fde80"
+    "reviewed_schema": "6cb8008ff168b0a85b06d321d6e7bc7f82d663a2058fd1150e66c340ef9fe521"
   }
 }
 ```

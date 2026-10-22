@@ -293,8 +293,9 @@ def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):
                 "test_foo.py": "def test_foo():\n    assert True\n"}),  # first emit: test_foo.py in added_files
         render({"tool.py": "print('v2')\n",
                 "test_foo.py": "def test_foo():\n    import tool\n    assert hasattr(tool, '__file__')\n"}),  # second emit: guarding test
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
     result = DesignMode().run(
         tmp_path / "run", model=FakeModel(answers),
@@ -349,12 +350,11 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
         "Change only the requested file.",          # strategy
         render({"tool.py": "print('v1')\n",
                 "test_foo.py": "def test_foo():\n    assert True\n"}),  # first emit
-        VERIFICATION_ANSWER,                         # verifier after first check
-        # gate_verification sees guardedness_blocked → reloops to emit
+        # gate_check sees guardedness_blocked → reloops to emit
         render({"tool.py": "print('v2')\n",
                 "test_foo.py": "def test_foo():\n    import tool\n    assert hasattr(tool, '__file__')\n"}),  # second emit
-        VERIFICATION_ANSWER,                         # verifier after second check
-        FAST_QA,                                     # focused QA
+        FAST_QA,                                     # focused QA (in fork_qa)
+        VERIFICATION_ANSWER,                         # verifier (in fork_qa)
     ]
 
     mode = DesignFastMode()

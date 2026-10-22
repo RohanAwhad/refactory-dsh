@@ -150,8 +150,8 @@ def test_is_signal_crash_none_returncode():
 def _design_answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
-            *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 
 def _design_run(workdir, model, target):
@@ -1256,7 +1256,7 @@ def test_design_fast_broken_guarantee_with_credentials_is_repaired(tmp_path, mon
     # Second emit: fixes flag.txt so check passes.
     good_emit = _render({"flag.txt": "good\n", "tool.py": "print('ok')\n"})
 
-    model = _FakeModel([FAST_PLAN, bad_emit, VERIFICATION_ANSWER, good_emit, VERIFICATION_ANSWER, FAST_QA])
+    model = _FakeModel([FAST_PLAN, bad_emit, good_emit, FAST_QA, VERIFICATION_ANSWER])
     result = DesignFastMode().run(
         tmp_path / "run", model=model,
         task={"name": "creds_test", "brief": "a tool",
@@ -1324,7 +1324,7 @@ def test_design_fast_base_double_crash_continues_with_note(tmp_path, monkeypatch
     # Second emit: tool.py that passes.
     good_emit = _render({"tool.py": "print('ok')\n"})
 
-    model = _FakeModel([FAST_PLAN, bad_emit, VERIFICATION_ANSWER, good_emit, VERIFICATION_ANSWER, FAST_QA])
+    model = _FakeModel([FAST_PLAN, bad_emit, good_emit, FAST_QA, VERIFICATION_ANSWER])
     result = DesignFastMode().run(
         tmp_path / "run", model=model,
         task={"name": "r2fast", "brief": "a tool",

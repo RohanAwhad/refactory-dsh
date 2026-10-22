@@ -205,8 +205,9 @@ def _design_answers(emit: list[str]) -> list[str]:
         DESIGN_DOC_ANSWER,
         DESIGN_REVIEW_ANSWER,
         *emit,
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
 
 
