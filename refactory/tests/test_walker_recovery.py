@@ -376,19 +376,6 @@ def test_outer_loop_evaluation_hung_op_stops_next_trial_starts_clean(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# A node with no derived limit gets DSH's 3600 s default
-# ---------------------------------------------------------------------------
-def test_unclassified_op_gets_the_dsh_default_limit(tmp_path):
-    from refactory_dsh.nn.executor import DEFAULT_OP_TIMEOUT_S, Executor, RunContext
-
-    graph = nn.Graph()
-    graph.add(nn.Node("plain", "op", call="walker_recovery_ops:succeed_op"))
-    executor = Executor(graph, RunContext(tmp_path), enable_recovery=True)
-    assert DEFAULT_OP_TIMEOUT_S == 3600
-    assert executor._effective_timeout(graph.nodes["plain"]) == 3600.0
-
-
-# ---------------------------------------------------------------------------
 # A check's own tools die at the op's limit, not only the op's child
 # ---------------------------------------------------------------------------
 def test_a_checks_own_tools_die_at_the_limit(tmp_path):
