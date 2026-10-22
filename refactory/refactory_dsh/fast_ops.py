@@ -119,8 +119,8 @@ FOLLOW_UP = "follow-up: "
 def _advisories(ctx: Any) -> list[str]:
     """The advisory notes and follow-ups gate_qa recorded, carried into the final report."""
     findings = ctx.read_json("fast-report.json", {}).get("findings") or []
-    return [f for f in findings
-            if str(f).startswith((evidence.ADVISORY_REPO_QUESTIONS, FOLLOW_UP))]
+    return [f for f in findings if str(f).startswith(
+        (evidence.ADVISORY_REPO_QUESTIONS, evidence.ADVISORY_CORRECTION_AUDIT, FOLLOW_UP))]
 
 
 def _repair(ctx: Any, findings: list[str], *, kind: str = "check",
@@ -763,6 +763,9 @@ def gate_qa(ctx: Any) -> str:
 
     # Case 3: No core defect — proceed, with any non-core findings as follow-ups
     create_ops.record_follow_ups(ctx, "focused_qa", non_core)
+    not_measured = evidence.correction_audit_advisories(ctx)
+    if not_measured:
+        advisory.append(evidence.advisory_correction_audit(not_measured))
     ctx.set_fact("qa_passed", True)
     _write_finding_sources_fast(ctx, qa, verifier_filtered,
                                 rebuttals=verifier_rebuttals, proceeding=True)
