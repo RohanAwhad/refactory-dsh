@@ -689,7 +689,7 @@ def test_the_command_line_carries_single_and_task(monkeypatch, capsys):
     monkeypatch.setattr("refactory_dsh.model.DshModelClient", lambda **kwargs: None)
     monkeypatch.setattr(
         create_module, "create",
-        lambda config, client=None: (seen.append(config), Result())[1],
+        lambda config, client=None, **kwargs: (seen.append(config), Result())[1],
     )
     assert create_module.main(["--name", "one_pack", "--brief", "count", "--single"]) == 0
     assert seen[0].single_shot is True and seen[0].task_ref == ""
@@ -787,7 +787,7 @@ def test_each_package_gets_its_own_run_directory(monkeypatch, capsys):
     monkeypatch.setattr("refactory_dsh.model.DshModelClient", lambda **kwargs: None)
     monkeypatch.setattr(
         create_module, "create",
-        lambda config, client=None: (seen.append(Path(config.workdir)), Result())[1],
+        lambda config, client=None, **kwargs: (seen.append(Path(config.workdir)), Result())[1],
     )
     for name in ("one_pack", "two_pack"):
         assert create_module.main(["--name", name, "--brief", "count"]) == 0
