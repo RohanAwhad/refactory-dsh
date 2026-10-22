@@ -320,7 +320,7 @@ export const designGraph: ShapeEntry = {
   name: 'designGraph',
   graph: designFixture,
   directors: {}, dataPasses: {},
-  gatesWithReloop: ['gate_research', 'gate_pitfalls', 'gate_design_review', 'gate_strategy', 'check', 'gate_verification', 'gate_qa', 'gate_overwatch'],
+  gatesWithReloop: ['gate_research', 'gate_pitfalls', 'gate_design_review', 'gate_strategy', 'check', 'gate_qa', 'gate_overwatch'],
   fixedVerdicts: {}, large: true,
 }
 

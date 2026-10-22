@@ -85,8 +85,8 @@ def _answers(*emits: str) -> list[str]:
     not run.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
-            *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 
 def _mode(**knobs) -> DesignMode:
@@ -714,8 +714,9 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
     git(worktree.recorded(run).path, "checkout", "--", "app.py")
 
     redone = DesignMode.resume(run, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
+                                                          *REVIEW_ANSWERS[:3],
                                                           VERIFICATION_ANSWER,
-                                                          *REVIEW_ANSWERS]))
+                                                          REVIEW_ANSWERS[3]]))
     assert redone.error is None
     assert (run / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
     assert git(repo, "show", f"{_report(run)['branch']}:tool.py") == "print('redone')"
@@ -1432,13 +1433,15 @@ def test_a_design_missing_a_contract_part_reloops_before_the_gate(tmp_path):
     assert "Rule and sites" in verdict.reason
 
 
-def test_a_rule_site_without_a_marker_reloops_before_the_gate(tmp_path):
-    """A site the design lists without saying whether the change covers it reloops."""
+def test_a_rule_site_without_a_marker_is_advisory_at_the_gate(tmp_path):
+    """A site the design lists without a [changed] or [left] marker is listed as advisory."""
     import refactory_dsh.design_ops as ops
 
     design_text = (
         "# Make the gate check constraints\n\n"
         "## Summary\n\nSplit constraints into clauses.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n"
+        "| \"the brief\" | § Changes | test_tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `authoring_evidence.py:154` \u2014 **[changed]**\n"
         "- `create_ops.py:1696` \u2014 the overwatch gate\n\n"
@@ -1456,18 +1459,21 @@ def test_a_rule_site_without_a_marker_reloops_before_the_gate(tmp_path):
     ctx.write_text("design.md", design_text)
     ctx.write_json("brief.json", {"name": "b17_clauses", "brief": "split constraints"})
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "create_ops.py:1696" in verdict.reason
-    assert "authoring_evidence.py:154" not in verdict.reason
+    assert verdict == "proceed"
+    advisory = ctx.facts["design_review_advisory"]
+    assert "create_ops.py:1696" in advisory
+    assert "authoring_evidence.py:154" not in advisory
 
 
-def test_a_design_whose_title_is_the_run_name_reloops(tmp_path):
-    """The gate catches a title that equals the run name."""
+def test_a_design_whose_title_is_the_run_name_is_advisory(tmp_path):
+    """The gate notes a title that equals the run name, as advisory."""
     import refactory_dsh.design_ops as ops
 
     design_text = (
         "# b17_clauses\n\n"
         "## Summary\n\nDo the thing.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n"
+        "| \"the brief\" | § Changes | test_tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `file.py:1` \u2014 **[changed]**\n\n"
         "## Docs\n\n"
@@ -1483,17 +1489,19 @@ def test_a_design_whose_title_is_the_run_name_reloops(tmp_path):
     ctx.write_text("design.md", design_text)
     ctx.write_json("brief.json", {"name": "b17_clauses", "brief": "split constraints"})
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "title is the run name" in verdict.reason
+    assert verdict == "proceed"
+    assert "title is the run name" in ctx.facts["design_review_advisory"]
 
 
-def test_a_design_with_left_no_reason_reloops(tmp_path):
+def test_a_design_with_left_no_reason_is_advisory(tmp_path):
     """The gate catches a rule site marked [left] without a reason."""
     import refactory_dsh.design_ops as ops
 
     design_text = (
         "# Enforce clause coverage\n\n"
         "## Summary\n\nFix the audit.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n"
+        "| \"the brief\" | § Changes | test_tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `evidence.py:10` \u2014 **[changed]**\n"
         "- `ops.py:20` \u2014 **[left]**\n\n"
@@ -1510,8 +1518,8 @@ def test_a_design_with_left_no_reason_reloops(tmp_path):
     ctx.write_text("design.md", design_text)
     ctx.write_json("brief.json", {"name": "b17_clauses", "brief": "fix audit"})
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "[left] without a reason" in verdict.reason
+    assert verdict == "proceed"
+    assert "[left] without a reason" in ctx.facts["design_review_advisory"]
 
 
 # ── design_fast, on the same steps (`repo_change`) ─────────────────────────────
@@ -1534,7 +1542,7 @@ def _fast(workdir: Path, *emits: str, refused: int = 0, knobs: dict | None = Non
     mode.load_state_dict(state)
     answers = [FAST_PLAN] + [answer for index, emit in enumerate(emits)
                              for answer in ((emit,) if index < refused
-                                            else (emit, VERIFICATION_ANSWER, FAST_QA))]
+                                            else (emit, FAST_QA, VERIFICATION_ANSWER))]
     return mode.run(workdir, model=FakeModel(answers),
                     task={"name": NAME, "brief": "a tool", "check": "python tool.py", **task})
 
@@ -1546,13 +1554,13 @@ def test_design_fast_changes_a_repository_in_a_worktree_and_delivers_nothing(rep
     # Passes only where app.py is as committed and the setup command has run: the worktree, prepared.
     tool = ("import pathlib\nassert pathlib.Path('app.py').read_text() == \"print('app')\\n\"\n"
             "assert pathlib.Path('built.txt').exists()\n")
-    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), VERIFICATION_ANSWER, FAST_QA])
+    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), FAST_QA, VERIFICATION_ANSWER])
     result = DesignFastMode().run(tmp_path / "run", model=model, task={
         "name": NAME, "brief": "a tool", "check": "python tool.py", "target": str(repo),
         "setup": "python -c \"open('built.txt', 'w').write('built')\""})
     assert result.exit_ok, result.error
     assert "===EDIT: <relative path>===" in model.prompts[1], "emit is told it may edit the last attempt"
-    assert str(worktree.WRAPPER) in model.prompts[3], "focused QA is told how to run a command in the worktree"
+    assert str(worktree.WRAPPER) in model.prompts[2], "focused QA is told how to run a command in the worktree"
     assert (git(repo, "rev-parse", "HEAD"), (repo / "app.py").read_text()) == (head, "print('mine, not committed')\n")
     payload = _report(tmp_path / "run")
     assert (payload["target"], payload["base"]) == (str(repo.resolve()), head)

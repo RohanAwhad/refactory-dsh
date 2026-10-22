@@ -96,7 +96,8 @@ naming the route a real run takes for every runtime that runs it.
 
 `gate_qa` and the fast `gate_qa` refuse a reviewer output that lacks an entry for a
 changed function, or gives an answer with no `path:line` evidence. `gate_design_review`
-performs the same check against the design's `[changed]` sites.
+performs the same check against the design's `[changed]` sites, but at design time a
+missing entry is advisory: it is listed at the person's gate and never re-runs the review.
 
 ### Claim checking
 
@@ -128,12 +129,13 @@ only:
   it began, a function counts only if it also changed relative to the merged-in commit
   (`changed_functions.merged_upstream`).
 
-When missing repository questions are a gate's only problem, the reviewer is re-run
-once (`REPO_QUESTION_RERUNS`) without spending a builder or review attempt. The re-run's
-feedback names each missing function and answer.
+When missing repository questions are a post-build gate's only problem, the reviewer is
+re-run once (`REPO_QUESTION_RERUNS`) without spending a builder or review attempt. The
+re-run's feedback names each missing function and answer. At design time there is no
+re-run: `gate_design_review` lists them as advisory straight away.
 
 Questions still missing after that re-run are advisory. The gate proceeds and records
-them in `reviews/qa-gate.txt`, the design review's findings, or fast mode's
+them in `reviews/qa-gate.txt`, the design review's advisory list, or fast mode's
 `fast-report.json`. The pull request's Verification section lists them. A run whose
 reviews found nothing blocking never ends on repository questions.
 

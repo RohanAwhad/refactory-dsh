@@ -63,7 +63,11 @@
       "targets": [
         "health_checker",
         "code_reviewer",
-        "qa_director"
+        "qa_director",
+        "verifier"
+      ],
+      "optional_targets": [
+        "verifier"
       ],
       "_type": "ForkNode"
     },
@@ -101,12 +105,6 @@
       "id": "gate_strategy",
       "evaluator_type": "user",
       "max_iterations": 4,
-      "_type": "GateNode"
-    },
-    "gate_verification": {
-      "id": "gate_verification",
-      "evaluator_type": "fn",
-      "max_iterations": 5,
       "_type": "GateNode"
     },
     "health_checker": {
@@ -206,7 +204,7 @@
     },
     {
       "source": "check",
-      "target": "verifier",
+      "target": "fork_qa",
       "condition": "proceed"
     },
     {
@@ -258,11 +256,6 @@
       "source": "gate_design_review",
       "target": "design_doc",
       "condition": "reloop"
-    },
-    {
-      "source": "gate_design_review",
-      "target": "design_review",
-      "condition": "review_reloop"
     },
     {
       "source": "gate_design_review",
@@ -328,16 +321,6 @@
       "source": "gate_strategy",
       "target": "synthesize_strategy",
       "condition": "reloop"
-    },
-    {
-      "source": "gate_verification",
-      "target": "emit",
-      "condition": "reloop"
-    },
-    {
-      "source": "gate_verification",
-      "target": "fork_qa",
-      "condition": "proceed"
     },
     {
       "source": "join_qa",
@@ -406,7 +389,7 @@
     },
     {
       "source": "verifier",
-      "target": "gate_verification",
+      "target": "join_qa",
       "condition": null
     }
   ]

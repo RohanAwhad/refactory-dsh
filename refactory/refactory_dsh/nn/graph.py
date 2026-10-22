@@ -47,6 +47,7 @@ _NODE_FIELDS = frozenset(
         "blocking",
         "score_effect",
         "targets",
+        "optional_targets",
         "sources",
         "subgraph_entry",
         "subgraph_exit",
@@ -104,6 +105,11 @@ class Node:
     #: through this list rather than through edges, because one out-edge per branch
     #: would schedule the successor as soon as the first branch finished.
     targets: tuple[str, ...] = ()
+    #: `fork`: targets whose failure does not fail the fork.  Must be a subset
+    #: of ``targets``.  A failed optional branch is skipped in the fact merge;
+    #: the lowered graph marks these nodes ``optional: true`` in their worker
+    #: spec so DSH and run.py also tolerate the failure.
+    optional_targets: tuple[str, ...] = ()
     #: `join`: the nodes this barrier waits for. Declared for the same reason.
     sources: tuple[str, ...] = ()
     #: `data`: the subgraph it runs once per item, and where the items come from.
@@ -153,6 +159,11 @@ class Node:
                     f"data node {self.id!r} needs subgraph_entry and subgraph_exit, "
                     "which say which part of the graph runs once per item"
                 )
+        if self.optional_targets:
+            if self.kind != "fork":
+                raise GraphError(f"node {self.id!r} is not a fork but declares optional_targets")
+            if set(self.optional_targets) - set(self.targets):
+                raise GraphError("optional_targets must be a subset of targets")
         if self.kind != "fork" and self.targets:
             raise GraphError(f"node {self.id!r} is not a fork but declares targets")
         if self.kind != "join" and self.sources:
@@ -196,6 +207,7 @@ class Node:
             "blocking": self.blocking,
             "score_effect": self.score_effect,
             **({"targets": list(self.targets)} if self.targets else {}),
+            **({"optional_targets": list(self.optional_targets)} if self.optional_targets else {}),
             **({"sources": list(self.sources)} if self.sources else {}),
             **({"subgraph_entry": self.subgraph_entry} if self.subgraph_entry else {}),
             **({"subgraph_exit": self.subgraph_exit} if self.subgraph_exit else {}),
@@ -234,6 +246,7 @@ class Node:
             blocking=bool(state.get("blocking", True)),
             score_effect=str(state.get("score_effect", "affects")),
             targets=tuple(state.get("targets") or ()),
+            optional_targets=tuple(state.get("optional_targets") or ()),
             sources=tuple(state.get("sources") or ()),
             subgraph_entry=str(state.get("subgraph_entry", "")),
             subgraph_exit=str(state.get("subgraph_exit", "")),
@@ -250,7 +263,7 @@ class Node:
         if field_name not in _NODE_FIELDS:
             raise GraphError(f"node {self.id!r} has no field {field_name!r}")
         if field_name in ("knobs", "reads", "writes", "produces", "tools", "targets",
-                          "sources", "inline_items", "feedback_keys") and isinstance(value, list):
+                          "optional_targets", "sources", "inline_items", "feedback_keys") and isinstance(value, list):
             value = tuple(value)
         return replace(self, **{field_name: value})
 
