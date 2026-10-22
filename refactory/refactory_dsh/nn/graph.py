@@ -57,6 +57,7 @@ _NODE_FIELDS = frozenset(
         "inline_items",
         "limit",
         "feedback_keys",
+        "timeout_s",
     }
 )
 
@@ -124,6 +125,11 @@ class Node:
     #: enclosing phase, except the legacy validation role enters validation.
     resource_role: str | None = None
     feedback_keys: tuple[str, ...] = ()
+    #: `agent`: the most wall time the node's model work may take, in seconds, on
+    #: either runtime. Unset, the selected route's envelope applies. A node that
+    #: runs over fails like any other failed node, so an optional fork branch is
+    #: then missing rather than late.
+    timeout_s: int | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in NODE_KINDS:
@@ -177,6 +183,11 @@ class Node:
             )
         if self.resource_role not in (None, "work", "final_validation"):
             raise GraphError(f"node {self.id!r}: unknown resource_role {self.resource_role!r}")
+        if self.timeout_s is not None:
+            if self.kind != "agent":
+                raise GraphError(f"node {self.id!r} is not an agent but declares timeout_s")
+            if self.timeout_s < 1:
+                raise GraphError(f"node {self.id!r}: timeout_s must be >= 1")
 
     @property
     def resource_phase(self) -> str | None:
@@ -218,6 +229,7 @@ class Node:
                if self.inline_items else {}),
             **({"limit": self.limit} if self.limit else {}),
             **({"feedback_keys": list(self.feedback_keys)} if self.feedback_keys else {}),
+            **({"timeout_s": self.timeout_s} if self.timeout_s is not None else {}),
         }
 
     @classmethod
@@ -256,6 +268,7 @@ class Node:
             inline_items=tuple(state.get("inline_items") or ()),
             limit=int(state.get("limit", 0)),
             feedback_keys=tuple(state.get("feedback_keys") or ()),
+            timeout_s=(int(state["timeout_s"]) if state.get("timeout_s") is not None else None),
         )
 
     def with_field(self, field_name: str, value: Any) -> "Node":

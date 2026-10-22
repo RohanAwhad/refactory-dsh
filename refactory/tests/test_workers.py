@@ -113,9 +113,13 @@ def test_lowered_node_timeout_covers_the_declared_completion_budget(tmp_path):
                                    DshModelClient(worker_backend='codex', model='m').context())
     assert codex.nodes['build'].command_timeout_s == DEFAULT_TIMEOUT_S + 600
 
-    # An explicit node timeout is the author's own bound and passes through.
+    # An explicit node timeout is the author's own bound on the model session: the
+    # dispatched session stops there, and the command keeps the dispatch overhead
+    # beyond it, as a derived envelope does, so the session ends first (#307).
     explicit = workers.lower_workflow(graph(timeout=123), tmp_path / 'explicit', DshModelClient().context())
-    assert explicit.nodes['build'].command_timeout_s == 123
+    assert explicit.nodes['build'].command_timeout_s == 123 + 600
+    spec_path = explicit.nodes['build'].dispatch_command.rsplit(' ', 1)[1].strip("'")
+    assert json.loads(Path(spec_path).read_text())['model_context']['node_wall_s'] == 123
 
 
 def test_graph_checks_worker_outputs_not_success_sentence(monkeypatch, tmp_path):
