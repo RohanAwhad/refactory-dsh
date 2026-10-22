@@ -242,26 +242,80 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
             **UNREFUSED, **located, **planned}
 
 
+#: What a scoped change's plan is compiled from, in place of the perspectives step.
+SCOPED_STRATEGY_PLAN = (
+    "(no perspectives: this is a scoped change, so plan directly from the research and "
+    "the pitfalls — the simplest thing that could pass the check — and say what the "
+    "check will not catch)"
+)
+
+
+def route_strategy(ctx: Any) -> Any:
+    """Send a scoped change straight to the plan; a full design weighs perspectives first.
+
+    The perspectives step chooses between ways to build the artifact. A scoped change
+    has one sensible way, and one perspective summarised by the plan step is the same
+    work done twice.
+    """
+    from refactory_dsh.nn import Verdict
+
+    if ctx.facts.get("research_scope") == "scoped":
+        ctx.set_fact("strategy_plan", SCOPED_STRATEGY_PLAN)
+        # What the perspectives step would leave, empty: the plan and design steps
+        # declare them as inputs, and the spine refuses a declared input that is not
+        # on disk.
+        ctx.write_text("strategy-plan.json", "[]\n")
+        ctx.path("strategy").mkdir(parents=True, exist_ok=True)
+        return Verdict("scoped", "a scoped change is planned straight from the research")
+    # `proceed` rather than a label of its own: a person's skip of this gate sends
+    # proceed on the spine, and the full path is the one that loses nothing.
+    return Verdict("proceed", "a full design weighs perspectives before the plan")
+
+
+def route_design_review(ctx: Any) -> Any:
+    """Send a scoped change's design to the automatic checks; a full design is reviewed.
+
+    For a scoped change the design-review gate's own checks (an Ask mapping present,
+    citations and quotes true, high-risk pitfalls answered, required sections present)
+    and the person's approval are the review; the review agent adds a round to a change
+    whose design is a page long. The gate learns which from `design_review_by`, so a
+    run whose graph predates this gate keeps its agent's review.
+    """
+    from refactory_dsh.nn import Verdict
+
+    if ctx.facts.get("research_scope") == "scoped":
+        ctx.set_fact("design_review_by", "automatic")
+        return Verdict("scoped", "a scoped change's design is checked automatically")
+    ctx.set_fact("design_review_by", "agent")
+    return Verdict("proceed", "a full design is reviewed by the design-review agent")
+
+
 def gate_design_review(ctx: Any) -> str:
     """Proceed when the design review passes and the mechanical checks hold.
 
     Never raises ValueError: when attempts are exhausted, it proceeds to
     gate_strategy with the remaining findings in the design_review_findings
-    fact, so the person decides.
+    fact, so the person decides. A design `route_design_review` sent here without the
+    review agent (`design_review_by` is ``automatic``) has only the mechanical checks;
+    any review file is not its review.
     """
     from refactory_dsh.create_ops import PASS_MARK, blocking_findings
     from refactory_dsh.nn import Verdict
 
+    scoped = ctx.facts.get("design_review_by") == "automatic"
     # ── read the agent's review ──
     review_text = ctx.read_text("reviews/design-review.md") if ctx.exists(
-        "reviews/design-review.md") else ""
+        "reviews/design-review.md") and not scoped else ""
     problems: list[str] = []
     # What the gate notices that does not change what gets built. It is shown to the
     # person and never costs a round: a design goes back only for a problem in `problems`.
     advisories: list[str] = []
 
-    # Verdict and blocking findings, same parsing as gate_overwatch.
-    if review_text.strip():
+    # Verdict and blocking findings, same parsing as gate_overwatch. A scoped change's
+    # design had no review agent, so any review file is not its review.
+    if scoped:
+        pass
+    elif review_text.strip():
         verdict_line = review_text.strip().splitlines()[-1].strip()
         problems.extend(blocking_findings(review_text))
         if verdict_line != PASS_MARK:
@@ -467,7 +521,7 @@ def gate_design_review(ctx: Any) -> str:
 
     # ── mechanical check 6: repository questions and brief-example trace ──
     deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
-    if deliverable_kind_value == "repository_change" and design_text:
+    if deliverable_kind_value == "repository_change" and design_text and not scoped:
         from refactory_dsh.authoring_evidence import check_review_questions
         from refactory_dsh.changed_functions import is_generated, is_test_path
         from refactory_dsh import design_contract
@@ -557,8 +611,11 @@ def design_review_status(facts: dict) -> str:
     advisory_n = sum(1 for ln in str(facts.get("design_review_advisory", "")).splitlines()
                      if ln.startswith("- "))
     advisory = f", {advisory_n} advisory" if advisory_n else ""
+    # A scoped change's design had no review agent; the person is told so.
+    automatic = (" (automatic checks; scoped change)"
+                 if facts.get("design_review_by") == "automatic" else "")
     if "(none: the design review" in findings:
-        return f"Design review: PASS{advisory}"
+        return f"Design review{automatic}: PASS{advisory}"
     blocking = facts.get("design_review_blocking")
     source = str(blocking) if blocking is not None else findings
     lines = [
@@ -568,7 +625,7 @@ def design_review_status(facts: dict) -> str:
     ]
     n = len(lines)
     return (
-        f"Design review: FAIL, {n} unresolved{advisory}\n"
+        f"Design review{automatic}: FAIL, {n} unresolved{advisory}\n"
         + "\n".join(lines)
     )
 

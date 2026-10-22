@@ -7587,7 +7587,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
 
 ```json
 {
@@ -7616,7 +7616,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "check_design_claims",
-      "target": "design_review"
+      "target": "route_design_review"
     },
     {
       "condition": null,
@@ -7686,7 +7686,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "gate_pitfalls",
-      "target": "strategy_director"
+      "target": "route_strategy"
     },
     {
       "condition": "reloop",
@@ -7774,6 +7774,26 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "record_findings"
     },
     {
+      "condition": "proceed",
+      "source": "route_design_review",
+      "target": "design_review"
+    },
+    {
+      "condition": "scoped",
+      "source": "route_design_review",
+      "target": "gate_design_review"
+    },
+    {
+      "condition": "proceed",
+      "source": "route_strategy",
+      "target": "strategy_director"
+    },
+    {
+      "condition": "scoped",
+      "source": "route_strategy",
+      "target": "synthesize_strategy"
+    },
+    {
       "condition": null,
       "source": "strategy_director",
       "target": "synthesize_strategy"
@@ -7833,6 +7853,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "id": "pick_corrections",
+      "user": false
+    },
+    {
+      "id": "route_design_review",
+      "user": false
+    },
+    {
+      "id": "route_strategy",
       "user": false
     }
   ],
@@ -8106,6 +8134,24 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "choose the research directions and have a subagent answer each one",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.design_ops:route_design_review",
+      "gate_kind": "fn",
+      "id": "route_design_review",
+      "kind": "gate",
+      "knobs": [],
+      "notes": "a scoped change's design is checked automatically; a full design is reviewed",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.design_ops:route_strategy",
+      "gate_kind": "fn",
+      "id": "route_strategy",
+      "kind": "gate",
+      "knobs": [],
+      "notes": "a scoped change is planned straight from the research; a full design weighs perspectives",
       "role": "ceo"
     },
     {
@@ -8448,8 +8494,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "cb7bf5b83c7be483a63b13279ad3bcc79317709ce90c11060caf4abb8fb142a4"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
+    "reviewed_schema": "89e747a4135cdff73fe19893554d8d3b4455c11ff69c24af99c15846d5bc4ca5"
   }
 }
 ```
