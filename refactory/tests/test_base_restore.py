@@ -941,13 +941,14 @@ def test_e2e_fast_survives_guarded_test(tmp_path, monkeypatch):
         "app.py": "print('fixed')\n",
     })
 
+    # Since #475 the verifier is a branch of the review fork, which runs only once
+    # the check passes: focused QA, then the verifier.
     answers = [
         "Change only the requested file.",   # strategy
-        first_emit,                          # first emit
-        VERIFICATION_ANSWER,                 # verifier after first check
-        second_emit,                         # second emit
-        VERIFICATION_ANSWER,                 # verifier after second check
+        first_emit,                          # first emit (the check fails)
+        second_emit,                         # second emit (the check passes)
         FAST_QA,                             # focused QA
+        VERIFICATION_ANSWER,                 # verifier
     ]
     answers = answers + [""] * 20
 
