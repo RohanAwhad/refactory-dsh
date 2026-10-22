@@ -106,8 +106,8 @@ carries every row the deleted `@deepseek-ai__dsh-web-app` pnpm patch supplied.
 bundle in `PROFILE_TEMPLATES.web.bundles`, then `refactory`, then `refactory-web`)
 with DSH's own `composeEntries` and verifies that the `client-hmr` row is disabled
 after composition, that no patches were skipped, and that a user-layer
-`disabled: false` re-enables it. The
-remaining acceptance checks are browser-facing and run by hand against a live
+`disabled: false` re-enables it.
+The remaining acceptance checks are browser-facing and run by hand against a live
 server: the boot manifest lists `refactory-console`, `ui-refactory` and
 `ui-brand-refactory`; the page reports no `Failed to load plugins`; the Modes
 button renders the picker; and `session/create` with no preset returns
