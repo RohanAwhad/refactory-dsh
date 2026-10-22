@@ -406,9 +406,10 @@ citation past the end of its file, a quotation the brief does not contain, a mis
 required section (including the `## Ask mapping`), or an unanswered high-risk pitfall.
 Everything else it notices is **advisory**: a quotation that differs from the brief
 only in punctuation, case or markdown, a missing `## Failure trace`, rule-site marker
-and title formatting, research and perspective findings the design does not cite, and
-missing repository questions. Advisory items are listed at the person's gate under
-an Advisory heading and never cost a round. On a blocking problem it reloops to
+and title formatting, missing repository questions, and the review agent's own
+`## Notes`. Advisory items are listed at the person's gate under an Advisory heading
+and never cost a round. Research and perspective findings the design does not cite
+are recorded in the `finding_coverage` fact and not listed at all. On a blocking problem it reloops to
 `design_doc`; when its rounds run out, it proceeds to `gate_strategy` with the
 findings shown — it never fails the run. A scoped change gets one round; a full design
 gets `design_review_attempts` (default 2).
@@ -450,7 +451,7 @@ parallel**, merge into one synthesis whose blocking findings the QA gate reads, 
 are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs in parallel with the reviews as a branch of the review fork, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §15. Its verdict and requirement evidence map are checked at the last gate. A **failure digest** is built from the check output per runner (pytest, vitest, node's test runner) and stored in `check-record.json`, which survives redo; the builder receives the digest rather than the raw output. A **builder probe** is available during emit, design_doc, and design_review: the builder can test named failing tests in a throwaway standalone clone before making its final emission, and design agents can run commands (`--command`) in the clone to verify mechanisms the design relies on. At the post-build gates, **per-correction audit** checks each gate correction item by item: for every correction in the ledger it records the site in the diff, the test that reaches that site (via mechanical hunk-level revert), and the evidence scope (via AST-based patch-target detection); see docs/hardening.md §25-27. A QA or
 overwatch reloop goes back to the emit step, not to the plan a person approved.
 
-**Finding coverage.** Each research and perspective file carries finding ids in the format `FND-<slug>-<n>` (e.g. `FND-api-surface-1`). `gate_design_review` lists every finding id from `research/*.md` and `strategy/*.md` that the design does not cite, read from the detail files rather than the summaries (`research-plan.json`, `strategy-plan.json`), as an advisory item for the person and the reviewer. A design cites a finding where it changes a decision, and an uncited finding never sends the design back. Create mode's `review_design` gate runs the same check against the `findings` field of `strategy.json`; create's review raises when its attempts run out.
+**Finding coverage.** Each research and perspective file carries finding ids in the format `FND-<slug>-<n>` (e.g. `FND-api-surface-1`). `gate_design_review` records, in the `finding_coverage` fact, which finding ids from `research/*.md` and `strategy/*.md` the design cites, read from the detail files rather than the summaries (`research-plan.json`, `strategy-plan.json`). A design cites a finding only where it changes a decision, so an uncited finding is neither listed at the person's gate nor a reason to send the design back; the findings stay in their files for the reviewer. Create mode's `review_design` gate runs the same check against the `findings` field of `strategy.json`; create's review raises when its attempts run out.
 
 All authoring review uses the original brief, approved design and explicit user steering
 as its acceptance baseline. User-approved non-goals remain valid; an author or

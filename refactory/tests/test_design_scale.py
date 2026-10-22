@@ -18,11 +18,14 @@ PASSING_REVIEW = "No issues found.\n\nVERDICT: PASS"
 
 
 def _gate(design: str, *, brief: str = "a tool", scope: str = "full", source: str = "",
-          review: str = PASSING_REVIEW):
+          review: str = PASSING_REVIEW, pitfalls: list | None = None):
+    files = {"reviews/design-review.md": review, "design.md": design,
+             "brief.json": json.dumps({"brief": brief})}
+    if pitfalls is not None:
+        files["pitfalls.json"] = json.dumps(pitfalls)
     ctx = FakeCtx(
-        files={"reviews/design-review.md": review, "design.md": design,
-               "brief.json": json.dumps({"brief": brief})},
-        facts={"name": "scale_test", "has_pitfalls_step": False,
+        files=files,
+        facts={"name": "scale_test", "has_pitfalls_step": pitfalls is not None,
                "research_scope": scope, "source": source},
     )
     return ctx, gate_design_review(ctx)
@@ -51,6 +54,21 @@ def test_a_misquote_of_the_brief_still_blocks():
     assert "does not appear verbatim in the brief" in verdict.reason
 
 
+def test_a_misquote_that_drops_a_negation_still_blocks():
+    # "able" is inside "unable": a word-level match must not accept the inverted quote.
+    design = _make_design() + '\nThe brief says "Able to overwrite files".\n'
+    ctx, verdict = _gate(design, brief="The tool is unable to overwrite files.")
+    assert verdict == "reloop"
+    assert "does not appear verbatim in the brief" in verdict.reason
+
+
+def test_a_missing_high_risk_pitfall_still_blocks():
+    ctx, verdict = _gate(_make_design(), pitfalls=[
+        {"id": "PIT-001", "risk": "high", "text": "the cache key ignores the base"}])
+    assert verdict == "reloop"
+    assert "PIT-001" in verdict.reason
+
+
 # ── what is advisory ──────────────────────────────────────────────────────────
 
 def test_a_quote_differing_only_in_punctuation_and_case_is_advisory():
@@ -75,6 +93,25 @@ def test_paperwork_items_are_listed_and_cost_no_round():
     assert "other.py:3" in advisory
     assert ctx.facts["design_review_status"] == "Design review: PASS, 3 advisory"
     assert "## Advisory" in ctx.facts["design_review_findings"]
+
+
+def test_an_unmentioned_medium_pitfall_is_not_called_missing():
+    ctx, verdict = _gate(_make_design(), pitfalls=[
+        {"id": "PIT-002", "risk": "medium", "text": "a slower path on large inputs"}])
+    assert verdict == "proceed"
+    assert "PIT-002 (medium): not mentioned" in ctx.facts["pitfall_coverage"]
+    assert "MISSING" not in ctx.facts["pitfall_coverage"]
+
+
+def test_the_review_agents_notes_reach_the_person():
+    review = ("The design meets the brief.\n\n## Notes\n"
+              "- docs/cli.md describes the flag; the Docs section leaves it out\n\n"
+              "VERDICT: PASS")
+    ctx, verdict = _gate(_make_design(), review=review)
+    assert verdict == "proceed"
+    assert ("review note: docs/cli.md describes the flag; the Docs section leaves it out"
+            in ctx.facts["design_review_advisory"])
+    assert ctx.facts["design_review_status"] == "Design review: PASS, 1 advisory"
 
 
 def test_the_fail_count_counts_only_blocking_findings():

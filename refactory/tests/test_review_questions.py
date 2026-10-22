@@ -795,5 +795,7 @@ def test_design_review_asks_repository_questions_for_product_sites_only(tmp_path
         "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER, "VERDICT: PASS"])
 
     assert run.exit_ok, run.error
-    assert int(run.facts.get("design_review_reruns_used", 0)) == 0
+    # The test file needs no repository questions: nothing about it is listed.
+    assert "[repo-questions]" not in run.facts["design_review_advisory"]
+    assert "test_tool.py" not in run.facts["design_review_advisory"]
     assert run.facts["design_review_status"].startswith("Design review: PASS")

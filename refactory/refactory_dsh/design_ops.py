@@ -343,7 +343,8 @@ def gate_design_review(ctx: Any) -> str:
                 if quoted_collapsed not in brief_collapsed:
                     # Differing only in punctuation, case, spacing or markdown is a
                     # quoting slip, not a claim the brief does not make.
-                    if _quote_words(quoted) in _quote_words(brief_text):
+                    quoted_words = _quote_words(quoted)
+                    if quoted_words and f" {quoted_words} " in f" {_quote_words(brief_text)} ":
                         advisories.append(
                             f"the design's quote {quoted!r} differs from the brief only "
                             f"in punctuation or formatting"
@@ -435,7 +436,11 @@ def gate_design_review(ctx: Any) -> str:
                         elif pid in aside:
                             coverage_lines.append(f"  {pid} ({risk}): set aside")
                         else:
-                            coverage_lines.append(f"  {pid} ({risk}): MISSING")
+                            # Only a high-risk pitfall must be answered; the others
+                            # appear in a design only where they change a decision.
+                            coverage_lines.append(f"  {pid} ({risk}): "
+                                                  + ("MISSING" if risk == "high"
+                                                     else "not mentioned"))
                     if coverage_lines:
                         ctx.set_fact("pitfall_coverage",
                                      "Pitfall coverage:\n" + "\n".join(coverage_lines))
@@ -449,10 +454,14 @@ def gate_design_review(ctx: Any) -> str:
                      "pitfalls check skipped: no pitfalls_researcher in this graph")
 
     # ── mechanical check 5: finding coverage ──
-    # Research and perspective findings are read by the design writer and the reviewer;
-    # one the design does not mention is listed for them, never a reason to redo it.
+    # Research and perspective findings are read by the design writer and the reviewer.
+    # A design cites only the ones that change a decision, so an uncited finding is
+    # recorded in the finding_coverage fact, never listed at the gate or sent back.
     from refactory_dsh import findings_coverage
-    advisories.extend(findings_coverage.gate_problems(ctx))
+    findings_coverage.gate_problems(ctx)
+
+    # The review agent's notes do not send the design back; the person sees them.
+    advisories.extend(f"review note: {note}" for note in _review_notes(review_text))
 
     # ── mechanical check 6: repository questions and brief-example trace ──
     deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
@@ -564,7 +573,21 @@ def design_review_status(facts: dict) -> str:
 
 def _quote_words(text: str) -> str:
     """Text reduced to its words: case, punctuation, markdown and spacing dropped."""
-    return " ".join(_re.findall(r"[a-z0-9]+", text.lower()))
+    return " ".join(_re.findall(r"[^\W_]+", text.lower()))
+
+
+def _review_notes(review_text: str) -> list[str]:
+    """The bullets under the review's ``## Notes`` heading, without an empty 'none'."""
+    section = _re.search(r"(?im)^##\s+notes\s*$(.*?)(?=^#{1,2}\s|^\s*VERDICT:|\Z)",
+                         review_text, _re.S | _re.M)
+    if section is None:
+        return []
+    notes = []
+    for line in section[1].splitlines():
+        bullet = _re.match(r"\s*(?:[-*\u2022]|\d+[.)])\s+(.*\S)", line)
+        if bullet and not _re.fullmatch(r"(?i)none\.?", bullet[1].strip()):
+            notes.append(bullet[1].strip())
+    return notes
 
 
 def _advisory_block(advisories: list[str]) -> str:

@@ -29,7 +29,7 @@ from tests_support import (
 
 # ── gate integration tests (1–4) ──────────────────────────────────────────
 
-def test_gate_reloops_when_research_finding_missing(tmp_path):
+def test_gate_records_an_uncited_research_finding_without_listing_it(tmp_path):
     """1: A finding in a research file, missing from the design, fails the gate."""
     ctx = nn.RunContext(tmp_path)
     ctx.facts.update({
@@ -50,16 +50,15 @@ def test_gate_reloops_when_research_finding_missing(tmp_path):
     ctx.write_json('brief.json', {'name': 'x', 'brief': 'do a thing'})
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
-    # An unaddressed finding is listed for the person; it never costs a design round.
+    # A design cites only the findings that change a decision: an uncited one is
+    # recorded for the reviewer, never listed at the gate or sent back.
     assert verdict == 'proceed'
-    advisory = ctx.facts['design_review_advisory']
-    assert 'FND-foo-1' in advisory
-    assert 'lowering op-name strings' in advisory
-    assert 'research/foo.md' in advisory
-    assert ctx.facts['design_review_status'] == 'Design review: PASS, 1 advisory'
+    assert 'FND-foo-1: MISSING' in ctx.facts['finding_coverage']
+    assert 'FND-foo-1' not in ctx.facts['design_review_advisory']
+    assert 'FND-foo-1' not in ctx.facts['design_review_findings']
 
 
-def test_gate_reloops_when_perspective_finding_missing(tmp_path):
+def test_gate_records_an_uncited_perspective_finding_without_listing_it(tmp_path):
     """2: A finding in a perspective file, missing from the design, fails."""
     ctx = nn.RunContext(tmp_path)
     ctx.facts.update({
@@ -82,10 +81,8 @@ def test_gate_reloops_when_perspective_finding_missing(tmp_path):
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
     assert verdict == 'proceed'
-    advisory = ctx.facts['design_review_advisory']
-    assert 'FND-bar-1' in advisory
-    assert 'refactory_packages must be walked' in advisory
-    assert 'strategy/bar.md' in advisory
+    assert 'FND-bar-1: MISSING' in ctx.facts['finding_coverage']
+    assert 'FND-bar-1' not in ctx.facts['design_review_advisory']
 
 
 def test_gate_passes_when_finding_set_aside(tmp_path):
@@ -140,8 +137,8 @@ def test_dropped_finding_still_reaches_coverage(tmp_path):
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
     assert verdict == 'proceed'
-    assert 'FND-bar-1' in ctx.facts['design_review_advisory']
-    assert 'FND-foo-1' not in ctx.facts['design_review_advisory']
+    assert 'FND-bar-1: MISSING' in ctx.facts['finding_coverage']
+    assert 'FND-foo-1: addressed' in ctx.facts['finding_coverage']
 
 
 # ── unit tests: finding_coverage (5–10) ────────────────────────────────────
@@ -328,7 +325,7 @@ def test_definitions_with_markdown_decoration():
 
 def test_scripted_design_run_dropped_finding(tmp_path):
     """18: A finding dropped by the summary still reaches the coverage check, which
-    lists it as advisory at the person's gate instead of sending the design back."""
+    records it for the reviewer instead of sending the design back."""
     from refactory_dsh.design import DesignMode
 
     answers = [
@@ -359,11 +356,9 @@ def test_scripted_design_run_dropped_finding(tmp_path):
         p for p in model.prompts if 'What the design review found' in p
     ]
     assert len(design_doc_prompts) == 1
-    advisory = result.facts['design_review_advisory']
-    assert 'FND-extra-1' in advisory
-    assert 'extra finding text' in advisory
-    assert 'research/extra.md' in advisory
-    assert result.facts['design_review_status'].startswith('Design review: PASS, ')
+    assert 'FND-extra-1: MISSING' in result.facts['finding_coverage']
+    assert 'FND-extra-1' not in result.facts['design_review_advisory']
+    assert result.facts['design_review_status'].startswith('Design review: PASS')
 
 
 def test_scripted_create_run_finding_coverage(tmp_path):
@@ -480,6 +475,5 @@ def test_dsh_run_node_reports_missing_finding(tmp_path):
 
     assert result == 'proceed'
     feedback = (d / 'reviews' / 'design-review-feedback.txt').read_text()
-    assert '## Advisory' in feedback
-    assert 'FND-foo-1' in feedback
-    assert 'important finding' in feedback
+    assert feedback.startswith('the design review passed')
+    assert 'FND-foo-1' not in feedback

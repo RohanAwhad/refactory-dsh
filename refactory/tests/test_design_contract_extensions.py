@@ -174,6 +174,7 @@ def test_gate_accepts_both_sections_present():
     )
     result = gate_design_review(ctx)
     feedback = ctx.facts.get("design_review_feedback", "")
-    # Should not contain failure trace or ask mapping problems
-    assert "missing the required ## Failure trace" not in feedback
+    # Neither section is reported, as a blocking problem or as an advisory one.
     assert "missing the required ## Ask mapping" not in feedback
+    assert "Failure trace" not in ctx.facts["design_review_advisory"]
+    assert "Ask mapping" not in ctx.facts["design_review_advisory"]

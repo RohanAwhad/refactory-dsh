@@ -408,7 +408,7 @@ class DesignMode(Mode):
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
                       "design_review_findings", "pitfall_coverage",
-                      "finding_coverage", "design_review_reruns_used", "design_review_status",
+                      "finding_coverage", "design_review_status",
                       "design_review_advisory", "design_review_blocking"),
             knobs=("design_review_attempts",),
             max_iterations=6,
