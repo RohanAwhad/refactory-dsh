@@ -548,6 +548,142 @@ def test_fast_ops_base_reset_in_check_record(base_worktree_env, monkeypatch):
     )
 
 
+def test_design_ops_base_reset_in_check_record(base_worktree_env, monkeypatch):
+    """design_ops writes base_reset to check-record.json when ctx._base_reset is set."""
+    from refactory_dsh import design_ops, repo_change
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh import unbuilt_check
+    from refactory_dsh import failfast
+    from refactory_dsh import check_digest as cd_mod
+    from refactory_dsh import design_contract as dc_mod
+    from refactory_dsh import create_ops
+
+    env = base_worktree_env
+
+    env.ctx.facts["artifact"] = str(env.attempt_path)
+    env.ctx.facts["check"] = "python -m pytest -q"
+    env.ctx.facts["name"] = "test"
+    env.ctx.facts["brief"] = "test"
+    env.ctx.facts["files"] = []
+    env.ctx.facts["setup"] = ""
+    env.ctx.facts["generate"] = ""
+    env.ctx.facts["commit"] = "abc123"
+    env.ctx.facts["attempts_used"] = 1
+    env.ctx.knobs_dict["check_timeout_s"] = 60
+    env.ctx.knobs_dict["check_attempts"] = 3
+    env.ctx._base_reset = ["tests/test_math.py"]
+    env.ctx.enforce_writes = False
+
+    (env.run_dir / "check-record.json").write_text("{}")
+
+    monkeypatch.setattr(repo_change, "refused", lambda *a, **kw: None)
+
+    class _Prepass:
+        early_stop = False
+        ran = False
+        targeted_command = None
+        result = None
+        runners = []
+        digest_text = ""
+        raw_tail = ""
+
+    monkeypatch.setattr(failfast, "targeted_prepass", lambda *a, **kw: _Prepass())
+
+    fail_result = sandbox.SandboxResult(
+        ok=False, returncode=1,
+        stdout="FAILED tests/test_math.py::test_add\n1 failed in 0.1s\n",
+        stderr="",
+    )
+    monkeypatch.setattr(repo_change, "run_check", lambda *a, **kw: fail_result)
+    monkeypatch.setattr(design_ops, "apply_cwd_escaped", lambda *a, **kw: None)
+    monkeypatch.setattr(evidence, "record", lambda *a, **kw: None)
+    monkeypatch.setattr(evidence, "check_failure_kind", lambda *a, **kw: "code_failure")
+    monkeypatch.setattr(base_check, "compute_test_guardedness", lambda *a, **kw: None)
+
+    filtered = base_check.FilteredCheckResult(
+        all_excused=False, inherited=set(),
+        new_failures={"tests/test_math.py::test_add"},
+        new_failure_detail="FAILED tests/test_math.py::test_add",
+        inherited_detail="",
+        base_environment_failure=None,
+        guardedness=None,
+        base_failures=set(), base_complete=True,
+    )
+    monkeypatch.setattr(base_check, "filter_check", lambda *a, **kw: filtered)
+    monkeypatch.setattr(unbuilt_check, "scan_unbuilt_packages", lambda *a, **kw: [])
+
+    class _Digest:
+        raw_tail = ""
+        def to_dict(self):
+            return {"runners": []}
+
+    monkeypatch.setattr(cd_mod, "digest_check_output", lambda *a, **kw: _Digest())
+    monkeypatch.setattr(cd_mod, "format_digest", lambda *a, **kw: "")
+
+    class _Parsed:
+        rule_sites = []
+
+    monkeypatch.setattr(dc_mod, "parse", lambda *a, **kw: _Parsed())
+    monkeypatch.setattr(failfast, "detect_stuck", lambda *a, **kw: None)
+    monkeypatch.setattr(failfast, "record_check_history", lambda *a, **kw: None)
+    monkeypatch.setattr(create_ops, "repair", lambda *a, **kw: "reloop")
+
+    design_ops.check_artifact(env.ctx)
+
+    cr = json.loads((env.run_dir / "check-record.json").read_text())
+    assert cr.get("base_reset") == ["tests/test_math.py"], (
+        f"check-record.json should have base_reset, got: {cr}"
+    )
+
+
+def test_compare_prep_failure_ignores_dirty_cache(base_worktree_env, monkeypatch):
+    """compare_prep_failure re-runs the base when a cached entry has base_clean=False.
+
+    If the _read_prep_cache guard is removed, the dirty cache entry (base_ok=False,
+    same step) causes _resolve_prep_comparison to return None (inherited).  With
+    the guard, the cache is ignored, the base is re-prepared (succeeds), and the
+    result is a change-caused dict (not None).
+    """
+    env = base_worktree_env
+
+    env.ctx.facts["generate"] = "echo gen"
+    env.ctx.facts["setup"] = ""
+
+    found = worktree.recorded(env.ctx.workdir)
+    key = base_check.cache_key(found.base, "", "echo gen", "")
+
+    # Pre-seed with base_ok=False (same step) — if used, result would be None.
+    base_check._write_prep_cache(env.ctx.workdir, key, {
+        "base_ok": False,
+        "base_step": "echo gen",
+        "base_error": "gen failed",
+        "base_returncode": 1,
+    }, base_clean=True)
+    # Tamper: set base_clean to False so it looks like a dirty-base entry.
+    cache_path = env.ctx.workdir / base_check.PREP_CACHE_FILE
+    data = json.loads(cache_path.read_text())
+    data["base_clean"] = False
+    cache_path.write_text(json.dumps(data))
+
+    ok_result = sandbox.SandboxResult(ok=True, returncode=0,
+                                       stdout="ok\n", stderr="")
+    monkeypatch.setattr(sandbox, "run_command", lambda *a, **kw: ok_result)
+
+    prep_fail = {"step": "echo gen", "returncode": 1, "timed_out": False}
+    result = base_check.compare_prep_failure(
+        env.ctx, prep_fail, ["gen failed"], found,
+        worktree.check_environment(Path(found.path), env.run_dir / "home"),
+        env.run_dir / "home", 60.0,
+    )
+
+    # If the dirty cache was used: base_ok=False, same step → None (inherited).
+    # If the dirty cache was ignored: actual base prep succeeds → change-caused dict.
+    assert result is not None, (
+        "compare_prep_failure should have re-run the base (dirty cache ignored) "
+        "and returned a change-caused dict"
+    )
+
+
 # ── Test 5: dirty base cache miss ──────────────────────────────────────
 
 
