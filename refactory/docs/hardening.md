@@ -1340,10 +1340,17 @@ or `fast-report.json`. These cases are:
 - a `doc` clause naming a changed file that is not documentation (wording in a
   code file).
 
+A measured miss is never hidden by an unmeasured check: a wrong test id or an
+unknown result on any test of a site blocks, even when another test of the same
+site was not run.
+
 A site whose change is comments only passes without a test, since no test can
-catch a comment (`comment_only`). Comment syntax is known for `#` languages
-(Python, shell, YAML, TOML and similar) and `//` languages (TypeScript,
-JavaScript and similar); a file of any other kind is never comment-only.
+catch a comment (`comment_only`). Each added line is judged in place in HEAD's
+file: Python with `tokenize`, TypeScript and JavaScript (not JSX) with a scan that
+knows strings, template literals and regular expressions. A `#` or `//` inside a
+string, a block or JSDoc comment followed by code, a pointer dereference such as
+`*p = 0;` and a directive such as `//go:embed` are code. A file of any other kind
+is never comment-only.
 
 **Withdrawn corrections.** A correction whose audit row has `status == "excluded"`
 with a `user_change` pointing to a later ledger entry is skipped — it was
@@ -1448,7 +1455,14 @@ the pair. An `unavailable` entry cached by an earlier version is measured again.
 
 **Time cap.** Total revert time is capped below the gate's DSH timeout
 (`SITE_REVERT_TOTAL_S`, 240 s; `SITE_REVERT_PAIR_S`, 60 s per pair). Past the cap,
-the remaining pairs are `not_run`, which is advisory (§25).
+the remaining pairs are `not_run`, which is advisory (§25). The cap is checked only
+after the site itself: a site that is not in the diff, or whose path lies outside the
+run's worktree, is `not_in_diff` whatever the time.
+
+**Measuring honestly.** Each revert runs `python -B -m pytest`, so a module reverted
+twice within one second never runs from a stale `.pyc`. A test that passes is never a
+`collection_error`, whatever it prints, and a cited test that is not a test id is
+`no_tests`.
 
 **Blocking rule.** A measured miss is BLOCKING (§25). The only exemptions are:
 1. A `## Site revert exemptions` section in `design.md`.

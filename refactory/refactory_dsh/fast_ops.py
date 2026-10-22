@@ -119,8 +119,8 @@ FOLLOW_UP = "follow-up: "
 def _advisories(ctx: Any) -> list[str]:
     """The advisory notes and follow-ups gate_qa recorded, carried into the final report."""
     findings = ctx.read_json("fast-report.json", {}).get("findings") or []
-    return [f for f in findings
-            if str(f).startswith((evidence.ADVISORY_REPO_QUESTIONS, FOLLOW_UP))]
+    return [f for f in findings if str(f).startswith(
+        (evidence.ADVISORY_REPO_QUESTIONS, evidence.ADVISORY_CORRECTION_AUDIT, FOLLOW_UP))]
 
 
 def _repair(ctx: Any, findings: list[str], *, kind: str = "check",
