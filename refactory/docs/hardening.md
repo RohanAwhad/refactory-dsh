@@ -1421,6 +1421,47 @@ exemptions are:
 
 **Test.** `test_correction_audit.py`.
 
+## 28. Non-core findings become follow-ups (dm-171)
+
+**What the issue was.** On 2026-10-22 no lab run finished on its own. Reviewers sent
+builds back for findings that were real but outside the change: a missing extra test,
+a doc, an edge case the brief never asked for. Each cost a full builder round and a
+review cycle, and a run that spent its attempts on them failed with the change's
+core already working. b34b built 9 times with clean reviews before its last round;
+b33c built 8 times as each round's reviewers found new gaps.
+
+**The rule.** A build is held back only by a core defect. Reviewers end the first
+line of each BLOCKING finding with `[core]` (an ask, a criterion, a correction or
+constraint, or a regression) or `[non-core]`; `create_ops.SEVERITY_RULE` is the one
+instruction every post-build reviewer prompt carries, and `create_ops.is_non_core`
+the one parser. An untagged or doubly tagged finding is core, and so is one whose tag
+sits on a continuation line: a reviewer that writes an unmet ask and then a
+`- docs also missing [non-core]` line has written a core finding. `create_ops.gate_qa`,
+`create_ops.gate_overwatch` and `fast_ops.gate_qa` all split findings with
+`split_core`:
+
+- core findings send the build back as before, with the non-core ones riding along;
+- non-core findings alone never cost a round, never spend a review attempt, and
+  never stop a run;
+- Overwatch is told to state PASS when only non-core findings remain
+  (`OVERWATCH_VERDICT_RULE`), so a FAIL always blocks — it may rest on an ask named
+  only in prose. A PASS with non-core findings proceeds only when the intent audit
+  passes every requirement, and the evidence and correction audits hold;
+- in the fast modes, a failed check whose name ends with the tag is non-core too.
+
+What a gate proceeds with is recorded by `record_follow_ups` and reaches the pull
+request through `delivery._body`.
+
+**The cap.** A full-mode run has `attempts` builder rounds (`check_attempts` in design;
+three by default),
+shared by check failures and review reloops. The verifier's advisory round used to
+come on top of it; `take_advisory_round` now spends a round from the same cap, never
+the last one (a repair must remain for whatever the advisory rebuild breaks), and
+otherwise sends the verifier's findings to the pull request's unresolved verification
+list instead.
+
+**Held by.** `test_follow_ups.py`.
+
 ## Pin integrity
 
 ### Repository guard

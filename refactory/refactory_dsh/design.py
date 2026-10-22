@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import delivery, design_contract, pitfalls, repo_change
-from refactory_dsh.create_ops import API, RESEARCH_SCHEMA
+from refactory_dsh.create_ops import API, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
@@ -502,6 +502,7 @@ class DesignMode(Mode):
                 "Anything that fails or is "
                 "missing is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A "
                 "check you did not run is not a check that passed.\n"
+                + SEVERITY_RULE + "\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
             ),
@@ -534,6 +535,7 @@ class DesignMode(Mode):
                 "field. Record findings in "
                 "`reviews/code-review.md`. A defect that would stop the artifact working "
                 "is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
+                + SEVERITY_RULE + "\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
                 "When a false claim about design.md is found, report it against the code file "
@@ -565,6 +567,7 @@ class DesignMode(Mode):
                 "clearly without silently substituting a valid case. Write "
                 "`reviews/qa.md` with each check and its exact result. Anything that "
                 "breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
+                + SEVERITY_RULE + "\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
             ),
@@ -592,10 +595,11 @@ class DesignMode(Mode):
                    "reviews/verification.md", "emit.txt",
                    "changed-functions.json"),
             writes=("reviews/qa-gate.txt", "reviews/verification-unresolved.md",
-                    "reviews/finding-sources.json"),
+                    "reviews/finding-sources.json", "reviews/follow-ups.json", "reviews/follow-ups.md"),
             produces=("qa_gate", "review_reruns_used", "verification_advisory_used"),
             max_iterations=5,
-            notes="proceed only when every review ran and none is blocking; verifier findings are advisory",
+            notes="proceed when every review ran and none found a core defect; "
+                  "non-core findings become follow-ups; verifier findings are advisory",
         ))
         graph.add(Node(
             "overwatch", "agent",
@@ -625,6 +629,7 @@ class DesignMode(Mode):
                 "and keep that requirement unverified. Do not prescribe re-authoring "
                 "or repeating an unchanged probe to resolve an unavailable tool. "
                 "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
+                + SEVERITY_RULE + " " + OVERWATCH_VERDICT_RULE + " "
                 "Read reviews/verification-unresolved.md if it exists. Check whether the "
                 "builder addressed or rebutted each finding with a cited file:line.\n\n"
                 "Write `reviews/overwatch.md` ending with a "
@@ -639,10 +644,11 @@ class DesignMode(Mode):
         graph.add(Node(
             "gate_overwatch", "gate", evaluator="refactory_dsh.create_ops:gate_overwatch",
             reads=("reviews/overwatch.md",),
-            writes=("reviews/overwatch-gate.txt",),
+            writes=("reviews/overwatch-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
             produces=("overwatch_review",),
             max_iterations=4,
-            notes="proceed only on a stated PASS verdict",
+            notes="proceed on a stated PASS verdict with no core finding; "
+                  "non-core findings become follow-ups",
         ))
         graph.add(Node(
             "report", "op", call=f"{OPS}:report_artifact",
@@ -681,7 +687,7 @@ class DesignMode(Mode):
             "deliver", "op", call="refactory_dsh.delivery:deliver_design",
             resource_role="final_validation",
             knobs=("check_timeout_s",),
-            reads=("design.json", "delivery.md"),
+            reads=("design.json", "delivery.md", "reviews/follow-ups.json"),
             writes=("delivery.json", "pull-request.md", "design.json"),
             produces=("delivery_result", "pull_request", "delivery_conflict_files",
                       "delivery_conflict_detail", "delivery_target_tip", "commit"),
