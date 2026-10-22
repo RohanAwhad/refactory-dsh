@@ -107,6 +107,7 @@ def test_proceed_with_note(tmp_path, monkeypatch, capsys):
     code2 = console.main([
         "steer", "--run", RUN,
         "--verdict", "gate_strategy=proceed",
+        "--kind", "correction",
         "--note", "PROBE-NOTE use argparse",
     ])
     assert code2 == 0
