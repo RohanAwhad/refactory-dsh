@@ -145,8 +145,10 @@ def test_the_design_phase_prompts_scale_with_the_change():
     assert "one focused question for a scoped change" in nodes["research_director"].prompt_template
     assert "{{research_scope}}" in nodes["pitfalls_researcher"].prompt_template
     assert "list at most five" in nodes["pitfalls_researcher"].prompt_template
-    assert "{{research_scope}}" in nodes["strategy_director"].prompt_template
-    assert "For a scoped change, use one perspective" in nodes["strategy_director"].prompt_template
+    # A scoped change has no perspectives step: route_strategy sends it past
+    # strategy_director (test_design_short_path.py).
+    graph = DesignMode().build()
+    assert graph.out_edges("route_strategy", condition="scoped")[0].target == "synthesize_strategy"
 
 
 def test_the_design_does_not_account_for_every_finding():

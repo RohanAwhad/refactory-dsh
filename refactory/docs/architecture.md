@@ -411,15 +411,26 @@ and title formatting, missing repository questions, and the review agent's own
 and never cost a round. Research and perspective findings the design does not cite
 are recorded in the `finding_coverage` fact and not listed at all. On a blocking problem it reloops to
 `design_doc`; when its rounds run out, it proceeds to `gate_strategy` with the
-findings shown — it never fails the run. A scoped change gets one round; a full design
-gets `design_review_attempts` (default 2).
+findings shown — it never fails the run. A scoped change gets one round of the gate's
+own checks and no review agent (below); a full design gets `design_review_attempts`
+(default 2).
 
 **Design scale.** `prepare_design` sets `research_scope`: `scoped` for a refine or a
 brief that names files, otherwise `full`. The design phase follows it. A scoped change
 gets one research question (two or three only when it spans unrelated parts of the
-code), at most five pitfalls, one strategy perspective ("the simplest thing that could
-pass the check") and one design-review round. A full design keeps three to five
-questions and two to five perspectives. At either scale the design cites a research
+code) and at most five pitfalls, and two steps are left out: `route_strategy` sends it
+from the pitfalls straight to `synthesize_strategy`, which plans "the simplest thing
+that could pass the check" from the research and pitfalls with no perspectives step,
+and `route_design_review` sends its design from `check_design_claims` straight to
+`gate_design_review`, whose own checks (an Ask mapping present, citations and quotes
+true, high-risk pitfalls answered, required sections present) and the person's
+approval are its review — there is no agent to flag an ask without a row, an open
+alternative or a design-time repository question; the approval gate's status line
+says "Design review (automatic checks; scoped change)". `route_design_review` records
+which in `design_review_by`, so a run whose graph predates it keeps its agent's
+review. Both routing gates answer `scoped` or `proceed` (also what a person's skip of
+a gate sends on the spine), which both runtimes follow as edge labels. A full design keeps three to five questions, two to five
+perspectives and the design-review agent. At either scale the design cites a research
 finding only where it changes a decision; the findings stay in `research/` and
 `strategy/` for the design writer and the reviewer to read.
 
