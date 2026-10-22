@@ -114,6 +114,7 @@ class SandboxResult:
     progress: dict[str, Any] = field(default_factory=dict)
     prep_failure: dict[str, Any] | None = None
     cwd_outside: str | None = None
+    change_caused_prep: dict[str, Any] | None = None
 
     def problem(self) -> str:
         if self.timed_out:
