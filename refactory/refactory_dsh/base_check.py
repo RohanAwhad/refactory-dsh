@@ -730,7 +730,8 @@ def _resolve_prep_comparison(
         return None  # Same failure, no changed file uniquely named → inherited.
 
     # Different steps.
-    base_label = _step_label(base_step or "", generate, setup)
+    # No base step means _ensure_base_worktree failed: the base failed its install.
+    base_label = _step_label(base_step, generate, setup) if base_step else "install"
     attempt_order = _STEP_ORDER.get(step_label_val, 0)
     base_order = _STEP_ORDER.get(base_label, 0)
     if base_order > attempt_order:
@@ -798,9 +799,12 @@ def compare_prep_failure(
     def _try_base_prep() -> tuple[dict, bool]:
         try:
             base_path, base_found = _ensure_base_worktree(ctx)
-        except ValueError:
+        except ValueError as exc:
+            err = str(exc)
+            crashed = any(tok in err for tok in ("killed by SIG", "killed by signal",
+                                                 "exceeded its time limit"))
             return {"base_ok": False, "base_step": None,
-                    "base_error": None, "base_returncode": None}, False
+                    "base_error": err, "base_returncode": None}, crashed
 
         base_home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
         base_home.mkdir(parents=True, exist_ok=True)
