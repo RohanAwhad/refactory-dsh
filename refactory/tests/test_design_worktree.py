@@ -1235,6 +1235,41 @@ def test_begin_handles_untracked_directory(tmp_path):
     assert record is not None
 
 
+def test_emit_running_generator_with_contract_python_is_refused(tmp_path):
+    """Test 9: emit runs a generator with the contract's python — refused, target byte-identical."""
+    from refactory_dsh import agent_delivery, target_guard, worktree
+
+    repo = git_repo(tmp_path / "target")
+    before_bytes = (repo / "app.py").read_bytes()
+
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "tg0009genp", run)
+    target_guard.record(run, repo, output_only=("emit",), also=(Path(found.path),))
+
+    record = agent_delivery.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    prompt = record["prompt"]
+
+    # The contract text warns that the python is for nested dispatch only.
+    assert "nested dispatch only" in prompt
+
+    # Simulate the emit builder running a generator with the contract's python,
+    # which writes into the driver checkout (the target).  The generator modifies
+    # a tracked file and adds an untracked one — the same effect as running
+    # `python -m gen_discovery` with the contract interpreter when refactory_source
+    # points at the target.
+    (repo / "app.py").write_text("print('generator overwrote this')\n")
+    (repo / "generated_data.py").write_text("DATA = {}\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+
+    import pytest
+    with pytest.raises(ValueError, match="changed while agent"):
+        agent_delivery.finish(run, "emit")
+
+    # Target is byte-identical: tracked file restored, untracked file removed.
+    assert (repo / "app.py").read_bytes() == before_bytes
+    assert not (repo / "generated_data.py").exists()
+
+
 def test_head_moved_refusal_text(tmp_path):
     """s5: when HEAD moved during the node, the refusal says so."""
     from refactory_dsh import agent_delivery, target_guard, worktree
