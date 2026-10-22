@@ -1083,7 +1083,8 @@ class _PrepCtx:
         return default
 
 
-def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout: float) -> Any:
+def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout: float,
+                       *, triage_prep: bool = True) -> Any:
     """Run the check in the run's worktree, after preparing the environment it needs.
 
     An install that writes a lockfile amends the attempt (`worktree.ensure_environment`),
@@ -1109,6 +1110,19 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
         cf_formatted = _cf_write(diff_text, Path(found.path), ctx.workdir, found.base)
         ctx.set_fact("changed_functions", cf_formatted)
     if problems:
+        if triage_prep:
+            from refactory_dsh import base_check as _bc
+            triage = _bc.compare_prep_failure(
+                ctx, prep_fail, problems, found, env, home, timeout,
+            )
+            if triage is not None:
+                return sandbox.SandboxResult(
+                    ok=False,
+                    returncode=triage["returncode"],
+                    elapsed_s=0.0,
+                    stderr=triage["error_text"],
+                    change_caused_prep=triage,
+                )
         return sandbox.SandboxResult(ok=False, returncode=1, elapsed_s=0.0, prep_failure=prep_fail,
                                      stderr=(
             "the worktree's environment could not be prepared:\n" + "\n".join(problems)))
@@ -1126,7 +1140,8 @@ def refused(ctx: Any) -> str:
     return str(ctx.facts.get("emission_refused") or "")
 
 
-def run_check(ctx: Any, command: str, timeout: float) -> Any:
+def run_check(ctx: Any, command: str, timeout: float,
+              *, triage_prep: bool = True) -> Any:
     """Run ``command`` where the run works, and return its `sandbox.SandboxResult`.
 
     In the run's worktree it runs on the committed attempt -- what a check or reviewer
@@ -1153,7 +1168,8 @@ def run_check(ctx: Any, command: str, timeout: float) -> Any:
     if restored:
         target_guard.warn(f"tracked files in the run's worktree had changed since materialise and were put "
                           f"back, so the check runs the committed attempt: {target_guard._named(restored)}")
-    result = _check_in_worktree(ctx, found, command, timeout)
+    result = _check_in_worktree(ctx, found, command, timeout,
+                                triage_prep=triage_prep)
     # _check_in_worktree already warns about cwd escape; do not warn twice.
     _warn_if_shared_changed(found, "while preparing for and running the check")
     # The reviews and the next attempt read the worktree, and edits apply to the

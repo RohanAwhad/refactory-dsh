@@ -651,7 +651,7 @@ def check_artifact(ctx: Any) -> str:
 
     prepass = targeted_prepass(
         prev_record, command,
-        lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout),
+        lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False),
         check_timeout,
         root=(worktree.recorded(ctx.workdir).path
               if worktree.recorded(ctx.workdir) is not None else None),
@@ -784,6 +784,27 @@ def check_artifact(ctx: Any) -> str:
             "set as DEFAULT_FILE_MB in refactory_dsh/sandbox.py). " + detail
         )
     evidence.stop_unrepairable(outcome["status"], detail)
+
+    # Route change-caused preparation failures to the builder for repair.
+    _ccp = getattr(result, "change_caused_prep", None)
+    if _ccp:
+        from refactory_dsh.check_digest import _clean as _strip_noise
+        _error_text = _strip_noise(_ccp["error_text"])
+        _prep_detail = (
+            f"the {_ccp['step_label']} command `{_ccp['command']}` "
+            f"failed (exit {_ccp['returncode']}):\n{_error_text}"
+        )
+        ctx.write_text("check.txt", _prep_detail + "\n")
+        record_check_history(ctx, "full", _prep_detail, command)
+        ctx.write_json("check-record.json", {
+            "status": "fail",
+            "validation": _prep_detail[:4000],
+            "attempt": int(ctx.facts.get("attempts_used", 0)),
+            "check_mode": "prep_triage",
+            "command": _ccp.get("command"),
+            "commit": str(ctx.facts.get("commit", "")),
+        })
+        return repair(ctx, [_prep_detail])
 
     # A failure the unchanged base has too is not the attempt's (`base_check.compare_failures`).
     found = worktree.recorded(ctx.workdir)

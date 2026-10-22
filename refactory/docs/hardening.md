@@ -1605,7 +1605,9 @@ targeted-command builder (`build_probe_command`), with a short timeout of
 **Early stop**: the pre-pass stops early — skipping the full check — only
 when **all** of the following hold:
 
-1. `result.prep_failure is None` (no install/generate/setup failure).
+1. `result.prep_failure is None` (no install/generate/setup failure; a
+   change-caused prep failure has `change_caused_prep` set instead and
+   `prep_failure` absent, so it also passes this condition).
 2. `check_failure_kind(result) == "code_failure"` (structural classification).
 3. Exit code is not 4 or 5 (pytest "no tests collected" / "no tests matched").
 4. `parse_test_failures` on the targeted output, minus the inherited set,
@@ -1687,11 +1689,61 @@ The existing vitest branch also uses a single `-t` with `|`-joined patterns
 instead of multiple `-t` flags (vitest exits 1 when given several `-t` options).
 
 
+## Change-caused preparation failures (dm-104)
+
+When a generate, setup or install command fails while preparing the attempt's
+worktree, the failure is compared against the unchanged base before it is
+reported.  A failure the base does not have — or one that names files the
+attempt changed where the base's does not — is the change's failure: the
+exact error goes to the builder for repair, labelled with the step (generate,
+setup or install), and spends an attempt like any failed check.
+
+The base comparison follows the same isolation rules as the existing test
+comparison (`run_base_check`):
+
+- The base's prep runs in its own HOME (`BASE_CHECK_HOME`), not the
+  attempt's `CHECK_HOME`, so a setup that writes into HOME does not share
+  state with the attempt.
+- A crashed or timed-out base prep is discarded and retried once (R2).
+  A double crash returns the failure to today's handling (infrastructure).
+- The base's prep outcome is cached per run, keyed by `cache_key(base,
+  setup, generate, "")`.  Crashes and timeouts are never cached.
+
+Infrastructure faults — a signal kill (exit < 0 or shell-wrapped 134/135/139),
+a timeout, a missing executable (exit 126/127), or a resource exit
+(`_RESOURCE_EXIT_CODES`: 137, 152, 153) — bypass the base comparison entirely
+and keep today's handling.
+
+The base comparison is never run from the targeted pre-pass (#463), because
+the pre-pass timeout is too short for a full base preparation.
+
+When a change-caused preparation failure is detected:
+
+1. The error text is stripped of ANSI codes and noise via `_clean` from
+   `check_digest.py`.
+2. The failure is recorded in convergence history via `record_check_history`
+   with `check_mode="full"`, so R6 does not decide on stale history.
+3. In design mode, the failure goes to `repair()` directly, skipping
+   `filter_check`, the unbuilt diagnosis, the digest, stuck detection and
+   design-contract augmentation.
+4. In fast mode, the failure goes to `focused-check.json` with
+   `prep_triage=True` and the formatted error as `digest`.
+   `gate_verification` routes it to `_repair()` with the same text as
+   design mode, skipping the "requested runtime check failed" wrapping.
+5. A failed preparation is never reported as "unbuilt packages" because
+   the early return fires before the unbuilt diagnosis.
+
+Cross-references: #432 (infrastructure failure handling), #453 (convergence
+and noise stripping), #463 (targeted pre-pass).
+
 ### Behaviour changes
 
-All three changes (fail-fast pre-pass, stuck detection, pnpm test targeting)
-apply to both runtimes — the TS spine runs the same Python functions as
-subprocesses.
+All changes (fail-fast pre-pass, stuck detection, pnpm test targeting,
+change-caused preparation failures) apply to both runtimes — the TS spine
+runs the same Python functions as subprocesses.  The change-caused prep
+triage runs identically under `run.run_node` and the walker because the
+callables (`check_artifact` and `focused_check`) are the same Python
+functions.
 
 **Scope**: design and design_fast only.  create_fast / edit_fast /
 fix_pack's check gate and package check keep today's behaviour.  They become
