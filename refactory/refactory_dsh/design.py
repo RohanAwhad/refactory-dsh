@@ -663,7 +663,6 @@ class DesignMode(Mode):
             ),
             reads=("design.md",),
             writes=("design.md",),
-            produces=("design_corrections_applied",),
             notes="revise design.md with gate-strategy corrections before the builder runs",
         ))
         graph.add(Node(

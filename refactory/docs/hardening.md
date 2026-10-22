@@ -1760,3 +1760,26 @@ a follow-up, filed separately.
 - `commit` (the current commit hash)
 
 No new CLI flags or environment variables.
+
+### Steer correction ordering (dm-178)
+
+`console._steer` now writes verdicts before the note, aligning with the interactive
+bridge's `answer` action which already writes verdict-first.  A correction or
+constraint given in the same `refactory steer` call as a `gate_strategy=proceed`
+verdict is collected by `pick_gate_corrections` and applied to `design.md` before the
+build, on both runtimes.
+
+**Residual risk, accepted:** on a live DSH run, a 500 ms spine poll landing between
+`_steer`'s two writes (verdict then note) could insert a `verdict-use` before the
+note, causing `pick_gate_corrections` to stop collecting before it sees the note.
+The window is microseconds — `_steer` writes both entries in the same Python call
+without yielding — and has not been observed in practice.
+
+### Behaviour changes
+
+`_steer` writes verdicts before the note (both runtimes).  `pick_gate_corrections`
+uses `steering.parse_entries` and collects every correction/constraint with product
+scope and user-relayed source between the proceed verdict and the next gate-visit or
+verdict-use.  `apply_corrections` no longer declares
+`produces=("design_corrections_applied",)`, so the count fact set by
+`pick_gate_corrections` survives in `facts.json`.

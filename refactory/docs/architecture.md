@@ -590,6 +590,11 @@ meaning or format of arbitrary file contents; downstream checks still own that w
 Explicit structural controls such as skip and director expansion retain their existing
 semantics; a graph edit is not an ordinary verified agent delivery.
 
+A note given with a `proceed` verdict at `gate_strategy`, in the same steer call or a
+later one before resuming, becomes a gate correction: `pick_gate_corrections` collects
+it and `apply_corrections` rewrites `design.md` before the build, on both the walker
+and DSH runtimes.
+
 ### A run with a person at a gate — the command and what it showed
 
 `refactory_packages/review_pack` exists for this: `review` is
