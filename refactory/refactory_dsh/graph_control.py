@@ -507,7 +507,7 @@ def _find_rerun_target(saved: dict[str, Any], node: str = '') -> str:
 
 
 def _find_deliver_node(graph_nodes: dict[str, Any]) -> str | None:
-    """The deliver node's id, found by its callable from ``delivery.DELIVER_ENTRY_POINTS``.
+    """The deliver node's id, found by its callable from ``invocations.DELIVER_ENTRY_POINTS``.
 
     Checks ``callable_name`` first (set by lowering) and falls back to
     the ``command`` field for older checkpoints that lack the field.

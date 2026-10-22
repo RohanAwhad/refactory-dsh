@@ -189,7 +189,7 @@ def regenerate_snapshots() -> None:
     Run this once after a deliberate lowering change.  The files follow the
     text-file convention (trailing newline), matching ``_lower_mode_bytes``::
 
-        python -c "from tests.test_lowering_smoke import regenerate_snapshots; regenerate_snapshots()"
+        ../.venv/bin/python -c "from tests.test_lowering_smoke import regenerate_snapshots; regenerate_snapshots()"
     """
     SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     for key, mode_cls in _mode_classes():
@@ -208,7 +208,7 @@ def _ensure_snapshots():
         pytest.fail(
             f"Snapshot directory is missing or empty at {SNAPSHOT_DIR}.\n"
             f"Regenerate with:\n"
-            f'  python -c "from tests.test_lowering_smoke import regenerate_snapshots; regenerate_snapshots()"'
+            f'  ../.venv/bin/python -c "from tests.test_lowering_smoke import regenerate_snapshots; regenerate_snapshots()"'
         )
 
 

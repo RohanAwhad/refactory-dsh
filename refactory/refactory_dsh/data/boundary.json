@@ -52,6 +52,7 @@
     "refactory_dsh.run_ownership",
     "refactory_dsh.run_state",
     "refactory_dsh.sandbox",
+    "refactory_dsh.steer_probe",
     "refactory_dsh.steering",
     "refactory_dsh.strategies",
     "refactory_dsh.supervisor",
@@ -107,7 +108,6 @@
   ],
   "allowed_leaks": {},
   "references": [
-    {"source": "packages/bundle/graph/cordis.patch.yml", "target": "refactory_dsh.console", "kind": "yaml-ref", "reason": "core bundle launches product console for steering via steerArgs", "until": "the steering follow-up"},
     {"source": "packages/workflow/workflow-spine/src/index.ts", "target": "refactory_dsh.console", "kind": "string-ref", "reason": "error message mentioning console open command — documentation only", "until": "the split"},
     {"source": "refactory/refactory_dsh/invocations.py", "target": "refactory_dsh.delivery", "kind": "string-ref", "reason": "DELIVER_ENTRY_POINTS names the product callable as a string", "until": "the split — the string becomes a cross-repo entry point identifier"},
     {"source": "refactory/refactory_dsh/registry.py", "target": "refactory_packages", "kind": "discovery", "reason": "imports every refactory_packages.<name> including product default_pack and fix_pack; refuses namespace package, so packs cannot live in two repos as they stand", "until": "the split — registry must support namespace packages or packs move to a shared plugin system"}
