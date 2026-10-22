@@ -703,6 +703,7 @@ def gate_qa(ctx: Any) -> str:
         return _repair(ctx, findings, kind='check' if check_failed else 'review')
 
     # Case 2: Only verifier findings, QA passed
+    verifier_rebuttals: list[str] = []
     if verifier_text:
         advisory_used = int(ctx.facts.get("verification_advisory_used", 0))
         ctx.set_fact("verification_advisory_used", advisory_used + 1)
@@ -716,24 +717,29 @@ def gate_qa(ctx: Any) -> str:
             _write_finding_sources_fast(ctx, qa, verifier_filtered)
             return Verdict("reloop", fb)
         else:
-            # Advisory round spent; collect rebuttals and write unresolved
-            rebuttals = _parse_verifier_rebuttals(ctx)
-            unresolved = [f for f in verifier_filtered
-                          if not any(f in r for r in rebuttals)]
-            if unresolved:
+            # Advisory round spent; collect rebuttals and write remaining
+            verifier_rebuttals = _parse_verifier_rebuttals(ctx)
+            if verifier_filtered:
                 lines = []
-                for finding in unresolved:
-                    rebuttal = next((r for r in rebuttals if finding in r), None)
-                    lines.append(finding + (f" — {rebuttal}" if rebuttal else ""))
+                for finding in verifier_filtered:
+                    desc = _finding_description(finding)
+                    reb = next((r for r in verifier_rebuttals if desc.lower() in r.lower()), None)
+                    lines.append(finding + (f" — {reb}" if reb else ""))
                 ctx.write_text("reviews/verification-unresolved.md",
                                "\n".join(lines) + "\n")
-            _write_finding_sources_fast(ctx, qa, verifier_filtered, rebuttals=rebuttals)
 
     # Case 3: Neither blocking
     ctx.set_fact("qa_passed", True)
-    _write_finding_sources_fast(ctx, qa, verifier_filtered)
+    _write_finding_sources_fast(ctx, qa, verifier_filtered,
+                                rebuttals=verifier_rebuttals)
     ctx.write_json("fast-report.json", _report(ctx, "qa_passed", advisory))
     return "proceed"
+
+
+def _finding_description(finding: str) -> str:
+    """Strip the optional file:line: prefix from a verifier finding for matching."""
+    m = re.match(r'\S+:\d+:\s*', finding)
+    return finding[m.end():] if m else finding
 
 
 def _parse_verifier_rebuttals(ctx: Any) -> list[str]:
@@ -792,7 +798,7 @@ def _write_finding_sources_fast(ctx: Any, qa: Any, verifier_findings: list[str],
         entry = dict(entry)
         if key in current:
             entry["last_round"] = round_num
-            if entry["source"] == "verifier" and any(entry["finding"] in r for r in rebuttals):
+            if entry["source"] == "verifier" and any(_finding_description(entry["finding"]).lower() in r.lower() for r in rebuttals):
                 entry["fate"] = "rebutted"
             else:
                 entry["fate"] = "unresolved"
@@ -804,7 +810,7 @@ def _write_finding_sources_fast(ctx: Any, qa: Any, verifier_findings: list[str],
         if key not in seen:
             source, finding = key
             fate = "unresolved"
-            if source == "verifier" and any(finding in r for r in rebuttals):
+            if source == "verifier" and any(_finding_description(finding).lower() in r.lower() for r in rebuttals):
                 fate = "rebutted"
             entries.append({
                 "source": source, "review_path": review_path,

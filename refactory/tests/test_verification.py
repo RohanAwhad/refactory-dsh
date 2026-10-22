@@ -211,8 +211,8 @@ def test_advisory_fix_round_full_mode(tmp_path, monkeypatch):
         render({"tool.py": "print('built')\n"}),
         "health: passed", "code: passed", "qa: passed",
         VERIFICATION_FAIL,
-        # Advisory reloop → emit (round 2)
-        "## Verifier findings\nnegative values accepted → fixed\n\n" +
+        # Advisory reloop → emit (round 2): builder rebuts the finding
+        "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
         render({"tool.py": "print('built v2')\n"}),
         "health: passed", "code: passed", "qa: passed",
         VERIFICATION_FAIL,
@@ -299,22 +299,36 @@ def test_verifier_branch_failure(tmp_path, monkeypatch):
 
 
 def test_finding_sources_json(tmp_path, monkeypatch):
-    """finding-sources.json is written with correct schema."""
+    """Three-round test: round 1 QA+verifier findings, round 2 QA fixed
+    and verifier rebutted, round 3 proceed.  Asserts each entry's fate
+    and first_round/last_round."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                FakeModel, render)
-    VERIFICATION_PASS = "No blocking findings.\n\nVERDICT: PASS"
+    VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
+    QA_FAIL = "BLOCKING: tool.py:5: missing error handling\n\nVERDICT: FAIL"
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-        render({"tool.py": "print('built')\n"}),
+        # Round 1: QA and verifier both fail
+        render({"tool.py": "print('v1')\n"}),
+        "health: passed", "code: passed", QA_FAIL,
+        VERIFICATION_FAIL,
+        # Round 2: QA fixed, verifier still fails
+        render({"tool.py": "print('v2')\n"}),
         "health: passed", "code: passed", "qa: passed",
-        VERIFICATION_PASS,
+        VERIFICATION_FAIL,
+        # Round 3: builder rebuts verifier finding
+        "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
+        render({"tool.py": "print('v3')\n"}),
+        "health: passed", "code: passed", "qa: passed",
+        VERIFICATION_FAIL,
         "VERDICT: PASS",
     ]
+    model = FakeModel(answers)
     result = DesignMode().run(
-        tmp_path / "run", model=FakeModel(answers),
+        tmp_path / "run", model=model,
         verdicts={"gate_strategy": "proceed"},
         task={"name": "sources", "brief": "a tool", "check": "python tool.py"},
     )
@@ -329,6 +343,23 @@ def test_finding_sources_json(tmp_path, monkeypatch):
         assert "finding" in entry
         assert "fate" in entry
         assert entry["fate"] in ("fixed", "rebutted", "unresolved")
+        assert "first_round" in entry
+        assert "last_round" in entry
+    # QA finding: fixed (present in round 1, absent in rounds 2-3)
+    qa_entries = [e for e in data if e["source"] == "qa_director"
+                  and "missing error handling" in e["finding"]]
+    assert len(qa_entries) >= 1, "QA finding must appear in finding-sources.json"
+    assert qa_entries[0]["fate"] == "fixed", (
+        f"QA finding fate should be 'fixed', got {qa_entries[0]['fate']!r}")
+    assert qa_entries[0]["first_round"] == 1
+    # Verifier finding: rebutted (present in all rounds, builder rebutted it)
+    verifier_entries = [e for e in data if e["source"] == "verifier"
+                        and "negative values accepted" in e["finding"]]
+    assert len(verifier_entries) >= 1, "verifier finding must appear"
+    assert verifier_entries[0]["fate"] == "rebutted", (
+        f"verifier finding fate should be 'rebutted', got {verifier_entries[0]['fate']!r}")
+    assert verifier_entries[0]["first_round"] == 1
+    assert verifier_entries[0]["last_round"] >= 3
 
 
 def test_advisory_fix_round_fast_mode(tmp_path, monkeypatch):
@@ -346,8 +377,8 @@ def test_advisory_fix_round_fast_mode(tmp_path, monkeypatch):
         # fork: focused_qa, verifier
         FAST_QA,
         VERIFICATION_FAIL,
-        # Advisory reloop → emit
-        "## Verifier findings\nnegative values accepted → fixed\n\n" +
+        # Advisory reloop → emit: builder rebuts the finding
+        "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
         render({"tool.py": "print('built v2')\n"}),
         FAST_QA,
         VERIFICATION_FAIL,
@@ -414,3 +445,63 @@ def test_fast_mode_failing_check_routes_through_gate_check(tmp_path, monkeypatch
     )
     assert result.exit_ok, result.error
     assert int(result.facts.get("repairs_used", 0)) >= 1, "a repair must have been spent"
+
+
+def test_finding_description_strips_file_line_prefix():
+    """_finding_description strips the file:line: prefix used in BLOCKING findings."""
+    from refactory_dsh.create_ops import _finding_description
+    assert _finding_description("tool.py:1: negative values accepted") == "negative values accepted"
+    assert _finding_description("src/app.py:42: missing check") == "missing check"
+    assert _finding_description("the verifier did not state 'VERDICT: PASS'") == "the verifier did not state 'VERDICT: PASS'"
+    assert _finding_description("simple finding") == "simple finding"
+
+
+def test_rebuttal_matching_works_without_prefix():
+    """Rebuttal matching strips the file:line: prefix so a builder's rebuttal
+    like 'negative values accepted → rebutted: ...' matches the finding
+    'tool.py:1: negative values accepted'."""
+    from refactory_dsh.create_ops import _finding_description
+    finding = "tool.py:1: negative values accepted"
+    rebuttal = "negative values accepted → rebutted: false positive"
+    desc = _finding_description(finding)
+    assert desc.lower() in rebuttal.lower(), (
+        f"description {desc!r} should be found in rebuttal {rebuttal!r}")
+
+
+def test_rebuttal_fate_fast_mode(tmp_path, monkeypatch):
+    """Fast-mode advisory round records 'rebutted' fate in finding-sources.json."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import FakeModel, render
+    FAST_PLAN = "Change only the requested file."
+    FAST_QA = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python tool.py",
+                                                         "status": "pass", "evidence": "exit 0"}],
+                          "findings": [], "not_run": []})
+    VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
+    answers = [
+        FAST_PLAN,
+        render({"tool.py": "print('built')\n"}),
+        FAST_QA,
+        VERIFICATION_FAIL,
+        "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
+        render({"tool.py": "print('built v2')\n"}),
+        FAST_QA,
+        VERIFICATION_FAIL,
+    ]
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    state["knobs"]["repair_attempts"]["value"] = 2
+    mode.load_state_dict(state)
+    model = FakeModel(answers)
+    result = mode.run(
+        tmp_path / "run", model=model,
+        task={"name": "advisory_fast", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+    sources_path = tmp_path / "run" / "reviews" / "finding-sources.json"
+    assert sources_path.exists(), "finding-sources.json must be written"
+    sources = json.loads(sources_path.read_text())
+    verifier_entries = [e for e in sources if e["source"] == "verifier"
+                        and "negative values accepted" in e["finding"]]
+    assert len(verifier_entries) >= 1, "verifier finding must be in finding-sources.json"
+    assert verifier_entries[0]["fate"] == "rebutted", (
+        f"verifier finding fate should be 'rebutted', got {verifier_entries[0]['fate']!r}")

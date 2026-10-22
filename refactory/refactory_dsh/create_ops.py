@@ -2313,6 +2313,7 @@ def gate_qa(ctx: Any) -> str:
     verifier_filtered = [f for f in verifier_raw
                          if f != "reviews/verification.md is empty or missing"]
     verifier_text = "\n".join(verifier_filtered) if verifier_filtered else ""
+    verifier_rebuttals: list[str] = []
 
     # Case 1: QA blocking + verifier findings → combine
     if reason and verifier_text:
@@ -2340,19 +2341,16 @@ def gate_qa(ctx: Any) -> str:
             _write_finding_sources_full(ctx, snapshot, verifier_filtered)
             return Verdict("reloop", fb)
         else:
-            # Advisory round spent; collect rebuttals and write unresolved
-            rebuttals = _parse_verifier_rebuttals_full(ctx)
-            unresolved = [f for f in verifier_filtered
-                          if not any(f in r for r in rebuttals)]
-            if unresolved:
+            # Advisory round spent; collect rebuttals and write remaining
+            verifier_rebuttals = _parse_verifier_rebuttals_full(ctx)
+            if verifier_filtered:
                 lines = []
-                for finding in unresolved:
-                    reb = next((r for r in rebuttals if finding in r), None)
+                for finding in verifier_filtered:
+                    desc = _finding_description(finding)
+                    reb = next((r for r in verifier_rebuttals if desc.lower() in r.lower()), None)
                     lines.append(finding + (f" — {reb}" if reb else ""))
                 ctx.write_text("reviews/verification-unresolved.md",
                                "\n".join(lines) + "\n")
-            _write_finding_sources_full(ctx, snapshot, verifier_filtered,
-                                        rebuttals=rebuttals)
 
     # Case 3: Neither blocking — proceed
     notes = "".join(f"{note}\n" for note in (*scope_notes, advisory) if note)
@@ -2360,8 +2358,15 @@ def gate_qa(ctx: Any) -> str:
     ctx.set_fact("qa_gate", "(the reviews found nothing blocking)" + (f"\n{advisory}" if advisory else ""))
     ctx.write_text("validation.txt", "(reviews passed)\n")
     ctx.set_fact("validation", "(reviews passed)")
-    _write_finding_sources_full(ctx, snapshot, verifier_filtered)
+    _write_finding_sources_full(ctx, snapshot, verifier_filtered,
+                                rebuttals=verifier_rebuttals)
     return "proceed"
+
+
+def _finding_description(finding: str) -> str:
+    """Strip the optional file:line: prefix from a verifier finding for matching."""
+    m = re.match(r'\S+:\d+:\s*', finding)
+    return finding[m.end():] if m else finding
 
 
 def _parse_verifier_rebuttals_full(ctx: Any) -> list[str]:
@@ -2426,7 +2431,7 @@ def _write_finding_sources_full(ctx: Any, snapshot: dict[str, Any],
         entry = dict(entry)
         if key in current:
             entry["last_round"] = round_num
-            if entry["source"] == "verifier" and any(entry["finding"] in r for r in rebuttals):
+            if entry["source"] == "verifier" and any(_finding_description(entry["finding"]).lower() in r.lower() for r in rebuttals):
                 entry["fate"] = "rebutted"
             else:
                 entry["fate"] = "unresolved"
@@ -2438,7 +2443,7 @@ def _write_finding_sources_full(ctx: Any, snapshot: dict[str, Any],
         if key not in seen:
             source, finding = key
             fate = "unresolved"
-            if source == "verifier" and any(finding in r for r in rebuttals):
+            if source == "verifier" and any(_finding_description(finding).lower() in r.lower() for r in rebuttals):
                 fate = "rebutted"
             entries.append({
                 "source": source, "review_path": review_path,
