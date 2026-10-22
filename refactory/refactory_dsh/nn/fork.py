@@ -245,11 +245,18 @@ def run_fork(executor: Executor, node: Node) -> str | None:
         raise
     # All workers have finished, so no branch can still write after we return or
     # after the join begins. Order does not depend on completion timing.
-    for child in children:
+    optional = set(node.optional_targets or ())
+    for index, child in enumerate(children):
+        if errors[index] and node.targets[index] in optional:
+            # A failed optional branch is missing, not failed: keep its steps in
+            # the record, but move the error to the reason so the run's final
+            # step scan (Executor.run) does not fail the run on it.
+            for step in child.steps:
+                if step.error:
+                    step.reason, step.error = f"missing: {step.error}", None
         executor.steps.extend(child.steps)
         executor.model_calls += child.model_calls
         ctx.writes_made.extend(child.ctx.writes_made)
-    optional = set(node.optional_targets or ())
     error = next((e for i, e in enumerate(errors) if e and node.targets[i] not in optional), None)
     visited = {step.node for child in children for step in child.steps}
     missing = set(join.sources) - visited

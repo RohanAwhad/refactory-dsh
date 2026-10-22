@@ -298,6 +298,66 @@ def test_verifier_branch_failure(tmp_path, monkeypatch):
     assert "missing" in synthesis.lower() or "Verification:" in synthesis
 
 
+class _CrashingModel:
+    """Scripted answers; any prompt carrying ``mark`` raises, as a crashed branch."""
+
+    def __init__(self, answers, mark):
+        from tests_support import FakeModel
+        self.inner, self.mark, self.crashes = FakeModel(answers), mark, 0
+
+    def complete(self, prompt, *, system="", workdir=None):
+        if self.mark in prompt:
+            self.crashes += 1
+            raise RuntimeError("branch crashed")
+        return self.inner.complete(prompt, system=system, workdir=workdir)
+
+
+_VERIFIER_MARK = "design.md is in the run directory. Do NOT read it"
+
+
+@pytest.mark.parametrize("crash, survives", [(_VERIFIER_MARK, True),
+                                             ("check you did not run is not a check that passed", False)])
+def test_crashed_branch_full_mode(tmp_path, monkeypatch, crash, survives):
+    """A verifier that raises is missing, and the run completes; a reviewer that
+    raises still fails the run."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                               PITFALLS_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, render)
+    reviews = REVIEW_ANSWERS[:3] + (["No blocking findings.\n\nVERDICT: PASS"] if not survives else [])
+    if not survives:
+        reviews = reviews[1:]
+    model = _CrashingModel([RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+                            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                            render({"tool.py": "print('ok')\n"}), *reviews, "VERDICT: PASS"], crash)
+    result = DesignMode().run(tmp_path / "run", model=model, verdicts={"gate_strategy": "proceed"},
+                              task={"name": "crash", "brief": "a tool", "check": "python tool.py"})
+    assert model.crashes == 1
+    assert result.exit_ok is survives, result.error
+    if survives:
+        assert "proceed" in (tmp_path / "run" / "reviews" / "qa-gate.txt").read_text()
+    else:
+        assert "health_checker" in (result.error or "")
+
+
+@pytest.mark.parametrize("crash, survives", [(_VERIFIER_MARK, True),
+                                             ("Perform one focused QA review", False)])
+def test_crashed_branch_fast_mode(tmp_path, monkeypatch, crash, survives):
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import render
+    fast_qa = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python tool.py",
+                                                         "status": "pass", "evidence": "exit 0"}],
+                          "findings": [], "not_run": []})
+    other = fast_qa if survives else "No blocking findings.\n\nVERDICT: PASS"
+    model = _CrashingModel(["Change only the requested file.", render({"tool.py": "print('ok')\n"}), other],
+                           crash)
+    result = DesignFastMode().run(tmp_path / "run", model=model,
+                                  task={"name": "crash", "brief": "a tool", "check": "python tool.py"})
+    assert model.crashes == 1
+    assert result.exit_ok is survives, result.error
+    if not survives:
+        assert "focused_qa" in (result.error or "")
+
+
 def test_finding_sources_json(tmp_path, monkeypatch):
     """Three-round test: round 1 QA+verifier findings, round 2 QA fixed
     and verifier rebutted, round 3 proceed.  Asserts each entry's fate
