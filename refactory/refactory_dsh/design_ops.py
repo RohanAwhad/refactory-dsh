@@ -223,6 +223,7 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         REPO_CHANGE_REVIEW_INSTRUCTIONS if deliverable_kind == "repository_change"
         else ARTIFACT_REVIEW_INSTRUCTIONS
     )
+    from refactory_dsh.verification import verification_methods
 
     claims_facts = {
         "claims_check_feedback": "",
@@ -235,6 +236,7 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
             "design_review_findings": "(no findings yet)",
             "deliverable_kind": deliverable_kind,
             "review_instructions": review_instructions,
+            "verification_methods": verification_methods(deliverable_kind),
             **pitfalls_facts,
             **claims_facts,
             **UNREFUSED, **located, **planned}

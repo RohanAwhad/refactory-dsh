@@ -104,7 +104,7 @@ class DesignMode(Mode):
                     "check-record.json", "feedback-initial.json"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
-                      "deliverable_kind", "review_instructions",
+                      "deliverable_kind", "review_instructions", "verification_methods",
                       *repo_change.produces(), "delivery", "delivery_plan",
                       "has_pitfalls_step", "pitfalls", "pitfalls_review",
                       "claims_check_feedback", "claims_check_attempts_used", "design_review_status"),
@@ -491,10 +491,11 @@ class DesignMode(Mode):
         ))
 
         # ── design-v2's three reviews, in parallel, and the overwatch pass ──
-        from refactory_dsh.verification import VERIFIER_PROMPT
+        from refactory_dsh.verification import VERIFIER_PROMPT, VERIFIER_TIMEOUT_S
         graph.add(Node(
             "verifier", "agent",
             prompt_template=VERIFIER_PROMPT,
+            timeout_s=VERIFIER_TIMEOUT_S,
             reads=("brief.json", "test-guardedness.json", "changes.diff"),
             writes=("reviews/verification.md",),
             produces=("verification",),
@@ -617,7 +618,7 @@ class DesignMode(Mode):
                    "changed-functions.json"),
             writes=("reviews/qa-gate.txt", "reviews/verification-unresolved.md",
                     "reviews/finding-sources.json", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("qa_gate", "review_reruns_used", "verification_advisory_used"),
+            produces=("qa_gate", "review_reruns_used"),
             max_iterations=5,
             notes="proceed when every review ran and none found a core defect; "
                   "non-core findings become follow-ups; verifier findings are advisory",
@@ -651,12 +652,18 @@ class DesignMode(Mode):
                 "or repeating an unchanged probe to resolve an unavailable tool. "
                 "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
                 + SEVERITY_RULE + " " + OVERWATCH_VERDICT_RULE + " "
-                "Read reviews/verification-unresolved.md if it exists. Check whether the "
-                "builder addressed or rebutted each finding with a cited file:line.\n\n"
+                "Read reviews/verification-unresolved.md if it exists: the design-blind "
+                "verifier's findings, each with the builder's rebuttal where there is one. "
+                "Check each against the code. One that breaks an ask in the brief or existing "
+                "behaviour, and is not rebutted with a cited file:line, is your own BLOCKING "
+                "finding tagged `[core]`; the rest go to the pull request.\n\n"
                 "Write `reviews/overwatch.md` ending with a "
                 "line that is exactly `VERDICT: PASS` or `VERDICT: FAIL`, and name every "
                 "ask with no evidence behind it."
             ),
+            # verification-unresolved.md is read when present (the prompt says so) and
+            # not declared: a declared input must exist on the spine, and it does not
+            # in a run whose verifier found nothing.
             reads=("brief.json", "design.md", "reviews/qa-synthesized.md", "test-guardedness.json"),
             writes=("reviews/overwatch.md",),
             produces=("overwatch",),
