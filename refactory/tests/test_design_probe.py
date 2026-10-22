@@ -423,12 +423,41 @@ def test_no_worktree_no_probe(tmp_path):
 # ── unreached call site tests ─────────────────────────────────────────────────
 
 def test_unreached_call_site_reloop(tmp_path):
-    """A reviewer reporting BLOCKING for an unreached call site triggers
-    gate_design_review reloop.
+    """The design_probe_review fact is injected into design_review by for_run,
+    telling the reviewer to probe call sites.  When the reviewer follows this
+    instruction and reports BLOCKING for an unreached call site, gate_design_review
+    reloops.
+
+    Fails on main: for_run on main only calls annotate() and does not inject
+    {{design_probe_review}}, so the reviewer has no call-site probing instruction
+    and would not know to report unreached call sites as BLOCKING.
     """
+    from refactory_dsh.design import DesignMode
     from refactory_dsh.create_ops import blocking_findings
 
-    # The review text with a BLOCKING call-site finding
+    # ── Guard: for_run must inject {{design_probe_review}} into design_review ──
+    # This is the mechanism that tells the reviewer to probe call sites.
+    # On main, for_run only calls annotate() and does NOT inject the probe
+    # review fact, so this assertion fails on main.
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    (workdir / ".refactory").mkdir()
+
+    dm = DesignMode()
+    workflow = lowering.to_workflow(dm.state_dict(), name="design")
+    workflow = steering.for_run(workflow, workdir)
+
+    dr_template = workflow.nodes["design_review"].prompt_template
+    assert "{{design_probe_review}}" in dr_template, (
+        "for_run must inject {{design_probe_review}} into design_review's "
+        "prompt so the reviewer is told to probe call sites"
+    )
+
+    # ── Consequence: BLOCKING findings from the reviewer cause reloop ──
+    # When the reviewer follows the design_probe_review instruction and
+    # discovers an unreached call site, it reports BLOCKING.  The existing
+    # gate_design_review mechanism picks up BLOCKING lines via
+    # blocking_findings() and reloops.
     review_text = (
         "## Review\n\n"
         "The design wires into `builder_probe.py:363` but the probe shows "
