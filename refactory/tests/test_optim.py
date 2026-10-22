@@ -363,7 +363,7 @@ def test_a_node_session_runs_under_the_whole_dispatch_envelope(monkeypatch):
 
     seen: dict[str, object] = {}
 
-    def explode(self, cmd, run_dir, stop_at=None, budget_s=None, task=None):
+    def explode(self, cmd, run_dir, stop_at=None, budget_s=None, task=None, target_workdir=None):
         seen["stop_at"], seen["budget_s"] = stop_at, budget_s
         raise subprocess.TimeoutExpired(cmd="dsh", timeout=budget_s or 1)
 
@@ -419,7 +419,7 @@ def test_large_prompt_is_sent_on_stdin_not_as_argument(monkeypatch):
 
     seen = {}
 
-    def capture(self, cmd, run_dir, stop_at=None, budget_s=None, task=None):
+    def capture(self, cmd, run_dir, stop_at=None, budget_s=None, task=None, target_workdir=None):
         seen["cmd"] = cmd
         seen["task"] = task
         return subprocess.CompletedProcess(cmd, 0, "ok", "")

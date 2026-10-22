@@ -684,7 +684,7 @@ def parse_verdicts(pairs: list[str]) -> dict[str, str]:
     return verdicts
 
 
-def create(config: CreateConfig, client: Any = None) -> CreateResult:
+def create(config: CreateConfig, client: Any = None, *, enable_recovery: bool = False) -> CreateResult:
     """Run create-mode once. Returns what was created, or raises why it was not."""
     # Before the mode is loaded and long before the first model call: a creation that
     # says neither what class of work it is for nor that it is the single-shot special
@@ -756,6 +756,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
             },
             max_steps=config.max_steps,
             resource_limits=config.resource_limits,
+            enable_recovery=enable_recovery,
         )
     if run.gate_stop:
         return RunResult(exit_ok=False, error=run.error, gate_stop=run.gate_stop, workdir=workdir)
@@ -895,6 +896,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 run = (CreateFastMode if fast else CreateMode).resume(
                     workdir, model=client, max_steps=200, resource_limits=arguments(args),
+                    enable_recovery=True,
                 )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
@@ -937,6 +939,7 @@ def main(argv: list[str] | None = None) -> int:
                 resource_limits=arguments(args),
             ),
             client=client,
+            enable_recovery=True,
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

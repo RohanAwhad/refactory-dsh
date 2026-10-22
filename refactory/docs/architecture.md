@@ -274,6 +274,68 @@ uv run python -m pytest refactory/tests/test_equivalence.py -q --run-integration
 # 7 passed
 ```
 
+#### Walker failure policy and limits
+
+When `enable_recovery` is `True` (the default for all walker authoring runs and
+outer-loop evaluations):
+
+- **FnNode-only retry.** An op node (`kind="op"`) that raises gets one retry.
+  Gates (`kind="gate"`) are timed but never retried (their reloop mechanism via
+  `max_iterations` is the graph-level retry). Agent nodes are not retried by the
+  executor (`DshModelClient` has its own transport retry with exponential
+  backoff). Fork, join, and data nodes are structural.
+
+- **Fact restore.** Before each op attempt, `ctx.facts` is deep-copied. On
+  failure, facts are restored from the snapshot before retry.
+
+- **Per-op timeout.** Derived from the shared `command_timeout_s()` formula in
+  `lowering.py` (matching the DSH spine's lowering classification) clamped to
+  the remaining budget with a 1 s floor. Nodes without a classification get
+  DSH's 3600 s default (only for classified nodes). Ops and fn gates with a timeout run in a child process
+  forked from a preloaded forkserver (via a module-level
+  `multiprocessing.get_context("forkserver")` context whose
+  `set_forkserver_preload` is called with `refactory_dsh.nn.executor`,
+  `refactory_dsh.run`, and the modules the graph's ops and fn gates name).
+  The forkserver is a separate single-threaded process, so forking from it is
+  safe while the walker runs fork branches on threads; it has the same
+  picklable-arguments contract as spawn. The parent kills the child at the
+  limit via session-grouped SIGTERM→SIGKILL escalation (SIGTERM process group,
+  ≥5 s grace, SIGKILL process group). An op that exceeds its timeout raises
+  `OpTimeoutError` naming the node id with outcome `"failed"` (not `"unknown"`).
+
+- **Child-process context.** The child gets the same context DSH's runner
+  builds, via the shared `build_op_context()` helper: memory store, declared
+  reads, declared facts. No budget — the parent's kill is the enforcement.
+  Model identity (client kind and DSH context) flows to the child so
+  prepare/create_ops decide correctly. Exceptions round-trip with type, message
+  and traceback.
+
+- **Budget readers with None.** Under `enable_recovery`, ops get no
+  `ctx.budget`. Readers: `fast_ops.py:111,226,307,573` (skip budget check);
+  `base_check.py:425,582,721` (skip budget-clamped timeout);
+  `repo_change.py:1095,1148` (skip budget check); `delivery.py:1426` (skip
+  budget check); `design_ops.py:636` (skip budget check);
+  `create_ops.py:1592` (skip budget check).
+
+- **Budget integration.** `BudgetExhausted` is never retried. `OpTimeoutError`
+  is never retried. Per-op timeout is clamped to `remaining_s()`, so
+  `--max-elapsed-s` cannot be overrun by a single op.
+
+- **Fork branches.** `enable_recovery` is copied to fork-child `Executor`
+  instances. Branch ops get the same retry and timeout policy.
+
+- **DSH runtime parity.** `run_node()` in `run.py` (the DSH spine's per-node
+  runner) applies the same one-retry policy for FnNode ops with fact restore.
+  Gate callables are never retried. This ensures one policy for both runtimes.
+
+#### Walker recovery in the outer loop
+
+`WalkerEvaluator` enables `enable_recovery` by default. One transient op failure
+does not end a candidate's evaluation, and one hung op does not hang the search.
+`DshEvaluator` uses the spine's own `command_timeout_s` enforcement and does not
+use `enable_recovery`. Child-process kill ensures clean trial boundaries: no
+leaked processes or state between candidates.
+
 **The tower.** `refactory_packages/loop_mode` expresses the loop itself as a mode:
 eight step-nodes, a gate that loops back to `forward` or leaves for `report`, and
 `score()` reading the best score the inner run reached. Because it is scorable, a
