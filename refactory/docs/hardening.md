@@ -1521,7 +1521,6 @@ fingerprints (the run's graphs, project packages) are still validated and
 raise the "prepared configuration … changed" refusal as on main.  The
 re-exec'd owner child validates against the pin's files after re-exec.
 
-<<<<<<< HEAD
 ---
 
 ## 28. Target write protection for worktree runs (dm-159)
@@ -1594,7 +1593,7 @@ tracker dm-164, a follow-up, not this run.
 | `_execution_contract` path rebase + worktree instructions (Python, `agent_delivery.py`) | Both runtimes |
 | `amendPrompt` placeholder guard (TypeScript, `spine.ts`) | Spine runtime only (the walker has no `wf_edit`) |
 | CEO instructions and `${toolPrefix}_edit` description update (TypeScript, `index.ts`) | Spine runtime only |
-=======
+
 
 ## Fail-fast targeted pre-pass (dm-128)
 
@@ -1706,4 +1705,3 @@ a follow-up, filed separately.
 - `commit` (the current commit hash)
 
 No new CLI flags or environment variables.
->>>>>>> bbd1a63a0f0b830f418618650285f1652ed9ea0d
