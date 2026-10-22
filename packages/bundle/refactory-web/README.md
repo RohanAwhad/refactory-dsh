@@ -58,6 +58,38 @@ reconciles bundles by iterating those keys, and `dsh-refactory-web` sorts before
   generic brand slots, with `ui-brand-official` disabled.
 - The `wf_next` exclusion on the `repeat-tool-reminder` row, so driving a workflow
   with identical arguments is not reported as repetition.
+- The `client-hmr` row is disabled, preventing spurious page crashes from
+  ctime-triggered hot-swaps on pnpm-hardlinked bundles. See [Turn live reload
+  back on](#turn-live-reload-back-on) to re-enable it.
+
+### Turn live reload back on
+
+The `client-hmr` row is disabled in this layer because its stat-poll loop
+detects inode ctime changes caused by concurrent `pnpm install` runs on the same
+machine, triggering spurious hot-swaps that crash the page. To re-enable live
+reload for the `refactory` or `refactory-web` profile, add a user-layer override
+in `$DSH_HOME/profiles/<profile>/cordis.patch.yml`:
+
+```yaml
+- id: client-hmr
+  disabled: false
+```
+
+The user layer applies after every bundle layer and is hot-reloaded by the host,
+so no restart is needed for the edit itself.
+
+**With live reload off (the default):**
+
+1. A plugin enabled or disabled in Settings → Plugins, or a live edit to a
+   profile's `cordis.patch.yml` that changes client rows, reaches an open page
+   only after a page reload.
+2. A rebuilt client bundle is served only after the GUI host restarts
+   (`refactory ui` or `./refactory-dsh --additive`). The host reads each
+   bundle's bytes once at activation, and only `client-hmr`'s `rebuilt()`
+   re-reads them. A page reload alone keeps serving the old bytes.
+
+Turning live reload back on also brings back the ctime-triggered swap until the
+upstream stat-comparison bug is fixed.
 
 ### Verify it, without trusting this README
 
@@ -82,7 +114,7 @@ button renders the picker; and `session/create` with no preset returns
 <summary>Implementation internals — click to expand</summary>
 
 The layer restates the `repeat-tool-reminder` config (the patch dialect replaces a
-row's `config` wholesale), disables `ui-brand-official`, and appends four rows: the
+row's `config` wholesale), disables `ui-brand-official` and `client-hmr`, and appends four rows: the
 startup provider and the three refactory occupants. The `refactory-console` row
 injects `refactoryWebStartup` and reads `ctx.refactoryWebStartup.repoRoot`, which is
 what orders the provider before its reader.
@@ -110,7 +142,7 @@ package names against the installation the profile was loaded from.
 
 | File | Role |
 |---|---|
-| [`cordis.patch.yml`](cordis.patch.yml) | The layer: the reminder and brand overrides, then the four inserted rows |
+| [`cordis.patch.yml`](cordis.patch.yml) | The layer: the reminder and brand overrides, the disabled `client-hmr` row, then the four inserted rows |
 | [`src/startup.ts`](src/startup.ts) | The `refactory-web-startup` provider: resolves and publishes the checkout root |
 
 </details>

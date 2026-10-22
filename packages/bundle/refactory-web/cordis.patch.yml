@@ -41,6 +41,16 @@
 - id: ui-brand-official
   disabled: true
 
+# The dsh-web-app layer always mounts `client-hmr` (@deepseek-ai/dsh-client-hmr).
+# Its host half stat-polls every client bundle every 500 ms and treats a
+# ctime-only change as a rebuild; any `pnpm install` on the machine causes one
+# by hard-linking the same store files.  The hot swap then blanks the page with
+# SlotAssemblyError.  A developer running a rebuild watcher turns it back on
+# with a profile user-layer row `disabled: false` (README "Turn live reload
+# back on").
+- id: client-hmr
+  disabled: true
+
 - insert:
     # Publishes the checkout root the `refactory-console` row reads. A patch
     # cannot compute its own package directory: `!!js` is evaluated as
