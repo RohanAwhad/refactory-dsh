@@ -886,20 +886,16 @@ def test_node_declarations_include_convergence_facts():
         assert fact in check_node.produces, f"design check node missing {fact}"
     assert "check_attempt_cap" in check_node.knobs, "design check node missing check_attempt_cap knob"
 
-    # Design fast mode: focused_check, gate_verification and gate_qa nodes.
+    # Design fast mode: focused_check, gate_check and gate_qa nodes.
     fast_graph = DesignFastMode().build()
     fc_node = fast_graph.nodes["focused_check"]
     for fact in ("check_failures_history", "check_blocker_history",
                  "convergence_extras_used", "convergence_granted", "base_unavailable"):
         assert fact in fc_node.produces, f"design_fast focused_check missing {fact}"
-    gv_node = fast_graph.nodes["gate_verification"]
+    gc_node = fast_graph.nodes["gate_check"]
     for fact in ("convergence_extras_used", "convergence_granted"):
-        assert fact in gv_node.produces, f"design_fast gate_verification missing {fact}"
-    assert "check_attempt_cap" in gv_node.knobs, "design_fast gate_verification missing check_attempt_cap knob"
-    assert gv_node.max_iterations >= 15, (
-        f"gate_verification max_iterations ({gv_node.max_iterations}) must accommodate "
-        "check_attempt_cap + VERIFIER_GATE_LIMIT + review_budget"
-    )
+        assert fact in gc_node.produces, f"design_fast gate_check missing {fact}"
+    assert "check_attempt_cap" in gc_node.knobs, "design_fast gate_check missing check_attempt_cap knob"
     qa_node = fast_graph.nodes["gate_qa"]
     for fact in ("check_failures_history", "check_blocker_history",
                  "convergence_extras_used", "convergence_granted"):

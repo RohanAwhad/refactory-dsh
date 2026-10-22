@@ -249,13 +249,18 @@ def run_fork(executor: Executor, node: Node) -> str | None:
         executor.steps.extend(child.steps)
         executor.model_calls += child.model_calls
         ctx.writes_made.extend(child.ctx.writes_made)
-    error = next((error for error in errors if error), None)
+    optional = set(node.optional_targets or ())
+    error = next((e for i, e in enumerate(errors) if e and node.targets[i] not in optional), None)
     visited = {step.node for child in children for step in child.steps}
     missing = set(join.sources) - visited
     if error is None and missing:
         error = f"fork {node.id!r} did not complete join sources: {sorted(missing)}"
     if error is None:
         for index, child in enumerate(children):
+            target = node.targets[index]
+            # A failed optional branch is silently skipped in the fact merge.
+            if errors[index] and target in optional:
+                continue
             produced = {key for member in branches[index] for key in member.produces}
             produced.update(f"{member.id}_verdict" for member in branches[index] if member.kind == "gate")
             for key in sorted(produced):

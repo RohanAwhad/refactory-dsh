@@ -26,7 +26,10 @@ def test_fast_graphs_are_inspectable_and_have_one_focused_review(cls):
         {"strategy", "emit", "focused_qa", "verifier"} if cls is DesignFastMode else
         {"strategy", "emit", "focused_qa"})
     assert set(agents) == expected
-    assert not any(node.kind in ("fork", "join") for node in mode.graph().nodes.values())
+    if cls is DesignFastMode:
+        assert any(node.kind == "fork" for node in mode.graph().nodes.values())
+    else:
+        assert not any(node.kind in ("fork", "join") for node in mode.graph().nodes.values())
     if cls is EditFastMode:
         assert mode.graph().out_edges("survey")[0].target == "emit"
         assert "implementation-plan.txt" not in mode.graph().nodes["emit"].reads
@@ -42,7 +45,8 @@ def test_design_catches_known_defect_and_repairs_within_bound(tmp_path, monkeypa
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     bad = "===FILE: answer.py===\nassert 1 + 1 == 3\n"
     good = "===FILE: answer.py===\nassert 1 + 1 == 2\n"
-    client = FakeModel([PLAN, bad, VERIFICATION_ANSWER, good, VERIFICATION_ANSWER, QA_PASS])
+    # New flow: strategy → emit(bad) → focused_check(fail) → gate_check(reloop) → emit(good) → focused_check(pass) → gate_check(proceed) → fork(focused_qa, verifier) → gate_qa → report
+    client = FakeModel([PLAN, bad, good, QA_PASS, VERIFICATION_ANSWER])
     run = DesignFastMode().run(tmp_path / "run", model=client,
                                task={"name": "small", "brief": "assert two", "check": f"{sys.executable} answer.py"})
     assert run.exit_ok, run.error
@@ -52,9 +56,9 @@ def test_design_catches_known_defect_and_repairs_within_bound(tmp_path, monkeypa
     assert report["research"] == "not requested/run"
     assert report["canonical_smoke"] == "not run"
     assert (tmp_path / "run/repair.txt").read_text().startswith("requested runtime check failed")
-    assert len(client.prompts) == 6, "repairs repeat coder/verifier/QA, never the strategist"
+    assert len(client.prompts) == 5, "repairs repeat coder then fork(qa+verifier), never the strategist"
     assert (tmp_path / "run/implementation-plan.txt").read_text() == PLAN
-    assert PLAN in client.prompts[1] and PLAN in client.prompts[3]
+    assert PLAN in client.prompts[1] and PLAN in client.prompts[2]
 
 
 def test_a_check_with_no_target_imports_refactory_however_the_shell_path_reads(tmp_path, monkeypatch):
@@ -75,7 +79,7 @@ def test_a_check_with_no_target_imports_refactory_however_the_shell_path_reads(t
     state = mode.state_dict()
     state["knobs"]["worktree"]["value"] = False  # the artifact directory, not a worktree
     mode.load_state_dict(state)
-    run = mode.run(tmp_path / "run", model=FakeModel([PLAN, "===FILE: answer.py===\nanswer = 1\n", VERIFICATION_ANSWER, QA_PASS]),
+    run = mode.run(tmp_path / "run", model=FakeModel([PLAN, "===FILE: answer.py===\nanswer = 1\n", QA_PASS, VERIFICATION_ANSWER]),
                    task={"name": "imports", "brief": "import refactory",
                          "check": "python -c 'import refactory_dsh, answer'"})
     assert run.exit_ok, run.error

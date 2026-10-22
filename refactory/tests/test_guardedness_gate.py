@@ -213,9 +213,9 @@ def test_focused_check_declares_check_txt_write():
     assert "check.txt" in node.writes
 
 
-def test_gate_verification_fast_blocks_on_guardedness():
-    """gate_verification in fast mode returns reloop when guardedness is blocked."""
-    from refactory_dsh.fast_ops import gate_verification
+def test_gate_check_fast_blocks_on_guardedness():
+    """gate_check in fast mode returns reloop when guardedness is blocked."""
+    from refactory_dsh.fast_ops import gate_check
 
     ctx = FakeCtx(
         files={
@@ -224,19 +224,18 @@ def test_gate_verification_fast_blocks_on_guardedness():
                 "guardedness_blocked": True,
             }),
             "check.txt": "BLOCKING: these new tests pass without the change: test_foo.py",
-            "reviews/verification.md": "No blocking findings.\n\nVERDICT: PASS",
         }
     )
     ctx._knobs = {"repair_attempts": "2"}
-    result = gate_verification(ctx)
+    result = gate_check(ctx)
     assert isinstance(result, Verdict)
     assert str(result) == "reloop"
     assert "test_foo.py" in result.reason
 
 
-def test_gate_verification_fast_handles_check_failure():
-    """gate_verification in fast mode routes check failures to _repair."""
-    from refactory_dsh.fast_ops import gate_verification
+def test_gate_check_fast_handles_check_failure():
+    """gate_check in fast mode routes check failures to _repair."""
+    from refactory_dsh.fast_ops import gate_check
 
     ctx = FakeCtx(
         files={
@@ -245,11 +244,10 @@ def test_gate_verification_fast_handles_check_failure():
                 "returncode": 1,
             }),
             "check.txt": "requested runtime check failed (exit 1): assert False",
-            "reviews/verification.md": "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL",
         }
     )
     ctx._knobs = {"repair_attempts": "2"}
-    result = gate_verification(ctx)
+    result = gate_check(ctx)
     assert isinstance(result, Verdict)
     assert str(result) == "reloop"
     # Must carry the check failure, not the verifier noise.

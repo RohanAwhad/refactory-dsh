@@ -31,6 +31,19 @@ export function setup(project?: { config?: { root?: string } }) {
     return
   }
 
+  // Regenerate the design graph fixture so TS tests see the current graph.
+  const exportScript = resolve(dir, 'refactory', 'refactory_dsh', 'tools', 'export_design_graph.py')
+  if (existsSync(exportScript)) {
+    const exportResult = spawnSync(python, ['-m', 'refactory_dsh.tools.export_design_graph'], {
+      cwd: resolve(dir, 'refactory'),
+      encoding: 'utf-8',
+      timeout: 30_000,
+    })
+    if (exportResult.status !== 0) {
+      console.log(`design graph export: ${exportResult.stderr || 'failed'}`)
+    }
+  }
+
   // Not a git checkout — report inactive rather than throw, so pnpm test
   // works in a tarball checkout that has a venv.
   const gitCheck = spawnSync('git', ['-C', repo, 'rev-parse', '--is-inside-work-tree'], {
