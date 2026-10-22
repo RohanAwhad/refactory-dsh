@@ -1,8 +1,8 @@
 """Tests for feedback re-fill: declared feedback keys are re-derived from persisted files.
 
 Integration tests drive the redo through worker_node with a cleared fact, and
-the design_fast route through focused_check → verifier → gate_verification →
-worker_node's prompt.
+the design_fast route through focused_check → gate_check → worker_node's
+prompt.
 """
 
 from __future__ import annotations
@@ -518,7 +518,7 @@ def test_worker_refill_without_spec_keys(tmp_path, monkeypatch):
 
 def test_digest_design_fast_full_route(tmp_path, monkeypatch):
     """The digest reaches the builder through the full design_fast route:
-    focused_check → verifier → gate_verification → worker_node's prompt.
+    focused_check → gate_check → worker_node's prompt.
     """
     from refactory_dsh import fast_ops, nn
     from refactory_dsh.sandbox import SandboxResult

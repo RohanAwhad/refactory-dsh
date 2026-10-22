@@ -311,8 +311,8 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
     """Guardedness enforcement in fast mode reloops through the real executor.
 
     This exercises the full pipeline: focused_check detects non-guarding tests,
-    writes check.txt and sets guardedness_blocked in focused-check.json, the
-    verifier runs, then gate_verification reads the flag and reloops to emit.
+    writes check.txt and sets guardedness_blocked in focused-check.json, then
+    gate_check reads the flag and reloops to emit.
     On the second attempt guardedness passes and the run completes.
     """
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
