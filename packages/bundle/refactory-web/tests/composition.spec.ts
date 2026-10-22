@@ -90,10 +90,17 @@ describe('client-hmr composition', () => {
   })
 
   it('user-layer disabled: false re-enables client-hmr', () => {
+    // First verify client-hmr is disabled without the user layer
+    const warnBase = vi.fn()
+    const baseComposed = boot.composeEntries(allLayersWithWeb(), warnBase)
+    const hmrBase = baseComposed.find((e) => e.id === 'client-hmr')
+    expect(hmrBase).toBeDefined()
+    expect(hmrBase!.disabled).toBe(true)
+
+    // Then verify user-layer disabled: false re-enables it
     const userLayer = [{ id: 'client-hmr', disabled: false }]
     const warn = vi.fn()
     const composed = boot.composeEntries([...allLayersWithWeb(), userLayer], warn)
-
     const hmr = composed.find((e) => e.id === 'client-hmr')
     expect(hmr).toBeDefined()
     expect(hmr!.disabled).toBe(false)
