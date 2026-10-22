@@ -101,7 +101,12 @@ dsh plugin --profile refactory --dump-config   # the rows above are present, no 
 
 `tests/startup.spec.ts` checks that the provider publishes the checkout holding
 `refactory/` rather than the caller's working directory, and that the layer still
-carries every row the deleted `@deepseek-ai__dsh-web-app` pnpm patch supplied. The
+carries every row the deleted `@deepseek-ai__dsh-web-app` pnpm patch supplied.
+`tests/composition.spec.ts` composes the full GUI profile layer order (every
+bundle in `PROFILE_TEMPLATES.web.bundles`, then `refactory`, then `refactory-web`)
+with DSH's own `composeEntries` and verifies that the `client-hmr` row is disabled
+after composition, that no patches were skipped, and that a user-layer
+`disabled: false` re-enables it. The
 remaining acceptance checks are browser-facing and run by hand against a live
 server: the boot manifest lists `refactory-console`, `ui-refactory` and
 `ui-brand-refactory`; the page reports no `Failed to load plugins`; the Modes
