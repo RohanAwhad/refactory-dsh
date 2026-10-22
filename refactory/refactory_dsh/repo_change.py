@@ -500,8 +500,8 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
             "```\n\n"
             "Examples:\n"
             '- Named test: `--command "python -m pytest tests/test_foo.py::test_bar -x"`\n'
-            '- Mode lowering: `--command "python -c \\"from refactory_dsh.design import '
-            "DesignMode; print(DesignMode().to_workflow())\\\"\"` \n"
+            '- Mode lowering: `--command "python -c \\"from refactory_dsh import lowering; '
+            "from refactory_dsh.design import DesignMode; print(lowering.to_workflow(DesignMode().state_dict(), name='design'))\\\"\"` \n"
             '- Python snippet: `--command "python -c \\"import ast; print(ast.dump(...))\\\""`\n\n'
             "- `--command` takes a single shell string (double-quote it).\n"
             "- The output is a JSON object with `id`, `status`, `digest` and `raw_tail` fields.\n"
