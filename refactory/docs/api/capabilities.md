@@ -7659,11 +7659,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "design_doc"
     },
     {
-      "condition": "review_reloop",
-      "source": "gate_design_review",
-      "target": "design_review"
-    },
-    {
       "condition": "proceed",
       "source": "gate_design_review",
       "target": "gate_strategy"
@@ -8454,7 +8449,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "4af00c96fa55e6f51193ac31079b76f2cc10795f780e52a74a419b702cc9d4fe"
+    "reviewed_schema": "cb7bf5b83c7be483a63b13279ad3bcc79317709ce90c11060caf4abb8fb142a4"
   }
 }
 ```

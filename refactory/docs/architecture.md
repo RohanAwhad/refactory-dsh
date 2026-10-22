@@ -399,13 +399,29 @@ reads that review using the same verdict and blocking-findings parsing as
 quotation the design attributes to the brief appears verbatim in the brief. A fifth
 mechanical check validates per-changed-function repository questions (duplicates,
 callers, shared state) and the brief-example trace, for repository-change runs only.
-On failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
-proceeds to `gate_strategy` with the remaining findings shown — it never fails the
-run. A reviewer formatting miss re-runs `design_review` (via a `review_reloop` edge)
-without spending a `design_review_attempts` slot; the re-run counter is
-`design_review_reruns_used`. There is one re-run. After it, missing repository
-questions are advisory and are shown with the findings. Only changed product code needs
-repository questions; see [authoring validation](authoring-validation.md#reviewer-re-runs).
+
+The gate sends a design back only for what would make the build wrong or leave an ask
+unmet: a blocking finding from the review agent, a review that did not pass, a
+citation past the end of its file, a quotation the brief does not contain, a missing
+required section (including the `## Ask mapping`), or an unanswered high-risk pitfall.
+Everything else it notices is **advisory**: a quotation that differs from the brief
+only in punctuation, case or markdown, a missing `## Failure trace`, rule-site marker
+and title formatting, missing repository questions, and the review agent's own
+`## Notes`. Advisory items are listed at the person's gate under an Advisory heading
+and never cost a round. Research and perspective findings the design does not cite
+are recorded in the `finding_coverage` fact and not listed at all. On a blocking problem it reloops to
+`design_doc`; when its rounds run out, it proceeds to `gate_strategy` with the
+findings shown — it never fails the run. A scoped change gets one round; a full design
+gets `design_review_attempts` (default 2).
+
+**Design scale.** `prepare_design` sets `research_scope`: `scoped` for a refine or a
+brief that names files, otherwise `full`. The design phase follows it. A scoped change
+gets one research question (two or three only when it spans unrelated parts of the
+code), at most five pitfalls, one strategy perspective ("the simplest thing that could
+pass the check") and one design-review round. A full design keeps three to five
+questions and two to five perspectives. At either scale the design cites a research
+finding only where it changes a decision; the findings stay in `research/` and
+`strategy/` for the design writer and the reviewer to read.
 
 The `deliverable_kind` fact, computed by `prepare_design`, distinguishes repository
 changes from artifacts. The `review_instructions` fact renders `REPO_CHANGE_REVIEW_INSTRUCTIONS`
@@ -422,7 +438,9 @@ naming the reviewer and function in any refusal. A `review_reloop` edge from `ga
 are advisory: the gate proceeds, and the pull request lists them. The fast `gate_qa` validates `focused-qa.json`'s
 `repo_questions` key and strips `[repo-questions]`-prefixed problems from `failure_kind`'s
 word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
-PASS" or "Design review: FAIL, N unresolved" followed by the unresolved findings,
+PASS" (with ", N advisory" when the gate listed advisory items) or "Design review:
+FAIL, N unresolved" followed by the blocking findings, where N counts blocking
+findings only,
 carried by fact substitution to all template-rendered surfaces (terminal, GUI,
 headless refusal, `refactory status`). A **person answers `gate_strategy`** at that point, because a
 run that can approve its own plan is not reviewed at all, so a walker run stops at
@@ -457,7 +475,7 @@ too: it counts against the same cap as a repair (`attempts`, or `check_attempts`
 design; three rounds by default), it never takes the last repair, and when it cannot
 be taken the verifier's findings go to the pull request instead of back to the builder.
 
-**Finding coverage.** Each research and perspective file carries finding ids in the format `FND-<slug>-<n>` (e.g. `FND-api-surface-1`). `gate_design_review` checks that every finding id from `research/*.md` and `strategy/*.md` appears in the design's `## Research and perspective findings` section, either addressed at a valid site or § heading reference, or set aside with `[set-aside: <reason>]`. Coverage is checked against the detail files, not the summaries (`research-plan.json`, `strategy-plan.json`), so a finding a summary dropped is still required. All missing findings are blocking. Create mode's `review_design` gate runs the same check against the `findings` field of `strategy.json`; create's review raises when its attempts run out.
+**Finding coverage.** Each research and perspective file carries finding ids in the format `FND-<slug>-<n>` (e.g. `FND-api-surface-1`). `gate_design_review` records, in the `finding_coverage` fact, which finding ids from `research/*.md` and `strategy/*.md` the design cites, read from the detail files rather than the summaries (`research-plan.json`, `strategy-plan.json`). A design cites a finding only where it changes a decision, so an uncited finding is neither listed at the person's gate nor a reason to send the design back; the findings stay in their files for the reviewer. Create mode's `review_design` gate runs the same check against the `findings` field of `strategy.json`; create's review raises when its attempts run out.
 
 All authoring review uses the original brief, approved design and explicit user steering
 as its acceptance baseline. User-approved non-goals remain valid; an author or
