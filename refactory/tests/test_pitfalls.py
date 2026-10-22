@@ -409,8 +409,9 @@ def test_new_project_design_run_passes_pitfalls_gate(tmp_path):
         design_doc,
         DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
     result = DesignMode().run(
         tmp_path / "run",

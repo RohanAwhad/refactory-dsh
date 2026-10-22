@@ -227,12 +227,15 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         if budget_ledger:
             selected_context['budget_ledger'] = budget_ledger
         selected_context.update(role_routes={}, node_routes={})
+        is_optional = bool((declarations or {}).get(name, {}).get('optional'))
         payload = {'schema_version': 1, 'node_id': name,
                                     'prompt': node.prompt_template, 'reads': sorted(node.reads),
                                     'writes': sorted(node.writes),
                                     'produces': list((declarations or {}).get(name, {}).get('produces', [])),
                                     'post_checks': [check.model_dump() for check in node.post_checks],
                                     'model_context': selected_context}
+        if is_optional:
+            payload['optional'] = True
         serialized = json.dumps(payload, indent=2, sort_keys=True) + '\n'
         spec = directory / (hashlib.sha256(serialized.encode()).hexdigest() + '.json')
         spec.write_text(serialized)

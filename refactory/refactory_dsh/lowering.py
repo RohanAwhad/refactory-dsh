@@ -64,6 +64,15 @@ DECLARATIONS = ".refactory/declarations.json"
 MEMORY_KEY = "memory"
 
 
+def _optional_node_ids(graph: Graph) -> set[str]:
+    """Node ids that appear in some fork's optional_targets."""
+    ids: set[str] = set()
+    for node in graph.nodes.values():
+        if node.kind == "fork" and node.optional_targets:
+            ids.update(node.optional_targets)
+    return ids
+
+
 def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Every node's kind and declared reads, writes and facts, keyed by node id.
 
@@ -78,6 +87,7 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     the DSH path re-deriving it from an environment variable it cannot see.
     """
     graph = Graph.from_state(state.get("graph") or {})
+    optional_ids = _optional_node_ids(graph)
     declarations: dict[str, dict[str, Any]] = {}
     for node_id, node in graph.nodes.items():
         entry: dict[str, Any] = {
@@ -87,6 +97,8 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "produces": sorted(node.produces),
             "resource_role": node.resource_phase,
         }
+        if node_id in optional_ids:
+            entry["optional"] = True
         if node.kind == "data":
             entry["data"] = {
                 "subgraph_entry": node.subgraph_entry,
@@ -211,7 +223,10 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             # The branches are reached through `targets`, not edges: one out-edge
             # per branch would let the successor run as soon as the first one
             # finished, which is the bug the barrier exists to prevent.
-            nodes[node_id] = ForkNode(**common, targets=list(node.targets))
+            fork_kwargs: dict[str, Any] = {"targets": list(node.targets)}
+            if node.optional_targets:
+                fork_kwargs["optional_targets"] = list(node.optional_targets)
+            nodes[node_id] = ForkNode(**common, **fork_kwargs)
         elif node.kind == "join":
             nodes[node_id] = JoinNode(**common, sources=list(node.sources))
         elif node.kind == "data":

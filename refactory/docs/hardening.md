@@ -1089,9 +1089,10 @@ needed the design; the rest were found by design-blind methods:
 - **M15** Weakened tests
 
 The verifier is given the brief, the diff and the repository — never
-design.md. It sits between the build's check and the reviews' verdict
-(after `check` in full mode, after `focused_check` in fast mode). Its
-blocking findings go back to the builder like a review's.
+design.md. It runs in parallel with the reviews as an optional branch of
+the review fork. Its findings are advisory: they never spend review
+attempts, never fail or halt a run on their own. A verifier branch that
+fails or returns nothing is recorded as missing.
 
 ### Why design-blind
 
@@ -1102,13 +1103,14 @@ documents.
 
 ### Pipeline position
 
+Full mode:
 ```
-check → verifier → gate_verification → fork_qa → reviews
+check →(proceed) fork_qa → [health_checker, code_reviewer, qa_director, verifier] → join_qa → synthesize_qa → gate_qa
 ```
 
-In fast mode:
+Fast mode (design_fast):
 ```
-focused_check → verifier → gate_verification → focused_qa
+focused_check → gate_check →(proceed) fork_qa → [focused_qa, verifier] → join_qa → gate_qa
 ```
 
 ### Measurement

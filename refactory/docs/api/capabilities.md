@@ -7606,7 +7606,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "check",
-      "target": "verifier"
+      "target": "fork_qa"
     },
     {
       "condition": "reloop",
@@ -7724,16 +7724,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "synthesize_strategy"
     },
     {
-      "condition": "reloop",
-      "source": "gate_verification",
-      "target": "emit"
-    },
-    {
-      "condition": "proceed",
-      "source": "gate_verification",
-      "target": "fork_qa"
-    },
-    {
       "condition": null,
       "source": "join_qa",
       "target": "synthesize_qa"
@@ -7801,7 +7791,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": null,
       "source": "verifier",
-      "target": "gate_verification"
+      "target": "join_qa"
     }
   ],
   "gates": [
@@ -7840,10 +7830,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "id": "gate_strategy",
       "user": true
-    },
-    {
-      "id": "gate_verification",
-      "user": false
     },
     {
       "id": "pick_corrections",
@@ -7951,7 +7937,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "fork_qa",
       "kind": "fork",
       "knobs": [],
-      "notes": "start the three reviews",
+      "notes": "start the three reviews and the verifier",
       "role": "ceo"
     },
     {
@@ -7995,7 +7981,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "knobs": [
         "review_attempts"
       ],
-      "notes": "proceed only when every review ran and none is blocking",
+      "notes": "proceed only when every review ran and none is blocking; verifier findings are advisory",
       "role": "ceo"
     },
     {
@@ -8016,17 +8002,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "gate",
       "knobs": [],
       "notes": "{{design_review_status}}\n\nApprove the design before the artifact is written? It is in design.md in the run directory. Then, {{delivery}}; delivery.md there says more. Answer proceed to build and deliver it that way, or reloop to have the plan redone.\n\n## Unresolved design review findings\n{{design_review_findings}}",
-      "role": "ceo"
-    },
-    {
-      "call": "refactory_dsh.design_ops:gate_verification",
-      "gate_kind": "fn",
-      "id": "gate_verification",
-      "kind": "gate",
-      "knobs": [
-        "review_attempts"
-      ],
-      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend review_attempts)",
       "role": "ceo"
     },
     {
@@ -8474,7 +8449,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "65e8fcd34bb68421c6ea2eff49aa043ac9b7d9f134aa7e4d91f50b716ada2adc"
+    "reviewed_schema": "76cf32b7e98e9d33bd4f5574d9c9fa033037accb46ec14c99f0d40ccb08228e9"
   }
 }
 ```
@@ -8495,12 +8470,22 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     {
       "condition": null,
       "source": "focused_check",
-      "target": "verifier"
+      "target": "gate_check"
     },
     {
       "condition": null,
-      "source": "focused_qa",
-      "target": "gate_qa"
+      "source": "fork_qa",
+      "target": "join_qa"
+    },
+    {
+      "condition": "reloop",
+      "source": "gate_check",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_check",
+      "target": "fork_qa"
     },
     {
       "condition": "reloop",
@@ -8520,7 +8505,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     {
       "condition": "review_reloop",
       "source": "gate_qa",
-      "target": "focused_qa"
+      "target": "fork_qa"
     },
     {
       "condition": "proceed",
@@ -8528,14 +8513,9 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "target": "report"
     },
     {
-      "condition": "reloop",
-      "source": "gate_verification",
-      "target": "emit"
-    },
-    {
-      "condition": "proceed",
-      "source": "gate_verification",
-      "target": "focused_qa"
+      "condition": null,
+      "source": "join_qa",
+      "target": "gate_qa"
     },
     {
       "condition": null,
@@ -8555,20 +8535,20 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     {
       "condition": null,
       "source": "verifier",
-      "target": "gate_verification"
+      "target": "join_qa"
     }
   ],
   "gates": [
+    {
+      "id": "gate_check",
+      "user": false
+    },
     {
       "id": "gate_emit",
       "user": false
     },
     {
       "id": "gate_qa",
-      "user": false
-    },
-    {
-      "id": "gate_verification",
       "user": false
     }
   ],
@@ -8604,6 +8584,26 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "role": "code_reviewer"
     },
     {
+      "call": "",
+      "id": "fork_qa",
+      "kind": "fork",
+      "knobs": [],
+      "notes": "focused QA and verifier in parallel",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.fast_ops:gate_check",
+      "gate_kind": "fn",
+      "id": "gate_check",
+      "kind": "gate",
+      "knobs": [
+        "repair_attempts",
+        "check_attempt_cap"
+      ],
+      "notes": "route check failures and guardedness blocks; verifier handled in gate_qa",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.fast_ops:gate_emit",
       "gate_kind": "fn",
       "id": "gate_emit",
@@ -8627,15 +8627,11 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.fast_ops:gate_verification",
-      "gate_kind": "fn",
-      "id": "gate_verification",
-      "kind": "gate",
-      "knobs": [
-        "repair_attempts",
-        "check_attempt_cap"
-      ],
-      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
+      "call": "",
+      "id": "join_qa",
+      "kind": "join",
+      "knobs": [],
+      "notes": "wait for focused QA (verifier is optional)",
       "role": "ceo"
     },
     {
@@ -8877,7 +8873,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "e50a5164c556fe0c79f4b32592609d4e77f21f17d9e4bb92fa0b414e2f7fbadf"
+    "reviewed_schema": "6cb8008ff168b0a85b06d321d6e7bc7f82d663a2058fd1150e66c340ef9fe521"
   }
 }
 ```

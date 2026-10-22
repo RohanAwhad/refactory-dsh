@@ -526,8 +526,9 @@ def test_claims_exhaustion_reaches_review_through_graph(tmp_path):
         _BAD_DESIGN,                                   # design_doc  (3rd, exhaustion)
         DESIGN_REVIEW_ANSWER,                          # design_review
         render({"tool.py": "print('built')\n"}),       # emit
+        *REVIEW_ANSWERS[:3],                           # health, code, qa
         VERIFICATION_ANSWER,                           # verifier
-        *REVIEW_ANSWERS,                               # health, code, qa, overwatch
+        REVIEW_ANSWERS[3],                             # overwatch
     ]
     model = FakeModel(answers)
     result = DesignMode().run(

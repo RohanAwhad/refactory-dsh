@@ -205,8 +205,9 @@ def _design_answers(emit: list[str]) -> list[str]:
         DESIGN_DOC_ANSWER,
         DESIGN_REVIEW_ANSWER,
         *emit,
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
 
 
@@ -217,7 +218,6 @@ def test_the_design_graph_is_a_different_shape_from_a_package_one():
         "delivery_gate", "design_doc", "design_review", "done",
         "emit", "fork_qa", "gate_design_review", "gate_overwatch",
         "gate_pitfalls", "gate_qa", "gate_research", "gate_strategy",
-        "gate_verification",
         "health_checker", "join_qa",
         "materialise", "overwatch", "pick_corrections", "pitfalls_researcher",
         "prepare", "qa_director", "record_findings",

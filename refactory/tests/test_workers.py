@@ -664,3 +664,110 @@ def test_graph_worker_refuses_modified_dispatch_contract(tmp_path):
     result=subprocess.run([sys.executable,'-m','refactory_dsh.worker_node',str(spec)],capture_output=True,text=True)
     assert result.returncode == 1
     assert 'modified after graph preparation' in result.stderr
+
+
+def test_worker_node_optional_exits_zero_on_failure(tmp_path, monkeypatch, capsys):
+    """A worker spec with optional: true exits 0 with status 'missing' when execute raises."""
+    import sys
+    from refactory_dsh import worker_node
+
+    spec = {
+        'schema_version': 1,
+        'node_id': 'verifier',
+        'optional': True,
+        'reads': [],
+        'writes': [],
+        'prompt': 'test',
+        'model_context': {},
+    }
+    spec_path = tmp_path / 'spec.json'
+    spec_path.write_text(json.dumps(spec))
+
+    monkeypatch.setattr(sys, 'argv', ['worker_node', str(spec_path)])
+    monkeypatch.chdir(tmp_path)
+
+    def _failing_execute(s, w):
+        raise RuntimeError('deliberate test error')
+    monkeypatch.setattr(worker_node, 'execute', _failing_execute)
+
+    exit_code = worker_node.main()
+    assert exit_code == 0, f'optional worker must exit 0, got {exit_code}'
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out.strip())
+    assert output['status'] == 'missing'
+    assert output['node'] == 'verifier'
+
+    missing_file = tmp_path / 'reviews' / 'verifier-missing.txt'
+    assert missing_file.exists(), 'missing file must be written'
+    assert 'RuntimeError' in missing_file.read_text()
+
+
+def test_worker_node_non_optional_exits_one_on_failure(tmp_path, monkeypatch, capsys):
+    """A worker spec without optional still exits 1 when execute raises."""
+    import sys
+    from refactory_dsh import worker_node
+
+    spec = {
+        'schema_version': 1,
+        'node_id': 'verifier',
+        'reads': [],
+        'writes': [],
+        'prompt': 'test',
+        'model_context': {},
+    }
+    spec_path = tmp_path / 'spec.json'
+    spec_path.write_text(json.dumps(spec))
+
+    monkeypatch.setattr(sys, 'argv', ['worker_node', str(spec_path)])
+    monkeypatch.chdir(tmp_path)
+
+    def _failing_execute(s, w):
+        raise RuntimeError('deliberate test error')
+    monkeypatch.setattr(worker_node, 'execute', _failing_execute)
+
+    exit_code = worker_node.main()
+    assert exit_code == 1, f'non-optional worker must exit 1, got {exit_code}'
+
+    missing_file = tmp_path / 'reviews' / 'verifier-missing.txt'
+    assert not missing_file.exists(), 'missing file must NOT be written for non-optional'
+
+
+def test_run_node_optional_op_records_missing(tmp_path, monkeypatch):
+    """run_node for an optional op node records it as missing instead of raising."""
+    from refactory_dsh import run as run_mod
+
+    workdir = tmp_path / 'run'
+    workdir.mkdir()
+    refactory_dir = workdir / '.refactory'
+    refactory_dir.mkdir()
+    (refactory_dir / 'declarations.json').write_text(json.dumps({
+        'verifier': {
+            'reads': [],
+            'writes': ['reviews/verification.md'],
+            'produces': ['verification'],
+            'optional': True,
+        }
+    }))
+    (workdir / 'facts.json').write_text('{}')
+
+    call_count = 0
+    def _always_fail(ctx):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError('deliberate test failure')
+
+    monkeypatch.setattr(run_mod, 'resolve', lambda target: _always_fail)
+    monkeypatch.setenv('REFACTORY_PROJECT', str(tmp_path))
+
+    result = run_mod.run_node(
+        'test_module:always_fail',
+        workdir=workdir,
+        node_id='verifier',
+    )
+    assert result == {}, f'optional op must return empty dict, got {result!r}'
+    assert call_count == 2, 'must attempt initial + one retry before recording missing'
+
+    missing_file = workdir / 'reviews' / 'verifier-missing.txt'
+    assert missing_file.exists(), 'missing file must be written'
+    assert 'RuntimeError' in missing_file.read_text()

@@ -39,6 +39,7 @@ export interface NodeView {
   command?: string
   command_timeout_s?: number
   targets?: string[]
+  optional_targets?: string[]
   sources?: string[]
   expand?: DirectorExpansion
   /** For a `DataNode`: its resolved data source and the subgraph it iterates. */
@@ -545,7 +546,10 @@ export class Spine {
       view.temperature = node.temperature ?? 0
     }
     if (node.resource_role !== undefined) view.resource_role = node.resource_role
-    if (node._type === 'ForkNode') view.targets = node.targets ?? []
+    if (node._type === 'ForkNode') {
+      view.targets = node.targets ?? []
+      if (node.optional_targets) view.optional_targets = node.optional_targets
+    }
     if (node._type === 'JoinNode') view.sources = node.sources ?? []
     if (node._type === 'FnNode' || node._type === 'Study') {
       view.writes = node.writes ?? []

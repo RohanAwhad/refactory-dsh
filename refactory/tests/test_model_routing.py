@@ -145,8 +145,9 @@ def test_run_records_planning_models(tmp_path, monkeypatch):
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
     routes = {
         "design_doc": {"model": "test-strong-model"},
@@ -212,8 +213,9 @@ def test_delivery_body_includes_planning_models(tmp_path, monkeypatch):
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
+        *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        REVIEW_ANSWERS[3],
     ]
     routes = {
         "design_doc": {"model": "test-strong-model"},

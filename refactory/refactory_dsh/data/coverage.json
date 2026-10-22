@@ -175,7 +175,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-      "reviewed_schema": "65e8fcd34bb68421c6ea2eff49aa043ac9b7d9f134aa7e4d91f50b716ada2adc"
+      "reviewed_schema": "76cf32b7e98e9d33bd4f5574d9c9fa033037accb46ec14c99f0d40ccb08228e9"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -204,7 +204,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-      "reviewed_schema": "e50a5164c556fe0c79f4b32592609d4e77f21f17d9e4bb92fa0b414e2f7fbadf"
+      "reviewed_schema": "6cb8008ff168b0a85b06d321d6e7bc7f82d663a2058fd1150e66c340ef9fe521"
     },
     "default_pack/edit": {
       "doc": "refactory/docs/authoring-validation.md",

@@ -232,13 +232,13 @@ def test_design_mode_has_review_reloop_edges():
 
 
 def test_design_fast_mode_has_review_reloop_edge():
-    """DesignFastMode's graph has gate_qa -> focused_qa review_reloop edge."""
+    """DesignFastMode's graph has gate_qa -> fork_qa review_reloop edge."""
     from refactory_dsh.fast import DesignFastMode
 
     mode = DesignFastMode()
     graph = mode.build()
     edges = [(e.source, e.target, e.condition) for e in graph.edges]
-    assert ("gate_qa", "focused_qa", "review_reloop") in edges
+    assert ("gate_qa", "fork_qa", "review_reloop") in edges
 
 
 # ── changed_functions module tests ──
@@ -375,16 +375,17 @@ def test_design_mode_reviewer_miss_reloops_without_attempt(tmp_path, monkeypatch
         DESIGN_REVIEW_ANSWER,            # design_review
         # gate_strategy → proceed (via verdicts)
         render({"tool.py": tool}),       # emit
-        VERIFICATION_ANSWER,             # verifier
-        # First reviewer pass:
+        # First reviewer pass (fork_qa: health, code, qa, verifier):
         "health: ok",                    # health_checker (FakeModel injects rq)
         bad_code_review,                 # code_reviewer (bad rq → review_reloop)
         "qa: ok",                        # qa_director (FakeModel injects rq)
+        VERIFICATION_ANSWER,             # verifier
         # gate_qa → review_reloop → fork_qa
-        # Second reviewer pass (FakeModel auto-injects valid rq into all):
+        # Second reviewer pass (fork_qa again):
         "health: ok",                    # health_checker
         "code review: ok",              # code_reviewer
         "qa: ok",                        # qa_director
+        VERIFICATION_ANSWER,             # verifier
         # gate_qa → proceed
         "VERDICT: PASS",                 # overwatch
     ]
@@ -451,9 +452,11 @@ def test_design_fast_reviewer_miss_reloops_focused_qa(tmp_path, monkeypatch):
     model = FakeModel([
         PLAN,                      # strategy
         render({"tool.py": tool}), # emit
-        VERIFICATION_ANSWER,       # verifier
         bad_qa,                    # focused_qa (1st — bad rq)
+        VERIFICATION_ANSWER,       # verifier
+        # gate_qa → review_reloop → fork_qa (re-runs both branches)
         good_qa,                   # focused_qa (2nd — FakeModel injects valid rq)
+        VERIFICATION_ANSWER,       # verifier (2nd run in fork)
     ])
 
     run = DesignFastMode().run(
@@ -501,9 +504,11 @@ def test_design_fast_repo_questions_advisory_after_one_rerun(tmp_path, monkeypat
     model = FakeModel([
         PLAN,                      # strategy
         render({"tool.py": tool}), # emit
-        VERIFICATION_ANSWER,       # verifier
         bad_qa,                    # focused_qa (1st — the one targeted re-run follows)
+        VERIFICATION_ANSWER,       # verifier
+        # gate_qa → review_reloop → fork_qa (re-runs both branches)
         bad_qa,                    # focused_qa (2nd — still missing → advisory, proceed)
+        VERIFICATION_ANSWER,       # verifier (2nd run in fork)
     ])
 
     run = DesignFastMode().run(
@@ -553,11 +558,11 @@ def test_design_review_repo_questions_are_advisory_without_a_rerun(tmp_path, mon
         bad_design_review,           # design_review (missing questions → advisory, proceed)
         # gate_strategy → proceed (via verdicts)
         render({"tool.py": tool}),   # emit
-        VERIFICATION_ANSWER,         # verifier
-        # Reviewers (FakeModel auto-injects valid rq):
+        # Reviewers (fork_qa: health, code, qa, verifier):
         "health: ok",               # health_checker
         "code review: ok",          # code_reviewer
         "qa: ok",                    # qa_director
+        VERIFICATION_ANSWER,         # verifier
         # gate_qa → proceed
         "VERDICT: PASS",             # overwatch
     ]
@@ -610,7 +615,7 @@ def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path
                      "findings": [], "not_run": []})
 
     # ── DesignFastMode with target (repository change) ──
-    model_repo = FakeModel([PLAN, render({"tool.py": tool}), VERIFICATION_ANSWER, QA])
+    model_repo = FakeModel([PLAN, render({"tool.py": tool}), QA, VERIFICATION_ANSWER])
     run_repo = DesignFastMode().run(
         tmp_path / "run_fast_repo", model=model_repo,
         task={"name": "fast_repo", "brief": "a tool",
@@ -621,7 +626,7 @@ def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path
         "repo-change DesignFastMode should have code-change instructions"
 
     # ── DesignFastMode without target (artifact) ──
-    model_art = FakeModel([PLAN, render({"tool.py": tool}), VERIFICATION_ANSWER, QA])
+    model_art = FakeModel([PLAN, render({"tool.py": tool}), QA, VERIFICATION_ANSWER])
     run_art = DesignFastMode().run(
         tmp_path / "run_fast_art", model=model_art,
         task={"name": "fast_art", "brief": "a tool",
@@ -642,7 +647,7 @@ def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path
     model_dm_repo = FakeModel([
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-        render({"tool.py": tool}), VERIFICATION_ANSWER, *REVIEW_ANSWERS])
+        render({"tool.py": tool}), *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]])
     run_dm_repo = mode_dm.run(
         tmp_path / "run_dm_repo", model=model_dm_repo,
         verdicts={"gate_strategy": "proceed"},
@@ -661,7 +666,7 @@ def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path
     model_dm_art = FakeModel([
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-        render({"tool.py": tool}), VERIFICATION_ANSWER, *REVIEW_ANSWERS])
+        render({"tool.py": tool}), *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]])
     run_dm_art = mode_dm2.run(
         tmp_path / "run_dm_art", model=model_dm_art,
         verdicts={"gate_strategy": "proceed"},
@@ -712,9 +717,16 @@ def _design_answers(emitted: str, reviews: list[str]) -> list[str]:
     from tests_support import (RESEARCH_ANSWER, PITFALLS_ANSWER, DESIGN_DOC_ANSWER,
                                DESIGN_REVIEW_ANSWER, VERIFICATION_ANSWER)
 
+    # Interleave VERIFICATION_ANSWER after every 3 reviewer answers
+    # (the verifier runs as the 4th fork branch in each review round)
+    interleaved: list[str] = []
+    for i, r in enumerate(reviews):
+        interleaved.append(r)
+        if (i + 1) % 3 == 0:
+            interleaved.append(VERIFICATION_ANSWER)
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, emitted, VERIFICATION_ANSWER,
-            *reviews, "VERDICT: PASS"]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, emitted,
+            *interleaved, "VERDICT: PASS"]
 
 
 def test_design_mode_gate_qa_advisory_after_one_rerun_reaches_pr_text(tmp_path, monkeypatch):
@@ -780,7 +792,7 @@ def test_design_review_asks_repository_questions_for_product_sites_only(tmp_path
         DESIGN_REVIEW_ANSWER,  # answers for tool.py only
         render({"tool.py": "def build():\n    print('built')\n",
                 "tests/test_tool.py": "def test_build():\n    assert True\n"}),
-        VERIFICATION_ANSWER, "health: ok", "code review: ok", "qa: ok", "VERDICT: PASS"])
+        "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER, "VERDICT: PASS"])
 
     assert run.exit_ok, run.error
     assert int(run.facts.get("design_review_reruns_used", 0)) == 0

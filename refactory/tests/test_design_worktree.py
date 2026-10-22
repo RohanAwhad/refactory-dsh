@@ -85,8 +85,8 @@ def _answers(*emits: str) -> list[str]:
     not run.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
-            *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 
 def _mode(**knobs) -> DesignMode:
@@ -714,8 +714,9 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
     git(worktree.recorded(run).path, "checkout", "--", "app.py")
 
     redone = DesignMode.resume(run, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
+                                                          *REVIEW_ANSWERS[:3],
                                                           VERIFICATION_ANSWER,
-                                                          *REVIEW_ANSWERS]))
+                                                          REVIEW_ANSWERS[3]]))
     assert redone.error is None
     assert (run / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
     assert git(repo, "show", f"{_report(run)['branch']}:tool.py") == "print('redone')"
@@ -1541,7 +1542,7 @@ def _fast(workdir: Path, *emits: str, refused: int = 0, knobs: dict | None = Non
     mode.load_state_dict(state)
     answers = [FAST_PLAN] + [answer for index, emit in enumerate(emits)
                              for answer in ((emit,) if index < refused
-                                            else (emit, VERIFICATION_ANSWER, FAST_QA))]
+                                            else (emit, FAST_QA, VERIFICATION_ANSWER))]
     return mode.run(workdir, model=FakeModel(answers),
                     task={"name": NAME, "brief": "a tool", "check": "python tool.py", **task})
 
@@ -1553,13 +1554,13 @@ def test_design_fast_changes_a_repository_in_a_worktree_and_delivers_nothing(rep
     # Passes only where app.py is as committed and the setup command has run: the worktree, prepared.
     tool = ("import pathlib\nassert pathlib.Path('app.py').read_text() == \"print('app')\\n\"\n"
             "assert pathlib.Path('built.txt').exists()\n")
-    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), VERIFICATION_ANSWER, FAST_QA])
+    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), FAST_QA, VERIFICATION_ANSWER])
     result = DesignFastMode().run(tmp_path / "run", model=model, task={
         "name": NAME, "brief": "a tool", "check": "python tool.py", "target": str(repo),
         "setup": "python -c \"open('built.txt', 'w').write('built')\""})
     assert result.exit_ok, result.error
     assert "===EDIT: <relative path>===" in model.prompts[1], "emit is told it may edit the last attempt"
-    assert str(worktree.WRAPPER) in model.prompts[3], "focused QA is told how to run a command in the worktree"
+    assert str(worktree.WRAPPER) in model.prompts[2], "focused QA is told how to run a command in the worktree"
     assert (git(repo, "rev-parse", "HEAD"), (repo / "app.py").read_text()) == (head, "print('mine, not committed')\n")
     payload = _report(tmp_path / "run")
     assert (payload["target"], payload["base"]) == (str(repo.resolve()), head)
