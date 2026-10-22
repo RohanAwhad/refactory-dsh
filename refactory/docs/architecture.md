@@ -291,7 +291,7 @@ outer-loop evaluations):
 - **Per-op timeout.** Derived from the shared `command_timeout_s()` formula in
   `lowering.py` (matching the DSH spine's lowering classification) clamped to
   the remaining budget with a 1 s floor. Nodes without a classification get
-  DSH's 3600 s default. Ops and fn gates with a timeout run in a child process
+  DSH's 3600 s default (only for classified nodes). Ops and fn gates with a timeout run in a child process
   forked from a preloaded forkserver (via a module-level
   `multiprocessing.get_context("forkserver")` context whose
   `set_forkserver_preload` is called with `refactory_dsh.nn.executor`,

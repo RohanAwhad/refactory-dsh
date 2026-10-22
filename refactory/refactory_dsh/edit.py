@@ -60,7 +60,7 @@ def _digest(state: dict[str, Any]) -> str:
     return candidate_id(state)
 
 
-def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
+def edit(config: EditConfig, client: Any = None, *, enable_recovery: bool = False) -> dict[str, Any]:
     """Revise a mode and report the before and after scores.
 
     The graph owns validation, smoke and comparison on every entry point. This
@@ -104,7 +104,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     run = mode.run(
         run_workdir,
         model=client,
-        enable_recovery=True,
+        enable_recovery=enable_recovery,
         task={
             "name": config.name,
             "brief": config.brief,
@@ -231,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
                 project=None if args.resume else project_root(),
                 timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
             ),
+            enable_recovery=True,
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

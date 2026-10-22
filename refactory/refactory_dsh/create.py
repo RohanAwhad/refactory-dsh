@@ -684,7 +684,7 @@ def parse_verdicts(pairs: list[str]) -> dict[str, str]:
     return verdicts
 
 
-def create(config: CreateConfig, client: Any = None) -> CreateResult:
+def create(config: CreateConfig, client: Any = None, *, enable_recovery: bool = False) -> CreateResult:
     """Run create-mode once. Returns what was created, or raises why it was not."""
     # Before the mode is loaded and long before the first model call: a creation that
     # says neither what class of work it is for nor that it is the single-shot special
@@ -727,7 +727,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
         },
         max_steps=config.max_steps,
         verdicts=dict(config.verdicts),
-        enable_recovery=True,
+        enable_recovery=enable_recovery,
         resource_limits=config.resource_limits,
     )
     if not run.exit_ok:
@@ -886,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
                 resource_limits=arguments(args),
             ),
             client=client,
+            enable_recovery=True,
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

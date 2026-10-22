@@ -803,7 +803,7 @@ class Executor:
             state = {"knobs": {n: {"value": v} for n, v in self.ctx.knobs.items()}}
             raw = _cmd_timeout_s(node, state)
             if raw is None:
-                raw = 3600  # DSH cordis default
+                return None  # unclassified: no child-process timeout, retry only
             remaining = self.ctx.budget.remaining_s() if self.ctx.budget is not None else None
             if remaining is not None:
                 raw = min(raw, remaining)

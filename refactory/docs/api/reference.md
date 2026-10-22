@@ -616,7 +616,7 @@ create-mode: a mode whose output is a whole package.
 | class | `CreateError` | `` |
 | class | `CreateMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | class | `CreateResult` | `(package: 'str', mode: 'str', path: 'Path', files: 'list[str]' = <factory>, smoke_score: 'float \| None' = None, iterations: 'int' = 0, duration_s: 'float' = 0.0) -> None` |
-| function | `create` | `(config: 'CreateConfig', client: 'Any' = None) -> 'CreateResult'` |
+| function | `create` | `(config: 'CreateConfig', client: 'Any' = None, *, enable_recovery: 'bool' = False) -> 'CreateResult'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `parse_verdicts` | `(pairs: 'list[str]') -> 'dict[str, str]'` |
 | function | `result_from_run` | `(run: 'RunResult') -> 'dict[str, Any]'` |
@@ -641,7 +641,7 @@ Revise an existing mode from a brief.
 |---|---|---|
 | class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, smoke_timeout_s: 'int' = 3600, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, fast: 'bool' = False, repair_attempts: 'int' = 1, check: 'str' = '', check_timeout_s: 'int' = 60, resource_limits: 'dict[str, Any] \| None' = None, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
 | class | `EditMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
-| function | `edit` | `(config: 'EditConfig', client: 'Any' = None) -> 'dict[str, Any]'` |
+| function | `edit` | `(config: 'EditConfig', client: 'Any' = None, *, enable_recovery: 'bool' = False) -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 
 - **`EditConfig`** — A revision: what to change, and what to do about a regression.

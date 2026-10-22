@@ -209,23 +209,13 @@ def test_wiring_at_all_cli_sites():
     """Every walker run/resume site passes enable_recovery=True."""
     from refactory_dsh import create, design, edit
 
-    sites = [
-        (design, "main"),
-        (create, "create"),
-        (edit, "edit"),
-    ]
-
-    for module, func_name in sites:
-        source = inspect.getsource(getattr(module, func_name))
-        assert "enable_recovery=True" in source, (
-            f"{module.__name__}.{func_name} does not pass enable_recovery=True"
-        )
-
-    # Check resume sites via the CLI main functions.
+    # Every CLI main() must pass enable_recovery=True at both the run and resume
+    # paths.  Library functions (create.create, edit.edit) accept it as a
+    # parameter so tests can run without recovery; the CLI is what wires True.
     for module in (design, create, edit):
         source = inspect.getsource(module.main)
         assert "enable_recovery=True" in source, (
-            f"{module.__name__}.main (resume path) does not pass enable_recovery=True"
+            f"{module.__name__}.main does not pass enable_recovery=True"
         )
 
     # Check WalkerEvaluator.

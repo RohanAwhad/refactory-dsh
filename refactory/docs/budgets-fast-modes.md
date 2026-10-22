@@ -139,7 +139,7 @@ role-based/inherited behavior.
 
 Elapsed limits are checked at graph boundaries and while owned model/check
 processes run. Under `enable_recovery` (the default for walker authoring runs
-and outer-loop evaluations), ops and fn gates with a derived timeout run in a
+and outer-loop evaluations), classified ops and fn gates with a derived timeout run in a
 child process forked from a preloaded forkserver and are killed at the limit
 via session-grouped SIGTERM→SIGKILL escalation; ops in the child get no
 `ctx.budget`, and the parent's kill is the enforcement. Token limits are enforced
