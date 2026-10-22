@@ -199,16 +199,35 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     )
   })
 
-  it('four branches drain before join_qa, then gate_qa follows', () => {
-    const s = new Spine(graph)
-    // Advance through the graph until fork_qa
-    while (!ids(s).includes('fork_qa')) {
+  /** Walk to `until`, answering the scale gates with `scale` and every other gate proceed. */
+  function advance(s: Spine, until: string, scale: 'proceed' | 'scoped'): string[] {
+    const visited: string[] = []
+    while (!ids(s).includes(until)) {
       for (const n of ids(s)) {
+        visited.push(n)
         const view = s.view(n)
-        if (view._type === 'GateNode') s.verdict(n, 'proceed')
+        if (view._type === 'GateNode') s.verdict(n, n.startsWith('route_') ? scale : 'proceed')
         else s.complete(n)
       }
     }
+    return visited
+  }
+
+  it('a scoped change skips the perspectives step and the design-review agent', () => {
+    const scoped = advance(new Spine(graph), 'emit', 'scoped')
+    expect(scoped).toContain('synthesize_strategy')
+    expect(scoped).toContain('gate_design_review')
+    expect(scoped).not.toContain('strategy_director')
+    expect(scoped).not.toContain('design_review')
+    const full = advance(new Spine(graph), 'emit', 'proceed')
+    expect(full).toContain('strategy_director')
+    expect(full).toContain('design_review')
+  })
+
+  it('four branches drain before join_qa, then gate_qa follows', () => {
+    const s = new Spine(graph)
+    // Advance through the graph until fork_qa
+    advance(s, 'fork_qa', 'proceed')
     s.complete('fork_qa')
     const branches = ids(s)
     expect(branches).toContain('health_checker')

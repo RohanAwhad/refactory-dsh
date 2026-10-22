@@ -345,9 +345,8 @@ completed with status 0. The build was then checked for the damage a build can d
 doc gates pass — because "it exited 0" and "it left the tree working" are different
 claims and only the second one matters.
 
-**What this still does not prove.** It is not a clean clone: the submodules were
-already initialised and the venv already existed, so the script's fresh-clone branches
-were not exercised. A machine with neither was not available here.
+**What this still does not prove.** It is not a clean clone: the venv already existed,
+so the script's fresh-clone branches were not exercised. A machine with neither was not available here.
 
 ---
 
@@ -1088,11 +1087,39 @@ needed the design; the rest were found by design-blind methods:
 - **M13** Boundary values
 - **M15** Weakened tests
 
+For a change to an existing repository the three code reviewers apply M2, M3, M11 and
+M12 to every changed function (`REPO_CHANGE_REVIEW_INSTRUCTIONS`), so the verifier
+applies only M1, M2, M13 and M15 there, and its time goes to what only a reader
+without the design finds. A new artifact's reviewers do not apply M3, M11 or M12, and
+fix_pack has no reviewers, so in those the verifier applies all seven.
+`prepare_design` sets the `verification_methods` fact by `deliverable_kind`.
+
 The verifier is given the brief, the diff and the repository — never
 design.md. It runs in parallel with the reviews as an optional branch of
-the review fork. Its findings are advisory: they never spend review
-attempts, never fail or halt a run on their own. A verifier branch that
-fails or returns nothing is recorded as missing.
+the review fork, bounded at `VERIFIER_TIMEOUT_S` (600 s) on both runtimes: the
+node declares `timeout_s`, the spine gives its dispatched session that wall
+(`node_wall_s`) plus the usual dispatch overhead, and the walker gives its model
+client the same wall. Its prompt asks it to finish in about seven minutes and to write
+each finding as it finds it, since a session stopped at the wall leaves nothing. A
+verifier that fails, returns nothing or runs out of time is recorded as missing.
+fix_pack's verifier is inline on the main path, where running out of time would fail
+the run, so it keeps the route's envelope.
+
+**It never gets a builder round of its own.** When a review finds a core defect, the
+verifier's findings ride along in the same feedback, with the instruction to answer
+each under `## Verifier findings` in emit.txt (fixed, or rebutted with a cited
+file:line). Otherwise `gate_qa` writes them, with any rebuttal, to
+`reviews/verification-unresolved.md`. Overwatch reads that file when it exists (it is
+not a declared input, because on the spine a declared input must exist, and it does
+not in a run whose verifier found nothing) and makes a finding
+that breaks an ask or existing behaviour, unrebutted, its own core finding, which
+sends the build back; the pull request lists the rest. In the fast modes, with no
+Overwatch, the pull request lists them. A round with no verifier finding empties the
+file, so an earlier round's findings are never reported as current.
+
+This replaced an advisory builder round (#475) that the verifier took whenever the
+reviews passed and it did not: a full emit, check and review cycle spent on findings
+no other gate judged.
 
 ### Why design-blind
 
@@ -1316,13 +1343,41 @@ things for every clause:
    patches the project's own modules on the tested path. A test that does
    is `local`, not `connected`.
 
-**Fail closed.** Any status other than a known catch (`fail`) is a failure,
-never a pass. This includes `not_in_diff`, `unavailable`, `collection_error`,
-`import_only` (without a caught sibling) and `pass` (the test did not catch
-the revert).
+**Measured failures block; unmeasured checks are advisory.** A clause is BLOCKING
+when the audit measured a miss:
+- the site is `not_in_diff`;
+- the test still passes after the revert (`pass`: it does not reach the site);
+- the cited test ran no tests (`no_tests`: a wrong test id);
+- a code site has no tests and its change is not comments only;
+- the test patches the changed function (§26);
+- any status the audit does not know.
 
-A clause that fails any check is BLOCKING. The message names the correction id,
-the clause, the site and the test.
+The message names the correction id, the clause, the site and the test.
+
+A check the audit could not measure is advisory instead. The run proceeds, and
+the pull request's Verification section lists it under "Correction-audit checks
+not measured (advisory)" for a reviewer to check by hand. It is also in
+`correction-audit.json` (clause status `advisory`) and `reviews/overwatch-gate.txt`
+or `fast-report.json`. These cases are:
+- `not_run`: the time cap ran out, the test timed out or was killed, the patch
+  did not apply, or git failed;
+- `collection_error`: the revert broke test collection, so it measured nothing;
+- `import_only` or `new_file` with no caught sibling: the hunk only adds new
+  definitions, so reverting it can only break an import;
+- a `doc` clause naming a changed file that is not documentation (wording in a
+  code file).
+
+A measured miss is never hidden by an unmeasured check: a wrong test id or an
+unknown result on any test of a site blocks, even when another test of the same
+site was not run.
+
+A site whose change is comments only passes without a test, since no test can
+catch a comment (`comment_only`). Each added line is judged in place in HEAD's
+file: Python with `tokenize`, TypeScript and JavaScript (not JSX) with a scan that
+knows strings, template literals and regular expressions. A `#` or `//` inside a
+string, a block or JSDoc comment followed by code, a pointer dereference such as
+`*p = 0;` and a directive such as `//go:embed` are code. A file of any other kind
+is never comment-only.
 
 **Withdrawn corrections.** A correction whose audit row has `status == "excluded"`
 with a `user_change` pointing to a later ledger entry is skipped — it was
@@ -1332,21 +1387,29 @@ withdrawn. This reuses the existing exclusion validation path.
 - **prohibition:** requires a `pattern` field; code confirms the pattern is
   absent from the `+` lines of the diff. Missing `pattern` fails the clause.
 - **doc:** requires a `path` field naming a changed documentation file
-  (`.md`, `.rst`, `.txt`, or under `docs/`). A path to a non-doc file fails.
+  (`.md`, `.rst`, `.txt`, or under `docs/`). A path to a non-doc file passes as
+  advisory when that file changed, and fails when it did not.
 - **design:** requires a non-empty `heading` field that exists in the current
   `design.md`. Missing or unknown heading fails the clause.
 - **test:** cites a code site plus the test; the revert runs against the code
-  site, not the test file. A site inside a test file is not a code site.
+  site, not the test file. A site inside a test file is not a code site: it
+  passes when it is in the diff (`test_file`) and fails when it is not.
 
 A clause whose `sites` is not a list fails with "sites must be a list".
 
 **New-file sites.** A site in a file the base lacks (`new_file` result) or a
 site whose revert fails only with an import error on a name the reverted hunks
-define (`import_only` result) passes only when the same clause has a sibling
-site in an existing file whose revert fails its test.
+define (`import_only` result) passes when the same clause has a sibling site in
+an existing file whose revert fails its test. Without one it is advisory.
 
 **Test.** `test_correction_audit.py::test_correction_audit_unbuilt_blocks`,
-`test_correction_audit_no_base_does_not_block`.
+`test_correction_audit_no_base_does_not_block`,
+`test_large_ledger_past_the_cap_proceeds_with_an_advisory` (full design, through
+`gate_overwatch` and the pull-request text),
+`test_design_fast_past_the_cap_proceeds_with_an_advisory`,
+`test_a_measured_miss_still_blocks_beside_unmeasured_pairs`,
+`test_a_comment_only_site_needs_no_test`,
+`test_a_doc_clause_on_a_changed_code_file_is_advisory`.
 
 ## 26. Evidence scope enforcement (#431)
 
@@ -1400,21 +1463,35 @@ it catches the change.
    - `collection_error` → import/collection error, not a catch
    - `import_only` → fails only due to import of a name the reverted hunk
      defines, not a catch
-   - `unavailable` → timed out, signalled, test-file site, no tests ran
+   - `no_tests` → the cited test does not exist (pytest exit 4 or 5)
+   - `not_run` → the time cap ran out, the test timed out or was killed, the
+     patch did not apply, or git failed
+
+   Before any revert, a site in a test file is recorded as `test_file`, and a site
+   whose added lines are all comments as `comment_only`. Neither is reverted.
 8. Restore the file with `git checkout HEAD -- <file>` in a `finally` block.
 
 **Test-file exclusion.** A site inside a test file (`test_*.py`, `*_test.py`,
-`*.spec.ts`, or under a `tests/` directory) is not a code site.
+`*.spec.ts`, or under a `tests/` directory) is not a code site. It is checked
+against the diff and never reverted.
 
-**Cache.** Results are cached per `(HEAD, path:line, test_name)` in
+**Cache.** Measured results are cached per `(HEAD, path:line, test_name)` in
 `.refactory/site-revert-cache.json`, a dedicated file separate from
-`base-check.json`.
+`base-check.json`. A `not_run` result is never cached, so a later gate measures
+the pair. An `unavailable` entry cached by an earlier version is measured again.
 
-**Time cap.** Total revert time is capped below the gate's DSH timeout (240 s
-default). Past the cap, remaining pairs are reported as `unavailable`.
+**Time cap.** Total revert time is capped below the gate's DSH timeout
+(`SITE_REVERT_TOTAL_S`, 240 s; `SITE_REVERT_PAIR_S`, 60 s per pair). Past the cap,
+the remaining pairs are `not_run`, which is advisory (§25). The cap is checked only
+after the site itself: a site that is not in the diff, or whose path lies outside the
+run's worktree, is `not_in_diff` whatever the time.
 
-**Blocking rule.** Missing or unavailable revert results are BLOCKING. The only
-exemptions are:
+**Measuring honestly.** Each revert runs `python -B -m pytest`, so a module reverted
+twice within one second never runs from a stale `.pyc`. A test that passes is never a
+`collection_error`, whatever it prints, and a cited test that is not a test id is
+`no_tests`.
+
+**Blocking rule.** A measured miss is BLOCKING (§25). The only exemptions are:
 1. A `## Site revert exemptions` section in `design.md`.
 2. An explicit no-base record (`{"no_base": true}`) — modes without a base skip
    diff and revert checks.
@@ -1453,12 +1530,8 @@ What a gate proceeds with is recorded by `record_follow_ups` and reaches the pul
 request through `delivery._body`.
 
 **The cap.** A full-mode run has `attempts` builder rounds (`check_attempts` in design;
-three by default),
-shared by check failures and review reloops. The verifier's advisory round used to
-come on top of it; `take_advisory_round` now spends a round from the same cap, never
-the last one (a repair must remain for whatever the advisory rebuild breaks), and
-otherwise sends the verifier's findings to the pull request's unresolved verification
-list instead.
+three by default), shared by check failures and review reloops. The verifier never
+adds a round of its own (§15).
 
 **Held by.** `test_follow_ups.py`.
 

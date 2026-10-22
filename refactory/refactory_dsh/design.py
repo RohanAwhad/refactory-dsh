@@ -104,7 +104,7 @@ class DesignMode(Mode):
                     "check-record.json", "feedback-initial.json"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
-                      "deliverable_kind", "review_instructions",
+                      "deliverable_kind", "review_instructions", "verification_methods",
                       *repo_change.produces(), "delivery", "delivery_plan",
                       "has_pitfalls_step", "pitfalls", "pitfalls_review",
                       "claims_check_feedback", "claims_check_attempts_used", "design_review_status"),
@@ -210,6 +210,15 @@ class DesignMode(Mode):
             max_iterations=8,
             notes="proceed only when pitfalls.json is valid; reloop to pitfalls_researcher otherwise",
         ))
+        # A scoped change skips the perspectives step and, below, the design-review
+        # agent: both runtimes route on these gates' labels (`scoped`, or `proceed`).
+        graph.add(Node(
+            "route_strategy", "gate", evaluator=f"{OPS}:route_strategy",
+            writes=("strategy-plan.json", "strategy/"),
+            produces=("strategy_plan",),
+            max_iterations=8,
+            notes="a scoped change is planned straight from the research; a full design weighs perspectives",
+        ))
         graph.add(Node(
             "strategy_director", "agent",
             prompt_template=(
@@ -221,9 +230,7 @@ class DesignMode(Mode):
                 "You are the strategy director. From the research, choose between two "
                 "and five perspectives on how this artifact could be built — including "
                 "the simplest thing that could pass the check, and one that says what "
-                "the check will not catch. For a scoped change, use one perspective: "
-                "the simplest thing that could pass the check, saying also what the "
-                "check will not catch. Spawn one subagent per perspective and have "
+                "the check will not catch. Spawn one subagent per perspective and have "
                 "it write `strategy/<slug>.md` under the run directory, with each "
                 "finding as a heading `### FND-<slug>-<n> \u2014 <the finding>`, numbered "
                 "from 1 within the file. Then write "
@@ -323,6 +330,12 @@ class DesignMode(Mode):
             writes=("design.md",),
             produces=("design",),
             notes="write the design document the code is written from",
+        ))
+        graph.add(Node(
+            "route_design_review", "gate", evaluator=f"{OPS}:route_design_review",
+            produces=("design_review_by",),
+            max_iterations=8,
+            notes="a scoped change's design is checked automatically; a full design is reviewed",
         ))
         graph.add(Node(
             "check_design_claims", "gate",
@@ -478,10 +491,11 @@ class DesignMode(Mode):
         ))
 
         # ── design-v2's three reviews, in parallel, and the overwatch pass ──
-        from refactory_dsh.verification import VERIFIER_PROMPT
+        from refactory_dsh.verification import VERIFIER_PROMPT, VERIFIER_TIMEOUT_S
         graph.add(Node(
             "verifier", "agent",
             prompt_template=VERIFIER_PROMPT,
+            timeout_s=VERIFIER_TIMEOUT_S,
             reads=("brief.json", "test-guardedness.json", "changes.diff"),
             writes=("reviews/verification.md",),
             produces=("verification",),
@@ -604,7 +618,7 @@ class DesignMode(Mode):
                    "changed-functions.json"),
             writes=("reviews/qa-gate.txt", "reviews/verification-unresolved.md",
                     "reviews/finding-sources.json", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("qa_gate", "review_reruns_used", "verification_advisory_used"),
+            produces=("qa_gate", "review_reruns_used"),
             max_iterations=5,
             notes="proceed when every review ran and none found a core defect; "
                   "non-core findings become follow-ups; verifier findings are advisory",
@@ -638,12 +652,18 @@ class DesignMode(Mode):
                 "or repeating an unchanged probe to resolve an unavailable tool. "
                 "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
                 + SEVERITY_RULE + " " + OVERWATCH_VERDICT_RULE + " "
-                "Read reviews/verification-unresolved.md if it exists. Check whether the "
-                "builder addressed or rebutted each finding with a cited file:line.\n\n"
+                "Read reviews/verification-unresolved.md if it exists: the design-blind "
+                "verifier's findings, each with the builder's rebuttal where there is one. "
+                "Check each against the code. One that breaks an ask in the brief or existing "
+                "behaviour, and is not rebutted with a cited file:line, is your own BLOCKING "
+                "finding tagged `[core]`; the rest go to the pull request.\n\n"
                 "Write `reviews/overwatch.md` ending with a "
                 "line that is exactly `VERDICT: PASS` or `VERDICT: FAIL`, and name every "
                 "ask with no evidence behind it."
             ),
+            # verification-unresolved.md is read when present (the prompt says so) and
+            # not declared: a declared input must exist on the spine, and it does not
+            # in a run whose verifier found nothing.
             reads=("brief.json", "design.md", "reviews/qa-synthesized.md", "test-guardedness.json"),
             writes=("reviews/overwatch.md",),
             produces=("overwatch",),
@@ -721,11 +741,15 @@ class DesignMode(Mode):
         graph.connect("gate_research", "pitfalls_researcher", condition="proceed")
         graph.connect("pitfalls_researcher", "gate_pitfalls")
         graph.connect("gate_pitfalls", "pitfalls_researcher", condition="reloop")
-        graph.connect("gate_pitfalls", "strategy_director", condition="proceed")
+        graph.connect("gate_pitfalls", "route_strategy", condition="proceed")
+        graph.connect("route_strategy", "strategy_director", condition="proceed")
+        graph.connect("route_strategy", "synthesize_strategy", condition="scoped")
         graph.connect("strategy_director", "synthesize_strategy")
         graph.connect("synthesize_strategy", "design_doc")
         graph.connect("design_doc", "check_design_claims")
-        graph.connect("check_design_claims", "design_review", condition="proceed")
+        graph.connect("check_design_claims", "route_design_review", condition="proceed")
+        graph.connect("route_design_review", "design_review", condition="proceed")
+        graph.connect("route_design_review", "gate_design_review", condition="scoped")
         graph.connect("check_design_claims", "design_doc", condition="reloop")
         graph.connect("design_review", "gate_design_review")
         graph.connect("gate_design_review", "design_doc", condition="reloop")

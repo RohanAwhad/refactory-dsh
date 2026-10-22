@@ -119,8 +119,8 @@ FOLLOW_UP = "follow-up: "
 def _advisories(ctx: Any) -> list[str]:
     """The advisory notes and follow-ups gate_qa recorded, carried into the final report."""
     findings = ctx.read_json("fast-report.json", {}).get("findings") or []
-    return [f for f in findings
-            if str(f).startswith((evidence.ADVISORY_REPO_QUESTIONS, FOLLOW_UP))]
+    return [f for f in findings if str(f).startswith(
+        (evidence.ADVISORY_REPO_QUESTIONS, evidence.ADVISORY_CORRECTION_AUDIT, FOLLOW_UP))]
 
 
 def _repair(ctx: Any, findings: list[str], *, kind: str = "check",
@@ -730,7 +730,7 @@ def gate_qa(ctx: Any) -> str:
 
     # Case 1: QA blocking + verifier findings → combine into one repair round
     if findings and verifier_text:
-        findings.append("[verifier] " + verifier_text)
+        findings.append("[verifier] " + verifier_text + "\n\n" + create_ops.VERIFIER_RESPONSE)
 
     if findings:
         # Classify only refactory's own text; check stderr/stdout is target text
@@ -759,36 +759,16 @@ def gate_qa(ctx: Any) -> str:
             findings.append(create_ops.non_core_ride_along(non_core))
         return _repair(ctx, findings, kind='check' if check_failed else 'review')
 
-    # Case 2: Only verifier findings, QA passed
-    verifier_rebuttals: list[str] = []
-    if verifier_text:
-        advisory_used = int(ctx.facts.get("verification_advisory_used", 0))
-        ctx.set_fact("verification_advisory_used", advisory_used + 1)
-        if advisory_used == 0:
-            fb = ("[verifier] " + verifier_text +
-                  "\n\nFor each verifier finding, respond in emit.txt under "
-                  "## Verifier findings with the finding, then: fixed, or "
-                  "rebutted: <reason> <file:line>")
-            if non_core:
-                fb += "\n\n" + create_ops.non_core_ride_along(non_core)
-            ctx.write_text("repair.txt", fb + "\n")
-            ctx.set_fact("repair_feedback", fb)
-            _write_finding_sources_fast(ctx, qa, verifier_filtered)
-            return Verdict("reloop", fb)
-        else:
-            # Advisory round spent; collect rebuttals and write remaining
-            verifier_rebuttals = _parse_verifier_rebuttals(ctx)
-            if verifier_filtered:
-                lines = []
-                for finding in verifier_filtered:
-                    desc = _finding_description(finding)
-                    reb = next((r for r in verifier_rebuttals if desc.lower() in r.lower()), None)
-                    lines.append(finding + (f" — {reb}" if reb else ""))
-                ctx.write_text("reviews/verification-unresolved.md",
-                               "\n".join(lines) + "\n")
+    # Case 2: Only verifier findings, QA passed. The verifier never gets a builder
+    # round of its own; the pull request lists what it found.
+    verifier_rebuttals = _parse_verifier_rebuttals(ctx) if verifier_filtered else []
+    create_ops.record_verification_unresolved(ctx, verifier_filtered, verifier_rebuttals)
 
     # Case 3: No core defect — proceed, with any non-core findings as follow-ups
     create_ops.record_follow_ups(ctx, "focused_qa", non_core)
+    not_measured = evidence.correction_audit_advisories(ctx)
+    if not_measured:
+        advisory.append(evidence.advisory_correction_audit(not_measured))
     ctx.set_fact("qa_passed", True)
     _write_finding_sources_fast(ctx, qa, verifier_filtered,
                                 rebuttals=verifier_rebuttals, proceeding=True)
