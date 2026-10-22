@@ -583,10 +583,13 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                     ).strip()
 
                 # Write inherited and commit to check-record.json (correction item 2).
+                _base_reset_list = getattr(ctx, '_base_reset', [])
                 cr_record.update({
                     "inherited": sorted(filtered.inherited),
                     "commit": str(ctx.facts.get("commit", "")),
                 })
+                if _base_reset_list:
+                    cr_record["base_reset"] = _base_reset_list
                 ctx.write_json("check-record.json", cr_record)
 
                 # R6: store failure history and blocker for convergence detection.
