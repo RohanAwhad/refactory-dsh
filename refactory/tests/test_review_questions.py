@@ -220,13 +220,14 @@ def test_create_fast_mode_no_review_instructions():
 
 
 def test_design_mode_has_review_reloop_edges():
-    """DesignMode's graph has review_reloop edges."""
+    """DesignMode's QA gate has its review_reloop edge. The design review has none:
+    repository questions at design time are advisory, never a re-run."""
     from refactory_dsh.design import DesignMode
 
     mode = DesignMode()
     graph = mode.build()
     edges = [(e.source, e.target, e.condition) for e in graph.edges]
-    assert ("gate_design_review", "design_review", "review_reloop") in edges
+    assert ("gate_design_review", "design_review", "review_reloop") not in edges
     assert ("gate_qa", "fork_qa", "review_reloop") in edges
 
 
@@ -525,8 +526,9 @@ def test_design_fast_repo_questions_advisory_after_one_rerun(tmp_path, monkeypat
     assert "focused_qa" in advisory and "tool.py" in advisory
 
 
-def test_design_review_exhaustion_reaches_strategy_without_failing(tmp_path, monkeypatch):
-    """(d) design_review exhaustion reaches gate_strategy; the run does not fail."""
+def test_design_review_repo_questions_are_advisory_without_a_rerun(tmp_path, monkeypatch):
+    """(d) Missing repository questions at design time are listed at the person's gate;
+    the design review is not re-run for them and the run does not fail."""
     import sys
     from refactory_dsh.design import DesignMode
     from tests_support import (FakeModel, RESEARCH_ANSWER, PITFALLS_ANSWER,
@@ -553,8 +555,7 @@ def test_design_review_exhaustion_reaches_strategy_without_failing(tmp_path, mon
         "perspectives",              # strategy_director
         "one plan",                  # synthesize_strategy
         DESIGN_DOC_ANSWER,           # design_doc
-        bad_design_review,           # design_review (1st — the one targeted re-run follows)
-        bad_design_review,           # design_review (2nd — still missing → advisory, proceed)
+        bad_design_review,           # design_review (missing questions → advisory, proceed)
         # gate_strategy → proceed (via verdicts)
         render({"tool.py": tool}),   # emit
         # Reviewers (fork_qa: health, code, qa, verifier):
@@ -580,19 +581,19 @@ def test_design_review_exhaustion_reaches_strategy_without_failing(tmp_path, mon
               "check": f"{sys.executable} tool.py",
               "target": str(repo)})
 
-    # The run does NOT fail — after one re-run the missing questions are advisory
     assert run.exit_ok, run.error
 
-    # design_review was called twice: the first pass and its one targeted re-run
+    # design_review ran once: the missing questions cost no round
     dr_prompts = [p for p in model.prompts
                   if "Read the design document from `design.md`" in p
                   and "BLOCKING" in p and "open alternative" in p.lower()]
-    assert len(dr_prompts) == 2, (
-        f"design_review ran {len(dr_prompts)} times, expected 2"
+    assert len(dr_prompts) == 1, (
+        f"design_review ran {len(dr_prompts)} times, expected 1"
     )
-    # The gap is shown with the findings instead of spending design-review attempts
-    assert "advisory: repository questions" in run.facts["design_review_findings"]
-    assert run.facts["design_review_status"].startswith("Design review: PASS")
+    # The gap is shown at the person's gate as advisory
+    assert "[repo-questions]" in run.facts["design_review_advisory"]
+    assert "Advisory" in run.facts["design_review_findings"]
+    assert run.facts["design_review_status"].startswith("Design review: PASS, ")
 
 
 def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path, monkeypatch):
@@ -794,5 +795,7 @@ def test_design_review_asks_repository_questions_for_product_sites_only(tmp_path
         "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER, "VERDICT: PASS"])
 
     assert run.exit_ok, run.error
-    assert int(run.facts.get("design_review_reruns_used", 0)) == 0
+    # The test file needs no repository questions: nothing about it is listed.
+    assert "[repo-questions]" not in run.facts["design_review_advisory"]
+    assert "test_tool.py" not in run.facts["design_review_advisory"]
     assert run.facts["design_review_status"].startswith("Design review: PASS")
