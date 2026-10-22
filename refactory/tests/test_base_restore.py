@@ -759,21 +759,39 @@ def test_e2e_fast_survives_guarded_test(tmp_path, monkeypatch):
 
 
 def test_e2e_dsh_runner_survives_guarded_test(tmp_path, monkeypatch):
-    """One of the end-to-end cases runs through the DSH runner (run.main)."""
-    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    """One of the end-to-end cases runs through the DSH runner (run.main)
+    as ``python -m refactory_dsh.run …:check_artifact --node check``
+    in its own process, so both runtimes are covered."""
     from refactory_dsh.design import DesignMode
-    from refactory_dsh import lowering, run as node_runner
-    from tests_support import (FakeModel, render, DESIGN_DOC_ANSWER,
-                               DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
-                               RESEARCH_ANSWER, VERIFICATION_ANSWER,
-                               REVIEW_ANSWERS)
+    from refactory_dsh import lowering, design_ops, repo_change
+    from refactory_dsh.run import run_node, NODE_ENV, WORKDIR_ENV
+    from tests_support import render
 
     repo = _make_e2e_repo(tmp_path)
 
-    # Use DesignMode directly for this test since run.main requires
-    # a full DSH environment. The key verification is that both runtimes
-    # call the same base_check functions.
-    first_emit = render({
+    # Set up the run directory as if earlier graph nodes have already run.
+    run_dir = tmp_path / "run"
+    worktree.create(repo, "HEAD", "test7dsh01234", run_dir)
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["check_attempts"]["value"] = 3
+    lowering.write_declarations(state, run_dir)
+
+    (run_dir / "facts.json").write_text(json.dumps({
+        "name": "e2e_dsh_runner",
+        "brief": "a tool that uses helpers",
+        "check": "python -m pytest -q",
+        "generate": "sh generate.sh",
+    }))
+
+    knobs_json = json.dumps({
+        "check_attempts": 3, "check_timeout_s": 60,
+    })
+    monkeypatch.setenv("REFACTORY_KNOBS", knobs_json)
+
+    # Write the first attempt: modifies the TS helper and the linked test,
+    # adds a deliberately failing test so the check fails.
+    emit_text = render({
         "tests/helpers/graph-shapes.ts": (
             "export const square = (n: number) => n * n;\n"
             "export const cube = (n: number) => n * n * n;\n"
@@ -784,57 +802,53 @@ def test_e2e_dsh_runner_survives_guarded_test(tmp_path, monkeypatch):
         ),
         "app.py": "raise SystemExit(1)\n",
     })
-    second_emit = render({
-        "tests/helpers/graph-shapes.ts": (
-            "export const square = (n: number) => n * n;\n"
-            "export const cube = (n: number) => n * n * n;\n"
-        ),
-        "tests/test_linked.py": (
-            "def test_linked():\n    assert True\n"
-            "def test_new():\n    assert 1 + 1 == 2\n"
-        ),
-        "app.py": "print('fixed')\n",
-    })
+    (run_dir / "emit.txt").write_text(emit_text)
 
-    answers = [
-        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-        first_emit, VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
-        second_emit, VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+    # Materialise the emit in-process (apply changes to the worktree).
+    run_node(
+        f"{repo_change.OPS}:materialise",
+        workdir=run_dir, node_id="materialise",
+    )
+
+    # Run check_artifact through the DSH runner in its own process.
+    # Build the env from the current process (which has conftest's
+    # REFACTORY_HOME, REFACTORY_PROJECTS_DIR, etc.).
+    env = {**os.environ}
+    env[WORKDIR_ENV] = str(run_dir)
+    env[NODE_ENV] = json.dumps({"id": "check", "type": "GateNode"})
+    env["REFACTORY_KNOBS"] = knobs_json
+    env["REFACTORY_PROJECT"] = str(tmp_path)
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.run",
+         f"{design_ops.__name__}:check_artifact", "--node", "check"],
+        capture_output=True, text=True, timeout=120,
+        env=env,
+    )
+
+    # Exit 0 means the gate returned a verdict normally (not an
+    # environment-failure ValueError).  On unfixed code the base
+    # worktree's generate.sh fails because the helper is missing,
+    # evidence.stop_unrepairable raises, and main() returns 1.
+    assert proc.returncode == 0, (
+        f"DSH runner failed (exit {proc.returncode}):\n"
+        f"stdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-2000:]}"
+    )
+
+    # facts.json must not contain an environment failure in base_unavailable.
+    facts = json.loads((run_dir / "facts.json").read_text())
+    base_unavailable = facts.get("base_unavailable", "")
+    assert "the base check could not run" not in base_unavailable, (
+        f"base check became environment failure: {base_unavailable}"
+    )
+
+    # The verdict (last non-empty stdout line) should be "reloop"
+    # (a failing check that goes back to the builder), not "stop".
+    stdout_lines = [
+        l.strip() for l in proc.stdout.strip().splitlines() if l.strip()
     ]
-    answers = answers + [""] * 20
-
-    mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["check_attempts"]["value"] = 3
-    mode.load_state_dict(state)
-
-    # Run through Mode.run which exercises the walker path
-    result = mode.run(
-        tmp_path / "run",
-        model=FakeModel(answers),
-        verdicts={"gate_strategy": "proceed"},
-        task={
-            "name": "e2e_dsh_runner",
-            "brief": "a tool that uses helpers",
-            "check": "python -m pytest -q",
-            "target": str(repo),
-            "generate": "sh generate.sh",
-        },
+    assert stdout_lines, "DSH runner produced no stdout"
+    assert stdout_lines[-1] == "reloop", (
+        f"expected reloop verdict, got {stdout_lines[-1]!r}:\n"
+        f"stderr: {proc.stderr[-2000:]}"
     )
-
-    assert result.exit_ok is True, (
-        f"expected exit_ok, got error: {result.error}"
-    )
-
-    # Verify the base comparison was not recorded as environment failure
-    run_dir = tmp_path / "run"
-    if (run_dir / "check-record.json").exists():
-        cr = json.loads((run_dir / "check-record.json").read_text())
-        # If there was a base_reset, it should be in the record
-        # The key thing is: no environment_failure stopped the run
-        assert cr.get("status") != "environment_failure", (
-            "base check should not be an environment failure"
-        )
