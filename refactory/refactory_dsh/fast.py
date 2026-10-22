@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from refactory_dsh import delivery, repo_change
+from refactory_dsh.create_ops import SEVERITY_RULE
 from refactory_dsh.create import CreateMode
 from refactory_dsh.design import DesignMode
 from refactory_dsh.edit import EditMode
@@ -110,7 +111,9 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
             '"callers":"...", "shared_state":"..."}]}',
         )
     focused_qa_prompt = (
-        qa_prompt + (ARTIFACT_QA if artifact else "")
+        qa_prompt + "\nEach entry in `findings` is a BLOCKING finding. " + SEVERITY_RULE
+        + " A check of something non-core that fails ends its name with `[non-core]`.\n"
+        + (ARTIFACT_QA if artifact else "")
         + ("{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\n"
            if design else "")
         + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS
@@ -119,7 +122,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
     focused_qa_reads = (
         ("brief.json", "focused-check.json", "authoring-evidence.json")
         + (("test-guardedness.json",) if artifact else ())
-        + (("changed-functions.json", "reviews/verification.md") if design else ())
+        + (("changed-functions.json",) if design else ())
     )
 
     graph.add(Node(
@@ -134,30 +137,75 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
     gate_qa_reads = (
         ("focused-qa.json", "focused-check.json", "focused-source.json",
          "authoring-evidence.json", "intent-audit.json")
-        + (("changed-functions.json",) if design else ())
+        + (("changed-functions.json", "reviews/verification.md", "emit.txt") if design else ())
     )
     gate_qa_produces = (
         ("repair_feedback", "repairs_used", "check_repairs_used",
          "review_repairs_used", "qa_passed")
-        + (("review_reruns_used",) if design else ())
+        + (("review_reruns_used", "verification_advisory_used") if design else ())
+    )
+    gate_qa_writes = (
+        ("fast-report.json", "repair.txt",
+         "site-revert-results.json", "correction-audit.json",
+         "reviews/finding-sources.json", "reviews/follow-ups.json", "reviews/follow-ups.md")
+        + (("reviews/verification-unresolved.md",) if design else ())
     )
 
     graph.add(Node(
         "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
         resource_role="final_validation",
         knobs=("repair_attempts", "check_attempt_cap"), reads=gate_qa_reads,
-        writes=("fast-report.json", "repair.txt",
-                "site-revert-results.json", "correction-audit.json"),
+        writes=gate_qa_writes,
         produces=gate_qa_produces + ("check_failures_history", "check_blocker_history",
                                      "convergence_extras_used", "convergence_granted"),
-        max_iterations=12,
+        max_iterations=13 if design else 12,
         notes="repair only within the shared bound; unresolved findings are failure",
     ))
-    graph.connect("focused_check", "focused_qa")
-    graph.connect("focused_qa", "gate_qa")
-    graph.connect("gate_qa", "emit", condition="reloop")
+
     if design:
-        graph.connect("gate_qa", "focused_qa", condition="review_reloop")
+        from refactory_dsh.verification import VERIFIER_PROMPT
+        graph.add(Node(
+            "verifier", "agent",
+            prompt_template=VERIFIER_PROMPT,
+            reads=("brief.json", "test-guardedness.json", "changes.diff"),
+            writes=("reviews/verification.md",),
+            produces=("verification",),
+            role="code_reviewer",
+            resource_role="final_validation",
+            notes="design-blind verification: apply the evidence log's methods "
+                  "to the brief, diff and repo",
+        ))
+        graph.add(Node("fork_qa", "fork",
+                       targets=("focused_qa", "verifier"),
+                       optional_targets=("verifier",),
+                       notes="focused QA and verifier in parallel"))
+        graph.add(Node("join_qa", "join",
+                       sources=("focused_qa",),
+                       notes="wait for focused QA (verifier is optional)"))
+        graph.add(Node(
+            "gate_check", "gate",
+            evaluator=f"{OPS}:gate_check",
+            resource_role="final_validation",
+            reads=("focused-check.json", "check.txt", "check-record.json"),
+            writes=("fast-report.json", "repair.txt"),
+            produces=("repair_feedback", "repairs_used", "check_repairs_used",
+                      "convergence_extras_used", "convergence_granted"),
+            knobs=("repair_attempts", "check_attempt_cap"),
+            max_iterations=12,
+            notes="route check failures and guardedness blocks; verifier handled in gate_qa",
+        ))
+        graph.connect("focused_check", "gate_check")
+        graph.connect("gate_check", "fork_qa", condition="proceed")
+        graph.connect("gate_check", "emit", condition="reloop")
+        graph.connect("fork_qa", "join_qa")
+        graph.connect("verifier", "join_qa")
+        graph.connect("join_qa", "gate_qa")
+        graph.connect("gate_qa", "emit", condition="reloop")
+        graph.connect("gate_qa", "fork_qa", condition="review_reloop")
+    else:
+        graph.connect("focused_check", "focused_qa")
+        graph.connect("focused_qa", "gate_qa")
+        graph.connect("gate_qa", "emit", condition="reloop")
 
 
 class CreateFastMode(CreateMode):
@@ -355,8 +403,6 @@ class DesignFastMode(DesignMode):
             notes="send an emission materialise could not apply back to emit, within the repair bound",
         ))
         _qa_nodes(graph, artifact=True, design=True)
-        from refactory_dsh.verification import wire_verification
-        wire_verification(graph, fast=True)
         graph.add(Node(
             "report", "op", call=f"{OPS}:report_artifact", resource_role="final_validation",
             reads=("focused-qa.json", "focused-check.json"), writes=("design.json", "fast-report.json"),

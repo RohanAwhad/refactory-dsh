@@ -1700,7 +1700,14 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             return False
         return evidence.audit_problems(ctx) == [] and evidence.read_correction_audit(ctx) == []
 
-    if ev_data is not None and check_passed and _audit_passed():
+    from refactory_dsh.create_ops import follow_ups
+
+    left = follow_ups(ctx)
+    if ev_data is not None and check_passed and _audit_passed() and left:
+        reviews_line = ("- **Reviews:** the health check, code review, independent verification, "
+                        "QA and overwatch audit found no core defect; "
+                        f"{len(left)} non-core finding(s) are listed under Follow-ups.\n")
+    elif ev_data is not None and check_passed and _audit_passed():
         reviews_line = ("- **Reviews:** the health check, code review, independent verification and QA found nothing blocking, "
                         "and the overwatch audit passed.\n")
     else:
@@ -1759,6 +1766,12 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
                              + missing + "\n")
     verification += _process_notes_section(ctx)
     sections.append(verification)
+    if left:
+        sections.append(
+            "## Follow-ups (non-core findings)\n\n"
+            "The reviews judged these real but outside the change's core (no ask, "
+            "criterion, correction or existing behaviour depends on them), so they did "
+            "not hold it back:\n\n" + "\n".join(f"- {_public(' '.join(item.split()))}" for item in left))
 
     sections.append(f"## Original request\n\n{brief}")
     sections.append(f"---\n\nWritten by a refactory design run once its reviews passed.\n\n"
@@ -1974,11 +1987,18 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
     if title:
         record["title"] = title
         record["pr_text"] = BODY
+    from refactory_dsh.create_ops import follow_ups
+
+    left = follow_ups(ctx)
+    if left:
+        record["follow_ups"] = left
     _record(ctx, record)
     worktree.record_outcome(found, "succeeded")
     projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status=outcome["status"])
     delivered_head = (merge.merge_commit if merge and merge.merge_commit else found.head)
-    return {"delivery_result": f"{outcome['status']}: {url}, at {delivered_head[:12]}", "pull_request": url}
+    return {"delivery_result": f"{outcome['status']}: {url}, at {delivered_head[:12]}"
+                               + (f", with {len(left)} follow-up(s)" if left else ""),
+            "pull_request": url}
 
 
 def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, why: str,

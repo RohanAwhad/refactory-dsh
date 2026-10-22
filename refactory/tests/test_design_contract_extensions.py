@@ -104,8 +104,8 @@ def _make_design(*, failure_trace=True, ask_mapping=True, empty_trace=False):
     return "\n".join(parts)
 
 
-def test_gate_rejects_missing_failure_trace():
-    """gate_design_review should flag a missing Failure trace section."""
+def test_missing_failure_trace_is_advisory():
+    """A missing Failure trace section is listed for the person, never a design round."""
     from refactory_dsh.design_ops import gate_design_review
     design = _make_design(failure_trace=False, ask_mapping=True)
     review = "No issues found.\n\nVERDICT: PASS"
@@ -118,10 +118,9 @@ def test_gate_rejects_missing_failure_trace():
         facts={"name": "test_r4", "has_pitfalls_step": False},
     )
     result = gate_design_review(ctx)
-    # Should detect missing failure trace; the gate may proceed or reloop
-    # but the problem must be recorded
-    feedback = ctx.facts.get("design_review_feedback", "")
-    assert "Failure trace" in feedback or "failure trace" in feedback
+    assert result == "proceed"
+    assert "Failure trace" in ctx.facts["design_review_advisory"]
+    assert ctx.facts["design_review_status"] == "Design review: PASS, 1 advisory"
 
 
 def test_gate_rejects_missing_ask_mapping():
@@ -142,8 +141,8 @@ def test_gate_rejects_missing_ask_mapping():
     assert "Ask mapping" in feedback or "ask mapping" in feedback
 
 
-def test_gate_rejects_empty_failure_trace():
-    """An empty Failure trace section does not count as present."""
+def test_empty_failure_trace_is_advisory():
+    """An empty Failure trace section does not count as present; it is advisory."""
     from refactory_dsh.design_ops import gate_design_review
     design = _make_design(failure_trace=True, ask_mapping=True, empty_trace=True)
     review = "No issues found.\n\nVERDICT: PASS"
@@ -156,8 +155,8 @@ def test_gate_rejects_empty_failure_trace():
         facts={"name": "test_r4", "has_pitfalls_step": False},
     )
     result = gate_design_review(ctx)
-    feedback = ctx.facts.get("design_review_feedback", "")
-    assert "Failure trace" in feedback or "failure trace" in feedback
+    assert result == "proceed"
+    assert "Failure trace" in ctx.facts["design_review_advisory"]
 
 
 def test_gate_accepts_both_sections_present():
@@ -175,6 +174,7 @@ def test_gate_accepts_both_sections_present():
     )
     result = gate_design_review(ctx)
     feedback = ctx.facts.get("design_review_feedback", "")
-    # Should not contain failure trace or ask mapping problems
-    assert "missing the required ## Failure trace" not in feedback
+    # Neither section is reported, as a blocking problem or as an advisory one.
     assert "missing the required ## Ask mapping" not in feedback
+    assert "Failure trace" not in ctx.facts["design_review_advisory"]
+    assert "Ask mapping" not in ctx.facts["design_review_advisory"]

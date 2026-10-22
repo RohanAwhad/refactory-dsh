@@ -37,7 +37,10 @@ they reach the refill logic only through the entry point.
 
 The emit prompt's "do not apply or test your change anywhere" exists because
 direct edits to the worktree bypass materialise and the check.  The builder probe
-gives a safe alternative:
+gives a safe alternative.  Since dm-133, the probe is also available to
+`design_doc` and `design_review` via `--command` (no `--emission`); the clone
+runs at the run's base with `emission=None`, and the same isolation guarantees
+apply:
 
 - **Standalone clone** (`git clone --no-local --depth 1`): not a linked worktree.
   No `.git` registration.  `origin` removed after clone.
@@ -1086,9 +1089,10 @@ needed the design; the rest were found by design-blind methods:
 - **M15** Weakened tests
 
 The verifier is given the brief, the diff and the repository — never
-design.md. It sits between the build's check and the reviews' verdict
-(after `check` in full mode, after `focused_check` in fast mode). Its
-blocking findings go back to the builder like a review's.
+design.md. It runs in parallel with the reviews as an optional branch of
+the review fork. Its findings are advisory: they never spend review
+attempts, never fail or halt a run on their own. A verifier branch that
+fails or returns nothing is recorded as missing.
 
 ### Why design-blind
 
@@ -1099,13 +1103,14 @@ documents.
 
 ### Pipeline position
 
+Full mode:
 ```
-check → verifier → gate_verification → fork_qa → reviews
+check →(proceed) fork_qa → [health_checker, code_reviewer, qa_director, verifier] → join_qa → synthesize_qa → gate_qa
 ```
 
-In fast mode:
+Fast mode (design_fast):
 ```
-focused_check → verifier → gate_verification → focused_qa
+focused_check → gate_check →(proceed) fork_qa → [focused_qa, verifier] → join_qa → gate_qa
 ```
 
 ### Measurement
@@ -1416,6 +1421,47 @@ exemptions are:
 
 **Test.** `test_correction_audit.py`.
 
+## 28. Non-core findings become follow-ups (dm-171)
+
+**What the issue was.** On 2026-10-22 no lab run finished on its own. Reviewers sent
+builds back for findings that were real but outside the change: a missing extra test,
+a doc, an edge case the brief never asked for. Each cost a full builder round and a
+review cycle, and a run that spent its attempts on them failed with the change's
+core already working. b34b built 9 times with clean reviews before its last round;
+b33c built 8 times as each round's reviewers found new gaps.
+
+**The rule.** A build is held back only by a core defect. Reviewers end the first
+line of each BLOCKING finding with `[core]` (an ask, a criterion, a correction or
+constraint, or a regression) or `[non-core]`; `create_ops.SEVERITY_RULE` is the one
+instruction every post-build reviewer prompt carries, and `create_ops.is_non_core`
+the one parser. An untagged or doubly tagged finding is core, and so is one whose tag
+sits on a continuation line: a reviewer that writes an unmet ask and then a
+`- docs also missing [non-core]` line has written a core finding. `create_ops.gate_qa`,
+`create_ops.gate_overwatch` and `fast_ops.gate_qa` all split findings with
+`split_core`:
+
+- core findings send the build back as before, with the non-core ones riding along;
+- non-core findings alone never cost a round, never spend a review attempt, and
+  never stop a run;
+- Overwatch is told to state PASS when only non-core findings remain
+  (`OVERWATCH_VERDICT_RULE`), so a FAIL always blocks — it may rest on an ask named
+  only in prose. A PASS with non-core findings proceeds only when the intent audit
+  passes every requirement, and the evidence and correction audits hold;
+- in the fast modes, a failed check whose name ends with the tag is non-core too.
+
+What a gate proceeds with is recorded by `record_follow_ups` and reaches the pull
+request through `delivery._body`.
+
+**The cap.** A full-mode run has `attempts` builder rounds (`check_attempts` in design;
+three by default),
+shared by check failures and review reloops. The verifier's advisory round used to
+come on top of it; `take_advisory_round` now spends a round from the same cap, never
+the last one (a repair must remain for whatever the advisory rebuild breaks), and
+otherwise sends the verifier's findings to the pull request's unresolved verification
+list instead.
+
+**Held by.** `test_follow_ups.py`.
+
 ## Pin integrity
 
 ### Repository guard
@@ -1605,7 +1651,9 @@ targeted-command builder (`build_probe_command`), with a short timeout of
 **Early stop**: the pre-pass stops early — skipping the full check — only
 when **all** of the following hold:
 
-1. `result.prep_failure is None` (no install/generate/setup failure).
+1. `result.prep_failure is None` (no install/generate/setup failure; a
+   change-caused prep failure has `change_caused_prep` set instead and
+   `prep_failure` absent, so it also passes this condition).
 2. `check_failure_kind(result) == "code_failure"` (structural classification).
 3. Exit code is not 4 or 5 (pytest "no tests collected" / "no tests matched").
 4. `parse_test_failures` on the targeted output, minus the inherited set,
@@ -1687,11 +1735,61 @@ The existing vitest branch also uses a single `-t` with `|`-joined patterns
 instead of multiple `-t` flags (vitest exits 1 when given several `-t` options).
 
 
+## Change-caused preparation failures (dm-104)
+
+When a generate, setup or install command fails while preparing the attempt's
+worktree, the failure is compared against the unchanged base before it is
+reported.  A failure the base does not have — or one that names files the
+attempt changed where the base's does not — is the change's failure: the
+exact error goes to the builder for repair, labelled with the step (generate,
+setup or install), and spends an attempt like any failed check.
+
+The base comparison follows the same isolation rules as the existing test
+comparison (`run_base_check`):
+
+- The base's prep runs in its own HOME (`BASE_CHECK_HOME`), not the
+  attempt's `CHECK_HOME`, so a setup that writes into HOME does not share
+  state with the attempt.
+- A crashed or timed-out base prep is discarded and retried once (R2).
+  A double crash returns the failure to today's handling (infrastructure).
+- The base's prep outcome is cached per run, keyed by `cache_key(base,
+  setup, generate, "")`.  Crashes and timeouts are never cached.
+
+Infrastructure faults — a signal kill (exit < 0 or shell-wrapped 134/135/139),
+a timeout, a missing executable (exit 126/127), or a resource exit
+(`_RESOURCE_EXIT_CODES`: 137, 152, 153) — bypass the base comparison entirely
+and keep today's handling.
+
+The base comparison is never run from the targeted pre-pass (#463), because
+the pre-pass timeout is too short for a full base preparation.
+
+When a change-caused preparation failure is detected:
+
+1. The error text is stripped of ANSI codes and noise via `_clean` from
+   `check_digest.py`.
+2. The failure is recorded in convergence history via `record_check_history`
+   with `check_mode="full"`, so R6 does not decide on stale history.
+3. In design mode, the failure goes to `repair()` directly, skipping
+   `filter_check`, the unbuilt diagnosis, the digest, stuck detection and
+   design-contract augmentation.
+4. In fast mode, the failure goes to `focused-check.json` with
+   `prep_triage=True` and the formatted error as `digest`.
+   `gate_verification` routes it to `_repair()` with the same text as
+   design mode, skipping the "requested runtime check failed" wrapping.
+5. A failed preparation is never reported as "unbuilt packages" because
+   the early return fires before the unbuilt diagnosis.
+
+Cross-references: #432 (infrastructure failure handling), #453 (convergence
+and noise stripping), #463 (targeted pre-pass).
+
 ### Behaviour changes
 
-All three changes (fail-fast pre-pass, stuck detection, pnpm test targeting)
-apply to both runtimes — the TS spine runs the same Python functions as
-subprocesses.
+All changes (fail-fast pre-pass, stuck detection, pnpm test targeting,
+change-caused preparation failures) apply to both runtimes — the TS spine
+runs the same Python functions as subprocesses.  The change-caused prep
+triage runs identically under `run.run_node` and the walker because the
+callables (`check_artifact` and `focused_check`) are the same Python
+functions.
 
 **Scope**: design and design_fast only.  create_fast / edit_fast /
 fix_pack's check gate and package check keep today's behaviour.  They become

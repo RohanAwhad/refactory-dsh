@@ -654,6 +654,211 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     return result
 
 
+# ── prep triage: compare a preparation failure against the base ──────────
+
+PREP_CACHE_FILE = Path(".refactory") / "base-prep.json"
+
+
+def _read_prep_cache(run: Path, key: str) -> dict | None:
+    """Read the cached base-prep comparison result, if it matches the key."""
+    data = _read_json(run / PREP_CACHE_FILE)
+    if data.get("cache_key") == key:
+        return data
+    return None
+
+
+def _write_prep_cache(run: Path, key: str, result: dict) -> None:
+    """Write the base-prep comparison result to cache."""
+    cache_dir = run / PREP_CACHE_FILE.parent
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    data = {"cache_key": key, **result}
+    (run / PREP_CACHE_FILE).write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _step_label(step_cmd: str, generate: str, setup: str) -> str:
+    """Classify a prep step command as generate, setup or install."""
+    if step_cmd == generate:
+        return "generate"
+    if step_cmd == setup:
+        return "setup"
+    return "install"
+
+
+_STEP_ORDER = {"install": 0, "generate": 1, "setup": 2}
+
+
+def _resolve_prep_comparison(
+    base_ok: bool,
+    base_step: str | None,
+    base_error: str | None,
+    prep_fail: dict[str, Any],
+    problems: list[str],
+    found_wt: worktree.Worktree,
+    step_label_val: str,
+    generate: str,
+    setup: str,
+) -> dict[str, Any] | None:
+    """Given a base-prep result, decide whether the failure is change-caused.
+
+    Returns a change-caused dict or None (inherited / infrastructure).
+    """
+    error_text = "\n".join(problems)
+    step = prep_fail["step"]
+
+    if base_ok:
+        return {
+            "step": step, "step_label": step_label_val,
+            "returncode": prep_fail["returncode"],
+            "error_text": error_text, "command": step,
+        }
+
+    # Base also had problems.
+    if base_step == step:
+        # Same step — check the "names files the attempt changed" rule.
+        changed = _all_changed_files(Path(found_wt.path), found_wt.base)
+        if changed:
+            safe_base_error = base_error or ""
+            for f in changed:
+                basename = Path(f).name
+                if (f in error_text and f not in safe_base_error) or \
+                   (basename in error_text and basename not in safe_base_error):
+                    return {
+                        "step": step, "step_label": step_label_val,
+                        "returncode": prep_fail["returncode"],
+                        "error_text": error_text, "command": step,
+                    }
+        return None  # Same failure, no changed file uniquely named → inherited.
+
+    # Different steps.
+    # No base step means _ensure_base_worktree failed: the base failed its install.
+    base_label = _step_label(base_step, generate, setup) if base_step else "install"
+    attempt_order = _STEP_ORDER.get(step_label_val, 0)
+    base_order = _STEP_ORDER.get(base_label, 0)
+    if base_order > attempt_order:
+        # Base fails a later step → base passed the attempt's failing step.
+        return {
+            "step": step, "step_label": step_label_val,
+            "returncode": prep_fail["returncode"],
+            "error_text": error_text, "command": step,
+        }
+    return None  # Base fails earlier → inherited.
+
+
+def compare_prep_failure(
+    ctx: Any,
+    prep_fail: dict[str, Any] | None,
+    problems: list[str],
+    found: worktree.Worktree,
+    env: dict[str, str],
+    home: Path,
+    timeout: float,
+) -> dict[str, Any] | None:
+    """Compare a preparation failure against the unchanged base.
+
+    Returns a dict when the failure is change-caused and should go to
+    the builder for repair.  Returns None when the failure is
+    infrastructure or inherited (today's handling).
+    """
+    from refactory_dsh import authoring_evidence
+
+    # ── 1. Infrastructure fault guard ────────────────────────────────────
+    if prep_fail is None:
+        return None
+    rc = prep_fail.get("returncode")
+    if isinstance(rc, int) and rc < 0:
+        return None
+    if prep_fail.get("timed_out"):
+        return None
+    if rc in (126, 127):
+        return None
+    if rc in sandbox._AMBIGUOUS_SHELL_EXITS:
+        return None
+    if rc in authoring_evidence._RESOURCE_EXIT_CODES:
+        return None
+
+    # ── 2. Determine step label ──────────────────────────────────────────
+    generate = str(ctx.facts.get("generate") or "").strip()
+    setup = str(ctx.facts.get("setup") or "").strip()
+    step_label_val = _step_label(prep_fail["step"], generate, setup)
+
+    found_wt = worktree.recorded(ctx.workdir)
+    if found_wt is None:
+        return None
+
+    # ── 3. Check the per-run prep cache ──────────────────────────────────
+    key = cache_key(found_wt.base, setup, generate, "")
+    cached = _read_prep_cache(ctx.workdir, key)
+    if cached is not None:
+        return _resolve_prep_comparison(
+            cached["base_ok"], cached.get("base_step"),
+            cached.get("base_error"),
+            prep_fail, problems, found_wt, step_label_val, generate, setup,
+        )
+
+    # ── 4. Prepare the base worktree and run its prep commands ───────────
+    def _try_base_prep() -> tuple[dict, bool]:
+        try:
+            base_path, base_found = _ensure_base_worktree(ctx)
+        except ValueError as exc:
+            err = str(exc)
+            crashed = any(tok in err for tok in ("killed by SIG", "killed by signal",
+                                                 "exceeded its time limit"))
+            return {"base_ok": False, "base_step": None,
+                    "base_error": err, "base_returncode": None}, crashed
+
+        base_home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        base_home.mkdir(parents=True, exist_ok=True)
+        budget = getattr(ctx, "budget", None)
+        base_env = worktree.check_environment(base_path, base_home)
+
+        from refactory_dsh.repo_change import prepare_commands as _prep_cmds
+        _, base_problems, base_pf = _prep_cmds(
+            ctx, base_found, base_env, base_home, timeout, budget, amend=False,
+        )
+
+        is_crash = False
+        if base_pf is not None:
+            brc = base_pf.get("returncode")
+            is_crash = (
+                (isinstance(brc, int) and brc < 0)
+                or base_pf.get("timed_out", False)
+                or brc in sandbox._AMBIGUOUS_SHELL_EXITS
+            )
+
+        return {
+            "base_ok": not bool(base_problems),
+            "base_step": base_pf["step"] if base_pf else None,
+            "base_error": "\n".join(base_problems) if base_problems else None,
+            "base_returncode": base_pf.get("returncode") if base_pf else None,
+        }, is_crash
+
+    result_dict, is_crash = _try_base_prep()
+
+    if is_crash:
+        base_home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        shutil.rmtree(base_home, ignore_errors=True)
+        run_id = Path(found_wt.path).name.removeprefix("run-")
+        remove_base_worktree(Path(found_wt.target), run_id)
+        (ctx.workdir / PREP_CACHE_FILE).unlink(missing_ok=True)
+
+        result_dict, is_crash = _try_base_prep()
+        if is_crash:
+            base_home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+            shutil.rmtree(base_home, ignore_errors=True)
+            run_id = Path(found_wt.path).name.removeprefix("run-")
+            remove_base_worktree(Path(found_wt.target), run_id)
+            return None
+
+    # ── 5. Cache (never cache a crash or timeout) ────────────────────────
+    _write_prep_cache(ctx.workdir, key, result_dict)
+
+    return _resolve_prep_comparison(
+        result_dict["base_ok"], result_dict.get("base_step"),
+        result_dict.get("base_error"),
+        prep_fail, problems, found_wt, step_label_val, generate, setup,
+    )
+
+
 # ── test guardedness ─────────────────────────────────────────────────────
 
 

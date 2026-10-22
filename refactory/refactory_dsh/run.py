@@ -117,7 +117,7 @@ def _memory_store(directory: Path) -> Any:
     )
 
 
-def declarations(workdir: Path, node_id: str) -> dict[str, list[str]]:
+def declarations(workdir: Path, node_id: str) -> dict[str, Any]:
     """What the node declared: from the run directory, falling back to the manifest.
 
     The run directory is authoritative because it carries the facts a node produces,
@@ -130,11 +130,15 @@ def declarations(workdir: Path, node_id: str) -> dict[str, list[str]]:
         except json.JSONDecodeError:
             loaded = {}
         if isinstance(loaded, dict) and isinstance(loaded.get(node_id), dict):
-            return {
-                "reads": list(loaded[node_id].get("reads") or ()),
-                "writes": list(loaded[node_id].get("writes") or ()),
-                "produces": list(loaded[node_id].get("produces") or ()),
+            entry = loaded[node_id]
+            result: dict[str, Any] = {
+                "reads": list(entry.get("reads") or ()),
+                "writes": list(entry.get("writes") or ()),
+                "produces": list(entry.get("produces") or ()),
             }
+            if entry.get("optional"):
+                result["optional"] = True
+            return result
     manifest = _manifest()
     if str(manifest.get("id")) == node_id:
         return {
@@ -242,8 +246,17 @@ def run_node(
         ctx.facts = facts_snapshot
         try:
             produced = resolve(target)(ctx)
-        except Exception:
+        except Exception as retry_exc:
             _write_facts()
+            # Optional nodes (named in a fork's optional_targets) are recorded
+            # as missing instead of failing the run.
+            decl = declarations(directory, node_id)
+            if decl.get("optional"):
+                reviews_dir = directory / "reviews"
+                reviews_dir.mkdir(parents=True, exist_ok=True)
+                (reviews_dir / f"{node_id}-missing.txt").write_text(
+                    f"{type(retry_exc).__name__}: {retry_exc}\n")
+                return {}
             raise
     if isinstance(produced, dict):
         for key, value in produced.items():

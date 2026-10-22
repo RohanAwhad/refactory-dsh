@@ -1,8 +1,8 @@
 """Tests for feedback re-fill: declared feedback keys are re-derived from persisted files.
 
 Integration tests drive the redo through worker_node with a cleared fact, and
-the design_fast route through focused_check → verifier → gate_verification →
-worker_node's prompt.
+the design_fast route through focused_check → gate_check → worker_node's
+prompt.
 """
 
 from __future__ import annotations
@@ -518,7 +518,7 @@ def test_worker_refill_without_spec_keys(tmp_path, monkeypatch):
 
 def test_digest_design_fast_full_route(tmp_path, monkeypatch):
     """The digest reaches the builder through the full design_fast route:
-    focused_check → verifier → gate_verification → worker_node's prompt.
+    focused_check → gate_check → worker_node's prompt.
     """
     from refactory_dsh import fast_ops, nn
     from refactory_dsh.sandbox import SandboxResult
@@ -563,26 +563,23 @@ def test_digest_design_fast_full_route(tmp_path, monkeypatch):
     assert cr.get("digest"), "check-record.json must have a digest"
     assert "test_bar" in cr.get("digest", ""), "digest must contain the failing test ID"
 
-    # Step 3: gate_verification reads the digest and routes to the builder
-    (run / "reviews" / "verification.md").parent.mkdir(parents=True, exist_ok=True)
-    (run / "reviews" / "verification.md").write_text("No blocking findings.\n\nVERDICT: PASS\n")
+    # Step 3: gate_check reads the digest and routes to the builder
     (run / "fast-report.json").write_text("{}")
     (run / "repair.txt").write_text("(initial)\n")
 
-    gv_ctx = nn.RunContext(run, facts={**ctx.facts, "focused_check": json.dumps({"status": "fail"}),
+    gc_ctx = nn.RunContext(run, facts={**ctx.facts, "focused_check": json.dumps({"status": "fail"}),
                                        "repair_feedback": "(initial)", "repairs_used": 0},
                            knobs={"repair_attempts": 1})
-    gv_ctx._declared = ("reviews/verification-gate.txt", "reviews/verification-unresolved.md",
-                        "fast-report.json", "repair.txt")
-    gv_ctx._declared_facts = ("verification_gate", "repair_feedback", "repairs_used",
-                             "check_repairs_used", "verification_iterations_used")
-    gv_ctx.enforce_writes = False
+    gc_ctx._declared = ("fast-report.json", "repair.txt")
+    gc_ctx._declared_facts = ("repair_feedback", "repairs_used",
+                             "check_repairs_used")
+    gc_ctx.enforce_writes = False
 
-    result = fast_ops.gate_verification(gv_ctx)
+    result = fast_ops.gate_check(gc_ctx)
     # The result should be a reloop with the digest in the detail
     if hasattr(result, 'reason'):
         assert "test_bar" in result.reason, \
-            "gate_verification must pass the digest (not raw output) to the builder"
+            "gate_check must pass the digest (not raw output) to the builder"
     else:
         repair_text = (run / "repair.txt").read_text()
         assert "test_bar" in repair_text, \
