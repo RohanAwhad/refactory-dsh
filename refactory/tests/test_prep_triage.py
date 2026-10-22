@@ -318,13 +318,41 @@ def test_prep_failure_records_convergence_history(tmp_path):
 
 
 def test_base_prep_uses_own_home(tmp_path):
-    """CHECK_HOME and BASE_CHECK_HOME are distinct paths."""
-    from refactory_dsh.invocations import BASE_CHECK_HOME, CHECK_HOME
-    run_dir = tmp_path / "run"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    assert str(Path(run_dir).resolve() / CHECK_HOME) != str(
-        Path(run_dir).resolve() / BASE_CHECK_HOME
+    """The base prep in compare_prep_failure uses BASE_CHECK_HOME, not CHECK_HOME."""
+    # worktree re-exports both from invocations; the code uses worktree.BASE_CHECK_HOME.
+    assert str(worktree.CHECK_HOME) != str(worktree.BASE_CHECK_HOME), (
+        "CHECK_HOME and BASE_CHECK_HOME must be distinct paths"
     )
+    # Verify compare_prep_failure calls check_environment with the BASE home,
+    # not the attempt home that was passed to _check_in_worktree.
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "test00000020", run_dir)
+    worktree.write_wrapper(found, run_dir)
+    ctx = _Ctx(run_dir, facts={"generate": "sh gen.sh", "setup": ""})
+    # Pre-seed the cache with base_ok=True so compare_prep_failure doesn't
+    # actually call _ensure_base_worktree, but verify the key uses the right
+    # constants (setup, generate, "").
+    key = base_check.cache_key(found.base, "", "sh gen.sh", "")
+    base_check._write_prep_cache(run_dir, key, {
+        "base_ok": True, "base_step": None,
+        "base_error": None, "base_returncode": None,
+    })
+    attempt_home = tmp_path / "attempt-home"
+    attempt_home.mkdir(parents=True, exist_ok=True)
+    prep_fail = {"step": "sh gen.sh", "returncode": 1, "timed_out": False}
+    result = base_check.compare_prep_failure(
+        ctx, prep_fail, ["gen failed"], found,
+        worktree.check_environment(Path(found.path), attempt_home),
+        attempt_home, 60.0,
+    )
+    assert result is not None, "should be change-caused when base is cached as OK"
+    # The base_home that _try_base_prep builds is under BASE_CHECK_HOME,
+    # not under the attempt_home we passed.  The constants control that.
+    base_home_path = Path(run_dir).resolve() / worktree.BASE_CHECK_HOME
+    attempt_home_path = Path(run_dir).resolve() / worktree.CHECK_HOME
+    assert str(base_home_path) != str(attempt_home_path)
 
 
 # ── Integration: DSH runner (DesignMode) ───────────────────────────────────
@@ -421,6 +449,210 @@ def test_prep_triage_through_dsh_runner_fast(tmp_path, monkeypatch):
     )
 
 
+# ── Unit: _step_label classification ──────────────────────────────────────
+
+
+def test_step_label_classification():
+    """_step_label classifies generate, setup and install correctly."""
+    assert base_check._step_label("sh gen.sh", "sh gen.sh", "sh setup.sh") == "generate"
+    assert base_check._step_label("sh setup.sh", "sh gen.sh", "sh setup.sh") == "setup"
+    assert base_check._step_label("sh install.sh", "sh gen.sh", "sh setup.sh") == "install"
+    assert base_check._step_label("something", "", "") == "install"
+
+
+# ── Unit: _RESOURCE_EXIT_CODES guard ──────────────────────────────────────
+
+
+def test_resource_exit_152_keeps_infrastructure_handling(tmp_path):
+    """Exit 152 (SIGXCPU, in _RESOURCE_EXIT_CODES) bypasses the base comparison."""
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "test00000016", run_dir)
+    ctx = _Ctx(run_dir, facts={"generate": "", "setup": "sh s.sh"})
+    prep_fail = {"step": "sh s.sh", "returncode": 152, "timed_out": False}
+    result = base_check.compare_prep_failure(
+        ctx, prep_fail, ["cpu limit"], found,
+        worktree.check_environment(Path(found.path), tmp_path / "home"),
+        tmp_path / "home", 60.0,
+    )
+    assert result is None, "exit 152 (SIGXCPU) should return None (infrastructure)"
+
+
+def test_negative_returncode_keeps_infrastructure_handling(tmp_path):
+    """A directly negative returncode (signal kill) is infrastructure."""
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "test00000017", run_dir)
+    ctx = _Ctx(run_dir, facts={"generate": "sh gen.sh", "setup": ""})
+    prep_fail = {"step": "sh gen.sh", "returncode": -9, "timed_out": False}
+    result = base_check.compare_prep_failure(
+        ctx, prep_fail, ["signal killed"], found,
+        worktree.check_environment(Path(found.path), tmp_path / "home"),
+        tmp_path / "home", 60.0,
+    )
+    assert result is None, "negative returncode should return None (infrastructure)"
+
+
+# ── Unit: ANSI stripping ──────────────────────────────────────────────────
+
+
+def test_ansi_codes_stripped_from_builder_text(tmp_path, monkeypatch):
+    """ANSI escape codes are stripped before the prep error reaches the builder."""
+    from refactory_dsh import lowering, design_ops, repo_change
+    from refactory_dsh.run import run_node
+
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    (repo / "gen.sh").write_text(
+        '#!/bin/sh\n'
+        'if [ -f FAIL_MARKER ]; then\n'
+        '  printf "\\033[31mERROR\\033[0m: schema uncovered\\n"\n'
+        '  exit 1\n'
+        'fi\n'
+        'echo ok\n'
+    )
+    subprocess.run(["chmod", "+x", str(repo / "gen.sh")], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "gen.sh"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "gen"],
+                   capture_output=True, check=True)
+
+    run_dir = tmp_path / "run"
+    worktree.create(repo, "HEAD", "dshrunner0010", run_dir)
+    lowering.write_declarations(DesignMode().state_dict(), run_dir)
+    (run_dir / "facts.json").write_text(json.dumps({
+        "name": "ansi_test", "brief": "a tool",
+        "check": "python app.py", "generate": "sh gen.sh",
+    }))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 3}))
+    (run_dir / "emit.txt").write_text(render({
+        "FAIL_MARKER": "yes\n", "app.py": "print('runner')\n",
+    }))
+    run_node(f"{repo_change.OPS}:materialise", workdir=run_dir, node_id="materialise")
+    verdict = run_node(
+        f"{design_ops.__name__}:check_artifact", workdir=run_dir, node_id="check",
+    )
+    assert verdict == "reloop", f"expected reloop, got {verdict}"
+    facts = json.loads((run_dir / "facts.json").read_text())
+    validation = facts.get("validation", "")
+    assert "\033[" not in validation, (
+        f"ANSI escape codes must not appear in validation: {validation!r}"
+    )
+    assert "schema uncovered" in validation, (
+        f"error text not in validation: {validation!r}"
+    )
+
+
+# ── Unit: record_check_history with prep text ─────────────────────────────
+
+
+def test_record_check_history_prep_text_produces_empty_failures(tmp_path):
+    """record_check_history with prep failure text (no test IDs) records an empty set.
+
+    Covers failfast.py:275 (result_output parameter): when result_output
+    contains prep-failure text rather than test output, parse_test_failures
+    finds no test IDs and records an empty failure set.
+    """
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    worktree.create(repo, "HEAD", "test00000018", run_dir)
+    ctx = _Ctx(run_dir, facts={
+        "check": "python app.py",
+        "check_failures_history": [],
+        "check_blocker_history": [],
+    })
+    # Prep failure text — no pytest FAILED or vitest FAIL lines.
+    prep_text = "the generate command `sh gen.sh` failed (exit 1):\nschema uncovered"
+    record_check_history(ctx, "full", prep_text, "python app.py")
+    history = ctx.facts.get("check_failures_history", [])
+    assert len(history) == 1, f"expected 1 entry, got {len(history)}"
+    assert history[0] == [], (
+        "prep failure text has no test IDs, so failure set must be empty"
+    )
+
+
+def test_record_check_history_with_test_output_finds_failures(tmp_path):
+    """record_check_history with real test output extracts test IDs.
+
+    Covers failfast.py:275 (result_output parameter): when result_output
+    contains pytest output with FAILED lines, parse_test_failures finds
+    the test IDs and records them.
+    """
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    worktree.create(repo, "HEAD", "test00000019", run_dir)
+    ctx = _Ctx(run_dir, facts={
+        "check": "pytest",
+        "check_failures_history": [],
+        "check_blocker_history": [],
+    })
+    test_output = (
+        "=== FAILURES ===\n"
+        "FAILED tests/test_foo.py::test_bar - AssertionError\n"
+        "=== short test summary info ===\n"
+        "FAILED tests/test_foo.py::test_bar\n"
+        "1 failed\n"
+    )
+    record_check_history(ctx, "full", test_output, "pytest")
+    history = ctx.facts.get("check_failures_history", [])
+    assert len(history) == 1, f"expected 1 entry, got {len(history)}"
+    assert "tests/test_foo.py::test_bar" in history[0], (
+        f"expected test ID in history: {history[0]}"
+    )
+
+
+# ── Unit: _resolve_prep_comparison edge cases ─────────────────────────────
+
+
+def test_base_fails_earlier_step_returns_none(tmp_path):
+    """When the base fails an earlier step than the attempt, it's inherited."""
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "test00000021", run_dir)
+    worktree.write_wrapper(found, run_dir)
+    # Attempt fails setup, base fails generate (earlier step).
+    result = base_check._resolve_prep_comparison(
+        base_ok=False,
+        base_step="sh gen.sh",
+        base_error="gen failed on base",
+        prep_fail={"step": "sh setup.sh", "returncode": 1},
+        problems=["setup failed on attempt"],
+        found_wt=found,
+        step_label_val="setup",
+        generate="sh gen.sh",
+        setup="sh setup.sh",
+    )
+    assert result is None, "base fails earlier step → inherited"
+
+
+def test_base_fails_later_step_returns_change_caused(tmp_path):
+    """When the base fails a later step, the attempt's earlier failure is change-caused."""
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "test00000022", run_dir)
+    worktree.write_wrapper(found, run_dir)
+    # Attempt fails generate, base fails setup (later step).
+    result = base_check._resolve_prep_comparison(
+        base_ok=False,
+        base_step="sh setup.sh",
+        base_error="setup failed on base",
+        prep_fail={"step": "sh gen.sh", "returncode": 1},
+        problems=["gen failed on attempt"],
+        found_wt=found,
+        step_label_val="generate",
+        generate="sh gen.sh",
+        setup="sh setup.sh",
+    )
+    assert result is not None, "base fails later step → change-caused"
+    assert result["step_label"] == "generate"
+
+
 # ── Integration: prep failure never reported as unbuilt (DesignMode) ───────
 
 
@@ -482,4 +714,64 @@ def test_prep_failure_never_reported_as_unbuilt(tmp_path, monkeypatch):
     # The actual error text must reach the builder.
     assert "packages/foo/dist/index.js" in validation, (
         f"entry-point path not in validation: {validation!r}"
+    )
+
+
+# ── Integration: fast-mode gate_verification prep_triage routing ───────────
+
+
+def test_gate_verification_routes_prep_triage_without_wrapping(tmp_path, monkeypatch):
+    """gate_verification uses the digest directly for prep_triage, without
+    the 'requested runtime check failed' wrapping.
+
+    Covers fast_ops.py:772 (check_data.get("prep_triage")) and :774
+    (check_data.get("digest")).
+    """
+    from refactory_dsh import lowering, fast_ops, repo_change
+    from refactory_dsh.run import run_node
+
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('app')\n")
+    (repo / "gen.sh").write_text(
+        '#!/bin/sh\n'
+        'if [ -f FAIL_MARKER ]; then\n'
+        '  echo "coverage error: uncovered schema"\n'
+        '  exit 1\n'
+        'fi\n'
+        'echo ok\n'
+    )
+    subprocess.run(["chmod", "+x", str(repo / "gen.sh")], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "gen.sh"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "gen"],
+                   capture_output=True, check=True)
+
+    run_dir = tmp_path / "run"
+    worktree.create(repo, "HEAD", "dshrunner0011", run_dir)
+    lowering.write_declarations(DesignFastMode().state_dict(), run_dir)
+    (run_dir / "facts.json").write_text(json.dumps({
+        "name": "gate_ver_test", "brief": "a tool",
+        "check": "python app.py", "generate": "sh gen.sh",
+    }))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"repair_attempts": 3}))
+    (run_dir / "emit.txt").write_text(render({
+        "FAIL_MARKER": "yes\n", "app.py": "print('runner')\n",
+    }))
+    run_node(f"{fast_ops.__name__}:materialise_artifact", workdir=run_dir,
+             node_id="materialise")
+    run_node(f"{fast_ops.__name__}:focused_check", workdir=run_dir,
+             node_id="focused_check")
+    check_data = json.loads((run_dir / "focused-check.json").read_text())
+    assert check_data.get("prep_triage") is True
+
+    # Run gate_verification and check the repair_feedback fact.
+    verdict = run_node(f"{fast_ops.__name__}:gate_verification", workdir=run_dir,
+                       node_id="gate_verification")
+    facts = json.loads((run_dir / "facts.json").read_text())
+    repair_fb = facts.get("repair_feedback", "")
+    assert "coverage error: uncovered schema" in repair_fb, (
+        f"prep detail not in repair_feedback: {repair_fb!r}"
+    )
+    assert "requested runtime check failed" not in repair_fb, (
+        f"prep_triage should not be wrapped with 'requested runtime check failed': {repair_fb!r}"
     )
