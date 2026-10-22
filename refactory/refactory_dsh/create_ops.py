@@ -2403,7 +2403,7 @@ def gate_qa(ctx: Any) -> str:
 
     # Case 1: QA blocking + verifier findings → combine
     if reason and verifier_text:
-        reason += "\n[verifier] " + verifier_text
+        reason += "\n[verifier] " + verifier_text + "\n\n" + VERIFIER_RESPONSE
 
     if reason:
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
@@ -2411,34 +2411,11 @@ def gate_qa(ctx: Any) -> str:
         _write_finding_sources_full(ctx, snapshot, verifier_filtered)
         return repair(ctx, [reason], kind='review') if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
 
-    # Case 2: Only verifier findings, QA passed
-    if verifier_text:
-        advisory_used = int(ctx.facts.get("verification_advisory_used", 0))
-        ctx.set_fact("verification_advisory_used", advisory_used + 1)
-        if advisory_used == 0 and take_advisory_round(ctx):
-            fb = ("[verifier] " + verifier_text +
-                  "\n\nFor each verifier finding, respond in emit.txt under "
-                  "## Verifier findings with the finding, then: fixed, or "
-                  "rebutted: <reason> <file:line>")
-            if non_core:
-                fb += "\n\n" + non_core_ride_along(non_core)
-            ctx.write_text("validation.txt", fb + "\n")
-            ctx.set_fact("validation", fb)
-            ctx.write_text("reviews/qa-gate.txt", "advisory verifier reloop\n")
-            ctx.set_fact("qa_gate", fb)
-            _write_finding_sources_full(ctx, snapshot, verifier_filtered)
-            return Verdict("reloop", fb)
-        else:
-            # Advisory round spent; collect rebuttals and write remaining
-            verifier_rebuttals = _parse_verifier_rebuttals_full(ctx)
-            if verifier_filtered:
-                lines = []
-                for finding in verifier_filtered:
-                    desc = _finding_description(finding)
-                    reb = next((r for r in verifier_rebuttals if desc.lower() in r.lower()), None)
-                    lines.append(finding + (f" — {reb}" if reb else ""))
-                ctx.write_text("reviews/verification-unresolved.md",
-                               "\n".join(lines) + "\n")
+    # Case 2: Only verifier findings, QA passed. The verifier never gets a builder
+    # round of its own: Overwatch reads what it found and sends the build back only
+    # for a finding that breaks an ask, and the pull request lists the rest.
+    verifier_rebuttals = _parse_verifier_rebuttals_full(ctx) if verifier_filtered else []
+    record_verification_unresolved(ctx, verifier_filtered, verifier_rebuttals)
 
     # Case 3: No core defect — proceed, with any non-core findings as follow-ups
     record_follow_ups(ctx, "qa", non_core)
@@ -2566,22 +2543,27 @@ def classify_finding_sources(entries: list[dict[str, Any]], round_num: int,
     return entries
 
 
-def take_advisory_round(ctx: Any) -> bool:
-    """Whether the builder has a round left for an advisory reloop, spending it if so.
+#: What a builder sent back for a core defect is told about the verifier's findings
+#: that ride along with it.
+VERIFIER_RESPONSE = ("For each verifier finding, respond in emit.txt under "
+                     "## Verifier findings with the finding, then: fixed, or "
+                     "rebutted: <reason> <file:line>")
 
-    An advisory round is still a builder round, so it counts against the same cap
-    (``attempts``) as a repair, and it never takes the last one: a repair must remain
-    for whatever the advisory rebuild breaks. With no round to spare, its findings go
-    to the pull request instead. The fast modes' one repair plus one advisory round is
-    already within the cap.
+
+def record_verification_unresolved(ctx: Any, findings: list[str], rebuttals: list[str]) -> None:
+    """Write this round's verifier findings, each with the builder's rebuttal if any.
+
+    Overwatch reads the file and the pull request lists it. A round with no finding
+    empties it, so an earlier round's findings are never reported as current.
     """
-    used = int(ctx.facts.get("attempts_used", 0)) + 1
-    limit = (int(ctx.knob("attempts", ctx.knob("check_attempts", 3)))
-             + int(ctx.facts.get("convergence_extras_used", 0)))
-    if used + 1 >= limit:
-        return False
-    ctx.set_fact("attempts_used", used)
-    return True
+    lines = []
+    for finding in findings:
+        desc = _finding_description(finding)
+        reb = next((r for r in rebuttals if desc.lower() in r.lower()), None)
+        lines.append(finding + (f" — {reb}" if reb else ""))
+    if lines or ctx.exists("reviews/verification-unresolved.md"):
+        ctx.write_text("reviews/verification-unresolved.md",
+                       "\n".join(lines) + ("\n" if lines else ""))
 
 
 def gate_overwatch(ctx: Any) -> str:

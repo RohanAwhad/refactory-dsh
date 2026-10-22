@@ -323,19 +323,17 @@ def test_changed_functions_empty_diff(tmp_path):
 
 
 def test_verification_methods_recomposition():
-    """The recomposed VERIFICATION_METHODS matches the expected content."""
+    """Every method is applied by someone: the verifier takes the design-blind ones no
+    reviewer applies, and the code reviewers take the rest for each changed function."""
+    from refactory_dsh.authoring_evidence import REPO_CHANGE_REVIEW_INSTRUCTIONS
     from refactory_dsh.verification import (
         VERIFICATION_METHODS, M1_METHOD, M2_METHOD, M3_METHOD,
         M11_METHOD, M12_METHOD, M13_METHOD, M15_METHOD,
     )
-    # Each method constant should appear in VERIFICATION_METHODS
-    assert M1_METHOD in VERIFICATION_METHODS
-    assert M2_METHOD in VERIFICATION_METHODS
-    assert M3_METHOD in VERIFICATION_METHODS
-    assert M11_METHOD in VERIFICATION_METHODS
-    assert M12_METHOD in VERIFICATION_METHODS
-    assert M13_METHOD in VERIFICATION_METHODS
-    assert M15_METHOD in VERIFICATION_METHODS
+    for method in (M1_METHOD, M2_METHOD, M13_METHOD, M15_METHOD):
+        assert method in VERIFICATION_METHODS
+    for method in (M2_METHOD, M3_METHOD, M11_METHOD, M12_METHOD):
+        assert method in REPO_CHANGE_REVIEW_INSTRUCTIONS
 
 
 def test_reviewer_gates_exist():
