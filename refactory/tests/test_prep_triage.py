@@ -775,3 +775,34 @@ def test_gate_check_routes_prep_triage_without_wrapping(tmp_path, monkeypatch):
     assert "requested runtime check failed" not in repair_fb, (
         f"prep_triage should not be wrapped with 'requested runtime check failed': {repair_fb!r}"
     )
+
+
+# ── Unit: base_clean guard on _read_prep_cache (dm-162) ──────────────────
+
+
+def test_read_prep_cache_rejects_dirty_base(tmp_path):
+    """_read_prep_cache rejects entries without base_clean=True (dm-162)."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    key = "test_dirty_guard_key"
+
+    # Write a valid prep-cache entry with base_clean=True.
+    base_check._write_prep_cache(run_dir, key, {
+        "base_ok": True, "base_step": None,
+        "base_error": None, "base_returncode": None,
+    }, base_clean=True)
+    assert base_check._read_prep_cache(run_dir, key) is not None
+
+    # Tamper: set base_clean to False.
+    path = run_dir / base_check.PREP_CACHE_FILE
+    data = json.loads(path.read_text())
+    data["base_clean"] = False
+    path.write_text(json.dumps(data))
+    assert base_check._read_prep_cache(run_dir, key) is None, \
+        "prep cache with base_clean=False should be a miss"
+
+    # Tamper: remove base_clean entirely (old format).
+    del data["base_clean"]
+    path.write_text(json.dumps(data))
+    assert base_check._read_prep_cache(run_dir, key) is None, \
+        "prep cache without base_clean should be a miss"

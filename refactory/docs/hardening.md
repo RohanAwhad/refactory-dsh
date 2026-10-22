@@ -1876,3 +1876,114 @@ a follow-up, filed separately.
 - `commit` (the current commit hash)
 
 No new CLI flags or environment variables.
+
+
+## Base worktree integrity (dm-162)
+
+### The problem
+
+`compute_test_guardedness` copies the attempt's changed test files and helpers
+into the shared base worktree, runs them, then unlinks every copied path.
+For a file that already existed in the base commit (a *changed* test, not a
+*new* one), the unlink deletes the base's own tracked file instead of
+restoring it.  Because `_ensure_base_worktree` only checked HEAD commit
+identity — not file cleanliness — subsequent callers (`run_base_check`,
+`compare_prep_failure`) ran on the corrupted tree.  The corrupted result could
+be cached in `base-check.json` or `base-prep.json` and replayed on resume.
+
+Twice in 11 hours (b33a\_r1 and b34b), this turned a repairable check failure
+into a run-ending environment failure that had to be fixed by hand.
+
+### Three layers of defence
+
+#### Layer 1: restore-in-finally in `compute_test_guardedness`
+
+Before copying, `git ls-tree <base> -- <paths>` (with `--literal-pathspecs`)
+determines which destination paths exist in the base commit.  The entire
+copy → test → cleanup flow is wrapped in `try / finally`.  In the finally
+block:
+
+- pre-existing tracked files are restored via `git checkout <base> -- <paths>`
+  (never HEAD of another tree);
+- pre-existing ignored files have their bytes saved before copying and written
+  back;
+- only files that were *new* (not in the base commit) are unlinked.
+
+The `finally` fires for `BudgetExhausted`, `KeyboardInterrupt`, sandbox
+timeouts (`timed_out=True`) and any other exception.  It does not fire for
+SIGKILL or a DSH node timeout that kills the process — only Layer 2 covers
+those cases.
+
+#### Layer 2: dirty-base detection and repair in `_ensure_base_worktree`
+
+A new helper `_check_base_clean` runs at the single choke point all three
+callers share — inside `_ensure_base_worktree`, after the worktree exists and
+HEAD is verified, before `_isolate_hooks` and `ensure_environment`.
+
+Algorithm (following `worktree._restore`):
+
+1. `git --no-optional-locks status --porcelain=v1 -z --untracked-files=normal`
+2. If dirty:
+   - `git reset -q --hard <base_commit>` with `NO_HOOKS`
+   - `git clean -fdq -e /<name>` for each entry in the base install record's
+     `installed` list (names with trailing `/` stripped)
+3. Re-check that the status is empty.  On failure, rebuild the base worktree
+   (remove and re-add) — never let a failed reset become a cached environment
+   failure.
+4. Warn only about restored tracked files via `target_guard.warn` (the
+   `run warning:` prefix the spine promotes to run warnings).
+
+Installs (node\_modules, .venv, build outputs) survive because they are either
+gitignored (invisible to `--untracked-files=normal`) or excluded by the `-e`
+arguments from the install record.
+
+#### Layer 3: `base_clean` cache guard
+
+Both `base-check.json` and `base-prep.json` carry a `base_clean` field:
+
+- `_read_cache` and `_read_prep_cache` reject entries where
+  `data.get("base_clean") is not True` — dirty-base entries and old-format
+  entries without the field are treated as misses (safe re-run).
+- `_write_cache` and `_write_prep_cache` skip writing when `base_clean=False`
+  (warn via `target_guard.warn` and return).
+- Crashed results remain never-cached (the `_crashed` guard takes precedence).
+
+The `base_clean` value comes from the status taken right after the reset in
+`_check_base_clean` (recorded when `_ensure_base_worktree` ran), not a
+post-check re-verification.  This avoids three problems: a `Path` that makes
+`json.dumps` raise `TypeError`, attachment only on the success path (missing
+the environment-failure paths), and `__pycache__` making a project without
+`.gitignore` always dirty after its own check.
+
+### Why repair-and-warn is correct here
+
+The contributing guide says "the validator refuses; it never repairs"
+(`contributing.md:94`), but that rule applies to *graph state* validation.
+The base worktree is *environment state* — a cache reconstructable from the
+base commit.  Repairing it and warning is the same pattern
+`worktree._restore` uses for the run's own worktree after a check.
+
+### Behaviour changes
+
+All changes apply to both runtimes — the walker (`Mode.run`) and the DSH
+runner (`run.main`) — because the logic is in `base_check.py` which both
+runtimes call.
+
+1. **Restore after guardedness (Layer 1):** `compute_test_guardedness` now
+   restores pre-existing files from the base commit and removes new files in
+   a `finally` block, instead of unlinking all copied files.
+2. **Dirty-base reset (Layer 2):** `_ensure_base_worktree` now checks and
+   repairs dirty base worktrees using `git reset --hard` + `git clean -fdq`
+   with install-record exclusions, before any caller uses the base.
+3. **Reset failure rebuilds (C2):** A failed reset in `_check_base_clean`
+   rebuilds the base worktree from scratch instead of becoming a cached
+   environment failure.
+4. **Warning channel (C3):** Dirty-base warnings are emitted via
+   `target_guard.warn` (not bare `print`), so they appear as `run warning:`
+   lines the spine promotes.  `base_reset` is recorded in
+   `check-record.json`.
+5. **Cache guard (Layer 3):** `_read_cache` and `_read_prep_cache` reject
+   entries without `base_clean is True`.  `_write_cache` and
+   `_write_prep_cache` skip writing when `base_clean=False`.
+6. **Old cache entries re-run:** Existing cache files without `base_clean`
+   become misses (safe re-run).

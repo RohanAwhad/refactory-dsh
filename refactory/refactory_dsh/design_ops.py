@@ -1044,7 +1044,8 @@ def check_artifact(ctx: Any) -> str:
 
     # Record exactly what the builder will be given (feedback re-fill reads it).
     _inherited_list = sorted(filtered.inherited) if found is not None else []
-    ctx.write_json("check-record.json", {
+    _base_reset_list = getattr(ctx, '_base_reset', [])
+    _cr_fail: dict[str, Any] = {
         "status": "fail",
         "validation": detail[:4000],
         "digest": digest_text,
@@ -1056,7 +1057,10 @@ def check_artifact(ctx: Any) -> str:
         "targeted_command": prepass.targeted_command if prepass.ran else None,
         "inherited": _inherited_list,
         "commit": str(ctx.facts.get("commit", "")),
-    })
+    }
+    if _base_reset_list:
+        _cr_fail["base_reset"] = _base_reset_list
+    ctx.write_json("check-record.json", _cr_fail)
 
     return repair(ctx, [detail])
 

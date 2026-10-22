@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from typing import Any
 
 from refactory_dsh import sandbox, worktree
 from refactory_dsh.worktree import _json as _read_json, NO_HOOKS, _isolate_hooks
+from refactory_dsh import target_guard
 
 # ── ANSI stripping ───────────────────────────────────────────────────────
 
@@ -369,10 +371,86 @@ def _base_worktree_path(target: Path, run_id: str) -> Path:
     return worktree.slot(target) / f"{BASE_WORKTREE_PREFIX}{run_id}"
 
 
-def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
+def _check_base_clean(base_path: Path, base_commit: str, base_found: worktree.Worktree) -> list[str]:
+    """Check that the base worktree is clean; repair it if dirty.
+
+    Returns the list of tracked paths that were repaired (empty if already clean).
+    Warns via target_guard.warn listing repaired tracked paths only.
+    On failure, rebuilds the base worktree (remove and re-add) or raises as a crash.
+    """
+    # What the base installed and git does not ignore stays, as worktree._restore keeps
+    # it: the clean below keeps it, so neither status check may count it as dirt.
+    kept = {name.rstrip("/") for name in
+            _read_json(worktree._record_path(base_found)).get("installed", [])}
+
+    def _dirt(listing: str) -> list[str]:
+        return [entry for entry in listing.split("\0") if len(entry) > 3
+                and not (entry[:2] == "??" and entry[3:].rstrip("/") in kept)]
+
+    status_out = worktree.git(
+        base_path, "--no-optional-locks", "status", "--porcelain=v1", "-z",
+        "--untracked-files=normal",
+    )
+    if not _dirt(status_out):
+        return []
+
+    # Parse NUL-delimited entries to find tracked edits for the warning.
+    tracked_edits: list[str] = []
+    for entry in status_out.split("\0"):
+        if not entry or len(entry) < 4:
+            continue
+        code = entry[:2]
+        path = entry[3:]
+        if code != "??":
+            tracked_edits.append(path)
+
+    # Reset tracked files to the base commit.
+    try:
+        worktree.git(base_path, *NO_HOOKS, "reset", "-q", "--hard", base_commit)
+    except ValueError:
+        raise ValueError(f"base worktree reset failed (crashed): git reset --hard {base_commit[:12]}")
+
+    # Remove untracked files/dirs, preserving installs from the install record.
+    keep = [argument for name in sorted(kept) for argument in ("-e", f"/{name}")]
+    try:
+        worktree.git(base_path, "clean", "-fdq", *keep)
+    except ValueError:
+        raise ValueError(f"base worktree clean failed (crashed): git clean -fdq")
+
+    # Re-check: status must be empty now.
+    recheck = worktree.git(
+        base_path, "--no-optional-locks", "status", "--porcelain=v1", "-z",
+        "--untracked-files=normal",
+    )
+    if _dirt(recheck):
+        raise ValueError(
+            f"base worktree still dirty after reset: {recheck[:200]}"
+        )
+
+    # Warn only about restored tracked files (not __pycache__ or other untracked),
+    # following worktree._restore's pattern.
+    if tracked_edits:
+        target_guard.warn(
+            f"base worktree repaired: restored {len(tracked_edits)} tracked "
+            f"file(s) to {base_commit[:12]}: {', '.join(sorted(tracked_edits)[:10])}"
+        )
+
+    return tracked_edits
+
+
+def _rebuild_base_worktree(target: Path, run_id: str, base_path: Path) -> None:
+    """Remove and re-add the base worktree from scratch."""
+    try:
+        worktree.git(target, "worktree", "remove", "--force", str(base_path))
+    except ValueError:
+        shutil.rmtree(base_path, ignore_errors=True)
+
+
+def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree, list[str]]:
     """Create and prepare the base worktree on demand, caching it per run.
 
-    Returns the base worktree path and a Worktree descriptor for it.
+    Returns the base worktree path, a Worktree descriptor for it, and a list of
+    tracked paths that were repaired (empty when the base was already clean).
     Raises ValueError with an environment-failure message on failure.
     """
     found = worktree.recorded(ctx.workdir)
@@ -408,8 +486,6 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
                 f"could not create base worktree for {found.base}: {exc}"
             ) from exc
 
-    _isolate_hooks(target, base_path)
-
     # Build a Worktree descriptor for the base; use a synthetic branch name so
     # ensure_environment's record path does not collide with the run's own.
     base_found = worktree.Worktree(
@@ -420,6 +496,40 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
         target=found.target,
         run=found.run,
     )
+
+    # Layer 2: check and repair dirty base before any caller uses it.
+    # On failure, rebuild from scratch rather than becoming a cached env failure.
+    try:
+        repaired = _check_base_clean(base_path, found.base, base_found)
+    except ValueError:
+        # Reset failed — rebuild the base worktree from scratch.
+        _rebuild_base_worktree(target, run_id, base_path)
+        try:
+            worktree.git(
+                target, *NO_HOOKS, "worktree", "add", "-q", "--detach",
+                str(base_path), found.base,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"could not rebuild base worktree for {found.base}: {exc}"
+            ) from exc
+        # Rebuild the descriptor for the fresh worktree.
+        base_found = worktree.Worktree(
+            path=str(base_path),
+            branch=f"{worktree.BRANCH_PREFIX}base-{run_id}",
+            base=found.base,
+            head=found.base,
+            target=found.target,
+            run=found.run,
+        )
+        repaired = []  # Fresh worktree is clean.
+
+    # Accumulate base_reset on ctx for check-record.json.
+    if repaired:
+        prev = getattr(ctx, '_base_reset', [])
+        ctx._base_reset = prev + repaired
+
+    _isolate_hooks(target, base_path)
 
     # Prepare the environment (installs)
     budget = getattr(ctx, "budget", None)
@@ -432,7 +542,7 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
             "environment preparation failed on the base:\n" + "\n".join(problems)
         )
 
-    return base_path, base_found
+    return base_path, base_found, repaired
 
 
 def remove_base_worktree(target: Path, run_id: str) -> None:
@@ -501,6 +611,8 @@ def _changed_files_in_test_dirs(path: Path, base: str, test_files: list[str]) ->
 def _read_cache(run: Path, key: str) -> BaseCheckResult | None:
     data = _read_json(run / CACHE_FILE)
     if data.get("cache_key") == key:
+        if data.get("base_clean") is not True:
+            return None  # dirty-base or old entry — re-run
         result = BaseCheckResult(
             ok=data["ok"],
             failures=set(data.get("failures", [])),
@@ -514,12 +626,16 @@ def _read_cache(run: Path, key: str) -> BaseCheckResult | None:
     return None
 
 
-def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
+def _write_cache(run: Path, key: str, result: BaseCheckResult,
+                 *, base_clean: bool = True) -> None:
     # Never cache a crash result — R2: later checks get a fresh attempt.
     # Deterministic (non-crash) environment failures ARE cached so filter_check
     # and the next attempt do not re-prepare the base (v5 correction 2).
     if getattr(result, '_crashed', False):
         return  # pragma: no cover — guarded by run_base_check
+    if not base_clean:
+        target_guard.warn("skipping base-check cache write (base was dirty)")
+        return
     cache_dir = run / CACHE_FILE.parent
     cache_dir.mkdir(parents=True, exist_ok=True)
     # Compute completeness for R5/R6.
@@ -532,6 +648,7 @@ def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
         "exit_code": result.exit_code,
         "environment_failure": result.environment_failure,
         "base_complete": base_complete,
+        "base_clean": True,
     }
     (run / CACHE_FILE).write_text(json.dumps(data, indent=2) + "\n")
 
@@ -557,14 +674,19 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     if cached is not None:
         return cached
 
+    base_clean_flag = True  # Track whether the base was clean for cache writes.
+
     def _try_base() -> tuple[BaseCheckResult, bool]:
         """Attempt to prepare the base worktree and run the check.
 
         Returns ``(result, is_crash)``.  ``is_crash`` is True when a signal
         killed a preparation step and the base environment should be rebuilt.
         """
+        nonlocal base_clean_flag
         try:
-            base_path, base_found = _ensure_base_worktree(ctx)
+            base_path, base_found, repaired = _ensure_base_worktree(ctx)
+            if repaired:
+                base_clean_flag = False
         except ValueError as exc:
             err_str = str(exc)
             # Classify: use structured result from ensure_environment.
@@ -650,7 +772,7 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
             result._crashed = is_crash  # type: ignore[attr-defined]
             return result
 
-    _write_cache(ctx.workdir, key, result)
+    _write_cache(ctx.workdir, key, result, base_clean=base_clean_flag)
     return result
 
 
@@ -663,15 +785,21 @@ def _read_prep_cache(run: Path, key: str) -> dict | None:
     """Read the cached base-prep comparison result, if it matches the key."""
     data = _read_json(run / PREP_CACHE_FILE)
     if data.get("cache_key") == key:
+        if data.get("base_clean") is not True:
+            return None  # dirty-base or old entry — re-run
         return data
     return None
 
 
-def _write_prep_cache(run: Path, key: str, result: dict) -> None:
+def _write_prep_cache(run: Path, key: str, result: dict,
+                      *, base_clean: bool = True) -> None:
     """Write the base-prep comparison result to cache."""
+    if not base_clean:
+        target_guard.warn("skipping base-prep cache write (base was dirty)")
+        return
     cache_dir = run / PREP_CACHE_FILE.parent
     cache_dir.mkdir(parents=True, exist_ok=True)
-    data = {"cache_key": key, **result}
+    data = {"cache_key": key, "base_clean": True, **result}
     (run / PREP_CACHE_FILE).write_text(json.dumps(data, indent=2) + "\n")
 
 
@@ -796,9 +924,14 @@ def compare_prep_failure(
         )
 
     # ── 4. Prepare the base worktree and run its prep commands ───────────
+    prep_base_clean = True  # Track whether the base was clean for cache writes.
+
     def _try_base_prep() -> tuple[dict, bool]:
+        nonlocal prep_base_clean
         try:
-            base_path, base_found = _ensure_base_worktree(ctx)
+            base_path, base_found, repaired = _ensure_base_worktree(ctx)
+            if repaired:
+                prep_base_clean = False
         except ValueError as exc:
             err = str(exc)
             crashed = any(tok in err for tok in ("killed by SIG", "killed by signal",
@@ -850,7 +983,7 @@ def compare_prep_failure(
             return None
 
     # ── 5. Cache (never cache a crash or timeout) ────────────────────────
-    _write_prep_cache(ctx.workdir, key, result_dict)
+    _write_prep_cache(ctx.workdir, key, result_dict, base_clean=prep_base_clean)
 
     return _resolve_prep_comparison(
         result_dict["base_ok"], result_dict.get("base_step"),
@@ -902,7 +1035,7 @@ def compute_test_guardedness(
 
     # Ensure the base worktree exists (on demand, correction 1)
     try:
-        base_path, _ = _ensure_base_worktree(ctx)
+        base_path, _, _ = _ensure_base_worktree(ctx)
     except ValueError as exc:
         return {"new_test_files": sorted(new_test_files),
                 "unavailable": f"the base worktree could not be prepared: {exc}"}
@@ -911,38 +1044,85 @@ def compute_test_guardedness(
     # into the base worktree (correction 3)
     helper_files = _changed_files_in_test_dirs(attempt_path, found.base, new_test_files)
     all_to_copy = new_test_files + helper_files
-    copied: list[Path] = []
+
+    # Layer 1: determine which destinations exist in the base commit using git ls-tree.
+    # This distinguishes pre-existing tracked files (restore from base) from new files
+    # (unlink after) and pre-existing ignored files (save and write back bytes).
+    pre_existing: set[str] = set()
+    new_copied: list[Path] = []
+    saved_ignored: dict[str, bytes] = {}
+
+    try:
+        ls_output = worktree.git(
+            base_path, "--literal-pathspecs", "ls-tree", "--name-only",
+            found.base, "--", *all_to_copy,
+        )
+        base_tree_paths = set(ls_output.strip().split("\n")) if ls_output.strip() else set()
+    except ValueError:
+        base_tree_paths = set()
+
     for tf in all_to_copy:
-        src = attempt_path / tf
         dst = base_path / tf
-        if src.is_file():
+        if tf in base_tree_paths:
+            pre_existing.add(tf)
+        elif dst.exists():
+            # File exists but is not in the base commit (ignored file).
+            # Save its bytes so we can write them back after the restore.
+            try:
+                saved_ignored[tf] = dst.read_bytes()
+            except OSError:
+                pass
+
+    copied: list[Path] = []
+    try:
+        for tf in all_to_copy:
+            src = attempt_path / tf
+            dst = base_path / tf
+            if src.is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                copied.append(dst)
+                if tf not in pre_existing and tf not in saved_ignored:
+                    new_copied.append(dst)
+
+        # Run the test files against the base source
+        home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        env = worktree.check_environment(base_path, home)
+        budget = getattr(ctx, "budget", None)
+
+        if runner == "pytest":
+            test_cmd = f"python -m pytest -q {' '.join(new_test_files)}"
+        else:
+            test_cmd = f"npx vitest run {' '.join(new_test_files)}"
+
+        test_result = sandbox.run_command(
+            test_cmd, workdir=base_path, timeout_s=timeout,
+            budget=budget, env=env, home=home, exact_env=True,
+        )
+        test_output = "\n".join(
+            (test_result.stdout or "", test_result.stderr or "")
+        ).strip()
+        base_failures = parse_test_failures(test_output)
+        collection_errors, _ = _parse_collection_errors(test_output)
+    finally:
+        # Restore pre-existing files from the base commit.
+        if pre_existing:
+            try:
+                worktree.git(
+                    base_path, "checkout", found.base, "--", *sorted(pre_existing)
+                )
+            except ValueError as exc:
+                target_guard.warn(
+                    f"could not restore base worktree files: {exc}"
+                )
+        # Write back pre-existing ignored files that were overwritten.
+        for tf, content in saved_ignored.items():
+            dst = base_path / tf
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            copied.append(dst)
-
-    # Run the test files against the base source
-    home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
-    env = worktree.check_environment(base_path, home)
-    budget = getattr(ctx, "budget", None)
-
-    if runner == "pytest":
-        test_cmd = f"python -m pytest -q {' '.join(new_test_files)}"
-    else:
-        test_cmd = f"npx vitest run {' '.join(new_test_files)}"
-
-    test_result = sandbox.run_command(
-        test_cmd, workdir=base_path, timeout_s=timeout,
-        budget=budget, env=env, home=home, exact_env=True,
-    )
-    test_output = "\n".join(
-        (test_result.stdout or "", test_result.stderr or "")
-    ).strip()
-    base_failures = parse_test_failures(test_output)
-    collection_errors, _ = _parse_collection_errors(test_output)
-
-    # Restore the base worktree: remove the copied files
-    for dst in copied:
-        dst.unlink(missing_ok=True)
+            dst.write_bytes(content)
+        # Remove files that were new (not in the base commit).
+        for dst in new_copied:
+            dst.unlink(missing_ok=True)
 
     # Build the guardedness record (correction 4: distinguish import errors)
     guarding = 0
