@@ -54,7 +54,6 @@
         "brief.json",
         "changed-functions.json",
         "focused-check.json",
-        "reviews/verification.md",
         "test-guardedness.json"
       ],
       "writes": [
@@ -71,6 +70,40 @@
       "max_iterations": 1,
       "post_checks": [],
       "_type": "AgentNode"
+    },
+    "fork_qa": {
+      "id": "fork_qa",
+      "reads": [],
+      "writes": [],
+      "blocking": true,
+      "targets": [
+        "focused_qa",
+        "verifier"
+      ],
+      "optional_targets": [
+        "verifier"
+      ],
+      "_type": "ForkNode"
+    },
+    "gate_check": {
+      "id": "gate_check",
+      "reads": [
+        "check-record.json",
+        "check.txt",
+        "focused-check.json"
+      ],
+      "writes": [
+        "fast-report.json",
+        "repair.txt"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.fast_ops:gate_check",
+      "gate_prompt": "route check failures and guardedness blocks; verifier handled in gate_qa",
+      "max_iterations": 12,
+      "_type": "GateNode"
     },
     "gate_emit": {
       "id": "gate_emit",
@@ -93,15 +126,19 @@
       "reads": [
         "authoring-evidence.json",
         "changed-functions.json",
+        "emit.txt",
         "focused-check.json",
         "focused-qa.json",
         "focused-source.json",
-        "intent-audit.json"
+        "intent-audit.json",
+        "reviews/verification.md"
       ],
       "writes": [
         "correction-audit.json",
         "fast-report.json",
         "repair.txt",
+        "reviews/finding-sources.json",
+        "reviews/verification-unresolved.md",
         "site-revert-results.json"
       ],
       "blocking": true,
@@ -110,31 +147,18 @@
       "evaluator_role": null,
       "evaluator_command": "python -m refactory_dsh.run refactory_dsh.fast_ops:gate_qa",
       "gate_prompt": "repair only within the shared bound; unresolved findings are failure",
-      "max_iterations": 12,
+      "max_iterations": 13,
       "_type": "GateNode"
     },
-    "gate_verification": {
-      "id": "gate_verification",
-      "reads": [
-        "check-record.json",
-        "check.txt",
-        "focused-check.json",
-        "reviews/verification.md"
-      ],
-      "writes": [
-        "fast-report.json",
-        "repair.txt",
-        "reviews/verification-gate.txt",
-        "reviews/verification-unresolved.md"
-      ],
+    "join_qa": {
+      "id": "join_qa",
+      "reads": [],
+      "writes": [],
       "blocking": true,
-      "resource_role": "final_validation",
-      "evaluator_type": "fn",
-      "evaluator_role": null,
-      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.fast_ops:gate_verification",
-      "gate_prompt": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
-      "max_iterations": 15,
-      "_type": "GateNode"
+      "sources": [
+        "focused_qa"
+      ],
+      "_type": "JoinNode"
     },
     "materialise": {
       "id": "materialise",
@@ -240,13 +264,23 @@
     },
     {
       "source": "focused_check",
-      "target": "verifier",
+      "target": "gate_check",
       "condition": null
     },
     {
-      "source": "focused_qa",
-      "target": "gate_qa",
+      "source": "fork_qa",
+      "target": "join_qa",
       "condition": null
+    },
+    {
+      "source": "gate_check",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_check",
+      "target": "fork_qa",
+      "condition": "proceed"
     },
     {
       "source": "gate_emit",
@@ -265,7 +299,7 @@
     },
     {
       "source": "gate_qa",
-      "target": "focused_qa",
+      "target": "fork_qa",
       "condition": "review_reloop"
     },
     {
@@ -274,14 +308,9 @@
       "condition": "proceed"
     },
     {
-      "source": "gate_verification",
-      "target": "emit",
-      "condition": "reloop"
-    },
-    {
-      "source": "gate_verification",
-      "target": "focused_qa",
-      "condition": "proceed"
+      "source": "join_qa",
+      "target": "gate_qa",
+      "condition": null
     },
     {
       "source": "materialise",
@@ -300,7 +329,7 @@
     },
     {
       "source": "verifier",
-      "target": "gate_verification",
+      "target": "join_qa",
       "condition": null
     }
   ],

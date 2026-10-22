@@ -74,6 +74,7 @@
         "code_reviewer",
         "qa_director"
       ],
+      "optional_targets": [],
       "_type": "ForkNode"
     },
     "gate_overwatch": {
@@ -109,6 +110,7 @@
       ],
       "writes": [
         "correction-audit.json",
+        "reviews/finding-sources.json",
         "reviews/qa-gate.txt",
         "site-revert-results.json",
         "validation.txt"
