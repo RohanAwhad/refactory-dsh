@@ -1764,6 +1764,13 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             missing = gate_text.split(ADVISORY_REPO_QUESTIONS, 1)[1].strip()
             verification += ("\n- **Repository questions left unanswered (advisory):**\n"
                              + missing + "\n")
+    # Correction-audit checks the audit could not measure; a reviewer checks them by hand.
+    from refactory_dsh.authoring_evidence import correction_audit_advisories
+
+    not_measured = correction_audit_advisories(ctx)
+    if not_measured:
+        verification += ("\n- **Correction-audit checks not measured (advisory):**\n"
+                         + "\n".join(f"  - {note}" for note in not_measured) + "\n")
     verification += _process_notes_section(ctx)
     sections.append(verification)
     if left:
