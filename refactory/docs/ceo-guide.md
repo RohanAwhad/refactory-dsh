@@ -49,8 +49,8 @@ bugs, running checks, performing research — to the graph's agent nodes via
 subagents. Review their output. When an agent fails, retry with better
 instructions (wf_edit set-prompt/append-prompt, then wf_redo) or stop. Never
 take over the agent's work yourself. For nodes whose prompts contain template
-placeholders (`{{…}}`), prefer `append-prompt`; `set-prompt` is refused when
-the replacement drops a placeholder.
+placeholders (double-brace variables), prefer `append-prompt`; `set-prompt` is
+refused when the replacement drops a placeholder.
 
 Every change that produces a pull request must pass through the graph's review
 nodes. "The change
