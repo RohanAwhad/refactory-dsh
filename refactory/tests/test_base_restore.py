@@ -375,6 +375,36 @@ def test_dirty_base_worktree_repaired(base_worktree_env, capsys):
     assert len(base_reset) > 0, "base_reset should have entries"
 
 
+def test_unignored_install_survives_reset_without_reinstall(tmp_path, monkeypatch):
+    """An install git does not ignore is kept by the install record, and the re-check
+    does not count it as dirt, so a reset neither rebuilds nor reinstalls the base (C1)."""
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "package.json", '{"name": "x"}\n')
+    base_commit = _commit(repo, "tests/test_math.py", "def test_add():\n    assert 1 + 1 == 2\n")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "npm").write_text("#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/calls.log\"\n"
+                              "mkdir -p node_modules/pkg && echo installed > node_modules/pkg/index.js\n")
+    (stub / "npm").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub}{os.pathsep}{os.environ['PATH']}")
+    run_dir = tmp_path / "run"
+    worktree.create(repo, base_commit, "test0base02", run_dir)
+    ctx = _Ctx(run_dir)
+
+    base_path, _, _ = base_check._ensure_base_worktree(ctx)
+    assert (base_path / "node_modules" / "pkg" / "index.js").exists()
+    (base_path / "tests" / "test_math.py").write_text("CORRUPTED\n")
+    (base_path / "stray.txt").write_text("stray\n")
+
+    _, _, repaired = base_check._ensure_base_worktree(ctx)
+
+    assert repaired == ["tests/test_math.py"]
+    assert not (base_path / "stray.txt").exists()
+    assert (base_path / "node_modules" / "pkg" / "index.js").read_text() == "installed\n"
+    calls = (stub / "calls.log").read_text().splitlines()
+    assert len(calls) == 1, f"the base was rebuilt and reinstalled: {calls}"
+
+
 def test_dirty_base_through_run_base_check(base_worktree_env, monkeypatch, capsys):
     """Layer 2 fires before run_base_check uses the base."""
     env = base_worktree_env

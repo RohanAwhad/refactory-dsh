@@ -378,11 +378,20 @@ def _check_base_clean(base_path: Path, base_commit: str, base_found: worktree.Wo
     Warns via target_guard.warn listing repaired tracked paths only.
     On failure, rebuilds the base worktree (remove and re-add) or raises as a crash.
     """
+    # What the base installed and git does not ignore stays, as worktree._restore keeps
+    # it: the clean below keeps it, so neither status check may count it as dirt.
+    kept = {name.rstrip("/") for name in
+            _read_json(worktree._record_path(base_found)).get("installed", [])}
+
+    def _dirt(listing: str) -> list[str]:
+        return [entry for entry in listing.split("\0") if len(entry) > 3
+                and not (entry[:2] == "??" and entry[3:].rstrip("/") in kept)]
+
     status_out = worktree.git(
         base_path, "--no-optional-locks", "status", "--porcelain=v1", "-z",
         "--untracked-files=normal",
     )
-    if not status_out.strip("\0").strip():
+    if not _dirt(status_out):
         return []
 
     # Parse NUL-delimited entries to find tracked edits for the warning.
@@ -402,10 +411,7 @@ def _check_base_clean(base_path: Path, base_commit: str, base_found: worktree.Wo
         raise ValueError(f"base worktree reset failed (crashed): git reset --hard {base_commit[:12]}")
 
     # Remove untracked files/dirs, preserving installs from the install record.
-    record_data = _read_json(worktree._record_path(base_found))
-    keep: list[str] = []
-    for name in record_data.get("installed", []):
-        keep.extend(("-e", f"/{name.rstrip('/')}"))
+    keep = [argument for name in sorted(kept) for argument in ("-e", f"/{name}")]
     try:
         worktree.git(base_path, "clean", "-fdq", *keep)
     except ValueError:
@@ -416,7 +422,7 @@ def _check_base_clean(base_path: Path, base_commit: str, base_found: worktree.Wo
         base_path, "--no-optional-locks", "status", "--porcelain=v1", "-z",
         "--untracked-files=normal",
     )
-    if recheck.strip("\0").strip():
+    if _dirt(recheck):
         raise ValueError(
             f"base worktree still dirty after reset: {recheck[:200]}"
         )
