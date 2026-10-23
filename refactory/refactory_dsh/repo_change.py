@@ -1132,22 +1132,26 @@ class _PrepCtx:
         return default
 
 
-def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout: float,
-                       *, triage_prep: bool = True) -> Any:
-    """Run the check in the run's worktree, after preparing the environment it needs.
+def _check_home(ctx: Any) -> Path:
+    home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def _prepare_in_worktree(ctx: Any, found: worktree.Worktree, timeout: float
+                         ) -> tuple[worktree.Worktree, dict[str, str], Path, list[str], dict[str, Any] | None]:
+    """Prepare the environment the check needs in the run's worktree.
 
     An install that writes a lockfile amends the attempt (`worktree.ensure_environment`),
     and a generate command amends its tracked-file changes too, so the commit fact and
     the reviewers' diff follow them to their new head.
     """
-    home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
-    home.mkdir(parents=True, exist_ok=True)
-    budget = getattr(ctx, "budget", None)
+    home = _check_home(ctx)
     head_before = found.head
     found, env, problems, prep_fail = prepare_check_environment(
         found, ctx.facts if hasattr(ctx, 'facts') else {},
         amend=True, commit_lockfiles=True,
-        run=ctx.workdir, home=home, timeout=timeout, budget=budget,
+        run=ctx.workdir, home=home, timeout=timeout, budget=getattr(ctx, "budget", None),
     )
     worktree.write_wrapper(found, ctx.workdir)
     if found.head != head_before:
@@ -1158,6 +1162,95 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
         from refactory_dsh.changed_functions import compute_and_write as _cf_write
         cf_formatted = _cf_write(diff_text, Path(found.path), ctx.workdir, found.base)
         ctx.set_fact("changed_functions", cf_formatted)
+    return found, env, home, problems, prep_fail
+
+
+def _restored_attempt(ctx: Any) -> worktree.Worktree:
+    """The run's worktree at the committed attempt, with what a check or reviewer changed put back."""
+    found, restored = worktree.restore(ctx.workdir)
+    if found.head != str(ctx.facts.get("commit")):
+        raise ValueError("the worktree is not at the attempt materialise committed; materialise again before checking")
+    if restored:
+        target_guard.warn(f"tracked files in the run's worktree had changed since materialise and were put "
+                          f"back, so the check runs the committed attempt: {target_guard._named(restored)}")
+    return found
+
+
+def prepare_attempt(ctx: Any, timeout: float) -> list[str]:
+    """Bring the attempt to the commit its check and its reviewers both see, before either starts.
+
+    The environment is installed, then the ``generate`` command runs (its tracked-file
+    changes amended into the attempt) and the ``setup`` command builds, as `run_check`
+    does first; afterwards the commit no longer moves, so a check run with
+    ``prepared=True`` can run beside the reviews. Returns the problems that stopped the
+    preparation, empty when it worked or when the run has no worktree.
+    """
+    if worktree.recorded(ctx.workdir) is None:
+        return []
+    found, _env, _home, problems, _fail = _prepare_in_worktree(ctx, _restored_attempt(ctx), timeout)
+    _warn_if_shared_changed(found, "while preparing for the check")
+    return problems
+
+
+#: The run's check copy: a detached worktree of the run's own at the attempt's commit, in
+#: the target's worktree slot beside the run's worktree and its base worktree.
+CHECK_COPY_PREFIX = "check-"
+
+
+def _check_copy_path(target: Path, run_id: str) -> Path:
+    return worktree.slot(target) / f"{CHECK_COPY_PREFIX}{run_id}"
+
+
+def _check_copy(ctx: Any, found: worktree.Worktree, timeout: float
+                ) -> tuple[worktree.Worktree, dict[str, str], Path, list[str]]:
+    """The run's check copy at the attempt's commit, with its environment prepared.
+
+    It is kept across attempts -- moved to the new commit with what the last check left
+    in tracked and untracked files put back, its installed environment kept -- and its
+    hooks and HOME are its own, as the base worktree's are. It goes when the run's base worktree
+    does (`remove_check_copy`). Returns the copy, its environment and home, and the
+    problems that stopped its preparation.
+    """
+    target = Path(found.target)
+    run_id = Path(found.path).name.removeprefix("run-")
+    path = _check_copy_path(target, run_id)
+    if path.exists():
+        try:
+            worktree.git(path, "checkout", "-q", "--force", "--detach", found.head)
+            worktree.git(path, "clean", "-fdq")
+        except ValueError:
+            remove_check_copy(target, run_id)
+    if not path.exists():
+        worktree.git(target, *worktree.NO_HOOKS, "worktree", "add", "-q", "--detach",
+                     str(path), found.head)
+    worktree._isolate_hooks(target, path)
+    copy = worktree.Worktree(path=str(path), branch=f"{worktree.BRANCH_PREFIX}check-{run_id}",
+                             base=found.base, head=found.head, target=found.target, run=found.run)
+    from refactory_dsh.invocations import CHECK_COPY_HOME
+
+    home = Path(ctx.workdir).resolve() / CHECK_COPY_HOME
+    home.mkdir(parents=True, exist_ok=True)
+    copy, env, problems, _fail = prepare_check_environment(
+        copy, ctx.facts, amend=False, commit_lockfiles=False, run=ctx.workdir, home=home,
+        timeout=timeout, budget=getattr(ctx, "budget", None))
+    return copy, env, home, problems
+
+
+def remove_check_copy(target: Path, run_id: str) -> None:
+    """Remove the run's check copy, when the run ends or the copy cannot be reused."""
+    path = _check_copy_path(target, run_id)
+    if path.exists():
+        try:
+            worktree.git(target, "worktree", "remove", "--force", str(path))
+        except ValueError:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout: float,
+                       *, triage_prep: bool = True) -> Any:
+    """Run the check in the run's worktree, after preparing the environment it needs."""
+    budget = getattr(ctx, "budget", None)
+    found, env, home, problems, prep_fail = _prepare_in_worktree(ctx, found, timeout)
     if problems:
         if triage_prep:
             from refactory_dsh import base_check as _bc
@@ -1190,7 +1283,8 @@ def refused(ctx: Any) -> str:
 
 
 def run_check(ctx: Any, command: str, timeout: float,
-              *, triage_prep: bool = True) -> Any:
+              *, triage_prep: bool = True, prepared: bool = False,
+              beside_reviews: bool = False) -> Any:
     """Run ``command`` where the run works, and return its `sandbox.SandboxResult`.
 
     In the run's worktree it runs on the committed attempt -- what a check or reviewer
@@ -1200,6 +1294,14 @@ def run_check(ctx: Any, command: str, timeout: float,
     nothing of refactory's own on the path (`worktree.check_environment`). Afterwards the
     worktree is put back again, so the reviews and the next attempt see what edits apply
     to. Without a worktree it runs in the artifact directory the run claimed.
+
+    With ``prepared``, `prepare_attempt` has already done all of that for this commit:
+    the command runs in the run's worktree as it is, without preparing again.
+
+    With ``beside_reviews``, the reviewers are reading and running the delivered files
+    in the run's worktree while the command runs, so it runs in the run's check copy
+    instead (`_check_copy`): neither can see, or delete, what the other leaves, and the
+    run's worktree is not touched.
     """
     found = worktree.recorded(ctx.workdir)
     if found is None:
@@ -1211,14 +1313,38 @@ def run_check(ctx: Any, command: str, timeout: float,
         # An artifact built for refactory: its check imports refactory_dsh.
         return sandbox.run_command(command, workdir=root, timeout_s=timeout, budget=getattr(ctx, "budget", None),
                                    env=sandbox.refactory_env(), exact_env=True)
-    found, restored = worktree.restore(ctx.workdir)
-    if found.head != str(ctx.facts.get("commit")):
-        raise ValueError("the worktree is not at the attempt materialise committed; materialise again before checking")
-    if restored:
-        target_guard.warn(f"tracked files in the run's worktree had changed since materialise and were put "
-                          f"back, so the check runs the committed attempt: {target_guard._named(restored)}")
-    result = _check_in_worktree(ctx, found, command, timeout,
-                                triage_prep=triage_prep)
+    if beside_reviews:
+        if found.head != str(ctx.facts.get("commit")):
+            raise ValueError("the worktree is not at the attempt its check was prepared for; "
+                             "prepare the check again")
+        copy, env, home, problems = _check_copy(ctx, found, timeout)
+        if problems:
+            return sandbox.SandboxResult(ok=False, returncode=1, elapsed_s=0.0, stderr=(
+                "the check copy's environment could not be prepared:\n" + "\n".join(problems)))
+        result = sandbox.run_command(command, workdir=Path(copy.path), timeout_s=timeout,
+                                     budget=getattr(ctx, "budget", None), env=env, home=home,
+                                     exact_env=True, worktree_root=Path(copy.path))
+        if result.cwd_outside:
+            target_guard.warn(f"the check's command ended in {result.cwd_outside}, outside "
+                              f"its check copy {copy.path}")
+        _warn_if_shared_changed(found, "while running the check beside the reviews")
+        return result
+    if prepared:
+        found = worktree.recorded(ctx.workdir)
+        if found is None or found.head != str(ctx.facts.get("commit")):
+            raise ValueError("the worktree is not at the attempt its check was prepared for; "
+                             "prepare the check again")
+        home = _check_home(ctx)
+        result = sandbox.run_command(command, workdir=Path(found.path), timeout_s=timeout,
+                                     budget=getattr(ctx, "budget", None),
+                                     env=worktree.check_environment(Path(found.path), home),
+                                     home=home, exact_env=True, worktree_root=Path(found.path))
+        if result.cwd_outside:
+            target_guard.warn(f"the check's command ended in {result.cwd_outside}, outside "
+                              f"the run's worktree {found.path}")
+    else:
+        found = _restored_attempt(ctx)
+        result = _check_in_worktree(ctx, found, command, timeout, triage_prep=triage_prep)
     # _check_in_worktree already warns about cwd escape; do not warn twice.
     _warn_if_shared_changed(found, "while preparing for and running the check")
     # The reviews and the next attempt read the worktree, and edits apply to the
@@ -1277,4 +1403,5 @@ def report(ctx: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
     from refactory_dsh import base_check
     run_id = Path(found.path).name.removeprefix("run-")
     base_check.remove_base_worktree(Path(found.target), run_id)
+    remove_check_copy(Path(found.target), run_id)
     return payload

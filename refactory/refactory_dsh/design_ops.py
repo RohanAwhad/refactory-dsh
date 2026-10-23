@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import delivery, repo_change, sandbox, unbuilt_check, worktree
+from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT
 from refactory_dsh.nn import Verdict
 
 _FILE_EXT_RE = _re.compile(
@@ -694,7 +695,94 @@ def apply_cwd_escaped(result: Any, outcome: dict[str, Any]) -> None:
         outcome["cwd_escaped"] = result.cwd_outside
 
 
-def check_artifact(ctx: Any) -> str:
+def _refused_verdict(ctx: Any) -> Verdict | None:
+    """The reloop for an emission materialise could not apply, or None when it applied."""
+    refused = repo_change.refused(ctx)
+    if not refused:
+        return None
+    # Nothing was materialised, so there is nothing to record runtime evidence about;
+    # a refused emission is not a code failure, so it does not spend an attempt.
+    detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
+    ctx.write_text("check.txt", detail + "\n")
+    ctx.set_fact("validation", detail)
+    ctx.write_json("check-record.json", {
+        "status": "refused", "validation": detail,
+        "attempt": int(ctx.facts.get("attempts_used", 0)),
+        "check_mode": "full", "targeted_command": None,
+    })
+    return Verdict("reloop", detail)
+
+
+def _early_stop(ctx: Any, prepass: Any, prev_record: dict[str, Any],
+                _saved_base_unavailable: str) -> Any:
+    """Send the attempt back because the tests that failed last time still fail."""
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh.create_ops import repair
+    from refactory_dsh.failfast import detect_stuck
+
+    # Stop early: the targeted test still fails.
+    detail = prepass.digest_text or "(targeted check failed)"
+    ctx.write_text("check.txt", detail + "\n")
+    ctx.set_fact("validation", detail)
+
+    # R5: keep design-constraint lines in early-stop feedback.
+    from refactory_dsh import design_contract
+    run_name = str(ctx.facts.get("name") or "")
+    parsed = design_contract.parse(
+        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
+    )
+    left_lines = [
+        f"Design constraint: {site['path']} [left: {site['reason']}] "
+        "— do not change this; fix the tests or callers instead."
+        for site in parsed.rule_sites
+        if site.get("status") == "left" and site.get("reason")
+    ]
+    if left_lines:
+        detail = "\n".join(left_lines) + "\n\n" + detail
+
+    # base_unavailable note
+    base_note = _saved_base_unavailable
+    if base_note:
+        detail = detail + "\n\n" + base_note
+
+    # Stuck detection on early-stop path too (correction item 4)
+    found_wt = worktree.recorded(ctx.workdir)
+    stuck_notice = detect_stuck(
+        prev_record, prepass.runners,
+        "\n".join(filter(None, [
+            getattr(prepass.result, "stdout", None) or "",
+            getattr(prepass.result, "stderr", None) or "",
+        ])).strip(),
+        found_wt.path if found_wt else None,
+        prev_record.get("commit"),
+        str(ctx.facts.get("commit", "")),
+    )
+    if stuck_notice:
+        detail = stuck_notice + "\n\n" + detail
+
+    outcome = {
+        "command": prepass.targeted_command, "status": "code_failure",
+        "check_mode": "targeted", "targeted_command": prepass.targeted_command,
+    }
+    evidence.record(ctx, outcome)
+    ctx.write_json("check-record.json", {
+        "status": "fail",
+        "validation": detail[:4000],
+        "digest": prepass.digest_text,
+        "attempt": int(ctx.facts.get("attempts_used", 0)),
+        "command": prepass.targeted_command,
+        "runners": prepass.runners,
+        "raw_tail": prepass.raw_tail,
+        "check_mode": "targeted",
+        "targeted_command": prepass.targeted_command,
+        "inherited": list(prev_record.get("inherited", [])),
+        "commit": str(ctx.facts.get("commit", "")),
+    })
+    # Do NOT append to convergence history — targeted runs excluded.
+    return repair(ctx, [detail], early_stop=True)
+
+
+def check_artifact(ctx: Any, *, check_attempt: str | None = None) -> str:
     """Gate: run the brief's check, in a sandbox, and refuse what does not pass.
 
     This is the design-time equivalent of the package gate: a package must import and
@@ -703,29 +791,17 @@ def check_artifact(ctx: Any) -> str:
 
     The check runs where the run works (`repo_change.run_check`). An emission materialise
     could not apply is sent back to emit with the reason, as a failed check is, rather
-    than ending the run (#330 E5).
+    than ending the run (#330 E5). ``check_attempt`` names the prepared attempt the
+    evidence belongs to, when `prepare_check` ran this whole check itself.
     """
-    from refactory_dsh import authoring_evidence as evidence
-    from refactory_dsh.create_ops import repair
-
-    refused = repo_change.refused(ctx)
-    if refused:
-        # Nothing was materialised, so there is nothing to record runtime evidence about;
-        # a refused emission is not a code failure, so it does not spend an attempt.
-        detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
-        ctx.write_text("check.txt", detail + "\n")
-        ctx.set_fact("validation", detail)
-        ctx.write_json("check-record.json", {
-            "status": "refused", "validation": detail,
-            "attempt": int(ctx.facts.get("attempts_used", 0)),
-            "check_mode": "full", "targeted_command": None,
-        })
-        return Verdict("reloop", detail)
+    refused = _refused_verdict(ctx)
+    if refused is not None:
+        return refused
     command = str(ctx.facts["check"])
     check_timeout = int(ctx.knob("check_timeout_s", 180))
 
     # ── Targeted pre-pass ──────────────────────────────────────────────
-    from refactory_dsh.failfast import targeted_prepass, detect_stuck, record_check_history
+    from refactory_dsh.failfast import targeted_prepass
 
     prev_record = ctx.read_json("check-record.json", {})
     # Read base_unavailable before it is cleared below.
@@ -738,77 +814,34 @@ def check_artifact(ctx: Any) -> str:
         root=(worktree.recorded(ctx.workdir).path
               if worktree.recorded(ctx.workdir) is not None else None),
     )
-
     if prepass.early_stop:
-        # Stop early: the targeted test still fails.
-        detail = prepass.digest_text or "(targeted check failed)"
-        ctx.write_text("check.txt", detail + "\n")
-        ctx.set_fact("validation", detail)
+        return _early_stop(ctx, prepass, prev_record, _saved_base_unavailable)
+    return _full_check(ctx, command, check_timeout, prev_record,
+                       prepass.targeted_command if prepass.ran else None,
+                       beside_reviews=False, check_attempt=check_attempt)
 
-        # R5: keep design-constraint lines in early-stop feedback.
-        from refactory_dsh import design_contract
-        run_name = str(ctx.facts.get("name") or "")
-        parsed = design_contract.parse(
-            ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
-        )
-        left_lines = [
-            f"Design constraint: {site['path']} [left: {site['reason']}] "
-            "— do not change this; fix the tests or callers instead."
-            for site in parsed.rule_sites
-            if site.get("status") == "left" and site.get("reason")
-        ]
-        if left_lines:
-            detail = "\n".join(left_lines) + "\n\n" + detail
 
-        # base_unavailable note
-        base_note = _saved_base_unavailable
-        if base_note:
-            detail = detail + "\n\n" + base_note
+def _full_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[str, Any],
+                targeted_command: str | None, *, beside_reviews: bool,
+                check_attempt: str | None = None) -> Any:
+    """Run the whole check on the attempt, record its evidence, and judge it."""
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh.create_ops import repair
+    from refactory_dsh.failfast import detect_stuck, record_check_history
 
-        # Stuck detection on early-stop path too (correction item 4)
-        found_wt = worktree.recorded(ctx.workdir)
-        stuck_notice = detect_stuck(
-            prev_record, prepass.runners,
-            "\n".join(filter(None, [
-                getattr(prepass.result, "stdout", None) or "",
-                getattr(prepass.result, "stderr", None) or "",
-            ])).strip(),
-            found_wt.path if found_wt else None,
-            prev_record.get("commit"),
-            str(ctx.facts.get("commit", "")),
-        )
-        if stuck_notice:
-            detail = stuck_notice + "\n\n" + detail
-
-        outcome = {
-            "command": prepass.targeted_command, "status": "code_failure",
-            "check_mode": "targeted", "targeted_command": prepass.targeted_command,
-        }
-        evidence.record(ctx, outcome)
-        ctx.write_json("check-record.json", {
-            "status": "fail",
-            "validation": detail[:4000],
-            "digest": prepass.digest_text,
-            "attempt": int(ctx.facts.get("attempts_used", 0)),
-            "command": prepass.targeted_command,
-            "runners": prepass.runners,
-            "raw_tail": prepass.raw_tail,
-            "check_mode": "targeted",
-            "targeted_command": prepass.targeted_command,
-            "inherited": list(prev_record.get("inherited", [])),
-            "commit": str(ctx.facts.get("commit", "")),
-        })
-        # Do NOT append to convergence history — targeted runs excluded.
-        return repair(ctx, [detail], early_stop=True)
-
-    result = repo_change.run_check(ctx, command, check_timeout)
+    result = (repo_change.run_check(ctx, command, check_timeout, beside_reviews=True)
+              if beside_reviews else repo_change.run_check(ctx, command, check_timeout))
     detail = "\n".join((result.problem(), result.stdout or "", result.stderr or "")).strip()
     outcome = {"command": command, "status": "pass" if result.ok else evidence.check_failure_kind(
         result, budget=getattr(ctx, "budget", None)),
         "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s,
         "check_mode": "full",
-        "targeted_command": prepass.targeted_command if prepass.ran else None}
+        "targeted_command": targeted_command}
+    if check_attempt:
+        # The prepared attempt this evidence belongs to: a review taken beside this
+        # check binds to it (`authoring_evidence.current_problems`).
+        outcome["check_attempt"] = check_attempt
     apply_cwd_escaped(result, outcome)
     ctx.write_text("check.txt", detail or "ok\n")
 
@@ -846,7 +879,7 @@ def check_artifact(ctx: Any) -> str:
                 "status": "guarded", "validation": detail,
                 "attempt": int(ctx.facts.get("attempts_used", 0)),
                 "check_mode": "full",
-                "targeted_command": prepass.targeted_command if prepass.ran else None,
+                "targeted_command": targeted_command,
             })
             return repair(ctx, [detail])
         ctx.set_fact("validation", "(the check passed)")
@@ -854,7 +887,7 @@ def check_artifact(ctx: Any) -> str:
             "status": "pass", "validation": "(the check passed)",
             "attempt": int(ctx.facts.get("attempts_used", 0)),
             "check_mode": "full",
-            "targeted_command": prepass.targeted_command if prepass.ran else None,
+            "targeted_command": targeted_command,
         })
         return "proceed"
 
@@ -931,7 +964,7 @@ def check_artifact(ctx: Any) -> str:
                 "status": "pass", "validation": validation_msg,
                 "attempt": int(ctx.facts.get("attempts_used", 0)),
                 "check_mode": "full",
-                "targeted_command": prepass.targeted_command if prepass.ran else None,
+                "targeted_command": targeted_command,
             })
             # ── enforce test guardedness on excused pass too (R3) ──
             unexempted = enforce_guardedness(ctx)
@@ -947,7 +980,7 @@ def check_artifact(ctx: Any) -> str:
                     "status": "guarded", "validation": detail,
                     "attempt": int(ctx.facts.get("attempts_used", 0)),
                     "check_mode": "full",
-                    "targeted_command": prepass.targeted_command if prepass.ran else None,
+                    "targeted_command": targeted_command,
                 })
                 return repair(ctx, [detail])
             return "proceed"
@@ -1048,7 +1081,7 @@ def check_artifact(ctx: Any) -> str:
         "runners": digest.to_dict().get("runners", []),
         "raw_tail": digest.raw_tail[-500:],
         "check_mode": "full",
-        "targeted_command": prepass.targeted_command if prepass.ran else None,
+        "targeted_command": targeted_command,
         "inherited": _inherited_list,
         "commit": str(ctx.facts.get("commit", "")),
     }
@@ -1057,6 +1090,160 @@ def check_artifact(ctx: Any) -> str:
     ctx.write_json("check-record.json", _cr_fail)
 
     return repair(ctx, [detail])
+
+
+def prepare_check(ctx: Any) -> Any:
+    """Gate: bring the attempt to the commit its check and its reviewers both see.
+
+    The check runs beside the reviews (`check_beside_reviews`), so everything that can
+    still move the commit happens here first: the environment install, the ``generate``
+    command and the ``setup`` build (`repo_change.prepare_attempt`). The tests that failed
+    last time run here too, and an attempt that still fails them goes back to the builder
+    without spending a review. A preparation that fails is judged here by the whole
+    check, as it always was, which reports it with its triage.
+    """
+    import uuid
+
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh.failfast import targeted_prepass
+
+    # Nothing a last attempt prepared or decided may stand for this one.
+    for name in (CHECK_PREP, CHECK_VERDICT):
+        ctx.path(name).unlink(missing_ok=True)
+    refused = _refused_verdict(ctx)
+    if refused is not None:
+        return refused
+    command = str(ctx.facts["check"])
+    check_timeout = int(ctx.knob("check_timeout_s", 180))
+    attempt = uuid.uuid4().hex
+    # What sent the build back, for the reviewers: the check beside them rewrites
+    # `validation` while they run.
+    ctx.set_fact("review_feedback", str(ctx.facts.get("validation") or ""))
+    ctx.set_fact("review_baseline", json.dumps(evidence.requirements(ctx), indent=1))
+    prev_record = ctx.read_json("check-record.json", {})
+    saved_base_unavailable = ctx.facts.get("base_unavailable") or ""
+    if repo_change.prepare_attempt(ctx, check_timeout):
+        verdict = check_artifact(ctx, check_attempt=attempt)
+        _record_prepared(ctx, attempt, None)
+        _record_check_verdict(ctx, attempt, verdict)
+        return verdict
+    found = worktree.recorded(ctx.workdir)
+    prepass = targeted_prepass(
+        prev_record, command,
+        lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False,
+                                                   prepared=True),
+        check_timeout, root=found.path if found is not None else None,
+    )
+    if prepass.early_stop:
+        return _early_stop(ctx, prepass, prev_record, saved_base_unavailable)
+    _record_prepared(ctx, attempt, prepass.targeted_command if prepass.ran else None)
+    return "proceed"
+
+
+def _record_prepared(ctx: Any, attempt: str, targeted_command: str | None) -> None:
+    # `root` is the directory the evidence attests (`authoring_evidence.record`).
+    ctx.write_json(CHECK_PREP, {
+        "attempt": attempt, "commit": str(ctx.facts.get("commit") or ""),
+        "root": str(ctx.facts.get("artifact") or ctx.facts.get("package_path") or ""),
+        "targeted_command": targeted_command})
+
+
+def _record_check_verdict(ctx: Any, attempt: str, verdict: Any) -> None:
+    # The command it ran: a decision stands for this attempt only while the check is
+    # the same command (`graph-control amend-command` changes it).
+    ctx.write_json(CHECK_VERDICT, {"attempt": attempt, "command": str(ctx.facts.get("check") or ""),
+                                   "verdict": str(verdict), "reason": getattr(verdict, "reason", "")})
+
+
+def _decided(ctx: Any, attempt: str) -> dict[str, Any]:
+    """The decision recorded for ``attempt`` with the current check command, or {}."""
+    decided = ctx.read_json(CHECK_VERDICT, {}) if ctx.exists(CHECK_VERDICT) else {}
+    if (attempt and decided.get("attempt") == attempt
+            and decided.get("command") == str(ctx.facts.get("check") or "")):
+        return decided
+    return {}
+
+
+def check_beside_reviews(ctx: Any) -> dict[str, Any]:
+    """Op inside the review fork: the attempt's whole check, run beside its reviews.
+
+    It runs on the commit `prepare_check` settled, in the run's check copy
+    (`repo_change.run_check` with ``beside_reviews``), and records what it decided for
+    `gate_check`, which routes once the reviews are done: a node inside a fork may not
+    send the run outside it. A check that raises is recorded too and raised by
+    `gate_check`, because the node runner retries a failed op, and a retry here would be
+    a second full check for the same failure.
+    """
+    from refactory_dsh.budgets import BudgetExhausted
+
+    attempt = _prepared_attempt(ctx)
+    if not attempt:
+        raise ValueError("the check was not prepared for this attempt; prepare_check runs "
+                         "before the review fork")
+    if _decided(ctx, attempt):
+        return {}  # prepare_check ran the whole check itself
+    try:
+        verdict = _full_check(ctx, str(ctx.facts["check"]), int(ctx.knob("check_timeout_s", 180)),
+                              ctx.read_json("check-record.json", {}),
+                              _prepared(ctx).get("targeted_command"), beside_reviews=True,
+                              check_attempt=attempt)
+    except BudgetExhausted:
+        raise
+    except Exception as exc:  # recorded for gate_check to raise, not retried here
+        ctx.write_json(CHECK_VERDICT, {"attempt": attempt, "command": str(ctx.facts["check"]),
+                                       "error": str(exc), "error_type": type(exc).__name__})
+        return {}
+    _record_check_verdict(ctx, attempt, verdict)
+    return {}
+
+
+def _prepared(ctx: Any) -> dict[str, Any]:
+    return ctx.read_json(CHECK_PREP, {}) if ctx.exists(CHECK_PREP) else {}
+
+
+def _prepared_attempt(ctx: Any) -> str:
+    """The attempt `prepare_check` prepared, when it is the commit the run is at now."""
+    prepared = _prepared(ctx)
+    if prepared.get("attempt") and prepared.get("commit") == str(ctx.facts.get("commit") or ""):
+        return str(prepared["attempt"])
+    return ""
+
+
+def gate_check(ctx: Any) -> Any:
+    """Gate after the review fork: route on what the check beside the reviews decided.
+
+    A failed check sends the build back with the check's feedback, as before; the
+    reviews of that attempt are not read, because the next attempt is reviewed afresh.
+    A check that stopped the run (an unrepairable failure) stops it here. A person's
+    skip of the check proceeds on its skip receipt for this attempt.
+
+    With no decision for this attempt and command -- the check command was corrected
+    after the check ran (`graph-control amend-command` reruns this gate), or the check
+    never recorded one -- this gate runs the whole check itself, as the sequential gate
+    did, bound to the same attempt, so the reviews beside it stay current.
+    """
+    from refactory_dsh import authoring_evidence as evidence
+
+    attempt = _prepared_attempt(ctx)
+    if not attempt:
+        raise ValueError("the check was not prepared for the attempt the run is at; "
+                         "prepare_check runs before the review fork")
+    decided = _decided(ctx, attempt)
+    if decided:
+        if decided.get("error_type"):
+            # The check stopped the run, as it would have before the reviews.
+            raise (RuntimeError if decided["error_type"] == "RuntimeError" else ValueError)(
+                str(decided.get("error") or "the check failed"))
+        label = str(decided.get("verdict") or "")
+        return "proceed" if label == "proceed" else Verdict(label, str(decided.get("reason") or ""))
+    validation = (ctx.read_json(evidence.EVIDENCE, {}) if ctx.exists(evidence.EVIDENCE)
+                  else {}).get("validation", {})
+    if (validation.get("status") == "skipped" and validation.get("source") == "person"
+            and validation.get("check_attempt") == attempt):
+        return "proceed"
+    verdict = check_artifact(ctx, check_attempt=attempt)
+    _record_check_verdict(ctx, attempt, verdict)
+    return verdict
 
 
 def enforce_guardedness(ctx: Any) -> list[str]:

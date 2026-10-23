@@ -675,13 +675,15 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 | function | `locate` | `(ctx: 'Any', name: 'str', task: 'dict[str, Any]', *, in_worktree: 'bool \| None' = None, needs_worktree: 'tuple[str, ...]' = (), output_only: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise` | `(ctx: 'Any', *, source: 'Path \| None' = None, files: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise_node` | `(**fields: 'Any') -> 'Node'` |
+| function | `prepare_attempt` | `(ctx: 'Any', timeout: 'float') -> 'list[str]'` |
 | function | `prepare_check_environment` | `(found: 'worktree.Worktree', facts: 'dict[str, Any]', *, amend: 'bool', commit_lockfiles: 'bool', run: 'Path', home: 'Path', timeout: 'float', budget: 'Any' = None) -> 'tuple[worktree.Worktree, dict[str, str], list[str], dict[str, Any] \| None]'` |
 | function | `prepare_commands` | `(ctx: 'Any', found: 'worktree.Worktree', env: 'dict[str, str]', home: 'Path', timeout: 'float', budget: 'Any', *, amend: 'bool' = True) -> 'tuple[worktree.Worktree, list[str], dict[str, Any] \| None]'` |
 | function | `produces` | `() -> 'tuple[str, ...]'` |
 | function | `refuse_truncated` | `(path: 'Path', text: 'str') -> 'None'` |
 | function | `refused` | `(ctx: 'Any') -> 'str'` |
+| function | `remove_check_copy` | `(target: 'Path', run_id: 'str') -> 'None'` |
 | function | `report` | `(ctx: 'Any', name: 'str', payload: 'dict[str, Any]') -> 'dict[str, Any]'` |
-| function | `run_check` | `(ctx: 'Any', command: 'str', timeout: 'float', *, triage_prep: 'bool' = True) -> 'Any'` |
+| function | `run_check` | `(ctx: 'Any', command: 'str', timeout: 'float', *, triage_prep: 'bool' = True, prepared: 'bool' = False, beside_reviews: 'bool' = False) -> 'Any'` |
 | function | `wants_worktree` | `(ctx: 'Any') -> 'bool'` |
 
 - **`apply_emission`** — Parse emit.txt and resolve edits against the run worktree, read-only.
@@ -690,11 +692,13 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 - **`locate`** — Where the run works, as facts for the mode's prepare op to return.
 - **`materialise`** — Make the emitted files the run's artifact: a commit in its worktree, when it has one.
 - **`materialise_node`** — The op that applies ``emit.txt`` as the run's next attempt (`materialise`).
+- **`prepare_attempt`** — Bring the attempt to the commit its check and its reviewers both see, before either starts.
 - **`prepare_check_environment`** — Install dependencies, build check environment, run generate/setup.
 - **`prepare_commands`** — Run the run's generate command, then its setup command, in a prepared worktree.
 - **`produces`** — The facts `locate` returns, for the prepare node's ``produces``.
 - **`refuse_truncated`** — Refuse text copied from a read that the read tool cut short, before it is written anywhere.
 - **`refused`** — Why `materialise` could not apply the last ``emit.txt``; empty when it did.
+- **`remove_check_copy`** — Remove the run's check copy, when the run ends or the copy cannot be reused.
 - **`report`** — Settle the run's place, write the mode's report ``name`` from ``payload``, and return it.
 - **`run_check`** — Run ``command`` where the run works, and return its `sandbox.SandboxResult`.
 - **`wants_worktree`** — Whether the run's ``worktree`` knob asks for a worktree, as it does unless turned off.

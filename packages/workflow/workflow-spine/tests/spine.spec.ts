@@ -224,17 +224,17 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     expect(full).toContain('design_review')
   })
 
-  it('four branches drain before join_qa, then gate_qa follows', () => {
+  it('the check runs beside the reviews: five branches drain before join_qa, then gate_check routes', () => {
     const s = new Spine(graph)
-    // Advance through the graph until fork_qa
-    advance(s, 'fork_qa', 'proceed')
+    // Advance through the graph until fork_qa; prepare_check settles the commit first.
+    const before = advance(s, 'fork_qa', 'proceed')
+    expect(before).toContain('prepare_check')
+    expect(before).not.toContain('check')
     s.complete('fork_qa')
-    const branches = ids(s)
-    expect(branches).toContain('health_checker')
-    expect(branches).toContain('code_reviewer')
-    expect(branches).toContain('qa_director')
-    expect(branches).toContain('verifier')
-    // Complete three reviewers — verifier still pending, join not reached
+    expect(ids(s)).toEqual(expect.arrayContaining(
+      ['check', 'health_checker', 'code_reviewer', 'qa_director', 'verifier']))
+    // The check records its decision and completes into the join; it may not leave the fork.
+    s.complete('check')
     s.complete('health_checker')
     s.complete('code_reviewer')
     s.complete('qa_director')
@@ -244,9 +244,21 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     s.complete('verifier')
     expect(ids(s)).toContain('join_qa')
     s.complete('join_qa')
+    expect(ids(s)).toEqual(['gate_check'])
+    s.verdict('gate_check', 'proceed')
     expect(ids(s)).toContain('synthesize_qa')
     s.complete('synthesize_qa')
     expect(ids(s)).toContain('gate_qa')
+  })
+
+  it('a failed check, routed after the join, sends the build back to emit', () => {
+    const s = new Spine(graph)
+    advance(s, 'fork_qa', 'proceed')
+    s.complete('fork_qa')
+    for (const n of ['check', 'health_checker', 'code_reviewer', 'qa_director', 'verifier']) s.complete(n)
+    s.complete('join_qa')
+    s.verdict('gate_check', 'reloop', 'the check failed')
+    expect(ids(s)).toEqual(['emit'])
   })
 })
 

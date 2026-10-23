@@ -321,11 +321,17 @@ def _is_check_node(node: Any) -> bool:
     not run the check. No fact-level discriminator (CHECK_WRITES or
     CHECK_PRODUCES alone) can exclude materialise, because materialise
     writes ``changes.diff`` and produces both ``commit`` and ``files``.
+
+    A check that runs on a commit already prepared -- design mode's check
+    beside its reviews, which leaves the commit facts to ``prepare_check`` --
+    is known by the fact only a check produces, ``runtime_evidence``
+    (`authoring_evidence.check_nodes`).
     """
     from refactory_dsh.invocations import CHECK_PRODUCES
 
     return (
-        set(CHECK_PRODUCES).issubset(set(node.produces))
+        (set(CHECK_PRODUCES).issubset(set(node.produces))
+         or "runtime_evidence" in node.produces)
         and "check_timeout_s" in node.knobs
     )
 
@@ -361,12 +367,7 @@ def _is_deliver_node(node: Any) -> bool:
     mode whose delivery runs a merged check declares the knob and gets the
     envelope automatically.
     """
-    from refactory_dsh.invocations import CHECK_PRODUCES
-
-    return (
-        "check_timeout_s" in node.knobs
-        and not set(CHECK_PRODUCES).issubset(set(node.produces))
-    )
+    return "check_timeout_s" in node.knobs and not _is_check_node(node)
 
 
 def _delivery_envelope_s(state: dict[str, Any]) -> int:

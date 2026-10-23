@@ -93,7 +93,7 @@ def test_graph_shape_full_mode():
     assert "gate_verification" not in graph.nodes
     edges = [(e.source, e.target, e.condition) for e in graph.edges]
     assert ("check", "verifier", "proceed") not in edges
-    assert ("check", "fork_qa", "proceed") in edges
+    assert ("prepare_check", "fork_qa", "proceed") in edges
     assert ("verifier", "join_qa", None) in edges
 
 

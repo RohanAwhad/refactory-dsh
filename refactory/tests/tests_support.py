@@ -418,8 +418,30 @@ def render(files: dict[str, str]) -> str:
     return "\n".join(f"===FILE: {name}===\n{body}" for name, body in files.items()) + "\n"
 
 
+#: What a review beside a check answers when its script has no review for that attempt
+#: (`FakeModel.complete`), keyed by a line of each reviewer's prompt. Only a prompt that
+#: says the check runs beside it is answered this way.
+BESIDE_CHECK = "## The check runs beside this review"
+BESIDE_CHECK_REVIEWS = (
+    ("You are the health checker.", "health: ok"),
+    ("You are the code reviewer.", "code review: ok"),
+    ("You are the QA director.", "qa: ok"),
+    ("You verify the change against the brief and the repository only.", "No blocking findings.\n\nVERDICT: PASS"),
+)
+
+
+def _is_emission(answer: str) -> bool:
+    return any(marker in answer for marker in ("===FILE:", "===EDIT:", "===DELETE:"))
+
+
 class FakeModel:
-    """Answers with the given texts, in order."""
+    """Answers with the given texts, in order.
+
+    Design mode reviews an attempt beside its check, so an attempt whose check fails is
+    reviewed too, though `gate_check` sends it back without reading the reviews. A script
+    written for the check before the reviews has its next emission queued at that point:
+    a reviewer asking then gets a passing review instead, and the script is not consumed.
+    """
 
     def __init__(self, answers: list[str]) -> None:
         self.answers = list(answers)
@@ -430,6 +452,10 @@ class FakeModel:
     def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
         self.prompts.append(prompt)
         self.workdirs.append(workdir)
+        beside = (next((text for marker, text in BESIDE_CHECK_REVIEWS if marker in prompt), None)
+                  if BESIDE_CHECK in prompt else None)
+        if beside is not None and self.answers and _is_emission(self.answers[0]):
+            return beside
         answer = self.answers.pop(0) if self.answers else ""
         # Scripted pitfalls fixtures: agent_delivery's capture_final writes the
         # model's text answer to writes[0] (pitfalls.json), but pitfalls.md

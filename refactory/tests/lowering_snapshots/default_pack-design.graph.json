@@ -22,26 +22,24 @@
     "check": {
       "id": "check",
       "reads": [
-        "brief.json"
+        "brief.json",
+        "check-prep.json"
       ],
       "writes": [
         "authoring-evidence.json",
-        "changed-functions.json",
-        "changes.diff",
         "check-record.json",
+        "check-verdict.json",
         "check.txt",
         "test-guardedness.json",
         "validation.txt"
       ],
       "blocking": true,
       "resource_role": "final_validation",
-      "evaluator_type": "fn",
-      "evaluator_role": null,
-      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:check_artifact",
+      "command": "python -m refactory_dsh.run refactory_dsh.design_ops:check_beside_reviews",
+      "callable_name": "refactory_dsh.design_ops:check_beside_reviews",
+      "notes": "run the brief's check, in a sandbox, beside the reviews",
       "command_timeout_s": 6540,
-      "gate_prompt": "run the brief's check, in a sandbox",
-      "max_iterations": 8,
-      "_type": "GateNode"
+      "_type": "FnNode"
     },
     "check_design_claims": {
       "id": "check_design_claims",
@@ -62,7 +60,6 @@
     "code_reviewer": {
       "id": "code_reviewer",
       "reads": [
-        "authoring-evidence.json",
         "brief.json",
         "changed-functions.json",
         "design.md",
@@ -76,7 +73,7 @@
       "resource_role": "final_validation",
       "role": "ceo",
       "model": "",
-      "prompt_template": "## Pitfalls\n{{pitfalls}}\n\nCheck the built change against every high-risk pitfall. A high pitfall the code contradicts is BLOCKING.\n\nArtifact directory (absolute): {{artifact}}\nRead and run the delivered files at this exact path; do not infer it from your working directory. {{change}}\n\nBrief: {{brief}}\n\n## The design\nRead the approved design from `design.md` in the run directory.\n\n## The emitted source\nRead what was emitted from `emit.txt` in the run directory. In a worktree it may edit or delete files rather than write them whole, so judge the result: the files at the artifact path, and the diff named above.\n\nAcceptance baseline: the original brief, any approved design, and explicit user steering. Preserve user-approved non-goals. A README limitation, proposed exclusion, coordinator summary or reviewer note cannot waive a requested behavior without explicit user agreement to that change. Report conflicts instead of silently narrowing scope. Reviews must mark observed noncompliance as BLOCKING even when the limitation is documented.\n\nYou are the code reviewer. Read the delivered files against the design and the brief: is every file the design names present, does it do what the design says, and would it run? Trace input values through parsing to the delivered artifact: count/role binding, signs, units, and unsupported input must preserve the request or explicitly reject it. A matching number elsewhere in prose is not evidence for the requested field. Record findings in `reviews/code-review.md`. A defect that would stop the artifact working is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\nEnd the first line of each BLOCKING finding with `[core]` when it breaks an ask in the brief, an acceptance criterion, a correction or constraint the person gave, or existing behaviour (a regression: name the test or file:line that shows it), and with `[non-core]` otherwise: extra tests, docs, edge cases beyond the asks, refactors and style. A finding with no tag counts as core. Non-core findings do not hold the change back; its pull request lists them as follow-ups.\n{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\nWhen a false claim about design.md is found, report it against the code file that relies on the claim, not against design.md, because BLOCKING: design.md is downgraded by scope_filter_findings.\n\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory and read authoring-evidence.json for the full validation receipt.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{validation}}\n{{qa_gate}}\n{{overwatch_review}}\nThe runtime has already executed canonical smoke/acceptance on this revision. Read its receipt and actual output files; do not repeat a full model/Task feed. Use targeted spot checks only for a concrete uncovered requirement. A numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
+      "prompt_template": "## Pitfalls\n{{pitfalls}}\n\nCheck the built change against every high-risk pitfall. A high pitfall the code contradicts is BLOCKING.\n\nArtifact directory (absolute): {{artifact}}\nRead and run the delivered files at this exact path; do not infer it from your working directory. {{change}}\n\nBrief: {{brief}}\n\n## The design\nRead the approved design from `design.md` in the run directory.\n\n## The emitted source\nRead what was emitted from `emit.txt` in the run directory. In a worktree it may edit or delete files rather than write them whole, so judge the result: the files at the artifact path, and the diff named above.\n\nAcceptance baseline: the original brief, any approved design, and explicit user steering. Preserve user-approved non-goals. A README limitation, proposed exclusion, coordinator summary or reviewer note cannot waive a requested behavior without explicit user agreement to that change. Report conflicts instead of silently narrowing scope. Reviews must mark observed noncompliance as BLOCKING even when the limitation is documented.\n\nYou are the code reviewer. Read the delivered files against the design and the brief: is every file the design names present, does it do what the design says, and would it run? Trace input values through parsing to the delivered artifact: count/role binding, signs, units, and unsupported input must preserve the request or explicitly reject it. A matching number elsewhere in prose is not evidence for the requested field. Record findings in `reviews/code-review.md`. A defect that would stop the artifact working is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\nEnd the first line of each BLOCKING finding with `[core]` when it breaks an ask in the brief, an acceptance criterion, a correction or constraint the person gave, or existing behaviour (a regression: name the test or file:line that shows it), and with `[non-core]` otherwise: extra tests, docs, edge cases beyond the asks, refactors and style. A finding with no tag counts as core. Non-core findings do not hold the change back; its pull request lists them as follow-ups.\n{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\nWhen a false claim about design.md is found, report it against the code file that relies on the claim, not against design.md, because BLOCKING: design.md is downgraded by scope_filter_findings.\n\n## The check runs beside this review\nThe check `{{check}}` runs at the same time as this review, on the same commit, and is judged on its own once the reviews are done, so its result is not available to you. Do not run the whole check yourself. Use targeted spot checks only for a concrete uncovered requirement.\n\n## Requirements and intent baseline\n{{review_baseline}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{review_feedback}}\n{{qa_gate}}\n{{overwatch_review}}\nA test that also fails on the unchanged base is not this change's defect: the check compares its failures with the base. Report a failing test as BLOCKING only when the change causes it. Leave the run's worktree as you found it: write scratch files outside it.\nA numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
       "tools": [],
       "timeout": null,
       "max_iterations": 1,
@@ -201,12 +198,39 @@
         "health_checker",
         "code_reviewer",
         "qa_director",
-        "verifier"
+        "verifier",
+        "check"
       ],
       "optional_targets": [
         "verifier"
       ],
       "_type": "ForkNode"
+    },
+    "gate_check": {
+      "id": "gate_check",
+      "reads": [
+        "check-prep.json",
+        "check-verdict.json"
+      ],
+      "writes": [
+        "authoring-evidence.json",
+        "changed-functions.json",
+        "changes.diff",
+        "check-record.json",
+        "check-verdict.json",
+        "check.txt",
+        "test-guardedness.json",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:gate_check",
+      "command_timeout_s": 6540,
+      "gate_prompt": "send a failed check back to the builder; otherwise read the reviews",
+      "max_iterations": 8,
+      "_type": "GateNode"
     },
     "gate_design_review": {
       "id": "gate_design_review",
@@ -334,7 +358,6 @@
     "health_checker": {
       "id": "health_checker",
       "reads": [
-        "authoring-evidence.json",
         "brief.json",
         "changed-functions.json",
         "design.md"
@@ -346,7 +369,7 @@
       "resource_role": "final_validation",
       "role": "ceo",
       "model": "",
-      "prompt_template": "Artifact directory (absolute): {{artifact}}\nRead and run the delivered files at this exact path; do not infer it from your working directory. {{change}}\n\nBrief: {{brief}}\nThe check it must pass: {{check}}\n\n## The design\nRead the approved design from `design.md` in the run directory.\n\nAcceptance baseline: the original brief, any approved design, and explicit user steering. Preserve user-approved non-goals. A README limitation, proposed exclusion, coordinator summary or reviewer note cannot waive a requested behavior without explicit user agreement to that change. Report conflicts instead of silently narrowing scope. Reviews must mark observed noncompliance as BLOCKING even when the limitation is documented.\n\nYou are the health checker. Run the artifact the way a user would: run targeted checks for uncovered requirements. Reuse the canonical acceptance receipt for the check already executed. Record every command and its exact output in `reviews/health-check.md`. Anything that fails or is missing is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A check you did not run is not a check that passed.\nEnd the first line of each BLOCKING finding with `[core]` when it breaks an ask in the brief, an acceptance criterion, a correction or constraint the person gave, or existing behaviour (a regression: name the test or file:line that shows it), and with `[non-core]` otherwise: extra tests, docs, edge cases beyond the asks, refactors and style. A finding with no tag counts as core. Non-core findings do not hold the change back; its pull request lists them as follow-ups.\n{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\n\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory and read authoring-evidence.json for the full validation receipt.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{validation}}\n{{qa_gate}}\n{{overwatch_review}}\nThe runtime has already executed canonical smoke/acceptance on this revision. Read its receipt and actual output files; do not repeat a full model/Task feed. Use targeted spot checks only for a concrete uncovered requirement. A numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
+      "prompt_template": "Artifact directory (absolute): {{artifact}}\nRead and run the delivered files at this exact path; do not infer it from your working directory. {{change}}\n\nBrief: {{brief}}\nThe check it must pass: {{check}}\n\n## The design\nRead the approved design from `design.md` in the run directory.\n\nAcceptance baseline: the original brief, any approved design, and explicit user steering. Preserve user-approved non-goals. A README limitation, proposed exclusion, coordinator summary or reviewer note cannot waive a requested behavior without explicit user agreement to that change. Report conflicts instead of silently narrowing scope. Reviews must mark observed noncompliance as BLOCKING even when the limitation is documented.\n\nYou are the health checker. Run the artifact the way a user would: run targeted checks for uncovered requirements. The check itself runs beside this review, so do not run it again. Record every command and its exact output in `reviews/health-check.md`. Anything that fails or is missing is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A check you did not run is not a check that passed.\nEnd the first line of each BLOCKING finding with `[core]` when it breaks an ask in the brief, an acceptance criterion, a correction or constraint the person gave, or existing behaviour (a regression: name the test or file:line that shows it), and with `[non-core]` otherwise: extra tests, docs, edge cases beyond the asks, refactors and style. A finding with no tag counts as core. Non-core findings do not hold the change back; its pull request lists them as follow-ups.\n{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\n\n## The check runs beside this review\nThe check `{{check}}` runs at the same time as this review, on the same commit, and is judged on its own once the reviews are done, so its result is not available to you. Do not run the whole check yourself. Use targeted spot checks only for a concrete uncovered requirement.\n\n## Requirements and intent baseline\n{{review_baseline}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{review_feedback}}\n{{qa_gate}}\n{{overwatch_review}}\nA test that also fails on the unchanged base is not this change's defect: the check compares its failures with the base. Report a failing test as BLOCKING only when the change causes it. Leave the run's worktree as you found it: write scratch files outside it.\nA numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
       "tools": [],
       "timeout": null,
       "max_iterations": 1,
@@ -360,6 +383,7 @@
       "blocking": true,
       "resource_role": "final_validation",
       "sources": [
+        "check",
         "health_checker",
         "code_reviewer",
         "qa_director"
@@ -456,10 +480,35 @@
       "notes": "read the brief and the command that decides whether it is done",
       "_type": "FnNode"
     },
+    "prepare_check": {
+      "id": "prepare_check",
+      "reads": [
+        "brief.json"
+      ],
+      "writes": [
+        "authoring-evidence.json",
+        "changed-functions.json",
+        "changes.diff",
+        "check-prep.json",
+        "check-record.json",
+        "check-verdict.json",
+        "check.txt",
+        "test-guardedness.json",
+        "validation.txt"
+      ],
+      "blocking": true,
+      "resource_role": "final_validation",
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:prepare_check",
+      "command_timeout_s": 6540,
+      "gate_prompt": "settle the commit the check and the reviews see, and rerun last attempt's failing tests",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
     "qa_director": {
       "id": "qa_director",
       "reads": [
-        "authoring-evidence.json",
         "brief.json",
         "changed-functions.json",
         "design.md",
@@ -472,7 +521,7 @@
       "resource_role": "final_validation",
       "role": "ceo",
       "model": "",
-      "prompt_template": "Artifact directory (absolute): {{artifact}}\nRead and run the delivered files at this exact path; do not infer it from your working directory. {{change}}\n\nBrief: {{brief}}\nThe check it must pass: {{check}}\n\n## The approved design\nRead the approved design from `design.md` in the run directory.\n\n## The plan\nRead the synthesis strategy from `strategy.json` in the run directory.\n\nAcceptance baseline: the original brief, any approved design, and explicit user steering. Preserve user-approved non-goals. A README limitation, proposed exclusion, coordinator summary or reviewer note cannot waive a requested behavior without explicit user agreement to that change. Report conflicts instead of silently narrowing scope. Reviews must mark observed noncompliance as BLOCKING even when the limitation is documented.\n\nYou are the QA director. Design adversarial checks on the artifact \u2014 the cases a friendly reviewer would not try \u2014 and run them. Vary one semantic property at a time and inspect the actual output, not just the exit code. Include conflicting nearby numbers, unsupported counts, and alternative sign/unit encodings when the interface parses them. Accepted output must match the request; unsupported input must fail clearly without silently substituting a valid case. Write `reviews/qa.md` with each check and its exact result. Anything that breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\nEnd the first line of each BLOCKING finding with `[core]` when it breaks an ask in the brief, an acceptance criterion, a correction or constraint the person gave, or existing behaviour (a regression: name the test or file:line that shows it), and with `[non-core]` otherwise: extra tests, docs, edge cases beyond the asks, refactors and style. A finding with no tag counts as core. Non-core findings do not hold the change back; its pull request lists them as follow-ups.\n{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\n\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory and read authoring-evidence.json for the full validation receipt.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{validation}}\n{{qa_gate}}\n{{overwatch_review}}\nThe runtime has already executed canonical smoke/acceptance on this revision. Read its receipt and actual output files; do not repeat a full model/Task feed. Use targeted spot checks only for a concrete uncovered requirement. A numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
+      "prompt_template": "Artifact directory (absolute): {{artifact}}\nRead and run the delivered files at this exact path; do not infer it from your working directory. {{change}}\n\nBrief: {{brief}}\nThe check it must pass: {{check}}\n\n## The approved design\nRead the approved design from `design.md` in the run directory.\n\n## The plan\nRead the synthesis strategy from `strategy.json` in the run directory.\n\nAcceptance baseline: the original brief, any approved design, and explicit user steering. Preserve user-approved non-goals. A README limitation, proposed exclusion, coordinator summary or reviewer note cannot waive a requested behavior without explicit user agreement to that change. Report conflicts instead of silently narrowing scope. Reviews must mark observed noncompliance as BLOCKING even when the limitation is documented.\n\nYou are the QA director. Design adversarial checks on the artifact \u2014 the cases a friendly reviewer would not try \u2014 and run them. Vary one semantic property at a time and inspect the actual output, not just the exit code. Include conflicting nearby numbers, unsupported counts, and alternative sign/unit encodings when the interface parses them. Accepted output must match the request; unsupported input must fail clearly without silently substituting a valid case. Write `reviews/qa.md` with each check and its exact result. Anything that breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\nEnd the first line of each BLOCKING finding with `[core]` when it breaks an ask in the brief, an acceptance criterion, a correction or constraint the person gave, or existing behaviour (a regression: name the test or file:line that shows it), and with `[non-core]` otherwise: extra tests, docs, edge cases beyond the asks, refactors and style. A finding with no tag counts as core. Non-core findings do not hold the change back; its pull request lists them as follow-ups.\n{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\n\n## The check runs beside this review\nThe check `{{check}}` runs at the same time as this review, on the same commit, and is judged on its own once the reviews are done, so its result is not available to you. Do not run the whole check yourself. Use targeted spot checks only for a concrete uncovered requirement.\n\n## Requirements and intent baseline\n{{review_baseline}}\nLarge requirement inputs (design, strategy, plan) are referenced by path and sha256 above rather than inlined. Read those files from the run directory.\nPrior validation/review diagnostics (resolve any evidence-format errors in your own report): {{review_feedback}}\n{{qa_gate}}\n{{overwatch_review}}\nA test that also fails on the unchanged base is not this change's defect: the check compares its failures with the base. Report a failing test as BLOCKING only when the change causes it. Leave the run's worktree as you found it: write scratch files outside it.\nA numeric score, source inspection and requirement coverage are different evidence. The brief, accepted criteria/design and current user intent ledger are binding. Only explicit user changes or exclusions can alter them; an author, coordinator, reviewer or README cannot waive an ask. Missing required evidence is failed or unverified, never pending-but-passed. Do not modify the implementation. If a required tool/credential is unavailable, write `UNAVAILABLE:` with the dependency and exact unblock action; do not request recoding or unchanged retries.\n",
       "tools": [],
       "timeout": null,
       "max_iterations": 1,
@@ -621,8 +670,7 @@
       "id": "verifier",
       "reads": [
         "brief.json",
-        "changes.diff",
-        "test-guardedness.json"
+        "changes.diff"
       ],
       "writes": [
         "reviews/verification.md"
@@ -631,7 +679,7 @@
       "resource_role": "final_validation",
       "role": "code_reviewer",
       "model": "",
-      "prompt_template": "Artifact directory (absolute): {{artifact}}\nRead and run the delivered files at this exact path; do not infer it from your working directory. {{change}}\n\nBrief: {{brief}}\n\n{{verification_methods}}\nFor each finding, report it as:\nBLOCKING: <file:line>: <description with a runnable counterexample or a cited file:line chain>\n\ndesign.md is in the run directory. Do NOT read it, or strategy.json, or any review files. You verify the change against the brief and the repository only.\n\nEnd with a line that is exactly VERDICT: PASS when there are no blocking findings, or VERDICT: FAIL when there are any.",
+      "prompt_template": "Artifact directory (absolute): {{artifact}}\nRead and run the delivered files at this exact path; do not infer it from your working directory. {{change}}\n\nBrief: {{brief}}\n\n{{verification_methods}}\nFor each finding, report it as:\nBLOCKING: <file:line>: <description with a runnable counterexample or a cited file:line chain>\n\ndesign.md is in the run directory. Do NOT read it, or strategy.json, or any review files. You verify the change against the brief and the repository only.\n\nEnd with a line that is exactly VERDICT: PASS when there are no blocking findings, or VERDICT: FAIL when there are any.\n\n## The check runs beside this review\nThe check `{{check}}` runs at the same time, on the same commit, and is judged on its own. Do not run the whole check yourself.\n",
       "tools": [],
       "timeout": 600,
       "max_iterations": 1,
@@ -644,16 +692,6 @@
       "source": "apply_corrections",
       "target": "emit",
       "condition": null
-    },
-    {
-      "source": "check",
-      "target": "emit",
-      "condition": "reloop"
-    },
-    {
-      "source": "check",
-      "target": "fork_qa",
-      "condition": "proceed"
     },
     {
       "source": "check_design_claims",
@@ -699,6 +737,16 @@
       "source": "fork_qa",
       "target": "join_qa",
       "condition": null
+    },
+    {
+      "source": "gate_check",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_check",
+      "target": "synthesize_qa",
+      "condition": "proceed"
     },
     {
       "source": "gate_design_review",
@@ -767,12 +815,12 @@
     },
     {
       "source": "join_qa",
-      "target": "synthesize_qa",
+      "target": "gate_check",
       "condition": null
     },
     {
       "source": "materialise",
-      "target": "check",
+      "target": "prepare_check",
       "condition": null
     },
     {
@@ -799,6 +847,16 @@
       "source": "prepare",
       "target": "research_director",
       "condition": null
+    },
+    {
+      "source": "prepare_check",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "prepare_check",
+      "target": "fork_qa",
+      "condition": "proceed"
     },
     {
       "source": "record_findings",

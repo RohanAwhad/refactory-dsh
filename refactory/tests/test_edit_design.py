@@ -216,16 +216,16 @@ def test_the_design_graph_is_a_different_shape_from_a_package_one():
     assert sorted(graph.nodes) == [
         "apply_corrections", "check", "check_design_claims", "code_reviewer", "deliver",
         "delivery_gate", "design_doc", "design_review", "done",
-        "emit", "fork_qa", "gate_design_review", "gate_overwatch",
+        "emit", "fork_qa", "gate_check", "gate_design_review", "gate_overwatch",
         "gate_pitfalls", "gate_qa", "gate_research", "gate_strategy",
         "health_checker", "join_qa",
         "materialise", "overwatch", "pick_corrections", "pitfalls_researcher",
-        "prepare", "qa_director", "record_findings",
+        "prepare", "prepare_check", "qa_director", "record_findings",
         "report", "research_director", "route_design_review", "route_strategy",
         "strategy_director", "synthesize_qa",
         "synthesize_strategy", "verifier",
     ], "the graph is design-v2's phases, not v1's"
-    assert graph.nodes["check"].evaluator.endswith("check_artifact")
+    assert graph.nodes["check"].call.endswith("check_beside_reviews")
     assert "register" not in graph.nodes, "an artifact is not a package"
     assert "smoke" not in graph.nodes
 

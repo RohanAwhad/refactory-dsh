@@ -126,7 +126,7 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
             for text in check.get('must_contain', []):
                 if text not in artifact.read_text():
                     raise ValueError(f'worker artifact check failed: {check["path"]} missing required text')
-    from refactory_dsh.run import declarations, FACTS
+    from refactory_dsh.run import declarations, update_facts
     produces = spec.get('produces')
     if produces is None:
         produces = declarations(workdir, node)['produces']
@@ -137,9 +137,8 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
                 value = _path(workdir, spec['writes'][0]).read_text()
             except (UnicodeDecodeError, IsADirectoryError):
                 pass
-        facts = _read_facts(workdir)
-        facts[produces[0]] = value
-        (workdir / FACTS).write_text(json.dumps(facts, indent=2) + '\n')
+        # Only this fact: a sibling branch may have written others since this one began.
+        update_facts(workdir, {produces[0]: value})
     return receipt
 
 
