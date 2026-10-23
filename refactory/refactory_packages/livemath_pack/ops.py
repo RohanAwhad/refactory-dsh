@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .tasks import RESPONSE
+
+#: Every item's response, one JSON line per pass.
+RESPONSES = "responses.jsonl"
 
 
 def skill_section(skill: str) -> str:
@@ -35,7 +39,13 @@ def read_item(ctx: Any) -> dict[str, Any]:
 
 
 def record_response(ctx: Any) -> dict[str, Any]:
-    """Write the model's final response where the Task grades it."""
+    """Write the model's final response where the Task grades it, and keep a copy.
+
+    `response.md` is the one the Task reads and is replaced each pass; `responses.jsonl`
+    keeps every item's response, so a run can be compared item by item afterwards.
+    """
     response = str(ctx.facts.get("response") or "")
     ctx.write_text(RESPONSE, response)
+    item_id = str(ctx.facts.get("item_id") or "")
+    ctx.append_text(RESPONSES, json.dumps({"id": item_id, "response": response}) + "\n")
     return {"responded": bool(response.strip())}

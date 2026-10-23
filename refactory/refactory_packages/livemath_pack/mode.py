@@ -88,7 +88,7 @@ class SolvePack(nn.Mode):
         ))
         graph.add(nn.Node(
             "record_response", "op", call=f"{OPS}:record_response",
-            writes=("response.md",), produces=("responded",),
+            writes=("response.md", "responses.jsonl"), produces=("responded",),
             notes="keep the solver's response for grading",
         ))
         graph.connect("read_item", "solve")
