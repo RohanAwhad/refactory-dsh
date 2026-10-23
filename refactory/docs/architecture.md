@@ -411,8 +411,9 @@ and title formatting, missing repository questions, and the review agent's own
 and never cost a round. Research and perspective findings the design does not cite
 are recorded in the `finding_coverage` fact and not listed at all. On a blocking problem it reloops to
 `design_doc`; when its rounds run out, it proceeds to `gate_strategy` with the
-findings shown — it never fails the run. A scoped change gets one round of the gate's
-own checks and no review agent (below); a full design gets `design_review_attempts`
+findings shown — it never fails the run. A scoped change has no review agent (below);
+when the gate's own checks block its design, it goes back to `design_doc` once for a
+rewrite before the person sees it. A full design gets `design_review_attempts`
 (default 2).
 
 **Design scale.** `prepare_design` sets `research_scope`: `scoped` for a refine or a
