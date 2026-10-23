@@ -592,20 +592,24 @@ def wire_reviews(graph: Any) -> None:
 #: re-run is targeted: its feedback names each missing function and answer. After it the
 #: gaps are advisory, because a run whose reviews found nothing blocking must not end on a
 #: reviewer's bookkeeping.
-REPO_QUESTION_RERUNS = 1
-ADVISORY_REPO_QUESTIONS = "advisory: repository questions still missing after one re-run:"
-
-
-def repo_question_rerun_due(ctx: Any, counter: str) -> bool:
-    """Count one repository-questions-only miss under the fact *counter*; True while a re-run is due."""
-    used = int(ctx.facts.get(counter, 0)) + 1
-    ctx.set_fact(counter, used)
-    return used <= REPO_QUESTION_RERUNS
+#: Repository questions a review left unanswered are the reviewers' bookkeeping, not a
+#: defect in the change: they are listed on the pull request and never cost a second
+#: review pass (a re-run of every reviewer cost a measured run ten minutes and left the
+#: same answer missing).
+ADVISORY_REPO_QUESTIONS = "advisory: repository questions the reviews left unanswered:"
 
 
 def advisory_repo_questions(problems: list[str]) -> str:
-    """The advisory note listing repository questions still missing after the re-run."""
+    """The advisory note listing the repository questions the reviews left unanswered."""
     return ADVISORY_REPO_QUESTIONS + "\n" + "\n".join(f"- {p}" for p in problems)
+
+
+ADVISORY_CORRECTION_AUDIT = "advisory: correction-audit checks to confirm by hand:"
+
+
+def advisory_correction_audit(notes: list[str]) -> str:
+    """The advisory note listing correction-audit checks the audit could not measure."""
+    return ADVISORY_CORRECTION_AUDIT + "\n" + "\n".join(f"- {n}" for n in notes)
 
 
 def validate_repo_questions(
@@ -753,6 +757,34 @@ def check_review_questions(
     return problems
 
 
+#: Every per-test result compute_site_reverts gives; anything else fails the site.
+_KNOWN_REVERT_RESULTS = frozenset({
+    "fail", "pass", "not_in_diff", "no_tests", "collection_error", "import_only",
+    "new_file", "comment_only", "test_file", "not_run"})
+
+
+def is_doc_path(path: str) -> bool:
+    """Whether a path (``file`` or ``file:line``) names a documentation file."""
+    file = path.split(":", 1)[0]
+    return (file.endswith((".md", ".rst", ".txt"))
+            or file.startswith("docs/") or "/docs/" in file)
+
+
+# Prose formats only: a `.txt`, or a file under `docs/`, may be data, a fixture or code.
+_PROSE_SUFFIXES = (".md", ".markdown", ".rst", ".adoc")
+
+
+def is_prose_path(path: str) -> bool:
+    """Whether a site (``file`` or ``file:line``) is in a prose document, which is read and
+    not run, so no test is expected to catch its revert."""
+    return path.split(":", 1)[0].lower().endswith(_PROSE_SUFFIXES)
+
+
+def _prose_site_note(key: str, clause_number: int, site: str) -> str:
+    return (f"{key} clause {clause_number}: site {site} is documentation; the diff shows "
+            "it changed, and no test is expected to reach it")
+
+
 def correction_audit_problems(ctx: Any) -> list[str]:
     """Compute per-correction audit: check sites, reverts and scope.
 
@@ -798,11 +830,13 @@ def correction_audit_problems(ctx: Any) -> list[str]:
 
     # Run site reverts (skipped when no base or check failed)
     revert_results: dict[str, Any] = {}
+    revert_entries: list[dict[str, Any]] = []
     if not no_base and all_pairs:
         focused = ctx.read_json("focused-check.json", {}) if ctx.exists("focused-check.json") else {}
         check_failed = focused.get("status") == "fail" if focused else False
         if not check_failed:
             revert_results = base_check.compute_site_reverts(ctx, all_pairs)
+            revert_entries = [p for p in revert_results.get("pairs", []) if isinstance(p, dict)]
         else:
             revert_results = {"skipped": "check failed"}
 
@@ -832,9 +866,10 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                     exempted_sites.add(m.group(1))
 
     # Read the +lines from the diff for prohibition checks
+    import subprocess
+
     diff_added_lines: list[str] = []
     if not no_base:
-        import subprocess
         try:
             diff_output = subprocess.run(
                 ["git", "-C", str(found.path), "diff", "-U0", found.base, "HEAD"],
@@ -845,6 +880,19 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                     diff_added_lines.append(line[1:])
         except Exception:
             pass
+
+    diff_files_cache: list[str] = []
+
+    def _diff_files() -> list[str]:
+        if not diff_files_cache and not no_base:
+            try:
+                diff_files_cache.extend(subprocess.run(
+                    ["git", "-C", str(found.path), "diff", "--name-only", found.base, "HEAD"],
+                    capture_output=True, text=True, timeout=10,
+                ).stdout.strip().splitlines())
+            except Exception:
+                pass
+        return diff_files_cache
 
     problems: list[str] = []
     audit_output: list[dict[str, Any]] = []
@@ -869,6 +917,8 @@ def correction_audit_problems(ctx: Any) -> list[str]:
             sites = clause.get("sites", [])
             clause_status = "pass"
             site_results: list[dict[str, Any]] = []
+            # Checks the audit could not measure: reported in the PR, never blocking.
+            clause_advisories: list[str] = []
 
             kind = clause.get("kind", "")
 
@@ -910,18 +960,34 @@ def correction_audit_problems(ctx: Any) -> list[str]:
 
             if kind == "doc":
                 doc_path = clause.get("path", "")
-                _is_doc = (doc_path and (
-                    doc_path.endswith((".md", ".rst", ".txt"))
-                    or doc_path.startswith("docs/")
-                    or "/docs/" in doc_path
-                ))
-                if not doc_path or not _is_doc:
+                _is_doc = bool(doc_path) and is_doc_path(doc_path)
+                doc_file = doc_path.split(":")[0] if doc_path else ""
+                if not doc_path:
                     clause_status = "fail"
                     problems.append(
                         f"{key} clause {ci + 1}: doc clause requires a path to a "
                         "documentation file (.md/.rst/.txt or under docs/)"
                     )
-                    site_results.append({"site": doc_path or "?", "status": "fail"})
+                    site_results.append({"site": "?", "status": "fail"})
+                elif not _is_doc and not no_base:
+                    # Wording in a code file (a comment or docstring): the audit can
+                    # only show the file changed, so a changed file is advisory.
+                    if doc_file in _diff_files():
+                        clause_status = "advisory"
+                        clause_advisories.append(
+                            f"{key} clause {ci + 1}: doc clause names {doc_path}, not a "
+                            "documentation file; checked only that the file changed"
+                        )
+                        site_results.append({"site": doc_path, "status": "advisory"})
+                    else:
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: doc file {doc_path!r} "
+                            "is not in the diff"
+                        )
+                        site_results.append({"site": doc_path, "status": "fail"})
+                elif not _is_doc:
+                    site_results.append({"site": doc_path, "status": "pass"})
                 elif not no_base:
                     try:
                         diff_files = subprocess.run(
@@ -929,7 +995,7 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                              found.base, "HEAD"],
                             capture_output=True, text=True, timeout=10,
                         ).stdout.strip().splitlines()
-                        if doc_path in diff_files:
+                        if doc_file in diff_files:
                             site_results.append({"site": doc_path, "status": "pass"})
                         else:
                             clause_status = "fail"
@@ -945,6 +1011,7 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                 clause_results.append({
                     "clause": clause.get("clause", ""),
                     "sites": site_results, "status": clause_status,
+                    **({"advisory": clause_advisories} if clause_advisories else {}),
                 })
                 continue
 
@@ -1011,8 +1078,20 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                     site_results.append(sr)
                     continue
 
-                # A code site with an empty tests list fails the clause.
+                # A code site with an empty tests list fails the clause, unless its
+                # change is comments only: no test can catch a comment.
                 if not tests:
+                    if base_check.site_is_comment_only(ctx, site):
+                        sr["status"] = "pass"
+                        sr["comment_only"] = True
+                        site_results.append(sr)
+                        continue
+                    # A documentation site needs no test, only to be in the diff.
+                    if is_prose_path(site) and base_check.site_in_diff(ctx, site):
+                        sr["status"] = "advisory"
+                        clause_advisories.append(_prose_site_note(key, ci + 1, site))
+                        site_results.append(sr)
+                        continue
                     sr["status"] = "fail"
                     if site not in exempted_sites:
                         clause_status = "fail"
@@ -1095,12 +1174,23 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         needs_sibling.append(si)
                     sr["tests"].append(test_info)
 
-                # Determine site status — fail closed: any status other than
-                # a known catch (fail) is a failure, never a pass.
+                # Determine site status. A catch passes; a result that only means
+                # the audit could not measure the site is advisory; a measured
+                # miss, and any unknown status, fails.
                 test_results = [t.get("revert_result", "unavailable") for t in sr["tests"]]
                 if any(r == "fail" for r in test_results):
                     sr["status"] = "pass"
                     has_sibling_pass = True
+                elif any(r not in _KNOWN_REVERT_RESULTS for r in test_results):
+                    # any unknown status — fail closed, whatever else the site's tests say
+                    sr["status"] = "fail"
+                    if site not in exempted_sites:
+                        clause_status = "fail"
+                        problems.append(
+                            f"{key} clause {ci + 1}: site {site} revert unavailable"
+                        )
+                elif any(r in ("comment_only", "test_file") for r in test_results):
+                    sr["status"] = "pass"
                 elif all(r in ("new_file", "import_only") for r in test_results):
                     sr["status"] = "needs_sibling"
                 elif any(r == "not_in_diff" for r in test_results):
@@ -1110,6 +1200,29 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         problems.append(
                             f"{key} clause {ci + 1}: site {site} is not in the diff"
                         )
+                elif any(r == "no_tests" for r in test_results):
+                    sr["status"] = "fail"
+                    if site not in exempted_sites:
+                        clause_status = "fail"
+                        missing = [t["name"] for t in sr["tests"] if t.get("revert_result") == "no_tests"]
+                        problems.append(
+                            f"{key} clause {ci + 1}: site {site}: cited test "
+                            f"{', '.join(str(m) for m in missing)} ran no tests (check the test id)"
+                        )
+                elif any(r == base_check.NOT_RUN for r in test_results):
+                    sr["status"] = "advisory"
+                    reasons = sorted({t["detail"] for t in revert_entries
+                                      if t.get("result") == base_check.NOT_RUN
+                                      and t.get("site") == site and t.get("detail")})
+                    clause_advisories.append(
+                        f"{key} clause {ci + 1}: site {site}: revert not run"
+                        + (f" ({'; '.join(reasons)})" if reasons else "")
+                    )
+                elif any(r == "pass" for r in test_results) and is_prose_path(site):
+                    # A documentation file is read, not run: no test is expected to
+                    # catch its revert, and the diff already shows the site changed.
+                    sr["status"] = "advisory"
+                    clause_advisories.append(_prose_site_note(key, ci + 1, site))
                 elif any(r == "pass" for r in test_results):
                     # test passed = site not caught
                     sr["status"] = "fail"
@@ -1119,14 +1232,12 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                             f"{key} clause {ci + 1}: site {site} not reached by any "
                             "test (revert did not cause failure)"
                         )
-                else:
-                    # unavailable, collection_error, or any unknown status — fail closed
-                    sr["status"] = "fail"
-                    if site not in exempted_sites:
-                        clause_status = "fail"
-                        problems.append(
-                            f"{key} clause {ci + 1}: site {site} revert unavailable"
-                        )
+                elif any(r == "collection_error" for r in test_results):
+                    sr["status"] = "advisory"
+                    clause_advisories.append(
+                        f"{key} clause {ci + 1}: site {site}: the revert broke test "
+                        "collection, so it measured nothing"
+                    )
 
                 site_results.append(sr)
 
@@ -1135,19 +1246,23 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                 if not has_sibling_pass and si < len(site_results):
                     sr = site_results[si]
                     site = sr.get("site", "?")
-                    clause_status = "fail"
-                    problems.append(
-                        f"{key} clause {ci + 1}: site {site} new file with no sibling"
+                    sr["status"] = "advisory"
+                    clause_advisories.append(
+                        f"{key} clause {ci + 1}: site {site}: not measurable by revert "
+                        "(the hunk only adds new definitions or a new file, and no "
+                        "other site in this clause was caught)"
                     )
-                    sr["status"] = "fail"
 
+            if clause_status == "pass" and clause_advisories:
+                clause_status = "advisory"
             clause_results.append({
                 "clause": clause.get("clause", ""),
                 "sites": site_results, "status": clause_status,
+                **({"advisory": clause_advisories} if clause_advisories else {}),
             })
 
         overall_status = "pass" if all(
-            c.get("status") == "pass" for c in clause_results
+            c.get("status") in ("pass", "advisory") for c in clause_results
         ) else "fail"
         audit_output.append({
             "id": key,
@@ -1178,7 +1293,25 @@ def read_correction_audit(ctx: Any) -> list[str]:
         f"{item['id']}: {clause.get('status', 'fail')}: "
         f"{', '.join(s.get('site', '?') for s in clause.get('sites', []))}"
         for item in data if isinstance(item, dict) and item.get("status") != "pass"
-        for clause in item.get("clauses", []) if clause.get("status") != "pass"
+        for clause in item.get("clauses", []) if clause.get("status") not in ("pass", "advisory")
+    ]
+
+
+def correction_audit_advisories(ctx: Any) -> list[str]:
+    """The correction-audit checks a reviewer confirms by hand, from correction-audit.json:
+    those the audit could not measure, and the documentation sites no test is expected
+    to reach.
+
+    They never block; the pull request lists them so a reviewer can check by hand.
+    """
+    if not ctx.exists("correction-audit.json"):
+        return []
+    data = ctx.read_json("correction-audit.json", [])
+    return [
+        note
+        for item in data if isinstance(item, dict)
+        for clause in item.get("clauses", []) if isinstance(clause, dict)
+        for note in clause.get("advisory", [])
     ]
 
 

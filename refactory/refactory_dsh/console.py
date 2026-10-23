@@ -941,17 +941,20 @@ def _steer(
         Ledger.seed(run_root, seed)
     effective_kind = kind
     if note is not None:
+        if not note.strip():
+            raise SteeringError("--note must not be empty")
         if verdicts and kind == "info":
             from refactory_dsh.steering import NOTE_KINDS
             _, _, verdict_value = str(verdicts[-1]).partition("=")
             effective_kind = NOTE_KINDS.get(verdict_value.strip().lower(), kind)
-        ledger.note(effective_kind, note, scope=scope, source=source)
     _effective_kind = effective_kind
     recorded_scopes: dict[str, str] = {}
     for pair in verdicts:
         gate, _, value = str(pair).partition("=")
         entry = ledger.verdict(gate, value)
         recorded_scopes[str(pair)] = entry.get('scope', '')
+    if note is not None:
+        ledger.note(effective_kind, note, scope=scope, source=source)
     # The chain is checkable only when the run left agent outputs beside the ledger
     # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
     outputs = outputs_in(run_root) if ledger.exists() else {}

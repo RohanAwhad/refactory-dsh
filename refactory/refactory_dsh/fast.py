@@ -139,11 +139,8 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
          "authoring-evidence.json", "intent-audit.json")
         + (("changed-functions.json", "reviews/verification.md", "emit.txt") if design else ())
     )
-    gate_qa_produces = (
-        ("repair_feedback", "repairs_used", "check_repairs_used",
-         "review_repairs_used", "qa_passed")
-        + (("review_reruns_used", "verification_advisory_used") if design else ())
-    )
+    gate_qa_produces = ("repair_feedback", "repairs_used", "check_repairs_used",
+                        "review_repairs_used", "qa_passed")
     gate_qa_writes = (
         ("fast-report.json", "repair.txt",
          "site-revert-results.json", "correction-audit.json",
@@ -163,10 +160,11 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
     ))
 
     if design:
-        from refactory_dsh.verification import VERIFIER_PROMPT
+        from refactory_dsh.verification import VERIFIER_PROMPT, VERIFIER_TIMEOUT_S
         graph.add(Node(
             "verifier", "agent",
             prompt_template=VERIFIER_PROMPT,
+            timeout_s=VERIFIER_TIMEOUT_S,
             reads=("brief.json", "test-guardedness.json", "changes.diff"),
             writes=("reviews/verification.md",),
             produces=("verification",),
@@ -201,7 +199,6 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
         graph.connect("verifier", "join_qa")
         graph.connect("join_qa", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
-        graph.connect("gate_qa", "fork_qa", condition="review_reloop")
     else:
         graph.connect("focused_check", "focused_qa")
         graph.connect("focused_qa", "gate_qa")
@@ -355,7 +352,7 @@ class DesignFastMode(DesignMode):
                     "check-record.json", "feedback-initial.json"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
-                      "deliverable_kind", "review_instructions",
+                      "deliverable_kind", "review_instructions", "verification_methods",
                       "source_project", "source_files", "repair_feedback", "repairs_used",
                       *repo_change.produces()),
             notes="read the artifact brief, and say where the run works",

@@ -345,9 +345,8 @@ completed with status 0. The build was then checked for the damage a build can d
 doc gates pass — because "it exited 0" and "it left the tree working" are different
 claims and only the second one matters.
 
-**What this still does not prove.** It is not a clean clone: the submodules were
-already initialised and the venv already existed, so the script's fresh-clone branches
-were not exercised. A machine with neither was not available here.
+**What this still does not prove.** It is not a clean clone: the venv already existed,
+so the script's fresh-clone branches were not exercised. A machine with neither was not available here.
 
 ---
 
@@ -1088,11 +1087,39 @@ needed the design; the rest were found by design-blind methods:
 - **M13** Boundary values
 - **M15** Weakened tests
 
+For a change to an existing repository the three code reviewers apply M2, M3, M11 and
+M12 to every changed function (`REPO_CHANGE_REVIEW_INSTRUCTIONS`), so the verifier
+applies only M1, M2, M13 and M15 there, and its time goes to what only a reader
+without the design finds. A new artifact's reviewers do not apply M3, M11 or M12, and
+fix_pack has no reviewers, so in those the verifier applies all seven.
+`prepare_design` sets the `verification_methods` fact by `deliverable_kind`.
+
 The verifier is given the brief, the diff and the repository — never
 design.md. It runs in parallel with the reviews as an optional branch of
-the review fork. Its findings are advisory: they never spend review
-attempts, never fail or halt a run on their own. A verifier branch that
-fails or returns nothing is recorded as missing.
+the review fork, bounded at `VERIFIER_TIMEOUT_S` (600 s) on both runtimes: the
+node declares `timeout_s`, the spine gives its dispatched session that wall
+(`node_wall_s`) plus the usual dispatch overhead, and the walker gives its model
+client the same wall. Its prompt asks it to finish in about seven minutes and to write
+each finding as it finds it, since a session stopped at the wall leaves nothing. A
+verifier that fails, returns nothing or runs out of time is recorded as missing.
+fix_pack's verifier is inline on the main path, where running out of time would fail
+the run, so it keeps the route's envelope.
+
+**It never gets a builder round of its own.** When a review finds a core defect, the
+verifier's findings ride along in the same feedback, with the instruction to answer
+each under `## Verifier findings` in emit.txt (fixed, or rebutted with a cited
+file:line). Otherwise `gate_qa` writes them, with any rebuttal, to
+`reviews/verification-unresolved.md`. Overwatch reads that file when it exists (it is
+not a declared input, because on the spine a declared input must exist, and it does
+not in a run whose verifier found nothing) and makes a finding
+that breaks an ask or existing behaviour, unrebutted, its own core finding, which
+sends the build back; the pull request lists the rest. In the fast modes, with no
+Overwatch, the pull request lists them. A round with no verifier finding empties the
+file, so an earlier round's findings are never reported as current.
+
+This replaced an advisory builder round (#475) that the verifier took whenever the
+reviews passed and it did not: a full emit, check and review cycle spent on findings
+no other gate judged.
 
 ### Why design-blind
 
@@ -1316,13 +1343,53 @@ things for every clause:
    patches the project's own modules on the tested path. A test that does
    is `local`, not `connected`.
 
-**Fail closed.** Any status other than a known catch (`fail`) is a failure,
-never a pass. This includes `not_in_diff`, `unavailable`, `collection_error`,
-`import_only` (without a caught sibling) and `pass` (the test did not catch
-the revert).
+**Measured failures block; unmeasured checks are advisory.** A clause is BLOCKING
+when the audit measured a miss:
+- the site is `not_in_diff`;
+- the test still passes after the revert (`pass`: it does not reach the site),
+  unless the site is documentation (below);
+- the cited test ran no tests (`no_tests`: a wrong test id);
+- a code site has no tests and its change is not comments only (a documentation
+  site in the diff needs none, below);
+- the test patches the changed function (§26);
+- any status the audit does not know.
 
-A clause that fails any check is BLOCKING. The message names the correction id,
-the clause, the site and the test.
+The message names the correction id, the clause, the site and the test.
+
+A check the audit could not measure is advisory instead, and so is a
+documentation site. The run proceeds, and the pull request's Verification
+section lists it under "Correction-audit checks to confirm by hand (advisory)"
+for a reviewer to check. It is also in
+`correction-audit.json` (clause status `advisory`) and `reviews/overwatch-gate.txt`
+or `fast-report.json`. These cases are:
+- `not_run`: the time cap ran out, the test timed out or was killed, the patch
+  did not apply, or git failed;
+- `collection_error`: the revert broke test collection, so it measured nothing;
+- `import_only` or `new_file` with no caught sibling: the hunk only adds new
+  definitions, so reverting it can only break an import;
+- a `doc` clause naming a changed file that is not documentation (wording in a
+  code file);
+- a site in the diff in a prose document (`.md`, `.markdown`, `.rst`, `.adoc`),
+  whether no test catches its revert or none is cited. A document is read, not
+  run, so no test is expected to reach it, and the diff already shows the site
+  changed. A lab run spent a whole builder round adding a test that read a "See
+  also" link back from a Markdown file. A documentation site that is not in the
+  diff still blocks. A `.txt` file or a file under `docs/` is not prose for this
+  rule: it may be data, a fixture or code, and its uncaught revert still blocks.
+  A Markdown file that drives behaviour, such as an agent prompt, is prose here,
+  so the pull request is where a reviewer checks it.
+
+A measured miss is never hidden by an unmeasured check: a wrong test id or an
+unknown result on any test of a site blocks, even when another test of the same
+site was not run.
+
+A site whose change is comments only passes without a test, since no test can
+catch a comment (`comment_only`). Each added line is judged in place in HEAD's
+file: Python with `tokenize`, TypeScript and JavaScript (not JSX) with a scan that
+knows strings, template literals and regular expressions. A `#` or `//` inside a
+string, a block or JSDoc comment followed by code, a pointer dereference such as
+`*p = 0;` and a directive such as `//go:embed` are code. A file of any other kind
+is never comment-only.
 
 **Withdrawn corrections.** A correction whose audit row has `status == "excluded"`
 with a `user_change` pointing to a later ledger entry is skipped — it was
@@ -1332,21 +1399,31 @@ withdrawn. This reuses the existing exclusion validation path.
 - **prohibition:** requires a `pattern` field; code confirms the pattern is
   absent from the `+` lines of the diff. Missing `pattern` fails the clause.
 - **doc:** requires a `path` field naming a changed documentation file
-  (`.md`, `.rst`, `.txt`, or under `docs/`). A path to a non-doc file fails.
+  (`.md`, `.rst`, `.txt`, or under `docs/`), with or without a `:line`. A path
+  to a non-doc file passes as advisory when that file changed, and fails when it
+  did not.
 - **design:** requires a non-empty `heading` field that exists in the current
   `design.md`. Missing or unknown heading fails the clause.
 - **test:** cites a code site plus the test; the revert runs against the code
-  site, not the test file. A site inside a test file is not a code site.
+  site, not the test file. A site inside a test file is not a code site: it
+  passes when it is in the diff (`test_file`) and fails when it is not.
 
 A clause whose `sites` is not a list fails with "sites must be a list".
 
 **New-file sites.** A site in a file the base lacks (`new_file` result) or a
 site whose revert fails only with an import error on a name the reverted hunks
-define (`import_only` result) passes only when the same clause has a sibling
-site in an existing file whose revert fails its test.
+define (`import_only` result) passes when the same clause has a sibling site in
+an existing file whose revert fails its test. Without one it is advisory.
 
 **Test.** `test_correction_audit.py::test_correction_audit_unbuilt_blocks`,
-`test_correction_audit_no_base_does_not_block`.
+`test_correction_audit_no_base_does_not_block`,
+`test_large_ledger_past_the_cap_proceeds_with_an_advisory` (full design, through
+`gate_overwatch` and the pull-request text),
+`test_design_fast_past_the_cap_proceeds_with_an_advisory`,
+`test_a_measured_miss_still_blocks_beside_unmeasured_pairs`,
+`test_a_comment_only_site_needs_no_test`,
+`test_a_doc_clause_on_a_changed_code_file_is_advisory`,
+`test_a_documentation_site_needs_no_test_but_must_be_in_the_diff`.
 
 ## 26. Evidence scope enforcement (#431)
 
@@ -1400,21 +1477,35 @@ it catches the change.
    - `collection_error` → import/collection error, not a catch
    - `import_only` → fails only due to import of a name the reverted hunk
      defines, not a catch
-   - `unavailable` → timed out, signalled, test-file site, no tests ran
+   - `no_tests` → the cited test does not exist (pytest exit 4 or 5)
+   - `not_run` → the time cap ran out, the test timed out or was killed, the
+     patch did not apply, or git failed
+
+   Before any revert, a site in a test file is recorded as `test_file`, and a site
+   whose added lines are all comments as `comment_only`. Neither is reverted.
 8. Restore the file with `git checkout HEAD -- <file>` in a `finally` block.
 
 **Test-file exclusion.** A site inside a test file (`test_*.py`, `*_test.py`,
-`*.spec.ts`, or under a `tests/` directory) is not a code site.
+`*.spec.ts`, or under a `tests/` directory) is not a code site. It is checked
+against the diff and never reverted.
 
-**Cache.** Results are cached per `(HEAD, path:line, test_name)` in
+**Cache.** Measured results are cached per `(HEAD, path:line, test_name)` in
 `.refactory/site-revert-cache.json`, a dedicated file separate from
-`base-check.json`.
+`base-check.json`. A `not_run` result is never cached, so a later gate measures
+the pair. An `unavailable` entry cached by an earlier version is measured again.
 
-**Time cap.** Total revert time is capped below the gate's DSH timeout (240 s
-default). Past the cap, remaining pairs are reported as `unavailable`.
+**Time cap.** Total revert time is capped below the gate's DSH timeout
+(`SITE_REVERT_TOTAL_S`, 240 s; `SITE_REVERT_PAIR_S`, 60 s per pair). Past the cap,
+the remaining pairs are `not_run`, which is advisory (§25). The cap is checked only
+after the site itself: a site that is not in the diff, or whose path lies outside the
+run's worktree, is `not_in_diff` whatever the time.
 
-**Blocking rule.** Missing or unavailable revert results are BLOCKING. The only
-exemptions are:
+**Measuring honestly.** Each revert runs `python -B -m pytest`, so a module reverted
+twice within one second never runs from a stale `.pyc`. A test that passes is never a
+`collection_error`, whatever it prints, and a cited test that is not a test id is
+`no_tests`.
+
+**Blocking rule.** A measured miss is BLOCKING (§25). The only exemptions are:
 1. A `## Site revert exemptions` section in `design.md`.
 2. An explicit no-base record (`{"no_base": true}`) — modes without a base skip
    diff and revert checks.
@@ -1453,12 +1544,8 @@ What a gate proceeds with is recorded by `record_follow_ups` and reaches the pul
 request through `delivery._body`.
 
 **The cap.** A full-mode run has `attempts` builder rounds (`check_attempts` in design;
-three by default),
-shared by check failures and review reloops. The verifier's advisory round used to
-come on top of it; `take_advisory_round` now spends a round from the same cap, never
-the last one (a repair must remain for whatever the advisory rebuild breaks), and
-otherwise sends the verifier's findings to the pull request's unresolved verification
-list instead.
+three by default), shared by check failures and review reloops. The verifier never
+adds a round of its own (§15).
 
 **Held by.** `test_follow_ups.py`.
 
@@ -1803,3 +1890,137 @@ a follow-up, filed separately.
 - `commit` (the current commit hash)
 
 No new CLI flags or environment variables.
+
+### Steer correction ordering (dm-178)
+
+`console._steer` now writes verdicts before the note, aligning with the interactive
+bridge's `answer` action which already writes verdict-first.  A correction or
+constraint given in the same `refactory steer` call as a `gate_strategy=proceed`
+verdict is collected by `pick_gate_corrections` and applied to `design.md` before the
+build, on both runtimes.
+
+**Residual risk, accepted:** on a live DSH run, a 500 ms spine poll landing between
+`_steer`'s two writes (verdict then note) could insert a `verdict-use` before the
+note, causing `pick_gate_corrections` to stop collecting before it sees the note.
+The window is microseconds — `_steer` writes both entries in the same Python call
+without yielding — and has not been observed in practice.
+
+### Behaviour changes
+
+`_steer` writes verdicts before the note (both runtimes).  `pick_gate_corrections`
+uses `steering.parse_entries` and collects every correction/constraint with product
+scope and user-relayed source between the proceed verdict and the next gate-visit or
+verdict-use.  `apply_corrections` no longer declares
+`produces=("design_corrections_applied",)`, so the count fact set by
+`pick_gate_corrections` survives in `facts.json`.
+
+
+## Base worktree integrity (dm-162)
+
+### The problem
+
+`compute_test_guardedness` copies the attempt's changed test files and helpers
+into the shared base worktree, runs them, then unlinks every copied path.
+For a file that already existed in the base commit (a *changed* test, not a
+*new* one), the unlink deletes the base's own tracked file instead of
+restoring it.  Because `_ensure_base_worktree` only checked HEAD commit
+identity — not file cleanliness — subsequent callers (`run_base_check`,
+`compare_prep_failure`) ran on the corrupted tree.  The corrupted result could
+be cached in `base-check.json` or `base-prep.json` and replayed on resume.
+
+Twice in 11 hours (b33a\_r1 and b34b), this turned a repairable check failure
+into a run-ending environment failure that had to be fixed by hand.
+
+### Three layers of defence
+
+#### Layer 1: restore-in-finally in `compute_test_guardedness`
+
+Before copying, `git ls-tree <base> -- <paths>` (with `--literal-pathspecs`)
+determines which destination paths exist in the base commit.  The entire
+copy → test → cleanup flow is wrapped in `try / finally`.  In the finally
+block:
+
+- pre-existing tracked files are restored via `git checkout <base> -- <paths>`
+  (never HEAD of another tree);
+- pre-existing ignored files have their bytes saved before copying and written
+  back;
+- only files that were *new* (not in the base commit) are unlinked.
+
+The `finally` fires for `BudgetExhausted`, `KeyboardInterrupt`, sandbox
+timeouts (`timed_out=True`) and any other exception.  It does not fire for
+SIGKILL or a DSH node timeout that kills the process — only Layer 2 covers
+those cases.
+
+#### Layer 2: dirty-base detection and repair in `_ensure_base_worktree`
+
+A new helper `_check_base_clean` runs at the single choke point all three
+callers share — inside `_ensure_base_worktree`, after the worktree exists and
+HEAD is verified, before `_isolate_hooks` and `ensure_environment`.
+
+Algorithm (following `worktree._restore`):
+
+1. `git --no-optional-locks status --porcelain=v1 -z --untracked-files=normal`
+2. If dirty:
+   - `git reset -q --hard <base_commit>` with `NO_HOOKS`
+   - `git clean -fdq -e /<name>` for each entry in the base install record's
+     `installed` list (names with trailing `/` stripped)
+3. Re-check that the status is empty.  On failure, rebuild the base worktree
+   (remove and re-add) — never let a failed reset become a cached environment
+   failure.
+4. Warn only about restored tracked files via `target_guard.warn` (the
+   `run warning:` prefix the spine promotes to run warnings).
+
+Installs (node\_modules, .venv, build outputs) survive because they are either
+gitignored (invisible to `--untracked-files=normal`) or excluded by the `-e`
+arguments from the install record.
+
+#### Layer 3: `base_clean` cache guard
+
+Both `base-check.json` and `base-prep.json` carry a `base_clean` field:
+
+- `_read_cache` and `_read_prep_cache` reject entries where
+  `data.get("base_clean") is not True` — dirty-base entries and old-format
+  entries without the field are treated as misses (safe re-run).
+- `_write_cache` and `_write_prep_cache` skip writing when `base_clean=False`
+  (warn via `target_guard.warn` and return).
+- Crashed results remain never-cached (the `_crashed` guard takes precedence).
+
+The `base_clean` value comes from the status taken right after the reset in
+`_check_base_clean` (recorded when `_ensure_base_worktree` ran), not a
+post-check re-verification.  This avoids three problems: a `Path` that makes
+`json.dumps` raise `TypeError`, attachment only on the success path (missing
+the environment-failure paths), and `__pycache__` making a project without
+`.gitignore` always dirty after its own check.
+
+### Why repair-and-warn is correct here
+
+The contributing guide says "the validator refuses; it never repairs"
+(`contributing.md:94`), but that rule applies to *graph state* validation.
+The base worktree is *environment state* — a cache reconstructable from the
+base commit.  Repairing it and warning is the same pattern
+`worktree._restore` uses for the run's own worktree after a check.
+
+### Behaviour changes
+
+All changes apply to both runtimes — the walker (`Mode.run`) and the DSH
+runner (`run.main`) — because the logic is in `base_check.py` which both
+runtimes call.
+
+1. **Restore after guardedness (Layer 1):** `compute_test_guardedness` now
+   restores pre-existing files from the base commit and removes new files in
+   a `finally` block, instead of unlinking all copied files.
+2. **Dirty-base reset (Layer 2):** `_ensure_base_worktree` now checks and
+   repairs dirty base worktrees using `git reset --hard` + `git clean -fdq`
+   with install-record exclusions, before any caller uses the base.
+3. **Reset failure rebuilds (C2):** A failed reset in `_check_base_clean`
+   rebuilds the base worktree from scratch instead of becoming a cached
+   environment failure.
+4. **Warning channel (C3):** Dirty-base warnings are emitted via
+   `target_guard.warn` (not bare `print`), so they appear as `run warning:`
+   lines the spine promotes.  `base_reset` is recorded in
+   `check-record.json`.
+5. **Cache guard (Layer 3):** `_read_cache` and `_read_prep_cache` reject
+   entries without `base_clean is True`.  `_write_cache` and
+   `_write_prep_cache` skip writing when `base_clean=False`.
+6. **Old cache entries re-run:** Existing cache files without `base_clean`
+   become misses (safe re-run).

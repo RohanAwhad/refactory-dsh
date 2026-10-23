@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from typing import Any
 
 from refactory_dsh import sandbox, worktree
 from refactory_dsh.worktree import _json as _read_json, NO_HOOKS, _isolate_hooks
+from refactory_dsh import target_guard
 
 # ── ANSI stripping ───────────────────────────────────────────────────────
 
@@ -369,10 +371,86 @@ def _base_worktree_path(target: Path, run_id: str) -> Path:
     return worktree.slot(target) / f"{BASE_WORKTREE_PREFIX}{run_id}"
 
 
-def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
+def _check_base_clean(base_path: Path, base_commit: str, base_found: worktree.Worktree) -> list[str]:
+    """Check that the base worktree is clean; repair it if dirty.
+
+    Returns the list of tracked paths that were repaired (empty if already clean).
+    Warns via target_guard.warn listing repaired tracked paths only.
+    On failure, rebuilds the base worktree (remove and re-add) or raises as a crash.
+    """
+    # What the base installed and git does not ignore stays, as worktree._restore keeps
+    # it: the clean below keeps it, so neither status check may count it as dirt.
+    kept = {name.rstrip("/") for name in
+            _read_json(worktree._record_path(base_found)).get("installed", [])}
+
+    def _dirt(listing: str) -> list[str]:
+        return [entry for entry in listing.split("\0") if len(entry) > 3
+                and not (entry[:2] == "??" and entry[3:].rstrip("/") in kept)]
+
+    status_out = worktree.git(
+        base_path, "--no-optional-locks", "status", "--porcelain=v1", "-z",
+        "--untracked-files=normal",
+    )
+    if not _dirt(status_out):
+        return []
+
+    # Parse NUL-delimited entries to find tracked edits for the warning.
+    tracked_edits: list[str] = []
+    for entry in status_out.split("\0"):
+        if not entry or len(entry) < 4:
+            continue
+        code = entry[:2]
+        path = entry[3:]
+        if code != "??":
+            tracked_edits.append(path)
+
+    # Reset tracked files to the base commit.
+    try:
+        worktree.git(base_path, *NO_HOOKS, "reset", "-q", "--hard", base_commit)
+    except ValueError:
+        raise ValueError(f"base worktree reset failed (crashed): git reset --hard {base_commit[:12]}")
+
+    # Remove untracked files/dirs, preserving installs from the install record.
+    keep = [argument for name in sorted(kept) for argument in ("-e", f"/{name}")]
+    try:
+        worktree.git(base_path, "clean", "-fdq", *keep)
+    except ValueError:
+        raise ValueError(f"base worktree clean failed (crashed): git clean -fdq")
+
+    # Re-check: status must be empty now.
+    recheck = worktree.git(
+        base_path, "--no-optional-locks", "status", "--porcelain=v1", "-z",
+        "--untracked-files=normal",
+    )
+    if _dirt(recheck):
+        raise ValueError(
+            f"base worktree still dirty after reset: {recheck[:200]}"
+        )
+
+    # Warn only about restored tracked files (not __pycache__ or other untracked),
+    # following worktree._restore's pattern.
+    if tracked_edits:
+        target_guard.warn(
+            f"base worktree repaired: restored {len(tracked_edits)} tracked "
+            f"file(s) to {base_commit[:12]}: {', '.join(sorted(tracked_edits)[:10])}"
+        )
+
+    return tracked_edits
+
+
+def _rebuild_base_worktree(target: Path, run_id: str, base_path: Path) -> None:
+    """Remove and re-add the base worktree from scratch."""
+    try:
+        worktree.git(target, "worktree", "remove", "--force", str(base_path))
+    except ValueError:
+        shutil.rmtree(base_path, ignore_errors=True)
+
+
+def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree, list[str]]:
     """Create and prepare the base worktree on demand, caching it per run.
 
-    Returns the base worktree path and a Worktree descriptor for it.
+    Returns the base worktree path, a Worktree descriptor for it, and a list of
+    tracked paths that were repaired (empty when the base was already clean).
     Raises ValueError with an environment-failure message on failure.
     """
     found = worktree.recorded(ctx.workdir)
@@ -408,8 +486,6 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
                 f"could not create base worktree for {found.base}: {exc}"
             ) from exc
 
-    _isolate_hooks(target, base_path)
-
     # Build a Worktree descriptor for the base; use a synthetic branch name so
     # ensure_environment's record path does not collide with the run's own.
     base_found = worktree.Worktree(
@@ -420,6 +496,40 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
         target=found.target,
         run=found.run,
     )
+
+    # Layer 2: check and repair dirty base before any caller uses it.
+    # On failure, rebuild from scratch rather than becoming a cached env failure.
+    try:
+        repaired = _check_base_clean(base_path, found.base, base_found)
+    except ValueError:
+        # Reset failed — rebuild the base worktree from scratch.
+        _rebuild_base_worktree(target, run_id, base_path)
+        try:
+            worktree.git(
+                target, *NO_HOOKS, "worktree", "add", "-q", "--detach",
+                str(base_path), found.base,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"could not rebuild base worktree for {found.base}: {exc}"
+            ) from exc
+        # Rebuild the descriptor for the fresh worktree.
+        base_found = worktree.Worktree(
+            path=str(base_path),
+            branch=f"{worktree.BRANCH_PREFIX}base-{run_id}",
+            base=found.base,
+            head=found.base,
+            target=found.target,
+            run=found.run,
+        )
+        repaired = []  # Fresh worktree is clean.
+
+    # Accumulate base_reset on ctx for check-record.json.
+    if repaired:
+        prev = getattr(ctx, '_base_reset', [])
+        ctx._base_reset = prev + repaired
+
+    _isolate_hooks(target, base_path)
 
     # Prepare the environment (installs)
     budget = getattr(ctx, "budget", None)
@@ -432,7 +542,7 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
             "environment preparation failed on the base:\n" + "\n".join(problems)
         )
 
-    return base_path, base_found
+    return base_path, base_found, repaired
 
 
 def remove_base_worktree(target: Path, run_id: str) -> None:
@@ -501,6 +611,8 @@ def _changed_files_in_test_dirs(path: Path, base: str, test_files: list[str]) ->
 def _read_cache(run: Path, key: str) -> BaseCheckResult | None:
     data = _read_json(run / CACHE_FILE)
     if data.get("cache_key") == key:
+        if data.get("base_clean") is not True:
+            return None  # dirty-base or old entry — re-run
         result = BaseCheckResult(
             ok=data["ok"],
             failures=set(data.get("failures", [])),
@@ -514,12 +626,16 @@ def _read_cache(run: Path, key: str) -> BaseCheckResult | None:
     return None
 
 
-def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
+def _write_cache(run: Path, key: str, result: BaseCheckResult,
+                 *, base_clean: bool = True) -> None:
     # Never cache a crash result — R2: later checks get a fresh attempt.
     # Deterministic (non-crash) environment failures ARE cached so filter_check
     # and the next attempt do not re-prepare the base (v5 correction 2).
     if getattr(result, '_crashed', False):
         return  # pragma: no cover — guarded by run_base_check
+    if not base_clean:
+        target_guard.warn("skipping base-check cache write (base was dirty)")
+        return
     cache_dir = run / CACHE_FILE.parent
     cache_dir.mkdir(parents=True, exist_ok=True)
     # Compute completeness for R5/R6.
@@ -532,6 +648,7 @@ def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
         "exit_code": result.exit_code,
         "environment_failure": result.environment_failure,
         "base_complete": base_complete,
+        "base_clean": True,
     }
     (run / CACHE_FILE).write_text(json.dumps(data, indent=2) + "\n")
 
@@ -557,14 +674,19 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     if cached is not None:
         return cached
 
+    base_clean_flag = True  # Track whether the base was clean for cache writes.
+
     def _try_base() -> tuple[BaseCheckResult, bool]:
         """Attempt to prepare the base worktree and run the check.
 
         Returns ``(result, is_crash)``.  ``is_crash`` is True when a signal
         killed a preparation step and the base environment should be rebuilt.
         """
+        nonlocal base_clean_flag
         try:
-            base_path, base_found = _ensure_base_worktree(ctx)
+            base_path, base_found, repaired = _ensure_base_worktree(ctx)
+            if repaired:
+                base_clean_flag = False
         except ValueError as exc:
             err_str = str(exc)
             # Classify: use structured result from ensure_environment.
@@ -650,7 +772,7 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
             result._crashed = is_crash  # type: ignore[attr-defined]
             return result
 
-    _write_cache(ctx.workdir, key, result)
+    _write_cache(ctx.workdir, key, result, base_clean=base_clean_flag)
     return result
 
 
@@ -663,15 +785,21 @@ def _read_prep_cache(run: Path, key: str) -> dict | None:
     """Read the cached base-prep comparison result, if it matches the key."""
     data = _read_json(run / PREP_CACHE_FILE)
     if data.get("cache_key") == key:
+        if data.get("base_clean") is not True:
+            return None  # dirty-base or old entry — re-run
         return data
     return None
 
 
-def _write_prep_cache(run: Path, key: str, result: dict) -> None:
+def _write_prep_cache(run: Path, key: str, result: dict,
+                      *, base_clean: bool = True) -> None:
     """Write the base-prep comparison result to cache."""
+    if not base_clean:
+        target_guard.warn("skipping base-prep cache write (base was dirty)")
+        return
     cache_dir = run / PREP_CACHE_FILE.parent
     cache_dir.mkdir(parents=True, exist_ok=True)
-    data = {"cache_key": key, **result}
+    data = {"cache_key": key, "base_clean": True, **result}
     (run / PREP_CACHE_FILE).write_text(json.dumps(data, indent=2) + "\n")
 
 
@@ -796,9 +924,14 @@ def compare_prep_failure(
         )
 
     # ── 4. Prepare the base worktree and run its prep commands ───────────
+    prep_base_clean = True  # Track whether the base was clean for cache writes.
+
     def _try_base_prep() -> tuple[dict, bool]:
+        nonlocal prep_base_clean
         try:
-            base_path, base_found = _ensure_base_worktree(ctx)
+            base_path, base_found, repaired = _ensure_base_worktree(ctx)
+            if repaired:
+                prep_base_clean = False
         except ValueError as exc:
             err = str(exc)
             crashed = any(tok in err for tok in ("killed by SIG", "killed by signal",
@@ -850,7 +983,7 @@ def compare_prep_failure(
             return None
 
     # ── 5. Cache (never cache a crash or timeout) ────────────────────────
-    _write_prep_cache(ctx.workdir, key, result_dict)
+    _write_prep_cache(ctx.workdir, key, result_dict, base_clean=prep_base_clean)
 
     return _resolve_prep_comparison(
         result_dict["base_ok"], result_dict.get("base_step"),
@@ -902,7 +1035,7 @@ def compute_test_guardedness(
 
     # Ensure the base worktree exists (on demand, correction 1)
     try:
-        base_path, _ = _ensure_base_worktree(ctx)
+        base_path, _, _ = _ensure_base_worktree(ctx)
     except ValueError as exc:
         return {"new_test_files": sorted(new_test_files),
                 "unavailable": f"the base worktree could not be prepared: {exc}"}
@@ -911,38 +1044,85 @@ def compute_test_guardedness(
     # into the base worktree (correction 3)
     helper_files = _changed_files_in_test_dirs(attempt_path, found.base, new_test_files)
     all_to_copy = new_test_files + helper_files
-    copied: list[Path] = []
+
+    # Layer 1: determine which destinations exist in the base commit using git ls-tree.
+    # This distinguishes pre-existing tracked files (restore from base) from new files
+    # (unlink after) and pre-existing ignored files (save and write back bytes).
+    pre_existing: set[str] = set()
+    new_copied: list[Path] = []
+    saved_ignored: dict[str, bytes] = {}
+
+    try:
+        ls_output = worktree.git(
+            base_path, "--literal-pathspecs", "ls-tree", "--name-only",
+            found.base, "--", *all_to_copy,
+        )
+        base_tree_paths = set(ls_output.strip().split("\n")) if ls_output.strip() else set()
+    except ValueError:
+        base_tree_paths = set()
+
     for tf in all_to_copy:
-        src = attempt_path / tf
         dst = base_path / tf
-        if src.is_file():
+        if tf in base_tree_paths:
+            pre_existing.add(tf)
+        elif dst.exists():
+            # File exists but is not in the base commit (ignored file).
+            # Save its bytes so we can write them back after the restore.
+            try:
+                saved_ignored[tf] = dst.read_bytes()
+            except OSError:
+                pass
+
+    copied: list[Path] = []
+    try:
+        for tf in all_to_copy:
+            src = attempt_path / tf
+            dst = base_path / tf
+            if src.is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                copied.append(dst)
+                if tf not in pre_existing and tf not in saved_ignored:
+                    new_copied.append(dst)
+
+        # Run the test files against the base source
+        home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        env = worktree.check_environment(base_path, home)
+        budget = getattr(ctx, "budget", None)
+
+        if runner == "pytest":
+            test_cmd = f"python -m pytest -q {' '.join(new_test_files)}"
+        else:
+            test_cmd = f"npx vitest run {' '.join(new_test_files)}"
+
+        test_result = sandbox.run_command(
+            test_cmd, workdir=base_path, timeout_s=timeout,
+            budget=budget, env=env, home=home, exact_env=True,
+        )
+        test_output = "\n".join(
+            (test_result.stdout or "", test_result.stderr or "")
+        ).strip()
+        base_failures = parse_test_failures(test_output)
+        collection_errors, _ = _parse_collection_errors(test_output)
+    finally:
+        # Restore pre-existing files from the base commit.
+        if pre_existing:
+            try:
+                worktree.git(
+                    base_path, "checkout", found.base, "--", *sorted(pre_existing)
+                )
+            except ValueError as exc:
+                target_guard.warn(
+                    f"could not restore base worktree files: {exc}"
+                )
+        # Write back pre-existing ignored files that were overwritten.
+        for tf, content in saved_ignored.items():
+            dst = base_path / tf
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            copied.append(dst)
-
-    # Run the test files against the base source
-    home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
-    env = worktree.check_environment(base_path, home)
-    budget = getattr(ctx, "budget", None)
-
-    if runner == "pytest":
-        test_cmd = f"python -m pytest -q {' '.join(new_test_files)}"
-    else:
-        test_cmd = f"npx vitest run {' '.join(new_test_files)}"
-
-    test_result = sandbox.run_command(
-        test_cmd, workdir=base_path, timeout_s=timeout,
-        budget=budget, env=env, home=home, exact_env=True,
-    )
-    test_output = "\n".join(
-        (test_result.stdout or "", test_result.stderr or "")
-    ).strip()
-    base_failures = parse_test_failures(test_output)
-    collection_errors, _ = _parse_collection_errors(test_output)
-
-    # Restore the base worktree: remove the copied files
-    for dst in copied:
-        dst.unlink(missing_ok=True)
+            dst.write_bytes(content)
+        # Remove files that were new (not in the base commit).
+        for dst in new_copied:
+            dst.unlink(missing_ok=True)
 
     # Build the guardedness record (correction 4: distinguish import errors)
     guarding = 0
@@ -1054,7 +1234,10 @@ def _is_import_only_failure(output: str, defined_names: set[str]) -> bool:
         for error_type in error_types:
             if error_type not in stripped:
                 continue
-            m = re.match(rf'(?:E\s+)?({error_type}):?\s+(.*)', stripped)
+            # A pytest E-line, or a plain "ErrorType: message" line. pytest's
+            # "ImportError while importing test module '...'" header is neither.
+            m = (re.match(rf'E\s+({error_type}):?\s+(.*)', stripped)
+                 or re.match(rf'({error_type}):\s+(.*)', stripped))
             if not m:
                 continue
             found_errors = True
@@ -1068,6 +1251,251 @@ def _is_import_only_failure(output: str, defined_names: set[str]) -> bool:
     return found_errors and all_names_defined
 
 
+#: Total and per-pair time for the site-revert pass, below the gate's DSH timeout.
+SITE_REVERT_TOTAL_S = 240
+SITE_REVERT_PAIR_S = 60
+
+#: A pair the pass could not measure: the time cap ran out, the test timed out or
+#: was killed, the patch did not apply, or git failed. Never cached, so a later
+#: gate measures it; the audit reports it as advisory, never as a failure.
+NOT_RUN = "not_run"
+
+#: Languages whose comments can be told from code exactly: Python by its own tokenizer,
+#: and JavaScript/TypeScript without JSX by a scan that follows strings, template literals
+#: and regular expressions. In any other file no line is taken as comment-only.
+_PYTHON_SOURCE = (".py", ".pyi")
+_SCRIPT_SOURCE = (".ts", ".mts", ".cts", ".mjs", ".cjs")
+_REGEX_AFTER = set("(,=:[!&|?{};+-*%<>~^")
+_REGEX_KEYWORD = re.compile(r"(?:^|[^\w$])(?:return|typeof|case|in|of|delete|void|throw|new|yield|await)\s*$")
+
+
+def _python_code_lines(text: str) -> set[int] | None:
+    import io
+    import tokenize
+
+    quiet = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
+             tokenize.DEDENT, tokenize.ENCODING, tokenize.ENDMARKER}
+    code: set[int] = set()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type not in quiet:
+                code.update(range(tok.start[0], tok.end[0] + 1))
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    return code
+
+
+def _script_code_lines(text: str) -> set[int] | None:
+    """Lines of JS/TS *text* holding anything outside a comment; None when it does not scan."""
+    code: set[int] = set()
+    line, i, n = 1, 0, len(text)
+    state, braces, prev, line_start = "code", [], "", 0
+    while i < n:
+        c, nxt = text[i], text[i + 1] if i + 1 < n else ""
+        if c == "\n":
+            line, line_start = line + 1, i + 1
+            state = "code" if state in ("line", "sq", "dq") else state
+            i += 1
+            continue
+        if state == "line":
+            i += 1
+        elif state == "block":
+            if c == "*" and nxt == "/":
+                state = "code"
+                i += 1
+            i += 1
+        elif state in ("sq", "dq", "tpl"):
+            code.add(line)
+            if c == "\\":
+                if nxt == "\n":
+                    line, line_start = line + 1, i + 2
+                i += 2
+                continue
+            if (state, c) in (("sq", "'"), ("dq", '"'), ("tpl", "`")):
+                state, prev = "code", c
+            elif state == "tpl" and c == "$" and nxt == "{":
+                braces.append(0)
+                state = "code"
+                i += 1
+            i += 1
+        elif c in " \t\r":
+            i += 1
+        elif c == "/" and nxt in "/*":
+            state = "line" if nxt == "/" else "block"
+            i += 2
+        else:
+            code.add(line)
+            if c == "/" and (prev in _REGEX_AFTER or not prev
+                             or _REGEX_KEYWORD.search(text[line_start:i])):
+                i, in_class = i + 1, False
+                while i < n and text[i] != "\n" and (text[i] != "/" or in_class):
+                    if text[i] == "\\":
+                        i += 1
+                    elif text[i] in "[]":
+                        in_class = text[i] == "["
+                    i += 1
+                prev = "/"
+                i += 1
+                continue
+            if c in "'\"`":
+                state = {"'": "sq", '"': "dq", "`": "tpl"}[c]
+            elif c == "{" and braces:
+                braces[-1] += 1
+            elif c == "}" and braces:
+                if braces[-1] == 0:
+                    braces.pop()
+                    state = "tpl"
+                else:
+                    braces[-1] -= 1
+            elif c == "\\":
+                i += 1
+            prev = c
+            i += 1
+    if state in ("block", "sq", "dq", "tpl") or braces:
+        return None
+    return code
+
+
+def _code_lines(path: str, text: str) -> set[int] | None:
+    """The 1-based lines of *text* that hold anything but comments, in *path*'s language,
+    or None when the language is not one read exactly here."""
+    suffix = Path(path).suffix
+    if suffix in _PYTHON_SOURCE:
+        return _python_code_lines(text)
+    if suffix in _SCRIPT_SOURCE:
+        return _script_code_lines(text)
+    return None
+
+
+def is_comment_only(path: str, added_lines: list[str], *, text: str | None = None,
+                    numbers: list[int] | None = None) -> bool:
+    """Whether every added line is blank or wholly a comment in *path*'s language.
+
+    Given the post-image *text* and the added lines' 1-based *numbers*, each line is
+    judged where it stands, so a ``#`` line inside a Python string or a ``//`` line in a
+    template literal is code; without them the added lines are read on their own. At
+    least one line must be a comment. A language not read exactly is never comment-only.
+    """
+    if text is None:
+        text = "\n".join(added_lines) + "\n"
+        numbers = list(range(1, len(added_lines) + 1))
+    lines = text.splitlines()
+    if not numbers or any(n < 1 or n > len(lines) for n in numbers):
+        return False
+    if [lines[n - 1] for n in numbers] != [line.rstrip("\r\n") for line in added_lines]:
+        return False
+    code = _code_lines(path, text)
+    if code is None or any(n in code for n in numbers):
+        return False
+    return any(lines[n - 1].strip() for n in numbers)
+
+
+def _site_range(site: str) -> tuple[str, int, int] | None:
+    """``(path, first line, last line)`` of a ``path:line[-line]`` site, or None."""
+    parts = site.split(":")
+    if len(parts) < 2:
+        return None
+    spec = parts[1]
+    try:
+        if "-" in spec:
+            start, end = spec.split("-", 1)
+            return parts[0], int(start), int(end)
+        return parts[0], int(spec), int(spec)
+    except ValueError:
+        return parts[0], 0, 0
+
+
+def _overlapping_hunks(attempt_path: Path, base: str, file_path: str,
+                       line_start: int, line_end: int) -> tuple[str, list[str]]:
+    """The ``-U0`` diff of *file_path* from *base* to HEAD, and the hunk lines whose
+    added range overlaps the site. Raises when git fails."""
+    import subprocess as _sp
+
+    diff_output = _sp.run(
+        ["git", "-C", str(attempt_path), "diff", "-U0", base, "HEAD", "--", file_path],
+        capture_output=True, text=True, timeout=15, check=True,
+    ).stdout
+    overlapping: list[str] = []
+    current: list[str] = []
+    overlaps = False
+    for line in diff_output.splitlines():
+        if line.startswith("@@"):
+            if current and overlaps:
+                overlapping.extend(current)
+            current = [line]
+            m = re.search(r'\+(\d+)(?:,(\d+))?', line)
+            if m:
+                hunk_start = int(m.group(1))
+                hunk_count = int(m.group(2)) if m.group(2) else 1
+                if hunk_count == 0:
+                    # Pure deletion hunk: site line is the position or next
+                    overlaps = line_start <= hunk_start + 1 and line_end >= hunk_start
+                else:
+                    overlaps = line_start <= hunk_start + hunk_count - 1 and line_end >= hunk_start
+            else:
+                overlaps = False
+        elif current:
+            current.append(line)
+    if current and overlaps:
+        overlapping.extend(current)
+    return diff_output, overlapping
+
+
+def _added(hunk_lines: list[str]) -> list[str]:
+    return [line[1:] for line in hunk_lines if line.startswith("+") and not line.startswith("+++")]
+
+
+def _added_numbers(hunk_lines: list[str]) -> list[int]:
+    """The post-image line numbers of the lines ``-U0`` hunks add."""
+    numbers: list[int] = []
+    for line in hunk_lines:
+        m = re.match(r'@@ -\S+ \+(\d+)(?:,(\d+))? @@', line)
+        if m:
+            start = int(m.group(1))
+            numbers.extend(range(start, start + (int(m.group(2)) if m.group(2) else 1)))
+    return numbers
+
+
+def _hunks_comment_only(attempt_path: Path, file_path: str, hunk_lines: list[str]) -> bool:
+    """Whether the lines *hunk_lines* add to HEAD's *file_path* are all comments, in place."""
+    import subprocess as _sp
+
+    try:
+        text = _sp.run(["git", "-C", str(attempt_path), "show", f"HEAD:{file_path}"],
+                       capture_output=True, text=True, timeout=10, check=True).stdout
+    except Exception:
+        return False
+    return is_comment_only(file_path, _added(hunk_lines), text=text,
+                           numbers=_added_numbers(hunk_lines))
+
+
+def site_in_diff(ctx: Any, site: str) -> bool:
+    """Whether a ``path:line`` site falls inside a hunk of the run's diff."""
+    found = worktree.recorded(ctx.workdir)
+    parsed = _site_range(site)
+    if found is None or parsed is None:
+        return False
+    try:
+        _, hunks = _overlapping_hunks(Path(found.path), found.base, *parsed)
+    except Exception:
+        return False
+    return bool(hunks)
+
+
+def site_is_comment_only(ctx: Any, site: str) -> bool:
+    """Whether every line a site's hunks add is a comment; False when it is not in the diff."""
+    found = worktree.recorded(ctx.workdir)
+    parsed = _site_range(site)
+    if found is None or parsed is None:
+        return False
+    file_path, line_start, line_end = parsed
+    try:
+        _, hunks = _overlapping_hunks(Path(found.path), found.base, file_path, line_start, line_end)
+    except Exception:
+        return False
+    return bool(hunks) and _hunks_comment_only(Path(found.path), file_path, hunks)
+
+
 def compute_site_reverts(
     ctx: Any, pairs: list[tuple[str, str, str]],
 ) -> dict[str, Any]:
@@ -1076,7 +1504,9 @@ def compute_site_reverts(
     *pairs* is a list of ``(site_path_line, test_file_and_name, scope)`` tuples.
     Operates on the run's own worktree (the attempt path), applies a reverse
     patch of only the overlapping hunks, runs the named test, and restores
-    the file in a ``finally`` block.  Results are cached in a dedicated file.
+    the file in a ``finally`` block. A site whose added lines are all comments,
+    or that sits in a test file, is checked against the diff and not reverted.
+    Measured results are cached in a dedicated file; ``not_run`` never is.
     """
     found = worktree.recorded(ctx.workdir)
     if found is None:
@@ -1095,81 +1525,82 @@ def compute_site_reverts(
         cache = {}
 
     results: list[dict[str, Any]] = []
-    summary = {"caught": 0, "not_caught": 0, "collection_error": 0, "unavailable": 0}
+    summary = {"caught": 0, "not_caught": 0, "collection_error": 0, NOT_RUN: 0}
 
     import subprocess as _sp
     import time as _time
 
-    total_timeout = 240  # cap total revert time (< gate DSH timeout)
     start_time = _time.monotonic()
-    per_pair_timeout = 60
+
+    def record(entry: dict[str, Any], key: str) -> None:
+        results.append(entry)
+        if entry["result"] != NOT_RUN:
+            cache[key] = entry
+        if entry.get("catches_site"):
+            summary["caught"] += 1
+        elif entry["result"] == "collection_error":
+            summary["collection_error"] += 1
+        elif entry["result"] == NOT_RUN:
+            summary[NOT_RUN] += 1
+        else:
+            summary["not_caught"] += 1
+
+    def not_run(site: str, test_name: str, detail: str) -> dict[str, Any]:
+        return {"site": site, "test": test_name, "result": NOT_RUN,
+                "catches_site": False, "detail": detail}
 
     for site, test_name, scope in pairs:
-        # Time cap
-        elapsed = _time.monotonic() - start_time
-        if elapsed > total_timeout:
-            results.append({
-                "site": site, "test": test_name,
-                "result": "unavailable", "catches_site": False,
-            })
-            summary["unavailable"] += 1
-            continue
-
         cache_key_str = f"{head}|{site}|{test_name}"
-        if cache_key_str in cache:
-            cached = cache[cache_key_str]
-            results.append(cached)
-            if cached.get("catches_site"):
-                summary["caught"] += 1
-            elif cached.get("result") == "collection_error":
-                summary["collection_error"] += 1
-            elif cached.get("result") == "unavailable":
-                summary["unavailable"] += 1
-            else:
-                summary["not_caught"] += 1
+        if not isinstance(test_name, str) or not test_name.strip():
+            # A citation that names no test: a wrong test id, measured without a run.
+            record({"site": site, "test": test_name,
+                    "result": "no_tests", "catches_site": False}, cache_key_str)
+            continue
+        cached = cache.get(cache_key_str)
+        # "unavailable" is what earlier versions cached for an unmeasured pair.
+        if cached and cached.get("result") not in (NOT_RUN, "unavailable"):
+            record(cached, cache_key_str)
             continue
 
-        # Test-file exclusion: a site inside a test file is not a code site
-        site_path = site.split(":")[0] if ":" in site else site
-        if _is_test_file(site_path):
-            entry = {"site": site, "test": test_name,
-                     "result": "unavailable", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["unavailable"] += 1
+        parsed = _site_range(site)
+        if parsed is None:
+            record({"site": site, "test": test_name,
+                    "result": "not_in_diff", "catches_site": False}, cache_key_str)
+            continue
+        file_path, line_start, line_end = parsed
+
+        # The file must exist inside the worktree: a path into another checkout is not
+        # in this diff (git diff would refuse it, which is not a measurement gap).
+        target = (attempt_path / file_path).resolve()
+        if not target.is_relative_to(attempt_path.resolve()) or not target.exists():
+            record({"site": site, "test": test_name,
+                    "result": "not_in_diff", "catches_site": False}, cache_key_str)
             continue
 
-        # Parse site line range
-        parts = site.split(":")
-        if len(parts) < 2:
-            entry = {"site": site, "test": test_name,
-                     "result": "not_in_diff", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["not_caught"] += 1
+        try:
+            diff_output, overlapping_hunks = _overlapping_hunks(
+                attempt_path, base, file_path, line_start, line_end)
+        except Exception as exc:
+            record(not_run(site, test_name, f"git diff failed: {exc}"), cache_key_str)
             continue
-        file_path = parts[0]
-        line_spec = parts[1]
-        if "-" in line_spec:
-            line_start, line_end = line_spec.split("-", 1)
-            try:
-                line_start, line_end = int(line_start), int(line_end)
-            except ValueError:
-                line_start = line_end = 0
-        else:
-            try:
-                line_start = line_end = int(line_spec)
-            except ValueError:
-                line_start = line_end = 0
 
-        # Check if file exists in the worktree
-        full_file = attempt_path / file_path
-        if not full_file.exists():
-            entry = {"site": site, "test": test_name,
-                     "result": "not_in_diff", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["not_caught"] += 1
+        if not overlapping_hunks:
+            record({"site": site, "test": test_name,
+                    "result": "not_in_diff", "catches_site": False}, cache_key_str)
+            continue
+
+        # A site inside a test file is not a code site: it is in the diff, which is
+        # all a revert of a test could show.
+        if _is_test_file(file_path):
+            record({"site": site, "test": test_name,
+                    "result": "test_file", "catches_site": False}, cache_key_str)
+            continue
+
+        all_added = _added(overlapping_hunks)
+        # A comment changes no behaviour, so no test can catch its revert.
+        if _hunks_comment_only(attempt_path, file_path, overlapping_hunks):
+            record({"site": site, "test": test_name,
+                    "result": "comment_only", "catches_site": False}, cache_key_str)
             continue
 
         # Check if file exists on base (new file)
@@ -1185,62 +1616,13 @@ def compute_site_reverts(
             is_new_file = False
 
         if is_new_file:
-            entry = {"site": site, "test": test_name,
-                     "result": "new_file", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["not_caught"] += 1
+            record({"site": site, "test": test_name,
+                    "result": "new_file", "catches_site": False}, cache_key_str)
             continue
 
-        # Get diff hunks for overlapping site
-        try:
-            diff_output = _sp.run(
-                ["git", "-C", str(attempt_path), "diff", "-U0", base, "HEAD", "--", file_path],
-                capture_output=True, text=True, timeout=15,
-            ).stdout
-        except Exception:
-            entry = {"site": site, "test": test_name,
-                     "result": "unavailable", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["unavailable"] += 1
-            continue
-
-        # Parse hunks and find overlapping ones
-        overlapping_hunks: list[str] = []
-        current_hunk_lines: list[str] = []
-        hunk_overlaps = False
-
-        for line in diff_output.splitlines():
-            if line.startswith("@@"):
-                if current_hunk_lines and hunk_overlaps:
-                    overlapping_hunks.extend(current_hunk_lines)
-                current_hunk_lines = [line]
-                # Parse hunk header for new-file line range
-                m = re.search(r'\+(\d+)(?:,(\d+))?', line)
-                if m:
-                    hunk_start = int(m.group(1))
-                    hunk_count = int(m.group(2)) if m.group(2) else 1
-                    if hunk_count == 0:
-                        # Pure deletion hunk: site line is the position or next
-                        hunk_overlaps = (line_start <= hunk_start + 1 and line_end >= hunk_start)
-                    else:
-                        hunk_end = hunk_start + hunk_count - 1
-                        hunk_overlaps = (line_start <= hunk_end and line_end >= hunk_start)
-                else:
-                    hunk_overlaps = False
-            elif current_hunk_lines:
-                current_hunk_lines.append(line)
-
-        if current_hunk_lines and hunk_overlaps:
-            overlapping_hunks.extend(current_hunk_lines)
-
-        if not overlapping_hunks:
-            entry = {"site": site, "test": test_name,
-                     "result": "not_in_diff", "catches_site": False}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["not_caught"] += 1
+        # Time cap: it bounds test runs only, so every check above is made for every pair.
+        if _time.monotonic() - start_time > SITE_REVERT_TOTAL_S:
+            record(not_run(site, test_name, "time cap reached"), cache_key_str)
             continue
 
         # Build a reverse patch containing only overlapping hunks
@@ -1251,12 +1633,6 @@ def compute_site_reverts(
             header_lines.append(line)
 
         reverse_patch = "\n".join(header_lines + overlapping_hunks) + "\n"
-
-        # Extract defined names from the added lines
-        all_added = []
-        for line in overlapping_hunks:
-            if line.startswith("+") and not line.startswith("+++"):
-                all_added.append(line[1:])
         defined_names = _extract_defined_names(all_added)
 
         # Apply reverse patch and run the test
@@ -1266,14 +1642,10 @@ def compute_site_reverts(
                 input=reverse_patch, capture_output=True, text=True, timeout=10, check=True,
             )
         except Exception as exc:
-            entry = {"site": site, "test": test_name,
-                     "result": "unavailable", "catches_site": False,
-                     "detail": f"patch apply failed: {exc}"}
-            results.append(entry)
-            cache[cache_key_str] = entry
-            summary["unavailable"] += 1
+            record(not_run(site, test_name, f"patch apply failed: {exc}"), cache_key_str)
             continue
 
+        detail = ""
         try:
             # Pick runner and build command
             test_path = test_name.split("::")[0] if "::" in test_name else test_name
@@ -1281,23 +1653,24 @@ def compute_site_reverts(
 
             if test_path.endswith(".py"):
                 if fn_name:
-                    cmd = f"python -m pytest -x -q {test_name}"
+                    cmd = f"python -B -m pytest -x -q {test_name}"
                 else:
-                    cmd = f"python -m pytest -x -q {test_path}"
+                    cmd = f"python -B -m pytest -x -q {test_path}"
             elif test_path.endswith(".ts") or test_path.endswith(".spec.ts"):
                 if fn_name:
                     cmd = f"npx vitest run {test_path} -t {fn_name}"
                 else:
                     cmd = f"npx vitest run {test_path}"
             else:
-                cmd = f"python -m pytest -x -q {test_name}"
+                cmd = f"python -B -m pytest -x -q {test_name}"
 
             home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
             env = worktree.check_environment(attempt_path, home)
 
             test_result = sandbox.run_command(
                 cmd, workdir=attempt_path,
-                timeout_s=min(per_pair_timeout, total_timeout - (_time.monotonic() - start_time)),
+                timeout_s=max(1.0, min(SITE_REVERT_PAIR_S,
+                                       SITE_REVERT_TOTAL_S - (_time.monotonic() - start_time))),
                 env=env, home=home, exact_env=True,
             )
 
@@ -1308,20 +1681,28 @@ def compute_site_reverts(
 
             # Classify result
             if getattr(test_result, "timed_out", False):
-                result = "unavailable"
+                result, detail = NOT_RUN, "the test timed out"
             elif rc is not None and rc < 0:
-                result = "unavailable"
-            elif rc in (4, 5) or "no tests ran" in test_output.lower():
-                # pytest exit 4 = no tests collected, 5 = no tests ran
-                result = "unavailable"
+                result, detail = NOT_RUN, f"the test was killed by signal {-rc}"
             else:
                 coll_files, has_unlocatable = _parse_collection_errors(test_output)
                 test_path_for_coll = test_name.split("::")[0] if "::" in test_name else test_name
-                has_collection = (test_path_for_coll in coll_files
-                                  or any(test_path_for_coll.startswith(e) for e in coll_files)
+                # pytest names the module by its absolute path, the citation by a
+                # path relative to the worktree.
+                has_collection = rc != 0 and (any(e == test_path_for_coll
+                                      or e.endswith("/" + test_path_for_coll)
+                                      or test_path_for_coll.startswith(e) for e in coll_files)
                                   or has_unlocatable)
+                # A module that no longer imports after the revert is a collection
+                # error (pytest then also reports the test as not found), and an
+                # import-only one when it names a definition the hunks removed.
                 if has_collection:
-                    result = "collection_error"
+                    result = ("import_only" if _is_import_only_failure(test_output, defined_names)
+                              else "collection_error")
+                elif rc in (4, 5) or "no tests ran" in test_output.lower():
+                    # pytest exit 4 = no tests collected, 5 = no tests ran: the cited
+                    # test does not exist, a wrong citation rather than a measurement gap.
+                    result = "no_tests"
                 elif rc != 0:
                     # Test failed — check if it's import-only
                     if _is_import_only_failure(test_output, defined_names):
@@ -1331,8 +1712,8 @@ def compute_site_reverts(
                 else:
                     result = "pass"  # test still passes = site NOT caught
 
-        except Exception:
-            result = "unavailable"
+        except Exception as exc:
+            result, detail = NOT_RUN, f"the test could not be run: {exc}"
         finally:
             # Restore the worktree
             try:
@@ -1343,20 +1724,11 @@ def compute_site_reverts(
             except Exception:
                 pass
 
-        catches = result == "fail"
         entry = {"site": site, "test": test_name,
-                 "result": result, "catches_site": catches}
-        results.append(entry)
-        cache[cache_key_str] = entry
-
-        if catches:
-            summary["caught"] += 1
-        elif result == "collection_error":
-            summary["collection_error"] += 1
-        elif result == "unavailable":
-            summary["unavailable"] += 1
-        else:
-            summary["not_caught"] += 1
+                 "result": result, "catches_site": result == "fail"}
+        if detail:
+            entry["detail"] = detail
+        record(entry, cache_key_str)
 
     # Write cache
     try:

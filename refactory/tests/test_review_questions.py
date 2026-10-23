@@ -219,26 +219,15 @@ def test_create_fast_mode_no_review_instructions():
     assert "{{review_instructions}}" not in focused_qa.prompt_template
 
 
-def test_design_mode_has_review_reloop_edges():
-    """DesignMode's QA gate has its review_reloop edge. The design review has none:
-    repository questions at design time are advisory, never a re-run."""
+def test_no_gate_re_runs_a_review_for_repository_questions():
+    """Repository questions are advisory at every gate: no graph has an edge that
+    re-runs a review for them, at design time or after the build."""
     from refactory_dsh.design import DesignMode
-
-    mode = DesignMode()
-    graph = mode.build()
-    edges = [(e.source, e.target, e.condition) for e in graph.edges]
-    assert ("gate_design_review", "design_review", "review_reloop") not in edges
-    assert ("gate_qa", "fork_qa", "review_reloop") in edges
-
-
-def test_design_fast_mode_has_review_reloop_edge():
-    """DesignFastMode's graph has gate_qa -> fork_qa review_reloop edge."""
     from refactory_dsh.fast import DesignFastMode
 
-    mode = DesignFastMode()
-    graph = mode.build()
-    edges = [(e.source, e.target, e.condition) for e in graph.edges]
-    assert ("gate_qa", "fork_qa", "review_reloop") in edges
+    for mode in (DesignMode(), DesignFastMode()):
+        edges = {(e.source, e.target, e.condition) for e in mode.build().edges}
+        assert not [e for e in edges if e[2] == "review_reloop"], type(mode).__name__
 
 
 # ── changed_functions module tests ──
@@ -323,19 +312,17 @@ def test_changed_functions_empty_diff(tmp_path):
 
 
 def test_verification_methods_recomposition():
-    """The recomposed VERIFICATION_METHODS matches the expected content."""
+    """Every method is applied by someone: the verifier takes the design-blind ones no
+    reviewer applies, and the code reviewers take the rest for each changed function."""
+    from refactory_dsh.authoring_evidence import REPO_CHANGE_REVIEW_INSTRUCTIONS
     from refactory_dsh.verification import (
         VERIFICATION_METHODS, M1_METHOD, M2_METHOD, M3_METHOD,
         M11_METHOD, M12_METHOD, M13_METHOD, M15_METHOD,
     )
-    # Each method constant should appear in VERIFICATION_METHODS
-    assert M1_METHOD in VERIFICATION_METHODS
-    assert M2_METHOD in VERIFICATION_METHODS
-    assert M3_METHOD in VERIFICATION_METHODS
-    assert M11_METHOD in VERIFICATION_METHODS
-    assert M12_METHOD in VERIFICATION_METHODS
-    assert M13_METHOD in VERIFICATION_METHODS
-    assert M15_METHOD in VERIFICATION_METHODS
+    for method in (M1_METHOD, M2_METHOD, M13_METHOD, M15_METHOD):
+        assert method in VERIFICATION_METHODS
+    for method in (M2_METHOD, M3_METHOD, M11_METHOD, M12_METHOD):
+        assert method in REPO_CHANGE_REVIEW_INSTRUCTIONS
 
 
 def test_reviewer_gates_exist():
@@ -348,92 +335,35 @@ def test_reviewer_gates_exist():
 # ── Integration tests: scripted mode.run() with FakeModel ──
 
 
-def test_design_mode_reviewer_miss_reloops_without_attempt(tmp_path, monkeypatch):
-    """(a) DesignMode: code_reviewer miss → review_reloop; code_reviewer twice; attempts_used unchanged."""
-    import sys
-    from refactory_dsh.design import DesignMode
-    from tests_support import (FakeModel, RESEARCH_ANSWER, PITFALLS_ANSWER,
-                               DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-                               VERIFICATION_ANSWER, git_repo, render)
+def test_design_mode_reviewer_miss_is_advisory_without_a_rerun(tmp_path, monkeypatch):
+    """(a) DesignMode: a code reviewer that leaves repository questions missing does not
+    re-run the reviews or spend an attempt; the gap is listed and the run delivers."""
+    from tests_support import render
 
-    repo = git_repo(tmp_path / "repo")
-    tool = "def build():\n    print('built')\n"
-
-    # code_reviewer answer with repo_questions present but empty (missing changed function)
-    bad_code_review = (
-        "code review: the code matches the design.\n\n"
-        "## Repository questions\n\n"
-        "```json\n[]\n```"
-    )
-
-    answers = [
-        RESEARCH_ANSWER,                 # research_director
-        PITFALLS_ANSWER,                 # pitfalls_researcher
-        "perspectives",                  # strategy_director
-        "one plan",                      # synthesize_strategy
-        DESIGN_DOC_ANSWER,               # design_doc
-        DESIGN_REVIEW_ANSWER,            # design_review
-        # gate_strategy → proceed (via verdicts)
-        render({"tool.py": tool}),       # emit
-        # First reviewer pass (fork_qa: health, code, qa, verifier):
-        "health: ok",                    # health_checker (FakeModel injects rq)
-        bad_code_review,                 # code_reviewer (bad rq → review_reloop)
-        "qa: ok",                        # qa_director (FakeModel injects rq)
-        VERIFICATION_ANSWER,             # verifier
-        # gate_qa → review_reloop → fork_qa
-        # Second reviewer pass (fork_qa again):
-        "health: ok",                    # health_checker
-        "code review: ok",              # code_reviewer
-        "qa: ok",                        # qa_director
-        VERIFICATION_ANSWER,             # verifier
-        # gate_qa → proceed
-        "VERDICT: PASS",                 # overwatch
-    ]
-
-    model = FakeModel(answers)
-    mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["pr"]["value"] = False
-    mode.load_state_dict(state)
-
-    run = mode.run(
-        tmp_path / "run", model=model,
-        verdicts={"gate_strategy": "proceed"},
-        task={"name": "rq_tool", "brief": "a tool",
-              "check": f"{sys.executable} tool.py",
-              "target": str(repo)})
+    bad_code_review = ("code review: the code matches the design.\n\n"
+                       "## Repository questions\n\n```json\n[]\n```")
+    run, model = _design_run(tmp_path, _design_answers(
+        render({"tool.py": "def build():\n    print('built')\n"}),
+        ["health: ok", bad_code_review, "qa: ok"]))
 
     assert run.exit_ok, run.error
-
-    # code_reviewer prompt appears twice
-    code_reviewer_prompts = [p for p in model.prompts
-                             if "You are the code reviewer." in p]
-    assert len(code_reviewer_prompts) >= 2, (
-        f"code_reviewer ran {len(code_reviewer_prompts)} times, expected >= 2"
-    )
-
-    # The second code_reviewer prompt's qa_gate names code_reviewer and the function
-    assert "code_reviewer" in code_reviewer_prompts[1]
-    assert "tool.py" in code_reviewer_prompts[1]
-
-    # attempts_used unchanged — review_reloop does not spend a builder attempt
+    code_reviews = [p for p in model.prompts if "You are the code reviewer." in p]
+    assert len(code_reviews) == 1
+    assert "Code-change review instructions" in code_reviews[0]
     assert int(run.facts.get("attempts_used", 0)) == 0
+    gate = (tmp_path / "run/reviews/qa-gate.txt").read_text()
+    assert gate.startswith("proceed: no blocking finding")
+    assert "advisory: repository questions" in gate and "tool.py::build" in gate
 
-    # Code-change review instructions present (for test (e))
-    assert any("Code-change review instructions" in p for p in code_reviewer_prompts)
 
-
-def test_design_fast_reviewer_miss_reloops_focused_qa(tmp_path, monkeypatch):
-    """(b) DesignFastMode: focused_qa miss → review_reloop; repairs_used unchanged."""
+def test_design_fast_repo_questions_are_advisory_without_a_rerun(tmp_path, monkeypatch):
+    """(b) DesignFastMode: focused_qa missing repository questions does not re-run QA or
+    spend a repair; fast-report.json records the gap, naming the node and the function."""
     import sys
     from refactory_dsh.fast import DesignFastMode
     from tests_support import FakeModel, VERIFICATION_ANSWER, git_repo, render
 
     repo = git_repo(tmp_path / "repo")
-    tool = "def build():\n    print('built')\n"
-
-    PLAN = "Change only the requested file."
-    # bad_qa: valid JSON but empty repo_questions (missing changed function)
     bad_qa = json.dumps({
         "status": "pass",
         "checks": [{"name": "runs", "command": "test",
@@ -441,22 +371,11 @@ def test_design_fast_reviewer_miss_reloops_focused_qa(tmp_path, monkeypatch):
         "findings": [], "not_run": [],
         "repo_questions": [],
     })
-    # good_qa: valid JSON without repo_questions (FakeModel auto-injects from changed-functions.json)
-    good_qa = json.dumps({
-        "status": "pass",
-        "checks": [{"name": "runs", "command": "test",
-                     "status": "pass", "evidence": "exit 0"}],
-        "findings": [], "not_run": [],
-    })
-
     model = FakeModel([
-        PLAN,                      # strategy
-        render({"tool.py": tool}), # emit
-        bad_qa,                    # focused_qa (1st — bad rq)
-        VERIFICATION_ANSWER,       # verifier
-        # gate_qa → review_reloop → fork_qa (re-runs both branches)
-        good_qa,                   # focused_qa (2nd — FakeModel injects valid rq)
-        VERIFICATION_ANSWER,       # verifier (2nd run in fork)
+        "Change only the requested file.",                       # strategy
+        render({"tool.py": "def build():\n    print('built')\n"}),  # emit
+        bad_qa,                                                   # focused_qa
+        VERIFICATION_ANSWER,                                      # verifier
     ])
 
     run = DesignFastMode().run(
@@ -466,61 +385,11 @@ def test_design_fast_reviewer_miss_reloops_focused_qa(tmp_path, monkeypatch):
               "target": str(repo)})
 
     assert run.exit_ok, run.error
-
-    # focused_qa prompt appears twice
     qa_prompts = [p for p in model.prompts if "Write focused-qa.json" in p]
-    assert len(qa_prompts) >= 2, (
-        f"focused_qa ran {len(qa_prompts)} times, expected >= 2"
-    )
-
-    # repairs_used unchanged (review reloop does not spend repairs)
+    assert len(qa_prompts) == 1
+    assert "Code-change review instructions" in qa_prompts[0]
     report = json.loads((tmp_path / "run/fast-report.json").read_text())
     assert report["repairs_used"] == 0
-
-    # Code-change review instructions present (for test (e))
-    assert any("Code-change review instructions" in p for p in qa_prompts)
-
-
-def test_design_fast_repo_questions_advisory_after_one_rerun(tmp_path, monkeypatch):
-    """(c) focused_qa missing repo questions twice: one re-run, then the run proceeds and
-    fast-report.json records the gap, naming the node and the function."""
-    import sys
-    from refactory_dsh.fast import DesignFastMode
-    from tests_support import FakeModel, VERIFICATION_ANSWER, git_repo, render
-
-    repo = git_repo(tmp_path / "repo")
-    tool = "def build():\n    print('built')\n"
-
-    PLAN = "Change only the requested file."
-    # Always-bad focused_qa: empty repo_questions
-    bad_qa = json.dumps({
-        "status": "pass",
-        "checks": [{"name": "runs", "command": "test",
-                     "status": "pass", "evidence": "exit 0"}],
-        "findings": [], "not_run": [],
-        "repo_questions": [],
-    })
-
-    model = FakeModel([
-        PLAN,                      # strategy
-        render({"tool.py": tool}), # emit
-        bad_qa,                    # focused_qa (1st — the one targeted re-run follows)
-        VERIFICATION_ANSWER,       # verifier
-        # gate_qa → review_reloop → fork_qa (re-runs both branches)
-        bad_qa,                    # focused_qa (2nd — still missing → advisory, proceed)
-        VERIFICATION_ANSWER,       # verifier (2nd run in fork)
-    ])
-
-    run = DesignFastMode().run(
-        tmp_path / "run", model=model,
-        task={"name": "rq_exhaust", "brief": "a tool",
-              "check": f"{sys.executable} tool.py",
-              "target": str(repo)})
-
-    assert run.exit_ok, run.error
-    qa_prompts = [p for p in model.prompts if "Write focused-qa.json" in p]
-    assert len(qa_prompts) == 2
-    report = json.loads((tmp_path / "run/fast-report.json").read_text())
     advisory = "\n".join(report["findings"])
     assert "advisory: repository questions" in advisory
     assert "focused_qa" in advisory and "tool.py" in advisory
@@ -729,21 +598,20 @@ def _design_answers(emitted: str, reviews: list[str]) -> list[str]:
             *interleaved, "VERDICT: PASS"]
 
 
-def test_design_mode_gate_qa_advisory_after_one_rerun_reaches_pr_text(tmp_path, monkeypatch):
-    """A code reviewer that leaves repository questions missing twice: one targeted re-run,
-    then gate_qa proceeds; qa-gate.txt and the pull-request text list the gap."""
+def test_design_mode_gate_qa_repo_question_advisory_reaches_pr_text(tmp_path, monkeypatch):
+    """A code reviewer that leaves repository questions missing: no re-run; gate_qa
+    proceeds, and qa-gate.txt and the pull-request text list the gap."""
     from tests_support import render
 
     bad_code_review = ("code review: the code matches the design.\n\n"
                        "## Repository questions\n\n```json\n[]\n```")
     run, model = _design_run(tmp_path, _design_answers(
         render({"tool.py": "def build():\n    print('built')\n"}),
-        ["health: ok", bad_code_review, "qa: ok",      # first round
-         "health: ok", bad_code_review, "qa: ok"]))    # the one re-run
+        ["health: ok", bad_code_review, "qa: ok"]))
 
     assert run.exit_ok, run.error
     code_reviews = [p for p in model.prompts if "You are the code reviewer." in p]
-    assert len(code_reviews) == 2
+    assert len(code_reviews) == 1
     gate = (tmp_path / "run/reviews/qa-gate.txt").read_text()
     assert gate.startswith("proceed: no blocking finding")
     assert "advisory: repository questions" in gate and "tool.py::build" in gate

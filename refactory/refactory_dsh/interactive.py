@@ -455,7 +455,7 @@ def run(
                 if prompt:
                     for line in prompt.splitlines():
                         print(f"  {line}", file=sys.stderr)
-                print(f"  Answer it with one of {verdicts_str} (add --note \"...\" to say why):", file=sys.stderr)
+                print(f"  Answer it with one of {verdicts_str} (add --note \"...\" to correct the design before it is built):", file=sys.stderr)
                 print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
                 # Read the resume command from run-config.json when available.
                 resume_cmd = f"refactory graph-control resume --run {workdir}"

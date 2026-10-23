@@ -49,67 +49,56 @@ def pick_gate_corrections(ctx: Any) -> str:
     agent entirely).
 
     Reads the ledger only when it exists; a missing ledger means "no corrections".
-    Only constraint entries (not process-scoped) immediately following a
-    gate_strategy proceed verdict are gate corrections.  Process notes and
-    other gates' notes are excluded here, not by the agent prompt.
+    Only correction or constraint entries with product scope and user-relayed
+    source, between a gate_strategy proceed verdict and the next gate-visit or
+    verdict-use, are gate corrections.
     """
-    from refactory_dsh.steering import LEDGER
+    from refactory_dsh.steering import LEDGER, parse_entries
 
     ledger_path = Path(ctx.workdir) / LEDGER
     if not ledger_path.exists():
         ctx.set_fact("gate_corrections", "")
-        ctx.set_fact("design_corrections_applied", "no corrections (no ledger)")
+        ctx.set_fact("design_corrections_applied", "0 corrections (no ledger)")
         return "skip"
 
     text = ledger_path.read_text()
+    entries = parse_entries(text)
     corrections: list[str] = []
 
-    # Parse the ledger entries: look for verdict entries for gate_strategy
-    # with verdict=proceed, then the immediately following constraint entry.
-    # Split into sections by ## headers
-    sections = _re.split(r'^## ', text, flags=_re.MULTILINE)
-    entries: list[dict[str, str]] = []
-    for section in sections[1:]:  # skip the title
-        lines = section.strip().splitlines()
-        if not lines:
-            continue
-        header = lines[0]
-        body = "\n".join(lines[1:]).strip()
-        entries.append({"header": header, "body": body})
-
-    saw_proceed = False
+    collecting = False
     for entry in entries:
-        header = entry["header"]
-        body = entry["body"]
-        # Check for verdict entries: "[timestamp] verdict" or "[timestamp] verdict-use"
-        if "verdict" in header.lower() and "verdict-use" not in header.lower():
-            # Parse the body for gate and verdict
-            gate_match = _re.search(r'^gate:\s*(.+)$', body, _re.MULTILINE)
-            verdict_match = _re.search(r'^verdict:\s*(.+)$', body, _re.MULTILINE)
+        kind = entry.get("kind", "")
+
+        # A verdict for gate_strategy=proceed starts collecting;
+        # any other verdict resets.
+        if kind == "verdict":
+            gate_match = _re.search(r'^gate:\s*(.+)$', entry["text"], _re.MULTILINE)
+            verdict_match = _re.search(r'^verdict:\s*(.+)$', entry["text"], _re.MULTILINE)
             if gate_match and verdict_match:
                 gate = gate_match.group(1).strip()
-                verdict = verdict_match.group(1).strip()
-                saw_proceed = (gate == "gate_strategy" and verdict == "proceed")
-                continue
-        # Check for constraint entries immediately after a gate_strategy proceed
-        if saw_proceed:
-            # Check if this is a constraint (not process-scoped)
-            is_constraint = "constraint" in header.lower() and "(process)" not in header.lower()
-            # Also check it's not a correction from another gate
-            is_correction = "correction" in header.lower()
-            if is_constraint or is_correction:
-                corrections.append(body)
-            saw_proceed = False
-        else:
-            saw_proceed = False
+                verdict = verdict_match.group(1).strip().lower()
+                collecting = (gate == "gate_strategy" and verdict == "proceed")
+            continue
+
+        # A gate-visit or verdict-use stops collecting.
+        if kind in ("gate-visit", "verdict-use"):
+            collecting = False
+            continue
+
+        # While collecting, pick up corrections/constraints with product scope
+        # and user-relayed source.
+        if collecting and kind in ("correction", "constraint"):
+            if entry.get("scope") == "product" and entry.get("source") == "user-relayed":
+                corrections.append(entry["text"])
 
     if not corrections:
         ctx.set_fact("gate_corrections", "")
-        ctx.set_fact("design_corrections_applied", "no corrections found in ledger")
+        ctx.set_fact("design_corrections_applied", "0 corrections")
         return "skip"
 
     joined = "\n\n".join(f"- {c}" for c in corrections)
     ctx.set_fact("gate_corrections", joined)
+    ctx.set_fact("design_corrections_applied", f"{len(corrections)} correction(s)")
 
     # Back up design.md before corrections are applied (gate 5c).
     design_path = Path(ctx.workdir) / "design.md"
@@ -223,6 +212,7 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         REPO_CHANGE_REVIEW_INSTRUCTIONS if deliverable_kind == "repository_change"
         else ARTIFACT_REVIEW_INSTRUCTIONS
     )
+    from refactory_dsh.verification import verification_methods
 
     claims_facts = {
         "claims_check_feedback": "",
@@ -235,9 +225,58 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
             "design_review_findings": "(no findings yet)",
             "deliverable_kind": deliverable_kind,
             "review_instructions": review_instructions,
+            "verification_methods": verification_methods(deliverable_kind),
             **pitfalls_facts,
             **claims_facts,
             **UNREFUSED, **located, **planned}
+
+
+#: What a scoped change's plan is compiled from, in place of the perspectives step.
+SCOPED_STRATEGY_PLAN = (
+    "(no perspectives: this is a scoped change, so plan directly from the research and "
+    "the pitfalls — the simplest thing that could pass the check — and say what the "
+    "check will not catch)"
+)
+
+
+def route_strategy(ctx: Any) -> Any:
+    """Send a scoped change straight to the plan; a full design weighs perspectives first.
+
+    The perspectives step chooses between ways to build the artifact. A scoped change
+    has one sensible way, and one perspective summarised by the plan step is the same
+    work done twice.
+    """
+    from refactory_dsh.nn import Verdict
+
+    if ctx.facts.get("research_scope") == "scoped":
+        ctx.set_fact("strategy_plan", SCOPED_STRATEGY_PLAN)
+        # What the perspectives step would leave, empty: the plan and design steps
+        # declare them as inputs, and the spine refuses a declared input that is not
+        # on disk.
+        ctx.write_text("strategy-plan.json", "[]\n")
+        ctx.path("strategy").mkdir(parents=True, exist_ok=True)
+        return Verdict("scoped", "a scoped change is planned straight from the research")
+    # `proceed` rather than a label of its own: a person's skip of this gate sends
+    # proceed on the spine, and the full path is the one that loses nothing.
+    return Verdict("proceed", "a full design weighs perspectives before the plan")
+
+
+def route_design_review(ctx: Any) -> Any:
+    """Send a scoped change's design to the automatic checks; a full design is reviewed.
+
+    For a scoped change the design-review gate's own checks (an Ask mapping present,
+    citations and quotes true, high-risk pitfalls answered, required sections present)
+    and the person's approval are the review; the review agent adds a round to a change
+    whose design is a page long. The gate learns which from `design_review_by`, so a
+    run whose graph predates this gate keeps its agent's review.
+    """
+    from refactory_dsh.nn import Verdict
+
+    if ctx.facts.get("research_scope") == "scoped":
+        ctx.set_fact("design_review_by", "automatic")
+        return Verdict("scoped", "a scoped change's design is checked automatically")
+    ctx.set_fact("design_review_by", "agent")
+    return Verdict("proceed", "a full design is reviewed by the design-review agent")
 
 
 def gate_design_review(ctx: Any) -> str:
@@ -245,21 +284,27 @@ def gate_design_review(ctx: Any) -> str:
 
     Never raises ValueError: when attempts are exhausted, it proceeds to
     gate_strategy with the remaining findings in the design_review_findings
-    fact, so the person decides.
+    fact, so the person decides. A design `route_design_review` sent here without the
+    review agent (`design_review_by` is ``automatic``) has only the mechanical checks;
+    any review file is not its review.
     """
     from refactory_dsh.create_ops import PASS_MARK, blocking_findings
     from refactory_dsh.nn import Verdict
 
+    scoped = ctx.facts.get("design_review_by") == "automatic"
     # ── read the agent's review ──
     review_text = ctx.read_text("reviews/design-review.md") if ctx.exists(
-        "reviews/design-review.md") else ""
+        "reviews/design-review.md") and not scoped else ""
     problems: list[str] = []
     # What the gate notices that does not change what gets built. It is shown to the
     # person and never costs a round: a design goes back only for a problem in `problems`.
     advisories: list[str] = []
 
-    # Verdict and blocking findings, same parsing as gate_overwatch.
-    if review_text.strip():
+    # Verdict and blocking findings, same parsing as gate_overwatch. A scoped change's
+    # design had no review agent, so any review file is not its review.
+    if scoped:
+        pass
+    elif review_text.strip():
         verdict_line = review_text.strip().splitlines()[-1].strip()
         problems.extend(blocking_findings(review_text))
         if verdict_line != PASS_MARK:
@@ -465,7 +510,7 @@ def gate_design_review(ctx: Any) -> str:
 
     # ── mechanical check 6: repository questions and brief-example trace ──
     deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
-    if deliverable_kind_value == "repository_change" and design_text:
+    if deliverable_kind_value == "repository_change" and design_text and not scoped:
         from refactory_dsh.authoring_evidence import check_review_questions
         from refactory_dsh.changed_functions import is_generated, is_test_path
         from refactory_dsh import design_contract
@@ -500,9 +545,14 @@ def gate_design_review(ctx: Any) -> str:
             advisories.extend(rq_problems)
 
     # ── decide: proceed, reloop, or exhaust ──
-    # A scoped change gets one review round; a full design the configured number.
+    # A full design gets the configured number of rounds. A scoped design checked only
+    # automatically gets one rewrite for what those checks block on, before the person
+    # sees it: a rewrite costs one design step and no review agent. A scoped design the
+    # review agent reviewed (a graph from before route_design_review) keeps one round.
     allowed = int(ctx.knob("design_review_attempts", 2))
-    if ctx.facts.get("research_scope") == "scoped":
+    if scoped:
+        allowed = min(allowed, 2)
+    elif ctx.facts.get("research_scope") == "scoped":
         allowed = min(allowed, 1)
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
     ctx.set_fact("design_review_attempts_used", used)
@@ -555,8 +605,11 @@ def design_review_status(facts: dict) -> str:
     advisory_n = sum(1 for ln in str(facts.get("design_review_advisory", "")).splitlines()
                      if ln.startswith("- "))
     advisory = f", {advisory_n} advisory" if advisory_n else ""
+    # A scoped change's design had no review agent; the person is told so.
+    automatic = (" (automatic checks; scoped change)"
+                 if facts.get("design_review_by") == "automatic" else "")
     if "(none: the design review" in findings:
-        return f"Design review: PASS{advisory}"
+        return f"Design review{automatic}: PASS{advisory}"
     blocking = facts.get("design_review_blocking")
     source = str(blocking) if blocking is not None else findings
     lines = [
@@ -566,7 +619,7 @@ def design_review_status(facts: dict) -> str:
     ]
     n = len(lines)
     return (
-        f"Design review: FAIL, {n} unresolved{advisory}\n"
+        f"Design review{automatic}: FAIL, {n} unresolved{advisory}\n"
         + "\n".join(lines)
     )
 
@@ -985,7 +1038,8 @@ def check_artifact(ctx: Any) -> str:
 
     # Record exactly what the builder will be given (feedback re-fill reads it).
     _inherited_list = sorted(filtered.inherited) if found is not None else []
-    ctx.write_json("check-record.json", {
+    _base_reset_list = getattr(ctx, '_base_reset', [])
+    _cr_fail: dict[str, Any] = {
         "status": "fail",
         "validation": detail[:4000],
         "digest": digest_text,
@@ -997,7 +1051,10 @@ def check_artifact(ctx: Any) -> str:
         "targeted_command": prepass.targeted_command if prepass.ran else None,
         "inherited": _inherited_list,
         "commit": str(ctx.facts.get("commit", "")),
-    })
+    }
+    if _base_reset_list:
+        _cr_fail["base_reset"] = _base_reset_list
+    ctx.write_json("check-record.json", _cr_fail)
 
     return repair(ctx, [detail])
 

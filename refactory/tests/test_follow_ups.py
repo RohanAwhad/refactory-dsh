@@ -17,8 +17,7 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh import create_ops, lowering, registry
-from refactory_dsh.create_ops import (OVERWATCH_VERDICT_RULE, SEVERITY_RULE, is_non_core,
-                                      split_core, take_advisory_round)
+from refactory_dsh.create_ops import OVERWATCH_VERDICT_RULE, SEVERITY_RULE, is_non_core, split_core
 from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
                            RESEARCH_ANSWER, VERIFICATION_ANSWER, FakeModel, git_repo,
                            render)
@@ -26,7 +25,6 @@ from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANS
 BUILT = render({"tool.py": "def build():\n    print('built')\n"})
 # A later round must change something: an emission identical to the last is refused.
 REBUILT = render({"tool.py": "def build():\n    print('built')\n\n\nbuild()\n"})
-REBUILT_AGAIN = render({"tool.py": "def build():\n    print('built again')\n\n\nbuild()\n"})
 NON_CORE = "BLOCKING: tool.py: add a test for an empty input file [non-core]"
 CORE = "BLOCKING: tool.py: build() prints nothing when run as a script [core: brief]"
 BUILDER = "## What the reviews refused"
@@ -170,8 +168,7 @@ def test_follow_ups_stay_out_of_the_repository_questions_advisory(tmp_path):
                        f"{NON_CORE}\n\n## Repository questions\n\n```json\n[]\n```")
     run, model = _design_run(tmp_path, [
         *_planning(), BUILT,
-        *_round(code=bad_code_review),      # first round
-        *_round(code=bad_code_review),      # the one repository-question re-run
+        *_round(code=bad_code_review),      # one review pass; no re-run for the questions
         "VERDICT: PASS"])
 
     assert run.exit_ok, run.error
@@ -264,38 +261,6 @@ def test_a_non_core_overwatch_finding_with_every_requirement_met_proceeds(tmp_pa
     assert verdict == "proceed"
     assert ctx.read_json("reviews/follow-ups.json") == {
         "overwatch": ["README.md: document the output [non-core]"]}
-
-
-# ── the builder-round cap ─────────────────────────────────────────────────
-
-def test_an_advisory_round_counts_against_the_cap_and_never_takes_the_last_repair(tmp_path):
-    ctx = _GateCtx(tmp_path, "")
-    ctx.knobs = {"check_attempts": 3}
-    ctx.facts = {"attempts_used": 0}
-    assert take_advisory_round(ctx) is True
-    assert ctx.facts["attempts_used"] == 1
-    # One repair used: the advisory round would leave none, so it is not taken.
-    assert take_advisory_round(ctx) is False
-    assert ctx.facts["attempts_used"] == 1
-    # A convergence extension widens the cap for the advisory round as for a repair.
-    ctx.facts["convergence_extras_used"] = 1
-    assert take_advisory_round(ctx) is True
-    assert ctx.facts["attempts_used"] == 2
-
-
-def test_a_verifier_round_with_no_round_to_spare_goes_to_the_pull_request(tmp_path):
-    """A core round leaves one repair; the verifier's findings are then listed, not built."""
-    verifier = "BLOCKING: tool.py:1: build() is not called when run as a script\n\nVERDICT: FAIL"
-    run, model = _design_run(tmp_path, [
-        *_planning(), BUILT,
-        *_round(code=f"code review: a defect.\n\n{CORE}"),
-        REBUILT, "health: ok", "code review: ok", "qa: ok", verifier,
-        "VERDICT: PASS"])
-
-    assert run.exit_ok, run.error
-    assert len([p for p in model.prompts if BUILDER in p]) == 2
-    unresolved = (tmp_path / "run/reviews/verification-unresolved.md").read_text()
-    assert "build() is not called" in unresolved
 
 
 # ── design_fast and create share the rule ─────────────────────────────────

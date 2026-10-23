@@ -168,6 +168,18 @@
       "max_iterations": 1,
       "_type": "AgentNode"
     },
+    "route_design_review": {
+      "id": "route_design_review",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
+    "route_strategy": {
+      "id": "route_strategy",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
     "strategy_director": {
       "id": "strategy_director",
       "role": "ceo",
@@ -214,7 +226,7 @@
     },
     {
       "source": "check_design_claims",
-      "target": "design_review",
+      "target": "route_design_review",
       "condition": "proceed"
     },
     {
@@ -284,18 +296,13 @@
     },
     {
       "source": "gate_pitfalls",
-      "target": "strategy_director",
+      "target": "route_strategy",
       "condition": "proceed"
     },
     {
       "source": "gate_qa",
       "target": "emit",
       "condition": "reloop"
-    },
-    {
-      "source": "gate_qa",
-      "target": "fork_qa",
-      "condition": "review_reloop"
     },
     {
       "source": "gate_qa",
@@ -371,6 +378,26 @@
       "source": "research_director",
       "target": "record_findings",
       "condition": null
+    },
+    {
+      "source": "route_design_review",
+      "target": "design_review",
+      "condition": "proceed"
+    },
+    {
+      "source": "route_design_review",
+      "target": "gate_design_review",
+      "condition": "scoped"
+    },
+    {
+      "source": "route_strategy",
+      "target": "strategy_director",
+      "condition": "proceed"
+    },
+    {
+      "source": "route_strategy",
+      "target": "synthesize_strategy",
+      "condition": "scoped"
     },
     {
       "source": "strategy_director",
