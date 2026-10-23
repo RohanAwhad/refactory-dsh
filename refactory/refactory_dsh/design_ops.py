@@ -545,9 +545,14 @@ def gate_design_review(ctx: Any) -> str:
             advisories.extend(rq_problems)
 
     # ── decide: proceed, reloop, or exhaust ──
-    # A scoped change gets one review round; a full design the configured number.
+    # A full design gets the configured number of rounds. A scoped design checked only
+    # automatically gets one rewrite for what those checks block on, before the person
+    # sees it: a rewrite costs one design step and no review agent. A scoped design the
+    # review agent reviewed (a graph from before route_design_review) keeps one round.
     allowed = int(ctx.knob("design_review_attempts", 2))
-    if ctx.facts.get("research_scope") == "scoped":
+    if scoped:
+        allowed = min(allowed, 2)
+    elif ctx.facts.get("research_scope") == "scoped":
         allowed = min(allowed, 1)
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
     ctx.set_fact("design_review_attempts_used", used)
