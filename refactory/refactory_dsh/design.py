@@ -699,12 +699,14 @@ class DesignMode(Mode):
                 "Read `design.md` from the run directory.\n\n"
                 "The following gate corrections were given when the design was approved:\n\n"
                 "{{gate_corrections}}\n\n"
-                "Update `design.md`: revise the ## Summary, the "
-                "heading (H1), and the description text in each site entry in ## Rule and sites to "
-                "reflect the corrections. "
-                "Do not change the ## Docs section, the ## Changes section, the "
-                "## Anti-patterns to avoid section, or the document's overall structure. Write the "
-                "updated `design.md`. Return a short message listing what was changed."
+                "Update `design.md` so that every part of it the corrections touch says what "
+                "they say: the ## Summary, the heading (H1), each site entry in ## Rule and "
+                "sites, and in ## Changes and ## Docs any wording, example text or file "
+                "list a correction replaces or adds to. Leave no part stating what a "
+                "correction overrides, because the builder reads the whole document. Keep "
+                "the sections the corrections do not touch as they are, and keep the "
+                "document's section headings and structure. Write the updated `design.md`. "
+                "Return a short message listing what was changed."
             ),
             reads=("design.md",),
             writes=("design.md",),

@@ -369,3 +369,17 @@ def test_count_fact_survives_on_proceed(tmp_path):
     result = pick_gate_corrections(ctx)
     assert result == "proceed"
     assert ctx.facts["design_corrections_applied"] == "1 correction(s)"
+
+
+def test_apply_corrections_updates_every_part_a_correction_touches():
+    """The builder reads the whole design, so a correction must not leave ## Changes or
+    ## Docs stating what it overrides (a lab run's corrected design kept a stale Changes
+    entry). The prompt asks for every touched part, those two sections included, and
+    keeps the untouched sections and the structure."""
+    from refactory_dsh.design import DesignMode
+
+    prompt = " ".join(DesignMode().build().nodes["apply_corrections"].prompt_template.split())
+    assert "Do not change the ## Docs section" not in prompt
+    assert "in ## Changes and ## Docs any wording, example text or file list" in prompt
+    assert "Leave no part stating what a correction overrides" in prompt
+    assert "keep the document's section headings and structure" in prompt

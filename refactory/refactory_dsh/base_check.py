@@ -1469,6 +1469,19 @@ def _hunks_comment_only(attempt_path: Path, file_path: str, hunk_lines: list[str
                            numbers=_added_numbers(hunk_lines))
 
 
+def site_in_diff(ctx: Any, site: str) -> bool:
+    """Whether a ``path:line`` site falls inside a hunk of the run's diff."""
+    found = worktree.recorded(ctx.workdir)
+    parsed = _site_range(site)
+    if found is None or parsed is None:
+        return False
+    try:
+        _, hunks = _overlapping_hunks(Path(found.path), found.base, *parsed)
+    except Exception:
+        return False
+    return bool(hunks)
+
+
 def site_is_comment_only(ctx: Any, site: str) -> bool:
     """Whether every line a site's hunks add is a comment; False when it is not in the diff."""
     found = worktree.recorded(ctx.workdir)
