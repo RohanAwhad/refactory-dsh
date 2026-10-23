@@ -787,7 +787,7 @@ def materialise(ctx: Any) -> dict[str, Any]:
     try:
         files = parse_files(answer)
     except ValueError as exc:
-        raise AttemptRefused(str(exc)) from exc
+        return {"emission_refused": str(exc)}
     if not files:
         raise ValueError(
             "the answer contained no '===FILE: <name>===' blocks, so there is "
@@ -837,7 +837,8 @@ def materialise(ctx: Any) -> dict[str, Any]:
     else:
         registry.install_workspace(project_for_nodes())
     ctx.write_json(f"{STAGING}/manifest.json", {"package": name, "files": sorted(written)})
-    return {"package_path": str(root), "files": sorted(written)}
+    cleared = {"emission_refused": ""} if ctx.facts.get("emission_refused") else {}
+    return {"package_path": str(root), "files": sorted(written), **cleared}
 
 
 def parse_files(answer: str) -> dict[str, str]:
@@ -869,6 +870,12 @@ def validate(ctx: Any) -> str:
     Every reason is written out and fed back into the next emit prompt, because a
     model that is told exactly which line broke can fix it in one attempt.
     """
+    refused = str(ctx.facts.get("emission_refused") or "")
+    if refused:
+        detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
+        ctx.write_text("validation.txt", detail + "\n")
+        ctx.set_fact("validation", detail)
+        return Verdict("reloop", detail)
     name = str(ctx.facts["name"])
     attempts = int(ctx.knob("attempts", 3))
     brief = ctx.read_json("brief.json", {}) or {}

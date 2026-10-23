@@ -1464,3 +1464,52 @@ def test_vitest_guard_reports_inactive_on_non_git_dir(tmp_path):
         f"vitest should pass when guard is inactive:\n{combined}")
     assert "repository guard inactive:" in combined, (
         f"should report guard inactive:\n{combined}")
+
+
+# ── literal pathspec protection ────────────────────────────────────────────
+def test_delete_bracket_path_does_not_glob_expand(repo, tmp_path):
+    """Deleting app/[id]/page.ts must not also delete app/i/page.ts.
+
+    Without GIT_LITERAL_PATHSPECS, git rm treats [id] as a character-class
+    pathspec matching 'i', so the sibling is removed.
+    """
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "bracket01234", run)
+    path = Path(found.path)
+
+    # Set up both files through commit_attempt so the worktree record stays current
+    worktree.commit_attempt(run, {
+        Path("app/[id]/page.ts"): "bracket\n",
+        Path("app/i/page.ts"): "sibling\n",
+    }, "setup files")
+
+    # Now delete only the bracket path
+    worktree.commit_attempt(run, {}, "delete bracket", (Path("app/[id]/page.ts"),))
+
+    tree = git(path, "ls-tree", "--name-only", "-r", "HEAD").splitlines()
+    assert "app/i/page.ts" in tree, "sibling must be kept"
+    assert "app/[id]/page.ts" not in tree, "target must be deleted"
+
+
+def test_colon_prefixed_path_does_not_expand_pathspec(repo, tmp_path):
+    """An emitted path starting with ':' must be committed literally.
+
+    Without GIT_LITERAL_PATHSPECS, git add treats ':(glob)**' as a pathspec
+    magic that matches everything including ignored files.
+    """
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "colonpath1234", run)
+    path = Path(found.path)
+
+    # Commit .gitignore through commit_attempt so the worktree record stays current
+    worktree.commit_attempt(run, {Path(".gitignore"): ".env\n"}, "setup gitignore")
+
+    # Write .env to disk — it is ignored by .gitignore so git clean won't touch it
+    (path / ".env").write_text("SECRET=x\n")
+
+    # Now add the colon-prefixed file
+    worktree.commit_attempt(run, {Path(":(glob)**"): "content\n"}, "colon path")
+
+    tree = git(path, "ls-tree", "--name-only", "-r", "HEAD").splitlines()
+    assert ":(glob)**" in tree, "the literal file must be committed"
+    assert ".env" not in tree, "the ignored file must NOT be committed"

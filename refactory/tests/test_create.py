@@ -82,35 +82,58 @@ def test_parse_files_refuses_malformed_header(answer, fragment):
         parse_files(answer)
 
 
-# ── T7: create-mode loop-back on malformed header ─────────────────────────
+# ── T7: create-mode loop-back on malformed header (full graph) ────────────
 def test_create_mode_loops_back_on_malformed_header(tmp_path):
-    """materialise catches ValueError from parse_files and raises
-    AttemptRefused so the framework loops back to emit with the quoted
-    line in its feedback.  A second (valid) emission is applied."""
-    import re as _re
-    from refactory_dsh.nn import RunContext
-    from refactory_dsh.worktree import AttemptRefused
+    """A malformed header loops back to emit through the full create graph.
 
-    workdir = tmp_path / "run"
-    workdir.mkdir()
-
-    # First emission: malformed header → materialise raises AttemptRefused
-    (workdir / "emit.txt").write_text("===FILE: has space.txt===\ncontent\n")
-    ctx = RunContext(workdir, facts={"name": NAME}, task={})
-    ctx._declared = ("staging/manifest.json",)
-    ctx._declared_facts = ("package_path", "files")
-    with pytest.raises(AttemptRefused, match=_re.escape("has space.txt")):
-        create_ops.materialise(ctx)
-
-    # Second emission: valid — materialise succeeds
-    (workdir / "emit.txt").write_text(
-        f"===FILE: {NAME}/__init__.py===\nprint('ok')\n"
+    First emission has a space in the path (malformed); second is valid.
+    The run succeeds, emit runs twice, and the retry prompt quotes the bad line.
+    """
+    bad_emission = "===FILE: has space.txt===\ncontent\n"
+    model = FakeModel(create_script(NAME, [bad_emission, render(good_files(NAME))]))
+    result = create_module.create(
+        _config(name=NAME, brief="count to a target", workdir=tmp_path / "run"),
+        client=model,
     )
-    ctx2 = RunContext(workdir, facts={"name": NAME}, task={})
-    ctx2._declared = ("staging/manifest.json",)
-    ctx2._declared_facts = ("package_path", "files")
-    produced = create_ops.materialise(ctx2)
-    assert "__init__.py" in produced["files"]
+    assert result.package == NAME
+    emit_prompts = [p for p in model.prompts if "Write the package" in p]
+    assert len(emit_prompts) == 2, "emit must run twice"
+    assert "has space.txt" in emit_prompts[-1], "retry prompt must quote the bad line"
+
+
+def test_create_fast_mode_loops_back_on_malformed_header(tmp_path, monkeypatch):
+    """A malformed header loops back to emit through the full create_fast graph.
+
+    First emission has a space in the path (malformed); second is valid.
+    The run succeeds, emit runs twice, and the retry prompt quotes the bad line.
+    """
+    from refactory_dsh.fast import CreateFastMode
+
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    name = "fast_counter"
+    bad_emission = "===FILE: has space.txt===\ncontent\n"
+    good_emission = render(good_files(name))
+    QA_PASS = json.dumps({"status": "pass", "checks": [{"name": "structural admission",
+                         "command": "import check", "status": "pass",
+                         "evidence": "the package loads"}],
+                         "findings": [],
+                         "not_run": ["broad research and full reviewer campaign not requested"]})
+    mode = CreateFastMode()
+    state = mode.state_dict()
+    state["knobs"]["single_shot"]["value"] = True
+    mode.load_state_dict(state)
+    client = FakeModel([
+        "Change only the requested file, preserve its public behavior, and review the required check result.",
+        bad_emission,
+        good_emission,
+        QA_PASS,
+    ])
+    run = mode.run(tmp_path / "run", model=client,
+                   task={"name": name, "brief": "a reusable counter"})
+    assert run.exit_ok, run.error
+    emit_prompts = [p for p in client.prompts if "emit the package" in p]
+    assert len(emit_prompts) == 2, "emit must run twice"
+    assert "has space.txt" in emit_prompts[-1], "retry prompt must quote the bad line"
 
 
 # ── T8: EDIT and DELETE headers refused by parse_files (whole files only) ──
