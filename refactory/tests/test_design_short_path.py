@@ -87,9 +87,12 @@ def test_a_scoped_gate_judges_only_its_own_checks():
     assert gate_design_review(ctx) == "proceed"
     assert ctx.facts["design_review_status"] == "Design review (automatic checks; scoped change): PASS"
     assert "stale note" not in ctx.facts["design_review_advisory"]
-    # Its own checks still block: a design with no Ask mapping is reported, not passed.
+    # Its own checks still block: a design with no Ask mapping goes back once for a
+    # rewrite, and only then reaches the person with the problem shown.
     ctx = FakeCtx(files={"design.md": _make_design(ask_mapping=False),
                          "brief.json": json.dumps({"brief": "a tool"})}, facts=dict(AUTOMATIC))
+    first = gate_design_review(ctx)
+    assert first == "reloop" and "Ask mapping" in first.reason
     assert gate_design_review(ctx) == "proceed"
     assert ctx.facts["design_review_status"].startswith(
         "Design review (automatic checks; scoped change): FAIL, 1 unresolved")
@@ -149,6 +152,23 @@ def test_a_scoped_change_runs_the_short_path_end_to_end(tmp_path, monkeypatch):
     assert "no perspectives: this is a scoped change" in plan
     assert run.facts["design_review_status"].startswith(
         "Design review (automatic checks; scoped change): PASS")
+
+
+def test_a_scoped_design_the_checks_block_is_rewritten_once_before_the_gate(tmp_path):
+    """Both 2026-10-22 measurement runs reached the person with a blocking finding the
+    design writer could have fixed; a scoped design now gets that one rewrite."""
+    import re
+    assert "## Ask mapping" in DESIGN_DOC_ANSWER
+    without_mapping = re.sub(r"## Ask mapping\n\n.*?\n\n(?=## )", "", DESIGN_DOC_ANSWER, flags=re.S)
+    assert "## Ask mapping" not in without_mapping
+    run, model = _design_run(tmp_path, "Make tool.py print built.", [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "one plan", without_mapping, DESIGN_DOC_ANSWER, *BUILD])
+
+    assert run.exit_ok, run.error
+    writes = [p for p in model.prompts if "Write the design document for this artifact" in p]
+    assert len(writes) == 2
+    assert "Ask mapping" in writes[1]
+    assert run.facts["design_review_status"] == "Design review (automatic checks; scoped change): PASS"
 
 
 def test_a_full_design_keeps_both_steps(tmp_path):
