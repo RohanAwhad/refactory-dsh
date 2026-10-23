@@ -83,22 +83,34 @@ def test_parse_files_refuses_malformed_header(answer, fragment):
 
 
 # ── T7: create-mode loop-back on malformed header ─────────────────────────
-def test_create_mode_loops_back_on_malformed_header():
-    """A create-mode run whose first emission has one malformed header
-    loops back to emit with the quoted line in its feedback, and the
-    second emission is applied."""
+def test_create_mode_loops_back_on_malformed_header(tmp_path):
+    """materialise catches ValueError from parse_files and raises
+    AttemptRefused so the framework loops back to emit with the quoted
+    line in its feedback.  A second (valid) emission is applied."""
     import re as _re
-    malformed_answer = "===FILE: has space.txt===\ncontent\n"
-    valid_answer = "===FILE: src/ok.py===\nprint('ok')\n"
+    from refactory_dsh.nn import RunContext
+    from refactory_dsh.worktree import AttemptRefused
 
-    # First call to parse_files raises ValueError quoting the line
-    with pytest.raises(ValueError, match=_re.escape("has space.txt")):
-        parse_files(malformed_answer)
+    workdir = tmp_path / "run"
+    workdir.mkdir()
 
-    # On the second emission, parse_files succeeds:
-    files = parse_files(valid_answer)
-    assert "src/ok.py" in files
-    assert files["src/ok.py"] == "print('ok')\n"
+    # First emission: malformed header → materialise raises AttemptRefused
+    (workdir / "emit.txt").write_text("===FILE: has space.txt===\ncontent\n")
+    ctx = RunContext(workdir, facts={"name": NAME}, task={})
+    ctx._declared = ("staging/manifest.json",)
+    ctx._declared_facts = ("package_path", "files")
+    with pytest.raises(AttemptRefused, match=_re.escape("has space.txt")):
+        create_ops.materialise(ctx)
+
+    # Second emission: valid — materialise succeeds
+    (workdir / "emit.txt").write_text(
+        f"===FILE: {NAME}/__init__.py===\nprint('ok')\n"
+    )
+    ctx2 = RunContext(workdir, facts={"name": NAME}, task={})
+    ctx2._declared = ("staging/manifest.json",)
+    ctx2._declared_facts = ("package_path", "files")
+    produced = create_ops.materialise(ctx2)
+    assert "__init__.py" in produced["files"]
 
 
 # ── T8: valid EDIT header refused by parse_files (whole files only) ────────
