@@ -845,6 +845,7 @@ emission, budget exhaustion, or a person's stop — leaves the worktree clean.
   (default 3). At the limit, it raises an error naming the conflicting files
   without starting a merge. `graph-control redeliver` accepts a run stopped
   there.
+- *Emission path validation.* The path in a `===FILE:`/`===EDIT:`/`===DELETE:` header may contain any character except whitespace, `=`, backtick, single quote, and double quote. Structural safety (`_artifact_paths`: no absolute paths, no `..`, no backslash, no control characters, no trailing `/`) is enforced after parsing. A line that starts like a header but does not match the format is refused with the offending line quoted, in both repo_change and create-mode parsing.
 - *Delivery advance (dm-116).* When delivery pushes a merge commit, the
   finally block advances the worktree record (head = merge, base = main's
   tip) so a later push fast-forwards.

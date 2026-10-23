@@ -64,6 +64,67 @@ def _clean_package():
     shutil.rmtree(root, ignore_errors=True)
 
 
+# ── T2: @-path accepted by parse_files ─────────────────────────────────────
+def test_parse_files_keeps_at_path():
+    files = parse_files("===FILE: packages/@types/index.d.ts===\ncontent\n")
+    assert "packages/@types/index.d.ts" in files
+    assert files["packages/@types/index.d.ts"] == "content\n"
+
+
+# ── T6: malformed header refused by parse_files ───────────────────────────
+@pytest.mark.parametrize("answer, fragment", [
+    ("===FILE: has space.txt===\ncontent\n", "has space.txt"),
+    ("===FILE:===\ncontent\n", "===FILE:==="),
+])
+def test_parse_files_refuses_malformed_header(answer, fragment):
+    import re as _re
+    with pytest.raises(ValueError, match=_re.escape(fragment)):
+        parse_files(answer)
+
+
+# ── T7: create-mode loop-back on malformed header ─────────────────────────
+def test_create_mode_loops_back_on_malformed_header():
+    """A create-mode run whose first emission has one malformed header
+    loops back to emit with the quoted line in its feedback, and the
+    second emission is applied."""
+    import re as _re
+    malformed_answer = "===FILE: has space.txt===\ncontent\n"
+    valid_answer = "===FILE: src/ok.py===\nprint('ok')\n"
+
+    # First call to parse_files raises ValueError quoting the line
+    with pytest.raises(ValueError, match=_re.escape("has space.txt")):
+        parse_files(malformed_answer)
+
+    # On the second emission, parse_files succeeds:
+    files = parse_files(valid_answer)
+    assert "src/ok.py" in files
+    assert files["src/ok.py"] == "print('ok')\n"
+
+
+# ── T8: valid EDIT header refused by parse_files (whole files only) ────────
+def test_parse_files_refuses_edit_header_with_whole_files_message():
+    """An answer with a valid ===EDIT: header is refused by parse_files,
+    quoting the line and saying this mode takes whole files only."""
+    import re as _re
+    answer = "===EDIT: src/main.py===\nsome edit body\n"
+    with pytest.raises(ValueError, match=_re.escape("===EDIT: src/main.py===")) as exc_info:
+        parse_files(answer)
+    assert "whole files only" in str(exc_info.value)
+    assert "===FILE: <path>===" in str(exc_info.value)
+
+
+# ── T9b: backtick- and quote-wrapped paths refused by parse_files ──────────
+@pytest.mark.parametrize("answer, fragment", [
+    ("===FILE: `src/a.py`===\ncontent\n", "`src/a.py`"),
+    ("===FILE: 'src/a.py'===\ncontent\n", "'src/a.py'"),
+    ('===FILE: "src/a.py"===\ncontent\n', '"src/a.py"'),
+])
+def test_parse_files_refuses_backtick_and_quote_wrapped_paths(answer, fragment):
+    import re as _re
+    with pytest.raises(ValueError, match=_re.escape(fragment)):
+        parse_files(answer)
+
+
 def test_the_command_line_carries_the_persons_approval():
     """`--verdict gate=value` is how a headless create is told the person's answer.
 

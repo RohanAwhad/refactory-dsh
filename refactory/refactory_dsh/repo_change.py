@@ -70,9 +70,15 @@ EMIT_FILE = "emit.txt"
 #: check and the reviews (#319); the agent-delivery bracket refuses that.
 OUTPUT_ONLY = ("emit",)
 
+#: The path portion of an emission header: any character except whitespace,
+#: '=', backtick, single quote, and double quote.  Structural safety
+#: (absolute, .., backslash, control chars) is validated separately by
+#: _artifact_paths after parsing.
+EMISSION_PATH = r"[^\s=`'\"]+"
+
 #: The blocks `emit.txt` is written in: a whole file, edits to an existing one, or its
 #: removal. Edits are what keep a small change to a long file small (#330 I4).
-BLOCK = re.compile(r"^===(FILE|EDIT|DELETE):\s*([A-Za-z0-9_./-]+)\s*===\s*$", re.MULTILINE)
+BLOCK = re.compile(rf"^===(FILE|EDIT|DELETE):\s*({EMISSION_PATH})\s*===\s*$", re.MULTILINE)
 
 #: The lines that frame one edit in an `===EDIT:` block: text copied from the file, and
 #: what replaces it.
@@ -544,9 +550,13 @@ def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple
     """
     kinds = "===FILE:, ===EDIT: or ===DELETE:" if edits else "===FILE:"
     headers = [line for line in answer.splitlines() if line.startswith(("===FILE:", "===EDIT:", "===DELETE:"))]
-    if any(BLOCK.fullmatch(line) is None for line in headers):
-        raise AttemptRefused(f"emit.txt has a block header that is not {kinds} followed by <relative path>===; "
-                             "write each one on its own line, with a path of letters, digits, '_', '.', '/' or '-'")
+    bad_lines = [line for line in headers if BLOCK.fullmatch(line) is None]
+    if bad_lines:
+        raise AttemptRefused(
+            f"emit.txt has a malformed block header: {bad_lines[0]!r}; "
+            f"a header must be exactly {kinds} <relative path>=== "
+            "where the path contains no whitespace, '=', backtick, or quotes"
+        )
     matches = list(BLOCK.finditer(answer))
     if not matches:
         raise AttemptRefused(f"emit.txt holds no {kinds} blocks; write each file's change as one, as the "

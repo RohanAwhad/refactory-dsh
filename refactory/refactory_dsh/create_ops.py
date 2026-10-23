@@ -20,7 +20,8 @@ from typing import Any
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
-from refactory_dsh.repo_change import refuse_truncated
+from refactory_dsh.repo_change import refuse_truncated, EMISSION_PATH
+from refactory_dsh.worktree import AttemptRefused
 
 #: Where a create/edit run stages its package inside the run directory, so two
 #: parallel runs of the same package name never collide.  A git worktree is not
@@ -35,7 +36,7 @@ STAGING = "staging"
 
 #: The marker the emit agent uses to separate files. JSON would need every
 #: newline escaped, which is where a generated source file usually dies.
-FILE_MARKER = re.compile(r"^===FILE:\s*([A-Za-z0-9_./-]+)\s*===\s*$", re.MULTILINE)
+FILE_MARKER = re.compile(rf"^===FILE:\s*({EMISSION_PATH})\s*===\s*$", re.MULTILINE)
 
 REQUIRED_FILES = ("__init__.py",)
 
@@ -783,7 +784,10 @@ def _package_relative(relative: str, name: str) -> str:
 def materialise(ctx: Any) -> dict[str, Any]:
     """Turn the emit agent's answer into a package directory."""
     answer = ctx.read_text("emit.txt")
-    files = parse_files(answer)
+    try:
+        files = parse_files(answer)
+    except ValueError as exc:
+        raise AttemptRefused(str(exc)) from exc
     if not files:
         raise ValueError(
             "the answer contained no '===FILE: <name>===' blocks, so there is "
@@ -838,6 +842,18 @@ def materialise(ctx: Any) -> dict[str, Any]:
 
 def parse_files(answer: str) -> dict[str, str]:
     """Split an answer into ``path -> source`` blocks."""
+    for line in answer.splitlines():
+        if line.startswith(("===EDIT:", "===DELETE:")):
+            raise ValueError(
+                f"this mode takes whole files only (===FILE: <path>===); "
+                f"got: {line!r}"
+            )
+        if line.startswith("===FILE:") and FILE_MARKER.fullmatch(line) is None:
+            raise ValueError(
+                f"malformed emission header: {line!r}; "
+                "a path may contain any characters except whitespace, '=', "
+                "backtick, or quotes"
+            )
     files: dict[str, str] = {}
     matches = list(FILE_MARKER.finditer(answer))
     for index, match in enumerate(matches):
