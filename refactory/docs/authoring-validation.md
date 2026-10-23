@@ -117,7 +117,7 @@ composed from verification methods M2, M3, M11, M12, plus repository questions a
 claim-checking instructions). Artifact runs get `ARTIFACT_REVIEW_INSTRUCTIONS` (the
 rendering and exchange-format text previously inline in health_checker and qa_director).
 
-### Reviewer re-runs
+### Unanswered repository questions
 
 Reviewers answer repository questions (duplicates, callers and shared state, each with
 `path:line` evidence or an `absent:` reason) for the run's changed **product** functions
@@ -129,15 +129,13 @@ only:
   it began, a function counts only if it also changed relative to the merged-in commit
   (`changed_functions.merged_upstream`).
 
-When missing repository questions are a post-build gate's only problem, the reviewer is
-re-run once (`REPO_QUESTION_RERUNS`) without spending a builder or review attempt. The
-re-run's feedback names each missing function and answer. At design time there is no
-re-run: `gate_design_review` lists them as advisory straight away.
-
-Questions still missing after that re-run are advisory. The gate proceeds and records
-them in `reviews/qa-gate.txt`, the design review's advisory list, or fast mode's
-`fast-report.json`. The pull request's Verification section lists them. A run whose
-reviews found nothing blocking never ends on repository questions.
+Missing repository questions are advisory at every gate, and nothing is re-run for
+them: they are the reviewers' bookkeeping, not a defect in the change. A post-build
+gate used to re-run every reviewer once when they were its only problem; on a measured
+run (dm-149, 2026-10-22) that cost ten minutes and left the same answer missing. The
+gate records them in `reviews/qa-gate.txt`, the design review's advisory list, or fast
+mode's `fast-report.json`, and the pull request's Verification section lists them. They
+never send a build back, re-run a review, or end a run.
 
 
 Overwatch receives the original brief, accepted strategy/criteria and design,

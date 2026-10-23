@@ -444,9 +444,8 @@ changes when the branch merged its base in. The product entries are rendered int
 as `{{changed_functions}}`.
 
 For the post-build QA gate, `gate_qa` validates each of the three review files independently,
-naming the reviewer and function in any refusal. A `review_reloop` edge from `gate_qa` to
-`fork_qa` re-runs only the reviewers, once. After that re-run, missing repository questions
-are advisory: the gate proceeds, and the pull request lists them. The fast `gate_qa` validates `focused-qa.json`'s
+naming the reviewer and function in any refusal. Missing repository questions are
+advisory: the gate proceeds, nothing is re-run, and the pull request lists them. The fast `gate_qa` validates `focused-qa.json`'s
 `repo_questions` key and strips `[repo-questions]`-prefixed problems from `failure_kind`'s
 word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
 PASS" (with ", N advisory" when the gate listed advisory items) or "Design review:

@@ -139,11 +139,8 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
          "authoring-evidence.json", "intent-audit.json")
         + (("changed-functions.json", "reviews/verification.md", "emit.txt") if design else ())
     )
-    gate_qa_produces = (
-        ("repair_feedback", "repairs_used", "check_repairs_used",
-         "review_repairs_used", "qa_passed")
-        + (("review_reruns_used",) if design else ())
-    )
+    gate_qa_produces = ("repair_feedback", "repairs_used", "check_repairs_used",
+                        "review_repairs_used", "qa_passed")
     gate_qa_writes = (
         ("fast-report.json", "repair.txt",
          "site-revert-results.json", "correction-audit.json",
@@ -202,7 +199,6 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
         graph.connect("verifier", "join_qa")
         graph.connect("join_qa", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
-        graph.connect("gate_qa", "fork_qa", condition="review_reloop")
     else:
         graph.connect("focused_check", "focused_qa")
         graph.connect("focused_qa", "gate_qa")

@@ -592,19 +592,15 @@ def wire_reviews(graph: Any) -> None:
 #: re-run is targeted: its feedback names each missing function and answer. After it the
 #: gaps are advisory, because a run whose reviews found nothing blocking must not end on a
 #: reviewer's bookkeeping.
-REPO_QUESTION_RERUNS = 1
-ADVISORY_REPO_QUESTIONS = "advisory: repository questions still missing after one re-run:"
-
-
-def repo_question_rerun_due(ctx: Any, counter: str) -> bool:
-    """Count one repository-questions-only miss under the fact *counter*; True while a re-run is due."""
-    used = int(ctx.facts.get(counter, 0)) + 1
-    ctx.set_fact(counter, used)
-    return used <= REPO_QUESTION_RERUNS
+#: Repository questions a review left unanswered are the reviewers' bookkeeping, not a
+#: defect in the change: they are listed on the pull request and never cost a second
+#: review pass (a re-run of every reviewer cost a measured run ten minutes and left the
+#: same answer missing).
+ADVISORY_REPO_QUESTIONS = "advisory: repository questions the reviews left unanswered:"
 
 
 def advisory_repo_questions(problems: list[str]) -> str:
-    """The advisory note listing repository questions still missing after the re-run."""
+    """The advisory note listing the repository questions the reviews left unanswered."""
     return ADVISORY_REPO_QUESTIONS + "\n" + "\n".join(f"- {p}" for p in problems)
 
 

@@ -742,11 +742,6 @@
     },
     {
       "source": "gate_qa",
-      "target": "fork_qa",
-      "condition": "review_reloop"
-    },
-    {
-      "source": "gate_qa",
       "target": "overwatch",
       "condition": "proceed"
     },

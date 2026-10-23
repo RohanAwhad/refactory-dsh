@@ -2359,7 +2359,7 @@ def gate_qa(ctx: Any) -> str:
     advisory = ""
     if not reason and deliverable_kind_value == "repository_change":
         from refactory_dsh.authoring_evidence import (
-            advisory_repo_questions, check_review_questions, repo_question_rerun_due)
+            advisory_repo_questions, check_review_questions)
         from refactory_dsh.changed_functions import review_functions
         import json as _json
 
@@ -2386,11 +2386,6 @@ def gate_qa(ctx: Any) -> str:
                 rq_problems.extend(
                     check_review_questions(review_text_content, changed_fns, reviewer_name))
             if rq_problems:
-                rq_report = "\n".join(rq_problems)
-                if repo_question_rerun_due(ctx, "review_reruns_used"):
-                    ctx.write_text("reviews/qa-gate.txt", rq_report + "\n")
-                    ctx.set_fact("qa_gate", rq_report)
-                    return Verdict("review_reloop", rq_report)
                 advisory = advisory_repo_questions(rq_problems)
 
     # ── verifier advisory handling ──
