@@ -113,13 +113,17 @@ def test_create_mode_loops_back_on_malformed_header(tmp_path):
     assert "__init__.py" in produced["files"]
 
 
-# ── T8: valid EDIT header refused by parse_files (whole files only) ────────
-def test_parse_files_refuses_edit_header_with_whole_files_message():
-    """An answer with a valid ===EDIT: header is refused by parse_files,
-    quoting the line and saying this mode takes whole files only."""
+# ── T8: EDIT and DELETE headers refused by parse_files (whole files only) ──
+@pytest.mark.parametrize("header", [
+    "===EDIT: src/main.py===",
+    "===DELETE: src/main.py===",
+])
+def test_parse_files_refuses_edit_header_with_whole_files_message(header):
+    """EDIT and DELETE headers are refused by parse_files, quoting the line
+    and saying this mode takes whole files only."""
     import re as _re
-    answer = "===EDIT: src/main.py===\nsome edit body\n"
-    with pytest.raises(ValueError, match=_re.escape("===EDIT: src/main.py===")) as exc_info:
+    answer = f"{header}\nsome body\n"
+    with pytest.raises(ValueError, match=_re.escape(header)) as exc_info:
         parse_files(answer)
     assert "whole files only" in str(exc_info.value)
     assert "===FILE: <path>===" in str(exc_info.value)
