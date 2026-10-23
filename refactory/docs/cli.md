@@ -254,8 +254,10 @@ python -m refactory_dsh.design --resume <dir>
 ```
 
 `halt` at any user gate ends the run. A reloop verdict's note becomes a correction
-in the intent ledger. An up-front `--verdict gate_strategy=proceed` is persisted
-as a run-scoped ledger entry and survives a resume.
+in the intent ledger. A note given with `proceed`, in the same call or a later one
+before resuming, becomes a gate correction written into `design.md` before the build.
+An up-front `--verdict gate_strategy=proceed` is persisted as a run-scoped ledger
+entry and survives a resume.
 
 ## Pin management
 

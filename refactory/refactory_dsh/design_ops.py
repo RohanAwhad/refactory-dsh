@@ -49,67 +49,56 @@ def pick_gate_corrections(ctx: Any) -> str:
     agent entirely).
 
     Reads the ledger only when it exists; a missing ledger means "no corrections".
-    Only constraint entries (not process-scoped) immediately following a
-    gate_strategy proceed verdict are gate corrections.  Process notes and
-    other gates' notes are excluded here, not by the agent prompt.
+    Only correction or constraint entries with product scope and user-relayed
+    source, between a gate_strategy proceed verdict and the next gate-visit or
+    verdict-use, are gate corrections.
     """
-    from refactory_dsh.steering import LEDGER
+    from refactory_dsh.steering import LEDGER, parse_entries
 
     ledger_path = Path(ctx.workdir) / LEDGER
     if not ledger_path.exists():
         ctx.set_fact("gate_corrections", "")
-        ctx.set_fact("design_corrections_applied", "no corrections (no ledger)")
+        ctx.set_fact("design_corrections_applied", "0 corrections (no ledger)")
         return "skip"
 
     text = ledger_path.read_text()
+    entries = parse_entries(text)
     corrections: list[str] = []
 
-    # Parse the ledger entries: look for verdict entries for gate_strategy
-    # with verdict=proceed, then the immediately following constraint entry.
-    # Split into sections by ## headers
-    sections = _re.split(r'^## ', text, flags=_re.MULTILINE)
-    entries: list[dict[str, str]] = []
-    for section in sections[1:]:  # skip the title
-        lines = section.strip().splitlines()
-        if not lines:
-            continue
-        header = lines[0]
-        body = "\n".join(lines[1:]).strip()
-        entries.append({"header": header, "body": body})
-
-    saw_proceed = False
+    collecting = False
     for entry in entries:
-        header = entry["header"]
-        body = entry["body"]
-        # Check for verdict entries: "[timestamp] verdict" or "[timestamp] verdict-use"
-        if "verdict" in header.lower() and "verdict-use" not in header.lower():
-            # Parse the body for gate and verdict
-            gate_match = _re.search(r'^gate:\s*(.+)$', body, _re.MULTILINE)
-            verdict_match = _re.search(r'^verdict:\s*(.+)$', body, _re.MULTILINE)
+        kind = entry.get("kind", "")
+
+        # A verdict for gate_strategy=proceed starts collecting;
+        # any other verdict resets.
+        if kind == "verdict":
+            gate_match = _re.search(r'^gate:\s*(.+)$', entry["text"], _re.MULTILINE)
+            verdict_match = _re.search(r'^verdict:\s*(.+)$', entry["text"], _re.MULTILINE)
             if gate_match and verdict_match:
                 gate = gate_match.group(1).strip()
-                verdict = verdict_match.group(1).strip()
-                saw_proceed = (gate == "gate_strategy" and verdict == "proceed")
-                continue
-        # Check for constraint entries immediately after a gate_strategy proceed
-        if saw_proceed:
-            # Check if this is a constraint (not process-scoped)
-            is_constraint = "constraint" in header.lower() and "(process)" not in header.lower()
-            # Also check it's not a correction from another gate
-            is_correction = "correction" in header.lower()
-            if is_constraint or is_correction:
-                corrections.append(body)
-            saw_proceed = False
-        else:
-            saw_proceed = False
+                verdict = verdict_match.group(1).strip().lower()
+                collecting = (gate == "gate_strategy" and verdict == "proceed")
+            continue
+
+        # A gate-visit or verdict-use stops collecting.
+        if kind in ("gate-visit", "verdict-use"):
+            collecting = False
+            continue
+
+        # While collecting, pick up corrections/constraints with product scope
+        # and user-relayed source.
+        if collecting and kind in ("correction", "constraint"):
+            if entry.get("scope") == "product" and entry.get("source") == "user-relayed":
+                corrections.append(entry["text"])
 
     if not corrections:
         ctx.set_fact("gate_corrections", "")
-        ctx.set_fact("design_corrections_applied", "no corrections found in ledger")
+        ctx.set_fact("design_corrections_applied", "0 corrections")
         return "skip"
 
     joined = "\n\n".join(f"- {c}" for c in corrections)
     ctx.set_fact("gate_corrections", joined)
+    ctx.set_fact("design_corrections_applied", f"{len(corrections)} correction(s)")
 
     # Back up design.md before corrections are applied (gate 5c).
     design_path = Path(ctx.workdir) / "design.md"

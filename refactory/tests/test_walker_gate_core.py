@@ -104,10 +104,11 @@ def test_proceed_with_note(tmp_path, monkeypatch, capsys):
     assert "halt" in err.lower() or "--resume" in err
 
     # 2. Steer: proceed with a note.
-    fake.answers = list(POST_GATE_PROCEED)
+    fake.answers = [DESIGN_DOC_ANSWER, *POST_GATE_PROCEED]
     code2 = console.main([
         "steer", "--run", RUN,
         "--verdict", "gate_strategy=proceed",
+        "--kind", "correction",
         "--note", "PROBE-NOTE use argparse",
     ])
     assert code2 == 0

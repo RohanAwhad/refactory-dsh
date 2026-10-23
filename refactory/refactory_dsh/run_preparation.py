@@ -130,7 +130,7 @@ def print_gate_stop(gate_id: str, workdir: Path, *, graph: Any = None) -> None:
         for line in prompt.splitlines():
             print(f"  {line}", file=sys.stderr)
     print(f"  Accepted verdicts: {verdicts_str}", file=sys.stderr)
-    print(f"  Answer it (add --note \"...\" to say why):", file=sys.stderr)
+    print(f"  Answer it (add --note \"...\" to correct the design before it is built):", file=sys.stderr)
     print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict> [--note ...]", file=sys.stderr)
     # Read resume command from run-config.json.
     resume_cmd = ""
