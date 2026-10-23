@@ -178,6 +178,20 @@ def test_id_at_heading_is_addressed():
     assert 'FND-foo-1' in addressed
 
 
+def test_id_at_a_place_in_a_section_is_addressed():
+    """A § reference may say where in the section, and may name a subsection."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='### Sentence insertion\n\nInsert it.\n\n'
+             '## Research and perspective findings\n\n'
+             '- FND-foo-1: § Changes item 3\n'
+             '- FND-foo-2: § Sentence insertion, relative link path\n')
+    findings = [{'id': f'FND-foo-{n}', 'source_file': 'research/foo.md',
+                 'text': 'a finding'} for n in (1, 2)]
+    addressed, _, _ = finding_coverage(design, findings)
+    assert addressed == ['FND-foo-1', 'FND-foo-2']
+
+
 def test_finding_coverage_set_aside():
     """8: A set-aside marker is recognised."""
     from refactory_dsh.findings_coverage import finding_coverage

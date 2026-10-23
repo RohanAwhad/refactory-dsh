@@ -153,6 +153,65 @@ def test_anti_patterns_entry_with_invalid_heading_fails():
     assert "PIT-001" in missing
 
 
+SUBSECTIONS = (
+    "### Regeneration of outputs\n\nRegenerate them.\n\n"
+    "### finding-sources.json attribution\n\nAttribute them.\n\n"
+    "### Keep it short, and plain\n\nKeep it.\n\n"
+    "#### Block-start predicate\n\nA block starts here.\n\n"
+    "```text\n### Example output\n```\n"
+)
+
+
+@pytest.mark.parametrize("entry", [
+    # Each from a lab design the check sent back though it named the section.
+    "- **PIT-001** (high) — Addressed by block-start rule 4. See § Changes rule 4.",
+    "- **PIT-001** (high): Addressed by §Changes item 2, where headings serve all roles.",
+    "- **PIT-001** (high): Addressed by § Changes → Regeneration command.",
+    "- **PIT-001** (high): Addressed by § Regeneration of outputs. No heading is added.",
+    "- **PIT-001** (high) — Addressed by joining with `'\\n'` (the list in § Changes).",
+    # A subsection whose name holds a dot or a comma, and one four levels deep.
+    "- **PIT-001** (high): Addressed by § finding-sources.json attribution, first rule.",
+    "- **PIT-001** (high): Addressed by § Keep it short, and plain.",
+    "- **PIT-001** (high): Addressed by § Block-start predicate.",
+    # A second § in the entry is read on its own.
+    "- **PIT-001** (high): unlike §4 of RFC 9110, handled by § Changes rule 2.",
+])
+def test_a_reference_that_names_a_section_and_says_where_in_it_is_addressed(entry):
+    design = _contract(body=SUBSECTIONS, anti=entry)
+    addressed, _, missing = pitfalls_mod.pitfall_coverage(design, [_pit()])
+    assert addressed == ["PIT-001"] and not missing
+
+
+@pytest.mark.parametrize("entry", [
+    "- PIT-001: see § Changesets",           # a longer word, not the Changes section
+    "- PIT-001: see § Regeneration later",   # no such heading or subsection
+    "- PIT-001: see Changes rule 4",         # no § reference at all
+    "- PIT-001: see § Changes2",             # a longer name, not the Changes section
+    "- PIT-001: see § Example output",       # a '###' line inside a code block
+])
+def test_a_reference_to_no_section_is_still_missing(entry):
+    design = _contract(body=SUBSECTIONS, anti=entry)
+    _, _, missing = pitfalls_mod.pitfall_coverage(design, [_pit()])
+    assert missing == ["PIT-001"]
+
+
+def test_gate_design_review_passes_a_pitfall_answered_by_section_and_rule(tmp_path):
+    """The dm-149 measurement's design answered PIT-001 with "See § Changes rule 4." and
+    was sent back for a whole design round as if it had not."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0,
+                      "has_pitfalls_step": True})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md", "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md", _contract(
+        anti="- **PIT-001** (high) — Addressed by block-start rule 4. See § Changes rule 4."))
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    ctx.write_json("pitfalls.json", [_pit()])
+    import refactory_dsh.design_ops as ops
+    assert ops.gate_design_review(ctx) == "proceed"
+    assert "PIT-001 (high): addressed" in ctx.facts["pitfall_coverage"]
+
+
 def test_set_aside_bold_marker_recognised():
     design = _contract(anti="- PIT-001: **[set-aside: out of scope]**")
     _, set_aside, _ = pitfalls_mod.pitfall_coverage(design, [_pit()])

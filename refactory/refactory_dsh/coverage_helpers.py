@@ -36,9 +36,19 @@ def site_paths(text: str) -> list[str]:
 
 
 def headings(text: str) -> list[str]:
-    """All ``## Heading`` headings in the design."""
-    return [line.strip()[3:].strip() for line in text.splitlines()
-            if line.strip().startswith("## ")]
+    """All section headings in the design, ``##`` and the subsections under them.
+
+    A ``#`` line inside a fenced code block is code, not a heading.
+    """
+    found: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("```", "~~~")):
+            fenced = not fenced
+        elif not fenced and (heading := re.match(r'#{2,6}\s+(.+)', stripped)):
+            found.append(heading[1].strip())
+    return found
 
 
 def has_valid_reference(entry: str, sites: list[str], hdgs: list[str]) -> bool:
@@ -50,11 +60,15 @@ def has_valid_reference(entry: str, sites: list[str], hdgs: list[str]) -> bool:
             site_clean = re.sub(r':\d+(-\d+)?$', '', site)
             if token == site_clean:
                 return True
-    # Heading references with the § sigil.
-    for m in re.finditer(r'§\s*([^,.\n]+)', entry):
-        ref = m.group(1).strip().rstrip('.')
+    # Heading references with the § sigil. The text after it names a heading, which may
+    # hold dots or commas, and may go on to say where in it ("§ Changes rule 4",
+    # "§ Changes → Regeneration"); designs write both, and reading only an exact name
+    # sent sound designs back.
+    for m in re.finditer('§', entry):
+        ref = entry[m.end():].lstrip().lower()
         for h in hdgs:
-            if ref.lower() == h.lower():
+            name = h.lower()
+            if ref.startswith(name) and not ref[len(name):][:1].isalnum():
                 return True
     return False
 
