@@ -2067,11 +2067,8 @@ def test_worktree_apply_at_path_all_three_block_kinds(tmp_path):
     assert git(wt, "show", f"{advanced.head}:{edit_file}") == "new patch"
     # ===DELETE: @-path file is removed from the committed tree
     import subprocess
-    result = subprocess.run(
-        ["git", "-C", str(wt), "show", f"{advanced.head}:{delete_file}"],
-        capture_output=True, text=True,
-    )
-    assert result.returncode != 0, "deleted file should not exist in committed tree"
+    with pytest.raises(subprocess.CalledProcessError):
+        git(wt, "show", f"{advanced.head}:{delete_file}")
 
 
 def test_the_design_mode_declares_the_knobs_the_ceo_passes():
