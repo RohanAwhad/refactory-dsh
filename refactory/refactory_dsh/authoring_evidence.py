@@ -604,7 +604,7 @@ def advisory_repo_questions(problems: list[str]) -> str:
     return ADVISORY_REPO_QUESTIONS + "\n" + "\n".join(f"- {p}" for p in problems)
 
 
-ADVISORY_CORRECTION_AUDIT = "advisory: correction-audit checks not measured:"
+ADVISORY_CORRECTION_AUDIT = "advisory: correction-audit checks to confirm by hand:"
 
 
 def advisory_correction_audit(notes: list[str]) -> str:
@@ -761,6 +761,28 @@ def check_review_questions(
 _KNOWN_REVERT_RESULTS = frozenset({
     "fail", "pass", "not_in_diff", "no_tests", "collection_error", "import_only",
     "new_file", "comment_only", "test_file", "not_run"})
+
+
+def is_doc_path(path: str) -> bool:
+    """Whether a path (``file`` or ``file:line``) names a documentation file."""
+    file = path.split(":", 1)[0]
+    return (file.endswith((".md", ".rst", ".txt"))
+            or file.startswith("docs/") or "/docs/" in file)
+
+
+# Prose formats only: a `.txt`, or a file under `docs/`, may be data, a fixture or code.
+_PROSE_SUFFIXES = (".md", ".markdown", ".rst", ".adoc")
+
+
+def is_prose_path(path: str) -> bool:
+    """Whether a site (``file`` or ``file:line``) is in a prose document, which is read and
+    not run, so no test is expected to catch its revert."""
+    return path.split(":", 1)[0].lower().endswith(_PROSE_SUFFIXES)
+
+
+def _prose_site_note(key: str, clause_number: int, site: str) -> str:
+    return (f"{key} clause {clause_number}: site {site} is documentation; the diff shows "
+            "it changed, and no test is expected to reach it")
 
 
 def correction_audit_problems(ctx: Any) -> list[str]:
@@ -938,11 +960,7 @@ def correction_audit_problems(ctx: Any) -> list[str]:
 
             if kind == "doc":
                 doc_path = clause.get("path", "")
-                _is_doc = (doc_path and (
-                    doc_path.endswith((".md", ".rst", ".txt"))
-                    or doc_path.startswith("docs/")
-                    or "/docs/" in doc_path
-                ))
+                _is_doc = bool(doc_path) and is_doc_path(doc_path)
                 doc_file = doc_path.split(":")[0] if doc_path else ""
                 if not doc_path:
                     clause_status = "fail"
@@ -977,7 +995,7 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                              found.base, "HEAD"],
                             capture_output=True, text=True, timeout=10,
                         ).stdout.strip().splitlines()
-                        if doc_path in diff_files:
+                        if doc_file in diff_files:
                             site_results.append({"site": doc_path, "status": "pass"})
                         else:
                             clause_status = "fail"
@@ -1066,6 +1084,12 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                     if base_check.site_is_comment_only(ctx, site):
                         sr["status"] = "pass"
                         sr["comment_only"] = True
+                        site_results.append(sr)
+                        continue
+                    # A documentation site needs no test, only to be in the diff.
+                    if is_prose_path(site) and base_check.site_in_diff(ctx, site):
+                        sr["status"] = "advisory"
+                        clause_advisories.append(_prose_site_note(key, ci + 1, site))
                         site_results.append(sr)
                         continue
                     sr["status"] = "fail"
@@ -1194,6 +1218,11 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         f"{key} clause {ci + 1}: site {site}: revert not run"
                         + (f" ({'; '.join(reasons)})" if reasons else "")
                     )
+                elif any(r == "pass" for r in test_results) and is_prose_path(site):
+                    # A documentation file is read, not run: no test is expected to
+                    # catch its revert, and the diff already shows the site changed.
+                    sr["status"] = "advisory"
+                    clause_advisories.append(_prose_site_note(key, ci + 1, site))
                 elif any(r == "pass" for r in test_results):
                     # test passed = site not caught
                     sr["status"] = "fail"
@@ -1269,7 +1298,9 @@ def read_correction_audit(ctx: Any) -> list[str]:
 
 
 def correction_audit_advisories(ctx: Any) -> list[str]:
-    """The correction-audit checks that could not be measured, from correction-audit.json.
+    """The correction-audit checks a reviewer confirms by hand, from correction-audit.json:
+    those the audit could not measure, and the documentation sites no test is expected
+    to reach.
 
     They never block; the pull request lists them so a reviewer can check by hand.
     """

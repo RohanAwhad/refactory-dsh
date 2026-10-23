@@ -1021,7 +1021,7 @@ def test_large_ledger_past_the_cap_proceeds_with_an_advisory(tmp_path, monkeypat
     assert gate.startswith("proceed: overwatch passed")
     assert evidence.ADVISORY_CORRECTION_AUDIT in gate
     body = delivery._body(ctx, found)
-    assert "Correction-audit checks not measured (advisory)" in body
+    assert "Correction-audit checks to confirm by hand (advisory)" in body
     assert "revert not run (time cap reached)" in body
     cache = json.loads((ctx.workdir / ".refactory" / "site-revert-cache.json").read_text())
     assert cache == {}
@@ -1306,3 +1306,63 @@ def test_reverts_in_one_file_never_run_stale_bytecode(tmp_path):
     pairs = [(f"m.py:{4 * i + 2}", f"test_m.py::test_f{i}", "local") for i in range(6)]
     results = base_check.compute_site_reverts(ctx, pairs)["pairs"]
     assert [p["result"] for p in results] == ["fail"] * 6
+
+
+def test_a_documentation_site_needs_no_test_but_must_be_in_the_diff(tmp_path):
+    """A correction to a prose document is evidenced by the diff: no test is expected to
+    fail when its line is reverted, or to be cited at all, so either is advisory, not a
+    measured miss (a lab run spent a whole builder round on it). A documentation site the
+    diff does not change still blocks, and so do an untested code site and an untested
+    `.txt` data file. A doc clause may cite its file with a line."""
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    repo = git_repo(tmp_path / "repo")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "guide.md").write_text("# Guide\n\nUse the tool.\n")
+    (repo / "README.md").write_text("# Tool\n")
+    (repo / "CHANGES.md").write_text("# Changes\n")
+    (repo / "data.txt").write_text("1\n")
+    (repo / "calc.py").write_text("X = 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "docs")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "run-branch")
+    (repo / "docs" / "guide.md").write_text(
+        "# Guide\n\nUse the tool.\nSee also: [README](../README.md).\n")
+    (repo / "README.md").write_text("# Tool\nSee the [guide](docs/guide.md).\n")
+    (repo / "data.txt").write_text("2\n")
+    (repo / "calc.py").write_text("X = 2\n")
+    (repo / "test_calc.py").write_text("def test_unrelated():\n    assert True\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "link")
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base, "head": git(repo, "rev-parse", "HEAD"),
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir)}))
+    ctx = nn.RunContext(run_dir, facts={"brief": "test", "artifact": str(run_dir / "art")})
+    (run_dir / "art").mkdir()
+    (run_dir / "art" / "a.txt").write_text("42")
+    Ledger.seed(run_dir, "test")
+    texts = ["Link the README from the guide", "Point the README at the guide",
+             "Mention it in the changelog", "Note it in the changelog", "Make X two",
+             "Make the data two", "Document it"]
+    for text in texts:
+        Ledger(run_dir).note("correction", text)
+    tests = ["test_calc.py::test_unrelated"]
+    _deliver_overwatch(ctx, {
+        "Link the README from the guide": [{"site": "docs/guide.md:4", "tests": tests, "scope": "local"}],
+        "Point the README at the guide": [{"site": "README.md:2", "tests": [], "scope": "local"}],
+        "Mention it in the changelog": [{"site": "CHANGES.md:1", "tests": tests, "scope": "local"}],
+        "Note it in the changelog": [{"site": "CHANGES.md:1", "tests": [], "scope": "local"}],
+        "Make X two": [{"site": "calc.py:1", "tests": tests, "scope": "local"}],
+        "Make the data two": [{"site": "data.txt:1", "tests": tests, "scope": "local"}]},
+        kinds={"Document it": {"kind": "doc", "path": "README.md:2"}})
+    problems = evidence.correction_audit_problems(ctx)
+    assert not any("docs/guide.md:4" in p or "README.md:2" in p for p in problems), problems
+    assert any("site CHANGES.md:1 is not in the diff" in p for p in problems), problems
+    assert any("site CHANGES.md:1 has no tests" in p for p in problems), problems
+    assert any("site calc.py:1 not reached by any test" in p for p in problems), problems
+    assert any("site data.txt:1 not reached by any test" in p for p in problems), problems
+    assert len(problems) == 4, problems
+    advisories = evidence.correction_audit_advisories(ctx)
+    for site in ("docs/guide.md:4", "README.md:2"):
+        assert any(f"site {site} is documentation" in a for a in advisories), advisories

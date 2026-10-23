@@ -51,6 +51,31 @@ class _TitleCtx:
             return default
 
 
+def test_pr_body_quotes_the_gate_corrections_inside_their_section(tmp_path):
+    """The corrections are quoted: a correction's own heading or line breaks stay inside
+    the section, and a credential-like value in one is masked like the rest of the body."""
+    import subprocess
+    corrections = ("- Use websockets\n## Not a section\nsecond line\n\n"
+                   "- Read API_TOKEN=s3cr3t-value from the environment")
+    ctx = _TitleCtx(facts={"brief": "Build a tool.", "name": "b2", "gate_corrections": corrections},
+                    files={"design.md": "# The heading\n\nThe design.\n"}, workdir=tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    for key, value in (("user.email", "test@test.com"), ("user.name", "Test")):
+        subprocess.run(["git", "-C", str(tmp_path), "config", key, value], check=True)
+    (tmp_path / "tool.py").write_text("print('built')\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "init"], check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    body = delivery._body(ctx, SimpleNamespace(path=str(tmp_path), base=head, head=head,
+                                               branch="refactory/run-test"))
+    assert ("## Corrections given at approval\n\n> - Use websockets\n> ## Not a section\n"
+            "> second line\n>\n> - Read API_TOKEN=*** from the environment") in body, body
+    assert "\n## Not a section" not in body
+    assert "s3cr3t-value" not in body
+
+
 def test_pr_title_from_design_heading():
     ctx = _TitleCtx(
         facts={"brief": "Fix audit", "name": "b2"},
@@ -3505,12 +3530,17 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     assert "websocket" in design_text.lower(), \
         f"design.md should mention websockets: {design_text[:500]}"
 
-    # The PR body should contain "websockets" and not "polling loop".
+    # The PR body should contain "websockets" and not "polling loop", except where
+    # it quotes the person's correction, which names what it replaces.
     pr_text = (run / delivery.BODY).read_text()
     assert "websocket" in pr_text.lower(), \
         f"PR text should mention websockets: {pr_text[:500]}"
-    assert "polling" not in pr_text.lower(), \
-        f"PR text should not mention the replaced approach: {pr_text[:500]}"
+    heading = "## Corrections given at approval\n\n"
+    assert heading + "> - use websockets instead of a polling loop\n" in pr_text, pr_text
+    before, after = pr_text.split(heading, 1)
+    described = before + after.split("\n## ", 1)[1]
+    assert "polling" not in described.lower(), \
+        f"PR text should not describe the replaced approach: {pr_text[:500]}"
 
     # Process notes should not appear in the design.
     assert "try harder" not in design_text.lower(), \
@@ -3719,6 +3749,8 @@ def test_apply_corrections_no_ledger_leaves_design_unchanged(github, tmp_path):
     # The pick_corrections op ran and set the fact.
     assert result.facts.get("design_corrections_applied"), \
         "pick_corrections should have set design_corrections_applied"
+    # With no corrections, the pull request has no corrections section.
+    assert "Corrections given at approval" not in (run / delivery.BODY).read_text()
 
 
 def test_ls_remote_failure_stops_existing_repo(github, tmp_path, monkeypatch):

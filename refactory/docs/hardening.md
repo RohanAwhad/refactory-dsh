@@ -1346,17 +1346,20 @@ things for every clause:
 **Measured failures block; unmeasured checks are advisory.** A clause is BLOCKING
 when the audit measured a miss:
 - the site is `not_in_diff`;
-- the test still passes after the revert (`pass`: it does not reach the site);
+- the test still passes after the revert (`pass`: it does not reach the site),
+  unless the site is documentation (below);
 - the cited test ran no tests (`no_tests`: a wrong test id);
-- a code site has no tests and its change is not comments only;
+- a code site has no tests and its change is not comments only (a documentation
+  site in the diff needs none, below);
 - the test patches the changed function (§26);
 - any status the audit does not know.
 
 The message names the correction id, the clause, the site and the test.
 
-A check the audit could not measure is advisory instead. The run proceeds, and
-the pull request's Verification section lists it under "Correction-audit checks
-not measured (advisory)" for a reviewer to check by hand. It is also in
+A check the audit could not measure is advisory instead, and so is a
+documentation site. The run proceeds, and the pull request's Verification
+section lists it under "Correction-audit checks to confirm by hand (advisory)"
+for a reviewer to check. It is also in
 `correction-audit.json` (clause status `advisory`) and `reviews/overwatch-gate.txt`
 or `fast-report.json`. These cases are:
 - `not_run`: the time cap ran out, the test timed out or was killed, the patch
@@ -1365,7 +1368,16 @@ or `fast-report.json`. These cases are:
 - `import_only` or `new_file` with no caught sibling: the hunk only adds new
   definitions, so reverting it can only break an import;
 - a `doc` clause naming a changed file that is not documentation (wording in a
-  code file).
+  code file);
+- a site in the diff in a prose document (`.md`, `.markdown`, `.rst`, `.adoc`),
+  whether no test catches its revert or none is cited. A document is read, not
+  run, so no test is expected to reach it, and the diff already shows the site
+  changed. A lab run spent a whole builder round adding a test that read a "See
+  also" link back from a Markdown file. A documentation site that is not in the
+  diff still blocks. A `.txt` file or a file under `docs/` is not prose for this
+  rule: it may be data, a fixture or code, and its uncaught revert still blocks.
+  A Markdown file that drives behaviour, such as an agent prompt, is prose here,
+  so the pull request is where a reviewer checks it.
 
 A measured miss is never hidden by an unmeasured check: a wrong test id or an
 unknown result on any test of a site blocks, even when another test of the same
@@ -1387,8 +1399,9 @@ withdrawn. This reuses the existing exclusion validation path.
 - **prohibition:** requires a `pattern` field; code confirms the pattern is
   absent from the `+` lines of the diff. Missing `pattern` fails the clause.
 - **doc:** requires a `path` field naming a changed documentation file
-  (`.md`, `.rst`, `.txt`, or under `docs/`). A path to a non-doc file passes as
-  advisory when that file changed, and fails when it did not.
+  (`.md`, `.rst`, `.txt`, or under `docs/`), with or without a `:line`. A path
+  to a non-doc file passes as advisory when that file changed, and fails when it
+  did not.
 - **design:** requires a non-empty `heading` field that exists in the current
   `design.md`. Missing or unknown heading fails the clause.
 - **test:** cites a code site plus the test; the revert runs against the code
@@ -1409,7 +1422,8 @@ an existing file whose revert fails its test. Without one it is advisory.
 `test_design_fast_past_the_cap_proceeds_with_an_advisory`,
 `test_a_measured_miss_still_blocks_beside_unmeasured_pairs`,
 `test_a_comment_only_site_needs_no_test`,
-`test_a_doc_clause_on_a_changed_code_file_is_advisory`.
+`test_a_doc_clause_on_a_changed_code_file_is_advisory`,
+`test_a_documentation_site_needs_no_test_but_must_be_in_the_diff`.
 
 ## 26. Evidence scope enforcement (#431)
 

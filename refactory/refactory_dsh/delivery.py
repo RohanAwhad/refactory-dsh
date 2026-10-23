@@ -1606,6 +1606,13 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     what_changed, mismatches = design_contract.build_what_changed(parsed, diff_files)
     if what_changed:
         sections.append("## What changed\n\n" + "\n".join(f"- {item}" for item in what_changed))
+    # The person's corrections at the approval gate, as given (`pick_gate_corrections`),
+    # so a reviewer of the pull request can check each one against the change. Quoted, so
+    # a correction's own line breaks or headings stay inside this section.
+    corrections = _public(str(ctx.facts.get("gate_corrections") or "")).strip()
+    if corrections:
+        sections.append("## Corrections given at approval\n\n" + "\n".join(
+            f"> {line}".rstrip() for line in corrections.splitlines()))
     if mismatches:
         target_guard.warn(
             f"design sites marked [changed] but not in the diff: {', '.join(mismatches)}"
@@ -1764,13 +1771,14 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             missing = gate_text.split(ADVISORY_REPO_QUESTIONS, 1)[1].strip()
             verification += ("\n- **Repository questions left unanswered (advisory):**\n"
                              + missing + "\n")
-    # Correction-audit checks the audit could not measure; a reviewer checks them by hand.
+    # Correction-audit checks a reviewer confirms by hand: those the audit could not
+    # measure, and documentation sites no test is expected to reach.
     from refactory_dsh.authoring_evidence import correction_audit_advisories
 
-    not_measured = correction_audit_advisories(ctx)
-    if not_measured:
-        verification += ("\n- **Correction-audit checks not measured (advisory):**\n"
-                         + "\n".join(f"  - {note}" for note in not_measured) + "\n")
+    by_hand = correction_audit_advisories(ctx)
+    if by_hand:
+        verification += ("\n- **Correction-audit checks to confirm by hand (advisory):**\n"
+                         + "\n".join(f"  - {note}" for note in by_hand) + "\n")
     verification += _process_notes_section(ctx)
     sections.append(verification)
     if left:

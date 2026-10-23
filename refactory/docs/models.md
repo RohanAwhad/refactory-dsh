@@ -164,7 +164,7 @@ The design_doc node writes `design.md` following a defined contract. The contrac
 6. **`## Failure trace`** — for each failure the brief reports, a file:line chain from the symptom to the root cause, and the link the fix breaks. When the brief asks for a new feature, write `N/A — this is a new feature.` A missing or empty trace is advisory.
 7. **`## Ask mapping`** — a markdown table with columns `| Ask (quoted from brief) | Design section | Test |`, one row per ask. `gate_design_review` mechanically checks that the section heading is present; the `design_review` agent validates that each quoted ask appears verbatim in the brief.
 8. **`## Test guardedness exemptions`** (optional) — when new tests pass on the base, list each test file path and reason. A new test that passes on the base and is not listed here is rejected by the guardedness gate.
-9. **`## Site revert exemptions`** (optional) — when a changed site cannot be caught by a mechanical revert-and-test, list the site path:line and reason. A changed site whose revert is not caught and that is not listed here blocks the correction audit.
+9. **`## Site revert exemptions`** (optional) — when a changed site cannot be caught by a mechanical revert-and-test, list the site path:line and reason. A changed site whose revert is not caught and that is not listed here blocks the correction audit, unless it is in a prose document (`.md`, `.markdown`, `.rst`, `.adoc`): no test is expected to reach a document, so that is advisory.
 
 ### Routing design_doc and design_review to a stronger model
 
