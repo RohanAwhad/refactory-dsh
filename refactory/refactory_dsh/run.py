@@ -32,6 +32,11 @@ from refactory_dsh.nn.resolve import resolve
 #: that DSH executed. This file is the runtime boundary.
 FACTS = "facts.json"
 
+#: Taken while a node writes the facts it produced. A fork's branches run at once on
+#: the spine -- the check beside its reviews, for one -- and each reads the facts when
+#: it starts and writes them when it finishes, so each writes back only what it changed.
+FACTS_LOCK = ".refactory/facts.lock"
+
 #: The spine passes each node its own declaration under this name.
 NODE_ENV = "DSH_WORKFLOW_NODE"
 
@@ -92,6 +97,55 @@ def _read_facts(workdir: Path) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def edit_facts(workdir: Path, edit: Any) -> None:
+    """Apply ``edit`` (a function of the facts dict, which it changes in place) to the
+    run's facts as they are on disk now, under :data:`FACTS_LOCK`, and replace the file
+    whole, so no reader sees half of it. A facts file that cannot be read is refused
+    rather than overwritten: writing back only this node's facts would drop the rest."""
+    import fcntl
+
+    lock_path = workdir / FACTS_LOCK
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    path = workdir / FACTS
+    with open(lock_path, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            facts: dict[str, Any] = {}
+            if path.exists():
+                try:
+                    loaded = json.loads(path.read_text())
+                except json.JSONDecodeError as exc:
+                    raise RunnerError(f"{path} cannot be read ({exc}); refusing to overwrite it") from exc
+                if not isinstance(loaded, dict):
+                    raise RunnerError(f"{path} is not a JSON object; refusing to overwrite it")
+                facts = loaded
+            edit(facts)
+            temporary = path.with_name(f".{FACTS}.{os.getpid()}.tmp")
+            temporary.write_text(json.dumps(facts, indent=2, default=str))
+            temporary.replace(path)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def update_facts(workdir: Path, changed: dict[str, Any], removed: tuple[str, ...] = ()) -> None:
+    """Set ``changed`` and drop ``removed`` in the run's facts, leaving every other fact as
+    it is on disk now: a node that ran beside others must not put back what they wrote
+    while it ran (`edit_facts`)."""
+    def edit(facts: dict[str, Any]) -> None:
+        facts.update(changed)
+        for key in removed:
+            facts.pop(key, None)
+
+    edit_facts(workdir, edit)
+
+
+def _write_changes(workdir: Path, before: dict[str, Any], after: dict[str, Any]) -> None:
+    """Write back the facts a node changed: those it set or altered, and those it dropped."""
+    changed = {key: value for key, value in after.items()
+               if key not in before or before[key] != value}
+    update_facts(workdir, changed, tuple(key for key in before if key not in after))
 
 
 def _memory_store(directory: Path) -> Any:
@@ -220,12 +274,11 @@ def run_node(
     )
     node_type = manifest.get("type", "")
     is_retryable = node_type not in ("gate", "GateNode")
+    started = copy.deepcopy(ctx.facts)
     facts_snapshot = copy.deepcopy(ctx.facts) if is_retryable else None
 
     def _write_facts() -> None:
-        path = directory / FACTS
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(ctx.facts, indent=2, default=str))
+        _write_changes(directory, started, ctx.facts)
 
     try:
         produced = resolve(target)(ctx)
@@ -262,9 +315,7 @@ def run_node(
         for key, value in produced.items():
             ctx.set_fact(key, value)
     ctx._check_produces()  # noqa: SLF001
-    path = directory / FACTS
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(ctx.facts, indent=2, default=str))
+    _write_facts()
     return produced
 
 

@@ -39,6 +39,11 @@ CHECK_HOME = Path(".refactory") / "check-home"
 #: The HOME the unchanged base is prepared and checked with.
 BASE_CHECK_HOME = Path(".refactory") / "base-check-home"
 
+#: The HOME the check copy is prepared and checked with (`repo_change._check_copy`): a
+#: setup that keeps what it wrote into HOME (a profile link to the checkout) must point at
+#: the copy, not at the run's worktree.
+CHECK_COPY_HOME = Path(".refactory") / "check-copy-home"
+
 #: How long one install may take before it is reported as failed.
 INSTALL_TIMEOUT_S = 1800
 
@@ -53,6 +58,13 @@ DELIVERY_SHOWN = Path(".refactory") / "delivery-shown.json"
 
 #: What a node that calls run_check writes.
 CHECK_WRITES = ("changes.diff", "test-guardedness.json", "changed-functions.json")
+
+#: What `design_ops.prepare_check` records about the attempt the check and its reviews
+#: run on, side by side; a review that starts before the check records binds to it.
+CHECK_PREP = "check-prep.json"
+
+#: What the check beside the reviews decided; `design_ops.gate_check` routes on it.
+CHECK_VERDICT = "check-verdict.json"
 
 #: What a node that calls run_check produces.
 CHECK_PRODUCES = ("commit", "files", "inherited_failures", "changed_functions")

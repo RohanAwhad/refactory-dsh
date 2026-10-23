@@ -286,6 +286,7 @@ def test_check_timeout_s_out_of_range_is_refused():
 
 @pytest.mark.parametrize("mode_cls, check_node_id, expected_envelope_s", [
     ("design", "check", 6540),
+    ("design", "prepare_check", 6540),
     ("design_fast", "focused_check", 6540),
     ("make_pass", "check", 6900),
 ])

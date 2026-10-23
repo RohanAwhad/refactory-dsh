@@ -16,8 +16,9 @@ if TYPE_CHECKING:
     from .executor import Executor
     from .graph import Node
 
-# A bound on simultaneous branch work, not another mode knob or API setting.
-MAX_WORKERS = 4
+# A bound on simultaneous branch work, not another mode knob or API setting. Design
+# mode's review fork has five branches: three reviews, the verifier and the check.
+MAX_WORKERS = 5
 
 
 def _overlap(left: Path, right: Path) -> bool:
@@ -201,11 +202,14 @@ def run_fork(executor: Executor, node: Node) -> str | None:
         return error
 
     errors: list[str | None] = [None] * len(children)
+    optional = set(node.optional_targets or ())
     try:
         if serial:
             for index in range(len(children)):
                 errors[index] = walk(index)
-                if errors[index]:
+                # A failed optional branch is missing, as it is when branches run at
+                # once: the branches after it still run.
+                if errors[index] and node.targets[index] not in optional:
                     for target in node.targets[index + 1:]:
                         record(target, "not-started")
                     break
@@ -245,7 +249,6 @@ def run_fork(executor: Executor, node: Node) -> str | None:
         raise
     # All workers have finished, so no branch can still write after we return or
     # after the join begins. Order does not depend on completion timing.
-    optional = set(node.optional_targets or ())
     for index, child in enumerate(children):
         if errors[index] and node.targets[index] in optional:
             # A failed optional branch is missing, not failed: keep its steps in

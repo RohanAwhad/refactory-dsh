@@ -1130,9 +1130,9 @@ documents.
 
 ### Pipeline position
 
-Full mode:
+Full mode (the check runs beside the reviews; see "The check beside the reviews" below):
 ```
-check →(proceed) fork_qa → [health_checker, code_reviewer, qa_director, verifier] → join_qa → synthesize_qa → gate_qa
+prepare_check →(proceed) fork_qa → [health_checker, code_reviewer, qa_director, verifier, check] → join_qa → gate_check →(proceed) synthesize_qa → gate_qa
 ```
 
 Fast mode (design_fast):
@@ -2024,3 +2024,84 @@ runtimes call.
    `_write_prep_cache` skip writing when `base_clean=False`.
 6. **Old cache entries re-run:** Existing cache files without `base_clean`
    become misses (safe re-run).
+
+## The check beside the reviews
+
+**Why.** Design mode ran its check, then its reviews. On the 2026-10-22 measurements
+the check took about 12 minutes on every run, and the reviews 2.5 (the happy canary)
+to 10 minutes (dm-149), so the reviews' whole time was added to every round.
+
+**How it works now.** Three nodes replace the one `check` gate:
+
+1. **`prepare_check`** (gate, before the review fork) settles the commit the check and
+   the reviewers both see: `repo_change.prepare_attempt` installs the environment, runs
+   the `generate` command (its tracked-file changes amended into the attempt) and the
+   `setup` build in the run's worktree. Nothing moves the commit after this. It also
+   reruns last attempt's failing tests there (the targeted pre-pass): an attempt that
+   still fails them goes back to the builder without a review. A preparation that fails
+   is judged right there by the whole sequential check (`check_artifact`), which reports
+   it with its triage as before. It first clears what a last attempt prepared or
+   decided, records the attempt in `check-prep.json`, and sets `review_feedback` (what
+   sent the build back) and `review_baseline` (the requirements) for the reviewers.
+2. **`check`** (op, a branch of `fork_qa`, beside the three reviews and the verifier)
+   runs the brief's check on that commit in the run's **check copy**
+   (`run_check(beside_reviews=True)`): a detached worktree of its own at the attempt's
+   commit, beside the run's worktree and its base worktree, its environment prepared
+   there and its hooks and HOME its own (`.refactory/check-copy-home`), so a setup that
+   keeps what it wrote into HOME points at the copy. The reviewers read and run the delivered files in the
+   run's worktree meanwhile; neither sees, or deletes, what the other leaves. The copy is
+   kept across attempts (moved to the new commit, the last check's files put back, its
+   installed environment kept) and removed with the base worktree. The op records its
+   decision, with the check command it ran, in `check-verdict.json`; a node inside a
+   fork may not send the run outside it. A check that raises (an unrepairable failure)
+   is recorded and raised by `gate_check`, because the node runner retries a failed op
+   and a retry would be a second full check.
+3. **`gate_check`** (gate, after `join_qa`) routes on that decision: a failed check goes
+   back to emit with its feedback, as before, and that attempt's reviews are not read. A
+   person's skip of the check proceeds on its skip receipt for this attempt. With no
+   decision for this attempt and command -- the check command was corrected after it
+   ran (`graph-control amend-command` reruns this gate), or the check never recorded
+   one -- the gate runs the whole check itself, bound to the same attempt, so the
+   reviews beside it stay current. A person may skip `gate_check` itself, as they could
+   the old gate: it produces `runtime_evidence`, so its skip leaves a skip receipt.
+
+**What the reviewers see.** The check's receipt does not exist when they start, so the
+three reviews do not read `authoring-evidence.json` or the facts the check writes. Their
+context is `BESIDE_CHECK_REVIEW_CONTEXT`: the check runs beside them and they must not
+rerun it; a test that also fails on the unchanged base is not the change's defect (the
+check compares its failures with the base); they write scratch files outside the run's
+worktree; plus `review_baseline` and `review_feedback`. The verifier no longer reads
+`test-guardedness.json`, which the check writes, and is told the check runs beside it.
+Overwatch runs after the check and still audits its receipt.
+
+**What a sign-off is bound to.** A reviewer that starts before the check records is
+bound to the commit, intent and inputs it saw and to that check's attempt
+(`delivery_identity` returns `identity` and `check_attempt`). The evidence names the
+attempt it ran on (`validation.check_attempt`), and `current_problems` accepts such a
+sign-off only when both match; any other check, commit or intent leaves it stale. A
+reviewer that starts after the check recorded is bound to the receipt, as before. A
+person's skip receipt carries the attempt when `check-prep.json` is for the commit the
+run is at.
+
+**Facts on the spine.** The spine runs a fork's branches at once, and each node read
+the facts when it started and rewrote all of `facts.json` when it finished, so a check
+finishing after its reviews would have put back the facts they wrote meanwhile. A node
+now writes back only the facts it changed (`run.update_facts`), as does an agent's
+completion (`worker_node`) and a data pass (`items._write_facts`): all through
+`run.edit_facts`, under `.refactory/facts.lock`, with the file replaced whole. A facts
+file that cannot be read is refused rather than overwritten. The walker runs up to five
+fork branches at once (`nn/fork.MAX_WORKERS`), the design review fork's width, and a
+serial fork no longer stops at a failed optional branch: as on the concurrent path, it
+is missing and the branches after it run.
+
+**Tests.** `test_check_beside_reviews.py`: the graph and the lowered workflow; what the
+reviews read and see; scripted runs whose check passes, and whose first check fails
+(two emits, the second carrying the failure, both attempts reviewed); `gate_check`'s
+routes, including a person's skip; the in-fork check refusing an attempt it was not
+prepared for and not running twice; a corrected check command judged again; the check
+running in its own copy, which follows the attempt; `prepare_check` clearing the last
+attempt's records, sending back before the reviews, and judging a failed preparation at
+once; sign-off binding; the facts lock, an unreadable facts file refused, and a node
+writing back only the facts it changed; and a serial fork running past a failed optional
+branch. `spine.spec.ts` drives the fixture through the new fork and both `gate_check`
+routes.

@@ -164,19 +164,14 @@ def _task_of(node: Node, workdir: Path) -> Task | None:
 
 
 def _write_facts(workdir: Path, fact: str, scores: list[dict[str, Any]]) -> None:
-    path = workdir / FACTS
-    facts: dict[str, Any] = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text())
-        except json.JSONDecodeError:
-            loaded = {}
-        if isinstance(loaded, dict):
-            facts = loaded
-    previous = facts.get(fact)
-    facts[fact] = list(previous) + scores if isinstance(previous, list) else list(scores)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(facts, indent=2, default=str))
+    from refactory_dsh.run import edit_facts
+
+    def add(facts: dict[str, Any]) -> None:
+        previous = facts.get(fact)
+        facts[fact] = list(previous) + scores if isinstance(previous, list) else list(scores)
+
+    # Under the facts lock, as every node's write is: a data pass can end beside a branch.
+    edit_facts(workdir, add)
 
 
 def command_list(node: Node, workdir: Path) -> dict[str, Any]:

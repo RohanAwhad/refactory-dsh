@@ -253,7 +253,8 @@ def test_an_attempt_that_fails_its_check_is_redone_as_a_second_commit_on_top_of_
 
 
 def test_a_check_that_rewrites_a_tracked_file_does_not_wedge_the_run(repo, tmp_path, capsys):
-    """The worktree is the run's own: what its check changed is put back, and said so."""
+    """What the check changes stays in its check copy: the run's worktree, where the
+    reviewers are, never sees it, and the next attempt's check starts from its commit."""
     tool = ("import os, pathlib\n"
             "pathlib.Path('app.py').write_text('rewritten by the check\\n')\n"
             "marker = pathlib.Path(os.environ['HOME']) / 'second-attempt'\n"
@@ -266,8 +267,8 @@ def test_a_check_that_rewrites_a_tracked_file_does_not_wedge_the_run(repo, tmp_p
     assert result.exit_ok, result.error
     assert git(repo, "show", f"{_report(tmp_path / 'run')['branch']}:app.py") == "print('app')"
     warned = capsys.readouterr().err
-    assert "the check changed tracked files in the run's worktree; they were put back" in warned and "app.py" in warned
-    assert "are not part of its branch" not in warned, "put back after the check, so the report finds none"
+    assert "the check changed tracked files in the run's worktree" not in warned
+    assert "are not part of its branch" not in warned, "the run's worktree holds only its commits"
 
 
 # ── edits, and an emission materialise cannot apply (#330 I4, E5) ──────────
@@ -794,7 +795,8 @@ def test_a_check_in_the_worktree_sees_none_of_refactorys_environment(repo, tmp_p
     result = _design(tmp_path / "run", FakeModel(_answers(render({"tool.py": tool}))), target=str(repo))
     assert result.exit_ok, result.error
     evidence = json.loads((tmp_path / "run" / "authoring-evidence.json").read_text())
-    assert evidence["validation"]["stdout"].strip() == str(tmp_path / "run" / ".refactory" / "check-home")
+    # The check runs beside the reviews, in the check copy, with the copy's own HOME.
+    assert evidence["validation"]["stdout"].strip() == str(tmp_path / "run" / ".refactory" / "check-copy-home")
 
 
 def test_a_check_in_the_worktree_is_bounded_by_its_timeout_not_by_memory(repo, tmp_path):

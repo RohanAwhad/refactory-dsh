@@ -7587,7 +7587,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
 
 ```json
 {
@@ -7597,16 +7597,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "apply_corrections",
       "target": "emit"
-    },
-    {
-      "condition": "reloop",
-      "source": "check",
-      "target": "emit"
-    },
-    {
-      "condition": "proceed",
-      "source": "check",
-      "target": "fork_qa"
     },
     {
       "condition": "reloop",
@@ -7652,6 +7642,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "fork_qa",
       "target": "join_qa"
+    },
+    {
+      "condition": "reloop",
+      "source": "gate_check",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_check",
+      "target": "synthesize_qa"
     },
     {
       "condition": "reloop",
@@ -7721,12 +7721,12 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": null,
       "source": "join_qa",
-      "target": "synthesize_qa"
+      "target": "gate_check"
     },
     {
       "condition": null,
       "source": "materialise",
-      "target": "check"
+      "target": "prepare_check"
     },
     {
       "condition": null,
@@ -7752,6 +7752,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "prepare",
       "target": "research_director"
+    },
+    {
+      "condition": "reloop",
+      "source": "prepare_check",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "prepare_check",
+      "target": "fork_qa"
     },
     {
       "condition": null,
@@ -7811,15 +7821,15 @@ Build a software artifact from a brief, name and acceptance command, as commits 
   ],
   "gates": [
     {
-      "id": "check",
-      "user": false
-    },
-    {
       "id": "check_design_claims",
       "user": false
     },
     {
       "id": "delivery_gate",
+      "user": false
+    },
+    {
+      "id": "gate_check",
       "user": false
     },
     {
@@ -7851,6 +7861,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "user": false
     },
     {
+      "id": "prepare_check",
+      "user": false
+    },
+    {
       "id": "route_design_review",
       "user": false
     },
@@ -7871,16 +7885,15 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.design_ops:check_artifact",
-      "gate_kind": "fn",
+      "call": "refactory_dsh.design_ops:check_beside_reviews",
       "id": "check",
-      "kind": "gate",
+      "kind": "op",
       "knobs": [
         "check_attempts",
         "check_timeout_s",
         "check_attempt_cap"
       ],
-      "notes": "run the brief's check, in a sandbox",
+      "notes": "run the brief's check, in a sandbox, beside the reviews",
       "role": "validation"
     },
     {
@@ -7960,8 +7973,21 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "fork_qa",
       "kind": "fork",
       "knobs": [],
-      "notes": "start the three reviews and the verifier",
+      "notes": "start the three reviews, the verifier and the check",
       "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.design_ops:gate_check",
+      "gate_kind": "fn",
+      "id": "gate_check",
+      "kind": "gate",
+      "knobs": [
+        "check_attempts",
+        "check_timeout_s",
+        "check_attempt_cap"
+      ],
+      "notes": "send a failed check back to the builder; otherwise read the reviews",
+      "role": "validation"
     },
     {
       "call": "refactory_dsh.design_ops:gate_design_review",
@@ -8040,7 +8066,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "join_qa",
       "kind": "join",
       "knobs": [],
-      "notes": "wait for all three reviews",
+      "notes": "wait for the check and all three reviews",
       "role": "ceo"
     },
     {
@@ -8098,6 +8124,19 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       ],
       "notes": "read the brief and the command that decides whether it is done",
       "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.design_ops:prepare_check",
+      "gate_kind": "fn",
+      "id": "prepare_check",
+      "kind": "gate",
+      "knobs": [
+        "check_attempts",
+        "check_timeout_s",
+        "check_attempt_cap"
+      ],
+      "notes": "settle the commit the check and the reviews see, and rerun last attempt's failing tests",
+      "role": "validation"
     },
     {
       "call": "",
@@ -8489,8 +8528,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "725251b224b0a51a7ebe3fd4f4a182a98720db5719cb29cb4478d2e577e50d0e"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
+    "reviewed_schema": "840c35f3257f22e40d99d8741d29a271c70eac528b0877a3e05b78d64ba597fc"
   }
 }
 ```

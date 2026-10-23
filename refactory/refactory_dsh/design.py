@@ -15,10 +15,18 @@ from typing import Any
 
 from refactory_dsh import delivery, design_contract, pitfalls, repo_change
 from refactory_dsh.create_ops import API, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE
+from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
 OPS = "refactory_dsh.design_ops"
+
+#: Design mode's verifier runs beside the check, in the review fork.
+BESIDE_CHECK_VERIFIER_NOTE = (
+    "\n\n## The check runs beside this review\n"
+    "The check `{{check}}` runs at the same time, on the same commit, and is judged on "
+    "its own. Do not run the whole check yourself.\n"
+)
 
 _ACCEPTANCE_BASELINE = (
     "Acceptance baseline: the original brief, any approved design, and explicit user "
@@ -472,31 +480,56 @@ class DesignMode(Mode):
             produces=("artifact", "files", "commit", "change", "emission_refused",
                       "changed_functions"),
         ))
+        # ── the check, beside the reviews ──
+        # prepare_check settles the commit the check and the reviewers both see; the
+        # check runs as a branch of the review fork and records its decision; gate_check
+        # routes on it once the reviews are done, because a node inside a fork may not
+        # send the run outside it.
+        check_produces = ("validation", "check_attempts_used", "review_attempts_used",
+                          "attempts_used", "runtime_evidence", "base_unavailable",
+                          "check_failures_history", "check_blocker_history",
+                          "convergence_extras_used", "convergence_granted", "inherited_failures")
+        check_writes = ("check.txt", "validation.txt", "authoring-evidence.json",
+                        "check-record.json", "test-guardedness.json", CHECK_VERDICT)
+        check_knobs = ("check_attempts", "check_timeout_s", "check_attempt_cap")
         graph.add(Node(
-            "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
+            "prepare_check", "gate", evaluator=f"{OPS}:prepare_check", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=("check.txt", "validation.txt", "authoring-evidence.json", "check-record.json", *repo_change.CHECK_WRITES),
-            produces=("validation", "check_attempts_used", "review_attempts_used",
-                      "attempts_used", "runtime_evidence",
-                      "base_unavailable",
-                      "check_failures_history",
-                      "check_blocker_history",
-                      "convergence_extras_used",
-                      "convergence_granted",
-                      *repo_change.CHECK_PRODUCES),
-            knobs=("check_attempts", "check_timeout_s", "check_attempt_cap"),
-            max_iterations=8,
-            notes="run the brief's check, in a sandbox",
+            writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP),
+            produces=(*check_produces, *repo_change.CHECK_PRODUCES,
+                      "review_feedback", "review_baseline"),
+            knobs=check_knobs, max_iterations=8,
+            notes="settle the commit the check and the reviews see, and rerun last "
+                  "attempt's failing tests",
+        ))
+        graph.add(Node(
+            "check", "op", call=f"{OPS}:check_beside_reviews", role="validation",
+            resource_role="final_validation",
+            reads=("brief.json", CHECK_PREP),
+            writes=check_writes, produces=check_produces,
+            knobs=check_knobs, max_iterations=8,
+            notes="run the brief's check, in a sandbox, beside the reviews",
+        ))
+        graph.add(Node(
+            "gate_check", "gate", evaluator=f"{OPS}:gate_check", role="validation",
+            resource_role="final_validation",
+            reads=(CHECK_PREP, CHECK_VERDICT),
+            # It runs the whole check itself when no decision stands for this attempt.
+            writes=(*check_writes, *repo_change.CHECK_WRITES),
+            produces=(*check_produces, *repo_change.CHECK_PRODUCES),
+            knobs=check_knobs, max_iterations=8,
+            notes="send a failed check back to the builder; otherwise read the reviews",
         ))
 
         # ── design-v2's three reviews, in parallel, and the overwatch pass ──
         from refactory_dsh.verification import VERIFIER_PROMPT, VERIFIER_TIMEOUT_S
         graph.add(Node(
             "verifier", "agent",
-            prompt_template=VERIFIER_PROMPT,
+            prompt_template=VERIFIER_PROMPT + BESIDE_CHECK_VERIFIER_NOTE,
             timeout_s=VERIFIER_TIMEOUT_S,
-            reads=("brief.json", "test-guardedness.json", "changes.diff"),
+            # Not test-guardedness.json: the check beside it writes that file.
+            reads=("brief.json", "changes.diff"),
             writes=("reviews/verification.md",),
             produces=("verification",),
             role="code_reviewer",
@@ -505,9 +538,10 @@ class DesignMode(Mode):
                   "to the brief, diff and repo",
         ))
         graph.add(Node("fork_qa", "fork",
-                       targets=("health_checker", "code_reviewer", "qa_director", "verifier"),
+                       targets=("health_checker", "code_reviewer", "qa_director", "verifier",
+                                "check"),
                        optional_targets=("verifier",),
-                       notes="start the three reviews and the verifier"))
+                       notes="start the three reviews, the verifier and the check"))
         graph.add(Node(
             "health_checker", "agent",
             prompt_template=(
@@ -518,8 +552,8 @@ class DesignMode(Mode):
                 "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "You are the health checker. Run the artifact the way a user would: run "
-                "targeted checks for uncovered requirements. Reuse the canonical acceptance "
-                "receipt for the check already executed. Record every command and "
+                "targeted checks for uncovered requirements. The check itself runs beside "
+                "this review, so do not run it again. Record every command and "
                 "its exact output in `reviews/health-check.md`. "
                 "Anything that fails or is "
                 "missing is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A "
@@ -600,8 +634,8 @@ class DesignMode(Mode):
             notes="attack the artifact against the brief",
         ))
         graph.add(Node("join_qa", "join",
-                       sources=("health_checker", "code_reviewer", "qa_director"),
-                       notes="wait for all three reviews"))
+                       sources=("check", "health_checker", "code_reviewer", "qa_director"),
+                       notes="wait for the check and all three reviews"))
         graph.add(Node(
             "synthesize_qa", "op", call="refactory_dsh.create_ops:synthesize_qa",
             reads=("reviews/health-check.md", "reviews/code-review.md", "reviews/qa.md",
@@ -761,12 +795,14 @@ class DesignMode(Mode):
         graph.connect("pick_corrections", "emit", condition="skip")
         graph.connect("apply_corrections", "emit")
         graph.connect("emit", "materialise")
-        graph.connect("materialise", "check")
-        graph.connect("check", "emit", condition="reloop")
-        graph.connect("check", "fork_qa", condition="proceed")
+        graph.connect("materialise", "prepare_check")
+        graph.connect("prepare_check", "emit", condition="reloop")
+        graph.connect("prepare_check", "fork_qa", condition="proceed")
         graph.connect("fork_qa", "join_qa")
         graph.connect("verifier", "join_qa")
-        graph.connect("join_qa", "synthesize_qa")
+        graph.connect("join_qa", "gate_check")
+        graph.connect("gate_check", "emit", condition="reloop")
+        graph.connect("gate_check", "synthesize_qa", condition="proceed")
         graph.connect("synthesize_qa", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
         graph.connect("gate_qa", "overwatch", condition="proceed")
@@ -779,7 +815,7 @@ class DesignMode(Mode):
         graph.connect("delivery_gate", "emit", condition="reloop")
         graph.connect("delivery_gate", "done", condition="proceed")
         from refactory_dsh.authoring_evidence import wire_reviews
-        wire_reviews(graph)
+        wire_reviews(graph, check_beside=True)
         return graph
 
     def invariants(self) -> tuple[Any, ...]:

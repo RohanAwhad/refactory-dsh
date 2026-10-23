@@ -10,9 +10,7 @@
     },
     "check": {
       "id": "check",
-      "evaluator_type": "fn",
-      "max_iterations": 8,
-      "_type": "GateNode"
+      "_type": "FnNode"
     },
     "check_design_claims": {
       "id": "check_design_claims",
@@ -64,12 +62,19 @@
         "health_checker",
         "code_reviewer",
         "qa_director",
-        "verifier"
+        "verifier",
+        "check"
       ],
       "optional_targets": [
         "verifier"
       ],
       "_type": "ForkNode"
+    },
+    "gate_check": {
+      "id": "gate_check",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
     },
     "gate_design_review": {
       "id": "gate_design_review",
@@ -116,6 +121,7 @@
     "join_qa": {
       "id": "join_qa",
       "sources": [
+        "check",
         "health_checker",
         "code_reviewer",
         "qa_director"
@@ -147,6 +153,12 @@
     "prepare": {
       "id": "prepare",
       "_type": "FnNode"
+    },
+    "prepare_check": {
+      "id": "prepare_check",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
     },
     "qa_director": {
       "id": "qa_director",
@@ -210,16 +222,6 @@
       "condition": null
     },
     {
-      "source": "check",
-      "target": "emit",
-      "condition": "reloop"
-    },
-    {
-      "source": "check",
-      "target": "fork_qa",
-      "condition": "proceed"
-    },
-    {
       "source": "check_design_claims",
       "target": "design_doc",
       "condition": "reloop"
@@ -263,6 +265,16 @@
       "source": "fork_qa",
       "target": "join_qa",
       "condition": null
+    },
+    {
+      "source": "gate_check",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_check",
+      "target": "synthesize_qa",
+      "condition": "proceed"
     },
     {
       "source": "gate_design_review",
@@ -331,12 +343,12 @@
     },
     {
       "source": "join_qa",
-      "target": "synthesize_qa",
+      "target": "gate_check",
       "condition": null
     },
     {
       "source": "materialise",
-      "target": "check",
+      "target": "prepare_check",
       "condition": null
     },
     {
@@ -363,6 +375,16 @@
       "source": "prepare",
       "target": "research_director",
       "condition": null
+    },
+    {
+      "source": "prepare_check",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "prepare_check",
+      "target": "fork_qa",
+      "condition": "proceed"
     },
     {
       "source": "record_findings",
