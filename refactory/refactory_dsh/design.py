@@ -618,7 +618,7 @@ class DesignMode(Mode):
                    "changed-functions.json"),
             writes=("reviews/qa-gate.txt", "reviews/verification-unresolved.md",
                     "reviews/finding-sources.json", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("qa_gate", "review_reruns_used"),
+            produces=("qa_gate",),
             max_iterations=5,
             notes="proceed when every review ran and none found a core defect; "
                   "non-core findings become follow-ups; verifier findings are advisory",
@@ -767,7 +767,6 @@ class DesignMode(Mode):
         graph.connect("join_qa", "synthesize_qa")
         graph.connect("synthesize_qa", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
-        graph.connect("gate_qa", "fork_qa", condition="review_reloop")
         graph.connect("gate_qa", "overwatch", condition="proceed")
         graph.connect("overwatch", "gate_overwatch")
         graph.connect("gate_overwatch", "emit", condition="reloop")

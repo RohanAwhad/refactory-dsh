@@ -168,8 +168,7 @@ def test_follow_ups_stay_out_of_the_repository_questions_advisory(tmp_path):
                        f"{NON_CORE}\n\n## Repository questions\n\n```json\n[]\n```")
     run, model = _design_run(tmp_path, [
         *_planning(), BUILT,
-        *_round(code=bad_code_review),      # first round
-        *_round(code=bad_code_review),      # the one repository-question re-run
+        *_round(code=bad_code_review),      # one review pass; no re-run for the questions
         "VERDICT: PASS"])
 
     assert run.exit_ok, run.error

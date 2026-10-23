@@ -1755,7 +1755,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         unresolved = ctx.read_text("reviews/verification-unresolved.md").strip()
         if unresolved:
             verification += "\n- **Unresolved verification findings:**\n" + unresolved + "\n"
-    # Repository questions the reviewers still left unanswered after their one re-run.
+    # Repository questions the reviewers left unanswered (advisory; never re-run).
     if ctx.exists("reviews/qa-gate.txt"):
         from refactory_dsh.authoring_evidence import ADVISORY_REPO_QUESTIONS
 

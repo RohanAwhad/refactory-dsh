@@ -711,16 +711,12 @@ def gate_qa(ctx: Any) -> str:
     advisory: list[str] = []
     rq_findings = [f for f in findings if f.startswith("[repo-questions]")]
     non_rq_findings = [f for f in findings if not f.startswith("[repo-questions]")]
-    # When ONLY repo-questions problems remain, re-run focused QA once with them named;
-    # after that they are advisory and the run proceeds.
-    if rq_findings and not non_rq_findings and not check_failed:
-        if evidence.repo_question_rerun_due(ctx, "review_reruns_used"):
-            rq_report = "\n".join(rq_findings)
-            ctx.set_fact("repair_feedback", rq_report)
-            ctx.write_text("repair.txt", rq_report + "\n")
-            return Verdict("review_reloop", rq_report)
+    # Unanswered repository questions are the reviewer's bookkeeping, not the builder's
+    # to fix: they never send the build back or re-run the review, and the pull request
+    # lists them.
+    if rq_findings:
         advisory = [evidence.advisory_repo_questions(rq_findings)]
-        findings = []
+        findings = non_rq_findings
     # ── verifier advisory handling (design_fast only) ──
     from refactory_dsh.verification import parse_verification_findings
     verifier_raw = parse_verification_findings(ctx) if ctx.exists("reviews/verification.md") else []
