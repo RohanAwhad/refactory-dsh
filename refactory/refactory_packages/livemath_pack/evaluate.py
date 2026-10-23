@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -25,6 +26,9 @@ from typing import Any
 
 from . import data
 from .tasks import RESPONSE
+
+#: The DSH patch that turns every tool of the solver's agent off.
+NO_TOOLS = Path(__file__).resolve().parent / "no-tools.yml"
 
 
 def _public(item: dict[str, Any]) -> dict[str, Any]:
@@ -90,7 +94,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="")
     parser.add_argument("--effort", default="")
     parser.add_argument("--permission-mode", default="")
+    parser.add_argument("--no-tools", action="store_true",
+                        help="give the DSH solver no tools, as SkillOpt's call has none")
     args = parser.parse_args(argv)
+    if args.no_tools:
+        from refactory_dsh.model import EXTRA_PATCHES_ENV
+
+        os.environ[EXTRA_PATCHES_ENV] = os.pathsep.join(
+            part for part in (os.environ.get(EXTRA_PATCHES_ENV, ""), str(NO_TOOLS)) if part)
 
     items = [item for item in data.items() if item["part"] == args.part]
     if args.limit:
@@ -137,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         "part": args.part,
         "route": route,
         "skill": "empty" if skill == "" else ("file" if skill is not None else "mode default"),
+        "tools": "none" if args.no_tools else "dsh default",
         "items": len(items),
         "graded": len(scored),
         "correct": correct,

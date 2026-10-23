@@ -1,0 +1,39 @@
+# A DSH agent with no tools, for a LiveMath solver comparable with SkillOpt's.
+#
+# SkillOpt answers each question with one `claude -p` call under `dontAsk` in an empty
+# directory, so its model can neither search the web nor run code. DSH's headless agent
+# can do both, and on LiveMath it searches for the arXiv paper a question was drawn
+# from. Applied through REFACTORY_DSH_PATCHES, this patch turns every tool row of the
+# base profile off, so the solver answers from the prompt alone.
+- id: tool-plugin-manager
+  disabled: true
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: tool-web
+  disabled: true

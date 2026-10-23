@@ -38,6 +38,20 @@ from refactory_dsh.owned_process import SHUTDOWN_GRACE_S, shutdown, _termination
 #: reviewable in the repository.
 NODE_PATCH = Path(__file__).resolve().parent / "patches" / "agent-node.yml"
 
+#: Extra DSH profile patches every completion of this process applies, separated by
+#: the platform's path separator. Unset means none.
+EXTRA_PATCHES_ENV = "REFACTORY_DSH_PATCHES"
+
+
+def extra_patches() -> list[Path]:
+    """The patches `REFACTORY_DSH_PATCHES` names; a named file that is missing is refused."""
+    raw = os.environ.get(EXTRA_PATCHES_ENV, "")
+    paths = [Path(part).expanduser() for part in raw.split(os.pathsep) if part.strip()]
+    for path in paths:
+        if not path.is_file():
+            raise RuntimeError(f"{EXTRA_PATCHES_ENV} names {path}, which is not a file")
+    return paths
+
 #: Wall-clock ceiling for one completion, before the subprocess is called hung.
 #:
 #: It is a hang detector rather than a budget: the authoring modes' agent nodes are
@@ -489,6 +503,10 @@ class DshModelClient:
             patch = self._worker_receipt.with_suffix(".patch.yml")
             write_patch(patch, self._runtime_root, self.route(), provider_config=self._provider_config)
             cmd += ["--patch", str(patch)]
+        # Deployment overlays a run asks for, applied last so they win: a benchmark
+        # that must not give its solver tools disables them here.
+        for extra in extra_patches():
+            cmd += ["--patch", str(extra)]
         if self._worker_backend == "dsh":
             if self._provider:
                 cmd += ["--provider", self._provider]
