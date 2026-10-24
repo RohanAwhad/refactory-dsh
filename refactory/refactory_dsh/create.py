@@ -398,6 +398,7 @@ class CreateMode(Mode):
             reads=("emit.txt",),
             writes=("staging/manifest.json",),
             produces=("package_path", "files", "emission_refused", "consecutive_refusals"),
+            knobs=("refusal_attempts",),
             notes="write the staged package to disk",
         ))
         # create-v2's `gate_build`: the built thing is checked before it is reviewed.

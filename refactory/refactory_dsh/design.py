@@ -483,6 +483,7 @@ class DesignMode(Mode):
             writes=("changes.diff", "changed-functions.json"),
             produces=("artifact", "files", "commit", "change", "emission_refused",
                       "changed_functions", "consecutive_refusals"),
+            knobs=("refusal_attempts",),
         ))
         # ── the check, beside the reviews ──
         # prepare_check settles the commit the check and the reviewers both see; the

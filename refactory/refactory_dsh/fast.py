@@ -393,6 +393,7 @@ class DesignFastMode(DesignMode):
             writes=("changes.diff", "changed-functions.json"),
             produces=("artifact", "files", "commit", "change", "emission_refused",
                       "changed_functions", "consecutive_refusals"),
+            knobs=("refusal_attempts",),
             notes="commit the emitted files on the run's branch, or write the artifact directory: "
                   "a copy of source_project, when there is one",
         ))
