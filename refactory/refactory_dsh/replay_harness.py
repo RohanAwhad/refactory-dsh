@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from refactory_dsh.create_ops import MARKER_RULE
+
 
 @dataclass
 class ReplayResult:
@@ -170,7 +172,8 @@ def _make_verifier_fn(client: Any):
             + VERIFICATION_METHODS +
             "\nFor each finding, report it as:\n"
             "BLOCKING: <file:line>: <description with a runnable counterexample or "
-            "a cited file:line chain>\n\n"
+            "a cited file:line chain>\n"
+            + MARKER_RULE + "\n\n"
             "design.md is in the run directory. Do NOT read it, or strategy.json, "
             "or any review files. You verify the change against the brief and the "
             "repository only.\n\n"

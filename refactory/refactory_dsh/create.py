@@ -27,7 +27,7 @@ from typing import Any
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.create_ops import (
-    CREATION_DIRECTIVE, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE, STRATEGY_SCHEMA,
+    CREATION_DIRECTIVE, MARKER_RULE, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE, STRATEGY_SCHEMA,
 )
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
@@ -425,11 +425,11 @@ class CreateMode(Mode):
                 "Use its authoritative receipt and outputs. A targeted extra model check must "
                 "name a concrete unmet criterion and its bounded scope. Record every "
                 "command and its exact output in `reviews/health-check.md`. If anything "
-                "fails or is missing, write `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
+                "fails or is missing, write BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
                 "If `staging/package-diff.json` exists, use it to focus checks on what changed from the source package. "
                 "A check you did not run is not a check that passed — say which ones you "
                 "skipped."
-                + " " + SEVERITY_RULE
+                + " " + SEVERITY_RULE + " " + MARKER_RULE
             ),
             reads=("brief.json", "design.md", "staging/package-diff.json"),
             writes=("reviews/health-check.md",),
@@ -450,8 +450,8 @@ class CreateMode(Mode):
                 "and notation supported by the contract, not only reject bad cases. "
                 "If `staging/package-diff.json` exists, review the diff between the source and the staged package. "
                 "Record findings in `reviews/code-review.md`. A defect that "
-                "would stop the package working is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. Style is not blocking."
-                + " " + SEVERITY_RULE
+                "would stop the package working is written as BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. Style is not blocking."
+                + " " + SEVERITY_RULE + " " + MARKER_RULE
             ),
             reads=("design.md", "emit.txt", "staging/package-diff.json"),
             writes=("reviews/code-review.md",),
@@ -482,8 +482,8 @@ class CreateMode(Mode):
                 "If `staging/package-diff.json` exists, use the diff to identify what changed from the source. "
                 "Write `reviews/qa.md` with each check and its exact result. Every "
                 "acceptance criterion in the strategy must have a check. Anything that "
-                "breaks an acceptance criterion is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
-                + " " + SEVERITY_RULE
+                "breaks an acceptance criterion is written as BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
+                + " " + SEVERITY_RULE + " " + MARKER_RULE
             ),
             reads=("brief.json", "strategy.json", "staging/package-diff.json"),
             writes=("reviews/qa.md",),
@@ -527,8 +527,8 @@ class CreateMode(Mode):
                 "artifacts. Audit actual final validation receipts and the accepted design "
                 "against the brief and latest intent ledger. Required behavior without "
                 "adequate evidence is failed or unverified with a precise reason. "
-                "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
-                + SEVERITY_RULE + " " + OVERWATCH_VERDICT_RULE + " "
+                "Any blocking finding is written as BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
+                + SEVERITY_RULE + " " + MARKER_RULE + " " + OVERWATCH_VERDICT_RULE + " "
                 "Write `reviews/overwatch.md` ending with exactly `VERDICT: PASS` or "
                 "`VERDICT: FAIL`. A missing required check cannot pass."
             ),

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh import create_ops, lowering, registry
-from refactory_dsh.create_ops import OVERWATCH_VERDICT_RULE, SEVERITY_RULE, is_non_core, split_core
+from refactory_dsh.create_ops import MARKER_RULE, OVERWATCH_VERDICT_RULE, SEVERITY_RULE, is_non_core, split_core
 from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
                            RESEARCH_ANSWER, VERIFICATION_ANSWER, FakeModel, git_repo,
                            render)
@@ -346,3 +346,84 @@ def test_every_post_build_reviewer_is_told_to_tag_its_findings(tmp_path, mode_pa
     # The spine runs the lowered graph: the rule reaches it in each reviewer's prompt.
     path, _workflow = lowering.write_mode_graph(mode.state_dict(), tmp_path, name="x")
     assert path.read_text().count("`[non-core]` otherwise") >= len(reviewers)
+
+
+@pytest.mark.parametrize("mode_path, reviewers", [
+    ("refactory_dsh.design:DesignMode",
+     ("health_checker", "code_reviewer", "qa_director", "overwatch", "design_review")),
+    ("refactory_dsh.create:CreateMode",
+     ("health_checker", "code_reviewer", "qa_director", "overwatch")),
+    ("refactory_dsh.edit:EditMode",
+     ("health_checker", "code_reviewer", "qa_director", "overwatch")),
+    ("refactory_dsh.fast:DesignFastMode", ("focused_qa",)),
+    ("refactory_dsh.fast:CreateFastMode", ("focused_qa",)),
+    ("refactory_dsh.fast:EditFastMode", ("focused_qa",)),
+])
+def test_every_reviewer_carries_marker_rule(tmp_path, mode_path, reviewers):
+    import importlib
+
+    module, cls = mode_path.split(":")
+    mode = getattr(importlib.import_module(module), cls)()
+    nodes = mode.graph().nodes
+    for reviewer in reviewers:
+        assert MARKER_RULE in nodes[reviewer].prompt_template, reviewer
+    # The spine runs the lowered graph: MARKER_RULE must appear in each reviewer node.
+    import json
+    path, _workflow = lowering.write_mode_graph(mode.state_dict(), tmp_path, name="x")
+    graph = json.loads(path.read_text())
+    for reviewer in reviewers:
+        node = graph["nodes"][reviewer]
+        assert MARKER_RULE in node["prompt_template"], (
+            f"{reviewer} node in lowered graph missing MARKER_RULE"
+        )
+
+
+def test_verifier_prompt_carries_marker_rule():
+    from refactory_dsh.verification import VERIFIER_PROMPT, FULL_VERIFIER_PROMPT
+    assert MARKER_RULE in VERIFIER_PROMPT
+    assert MARKER_RULE in FULL_VERIFIER_PROMPT
+    # replay_harness builds its verifier prompt independently (PIT-005);
+    # capture the constructed prompt via a mock client.
+    from refactory_dsh.replay_harness import _make_verifier_fn
+
+    class _Capture:
+        def complete(self, prompt, **kw):
+            self.prompt = prompt
+            return "VERDICT: PASS"
+
+    cap = _Capture()
+    _make_verifier_fn(cap)("brief", "diff")
+    assert MARKER_RULE in cap.prompt, (
+        "replay_harness verifier prompt missing MARKER_RULE"
+    )
+
+
+@pytest.mark.parametrize("mode_path, reviewers", [
+    ("refactory_dsh.design:DesignMode",
+     ("health_checker", "code_reviewer", "qa_director", "overwatch", "design_review")),
+    ("refactory_dsh.create:CreateMode",
+     ("health_checker", "code_reviewer", "qa_director", "overwatch")),
+    ("refactory_dsh.edit:EditMode",
+     ("health_checker", "code_reviewer", "qa_director", "overwatch")),
+    ("refactory_dsh.fast:DesignFastMode", ("focused_qa",)),
+    ("refactory_dsh.fast:CreateFastMode", ("focused_qa",)),
+    ("refactory_dsh.fast:EditFastMode", ("focused_qa",)),
+])
+def test_no_reviewer_prompt_shows_blocking_in_code_span(mode_path, reviewers):
+    import importlib
+
+    module, cls = mode_path.split(":")
+    mode = getattr(importlib.import_module(module), cls)()
+    nodes = mode.graph().nodes
+    for reviewer in reviewers:
+        prompt = nodes[reviewer].prompt_template
+        assert "`BLOCKING" not in prompt, f"{reviewer} prompt contains `BLOCKING code span"
+        assert "BLOCKING:`" not in prompt, f"{reviewer} prompt contains BLOCKING:` code span"
+
+
+def test_verifier_prompt_no_code_span_blocking():
+    from refactory_dsh.verification import VERIFIER_PROMPT, FULL_VERIFIER_PROMPT
+    for name, prompt in [("VERIFIER_PROMPT", VERIFIER_PROMPT),
+                         ("FULL_VERIFIER_PROMPT", FULL_VERIFIER_PROMPT)]:
+        assert "`BLOCKING" not in prompt, f"{name} contains `BLOCKING code span"
+        assert "BLOCKING:`" not in prompt, f"{name} contains BLOCKING:` code span"

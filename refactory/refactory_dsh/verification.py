@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from refactory_dsh.create_ops import MARKER_RULE
+
 #: The most wall time the review fork's verifier session may take, on either runtime.
 #: It runs beside the three reviews, which take about eight minutes, so a verifier
 #: inside this bound adds little or nothing to the round. Its prompt asks for less,
@@ -93,7 +95,8 @@ def _verifier_prompt(methods: str) -> str:
         + methods +
         "\nFor each finding, report it as:\n"
         "BLOCKING: <file:line>: <description with a runnable counterexample or "
-        "a cited file:line chain>\n\n"
+        "a cited file:line chain>\n"
+        + MARKER_RULE + "\n\n"
         "design.md is in the run directory. Do NOT read it, or strategy.json, "
         "or any review files. You verify the change against the brief and the "
         "repository only.\n\n"

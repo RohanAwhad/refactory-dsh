@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import delivery, design_contract, pitfalls, repo_change
-from refactory_dsh.create_ops import API, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE
+from refactory_dsh.create_ops import API, MARKER_RULE, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE
 from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
@@ -402,7 +402,7 @@ class DesignMode(Mode):
                 "only the brief's own path.\n"
                 "- An ask in the brief with no row in the Ask mapping table, or whose "
                 "named test does not exercise it.\n\n"
-                "List each finding as a line starting with `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem.\n\n"
+                "List each finding as a line starting with BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. " + MARKER_RULE + "\n\n"
                 "Write anything else under `## Notes`, never as BLOCKING: a doc the "
                 "'## Docs' section leaves out, a missing or thin Failure trace, a "
                 "quotation that differs only in punctuation or formatting, and style or "
@@ -556,9 +556,9 @@ class DesignMode(Mode):
                 "this review, so do not run it again. Record every command and "
                 "its exact output in `reviews/health-check.md`. "
                 "Anything that fails or is "
-                "missing is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A "
+                "missing is written as BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A "
                 "check you did not run is not a check that passed.\n"
-                + SEVERITY_RULE + "\n"
+                + SEVERITY_RULE + " " + MARKER_RULE + "\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
             ),
@@ -590,8 +590,8 @@ class DesignMode(Mode):
                 "A matching number elsewhere in prose is not evidence for the requested "
                 "field. Record findings in "
                 "`reviews/code-review.md`. A defect that would stop the artifact working "
-                "is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
-                + SEVERITY_RULE + "\n"
+                "is written as BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
+                + SEVERITY_RULE + " " + MARKER_RULE + "\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
                 "When a false claim about design.md is found, report it against the code file "
@@ -622,8 +622,8 @@ class DesignMode(Mode):
                 "Accepted output must match the request; unsupported input must fail "
                 "clearly without silently substituting a valid case. Write "
                 "`reviews/qa.md` with each check and its exact result. Anything that "
-                "breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
-                + SEVERITY_RULE + "\n"
+                "breaks an ask in the brief is written as BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path.\n"
+                + SEVERITY_RULE + " " + MARKER_RULE + "\n"
                 "{{review_instructions}}\n"
                 "Changed functions:\n{{changed_functions}}\n\n"
             ),
@@ -684,8 +684,8 @@ class DesignMode(Mode):
                 "external dependency and exact unblock action for the CEO or person, "
                 "and keep that requirement unverified. Do not prescribe re-authoring "
                 "or repeating an unchanged probe to resolve an unavailable tool. "
-                "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
-                + SEVERITY_RULE + " " + OVERWATCH_VERDICT_RULE + " "
+                "Any blocking finding is written as BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
+                + SEVERITY_RULE + " " + MARKER_RULE + " " + OVERWATCH_VERDICT_RULE + " "
                 "Read reviews/verification-unresolved.md if it exists: the design-blind "
                 "verifier's findings, each with the builder's rebuttal where there is one. "
                 "Check each against the code. One that breaks an ask in the brief or existing "

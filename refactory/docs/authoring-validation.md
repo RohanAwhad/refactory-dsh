@@ -99,6 +99,14 @@ changed function, or gives an answer with no `path:line` evidence. `gate_design_
 performs the same check against the design's `[changed]` sites, but at design time a
 missing entry is advisory: it is listed at the person's gate and never re-runs the review.
 
+### Marker placement rule
+
+Every reviewer prompt that can report BLOCKING findings carries
+`create_ops.MARKER_RULE`, which tells the reviewer to write the blocking
+marker only at the start of a finding line in its plain form and never
+wrap it in backticks or a code span. This prevents the `blocking_findings`
+parser from reading an explanatory mention as a real finding.
+
 ### Claim checking
 
 The design review and code_reviewer check each factual claim about existing code at
