@@ -294,6 +294,60 @@ def test_footprint_entry_without_evidence_is_full():
     assert "footprint without evidence" in result2["research_scope_reason"]
 
 
+def test_footprint_nonexistent_path_is_full(tmp_path):
+    """Correction #9: a footprint citing a path that does not exist is classed full."""
+    plan = [
+        {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+         "footprint": {"existing_functions": ["totally/nonexistent/file.py:10 some_func"],
+                       "new_items": [], "shared_engine": []}},
+    ]
+    ctx = _scale_ctx(plan, facts={"source": str(tmp_path)})
+    result = classify_scale(ctx)
+    assert result["research_scope"] == "full"
+    assert "footprint without evidence" in result["research_scope_reason"]
+    assert "nonexistent" in result["research_scope_reason"]
+
+    # A path that exists is accepted
+    (tmp_path / "real_file.py").write_text("def func(): pass\n")
+    plan2 = [
+        {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+         "footprint": {"existing_functions": ["real_file.py:1 func"],
+                       "new_items": [], "shared_engine": []}},
+    ]
+    ctx2 = _scale_ctx(plan2, facts={"source": str(tmp_path)})
+    result2 = classify_scale(ctx2)
+    assert result2["research_scope"] == "scoped"
+
+
+def test_null_footprint_field_is_full():
+    """A footprint with null existing_functions or new_items degrades to full, not crash."""
+    plan = [
+        {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+         "footprint": {"existing_functions": None, "new_items": [], "shared_engine": []}},
+    ]
+    ctx = _scale_ctx(plan)
+    result = classify_scale(ctx)
+    assert result["research_scope"] == "full"
+    assert "no usable footprint" in result["research_scope_reason"]
+
+    plan2 = [
+        {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+         "footprint": {"existing_functions": [], "new_items": None, "shared_engine": []}},
+    ]
+    ctx2 = _scale_ctx(plan2)
+    result2 = classify_scale(ctx2)
+    assert result2["research_scope"] == "full"
+    assert "no usable footprint" in result2["research_scope_reason"]
+
+
+def test_empty_directions_is_full():
+    """An empty research plan (no directions) is classed full."""
+    ctx = _scale_ctx([])
+    result = classify_scale(ctx)
+    assert result["research_scope"] == "full"
+    assert "no usable footprint" in result["research_scope_reason"]
+
+
 def test_classify_scale_reason_in_design_review_status():
     # scoped
     scoped_facts = {

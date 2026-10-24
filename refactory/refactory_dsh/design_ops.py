@@ -615,27 +615,44 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
     raw = ctx.read_text("research-plan.json") if ctx.exists("research-plan.json") else ""
     directions = _extract_json_array(raw)
 
+    if not directions:
+        return {
+            "research_scope": "full",
+            "research_scope_reason": "no usable footprint in the research",
+        }
+
+    # ── resolve source for path existence checks ──────────────────────
+    source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
+
+    def _path_exists(file_path: str) -> bool:
+        """True when *source* is known and *file_path* is a file under it."""
+        if not source:
+            return True  # no checkout to verify against
+        return (Path(source) / file_path).is_file()
+
     # ── aggregate footprint ────────────────────────────────────────────
     all_existing: dict[str, str] = {}   # name -> at
     all_new: dict[str, str] = {}        # name -> at
     shared_engine_refs: list[str] = []
     has_shared_engine = False
 
+    _FULL_NO_FP: dict[str, Any] = {
+        "research_scope": "full",
+        "research_scope_reason": "no usable footprint in the research",
+    }
+
     for d in directions:
         fp = d.get("footprint") if isinstance(d, dict) else None
         if fp is None:
-            return {
-                "research_scope": "full",
-                "research_scope_reason": "no usable footprint in the research",
-            }
+            return dict(_FULL_NO_FP)
         if not isinstance(fp, dict):
-            return {
-                "research_scope": "full",
-                "research_scope_reason": "no usable footprint in the research",
-            }
+            return dict(_FULL_NO_FP)
 
         # existing_functions — each entry is "path:line name"
-        for entry in fp.get("existing_functions", []):
+        existing = fp.get("existing_functions", [])
+        if existing is None or not isinstance(existing, list):
+            return dict(_FULL_NO_FP)
+        for entry in existing:
             if not isinstance(entry, str) or ":" not in entry:
                 return {
                     "research_scope": "full",
@@ -645,11 +662,31 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
             parts = entry.split(None, 1)
             loc = parts[0] if parts else entry
             name = parts[1] if len(parts) > 1 else loc
+            # Verify the cited path exists under the source checkout
+            file_path = loc.split(":")[0]
+            if not _path_exists(file_path):
+                return {
+                    "research_scope": "full",
+                    "research_scope_reason": f"footprint without evidence: {entry!r}",
+                }
             all_existing[name] = loc
 
         # new_items — each entry names what is added and the path
-        for entry in fp.get("new_items", []):
+        new_items_list = fp.get("new_items", [])
+        if new_items_list is None or not isinstance(new_items_list, list):
+            return dict(_FULL_NO_FP)
+        for entry in new_items_list:
             if not isinstance(entry, str) or ":" not in entry:
+                return {
+                    "research_scope": "full",
+                    "research_scope_reason": f"footprint without evidence: {entry!r}",
+                }
+            # Verify the cited path exists under the source checkout
+            colon_idx = entry.index(":")
+            before_colon = entry[:colon_idx]
+            path_parts = before_colon.rsplit(None, 1)
+            file_path = path_parts[-1] if path_parts else before_colon
+            if not _path_exists(file_path):
                 return {
                     "research_scope": "full",
                     "research_scope_reason": f"footprint without evidence: {entry!r}",
@@ -658,7 +695,17 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
 
         # shared_engine — list of "path:line" citations
         se = fp.get("shared_engine", [])
-        if isinstance(se, list) and se:
+        if se is None:
+            se = []
+        if not isinstance(se, list):
+            if se is True:
+                # tolerate boolean true with no evidence
+                return {
+                    "research_scope": "full",
+                    "research_scope_reason": "footprint without evidence: shared_engine true without citations",
+                }
+            se = []
+        if se:
             has_shared_engine = True
             for ref in se:
                 if not isinstance(ref, str) or ":" not in ref:
@@ -666,13 +713,14 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
                         "research_scope": "full",
                         "research_scope_reason": f"footprint without evidence: shared_engine {ref!r}",
                     }
+                # Verify the cited path exists under the source checkout
+                file_path = ref.split(":")[0]
+                if not _path_exists(file_path):
+                    return {
+                        "research_scope": "full",
+                        "research_scope_reason": f"footprint without evidence: shared_engine {ref!r}",
+                    }
                 shared_engine_refs.append(ref)
-        elif se is True:
-            # tolerate boolean true with no evidence
-            return {
-                "research_scope": "full",
-                "research_scope_reason": "footprint without evidence: shared_engine true without citations",
-            }
 
     # ── apply the three-part rule ──────────────────────────────────────
     if len(all_existing) > 2:

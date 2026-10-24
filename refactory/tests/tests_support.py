@@ -340,7 +340,7 @@ SCOPED_RESEARCH_ANSWER = json.dumps([
         "finding": "the mode API in the checkout: nn.Mode, nn.Graph, ctx.knob/read_json/write_json",
         "ids": ["FND-api-surface-1"],
         "footprint": {
-            "existing_functions": ["refactory_dsh/tool.py:50 tool.build"],
+            "existing_functions": ["app.py:1 app.main"],
             "new_items": [],
             "shared_engine": [],
         },

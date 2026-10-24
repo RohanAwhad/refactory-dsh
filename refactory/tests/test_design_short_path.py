@@ -77,7 +77,7 @@ def test_the_routing_gates_answer_by_the_scale(tmp_path):
     assert full.facts["design_review_by"] == "agent"
 
 
-_SCOPED_REASON = "touches 1 existing function(s) (tool.build at refactory_dsh/tool.py:50), adds nothing new, no shared engine"
+_SCOPED_REASON = "touches 1 existing function(s) (app.main at app.py:1), adds nothing new, no shared engine"
 AUTOMATIC = {"name": "short", "has_pitfalls_step": False, "research_scope": "scoped",
              "research_scope_reason": _SCOPED_REASON,
              "design_review_by": "automatic"}
