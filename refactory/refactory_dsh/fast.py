@@ -220,7 +220,7 @@ class CreateFastMode(CreateMode):
             "check": Knob("", "str", description="explicit focused check command in the emitted package; empty means not requested"),
             "check_timeout_s": Knob(60, "int", lo=1, hi=600, description="seconds allowed for the explicit focused check"),
             "check_attempt_cap": Knob(8, "int", lo=0, description="hard cap on total check attempts including convergence grants; 0 or a value at or below repair_attempts disables the extension"),
-            "refusal_attempts": Knob(3, "int", lo=1, hi=10, frozen=True, description="consecutive no-op emissions before the run stops"),
+            "refusal_attempts": Knob(3, "int", lo=1, hi=10, frozen=True, description="consecutive refused emissions before the run stops"),
         })
         return knobs
 
@@ -339,7 +339,7 @@ class DesignFastMode(DesignMode):
             "hard cap on total check attempts including convergence grants; "
             "0 or a value at or below repair_attempts disables the extension"))
         knobs["refusal_attempts"] = Knob(3, "int", lo=1, hi=10, frozen=True, description=(
-            "consecutive no-op emissions before the run stops"))
+            "consecutive refused emissions before the run stops"))
         knobs["source_project"] = Knob("", "str", description=(
             "an existing directory copied into the artifact directory before the change is applied, "
             "instead of a worktree; it takes no target, base or setup"))

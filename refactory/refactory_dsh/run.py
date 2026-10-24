@@ -107,7 +107,7 @@ def format_failure_detail(exc: Exception, limit: int = 2000) -> str:
     if test_block:
         used += 1 + len(test_block)  # newline + block
     remaining = limit - used - 1  # 1 for joining newline
-    if remaining > 0 and rest:
+    if remaining > 3 and rest:
         tail = "..." + rest[-(remaining - 3):] if len(rest) > remaining else rest
     else:
         tail = ""

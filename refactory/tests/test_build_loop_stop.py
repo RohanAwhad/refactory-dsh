@@ -356,3 +356,186 @@ def test_removing_consecutive_refusals_from_produces_fails(tmp_path, monkeypatch
     assert code == 1, (
         f"expected exit 1 (produces check failure), got {code}. stderr={captured.getvalue()}"
     )
+
+
+# ── review of #496: the stop holds on every path, the count resets and survives ──
+
+def _design_mode(**knobs):
+    from refactory_dsh.design import DesignMode
+
+    mode = DesignMode()
+    state = mode.state_dict()
+    for key, value in knobs.items():
+        state["knobs"][key]["value"] = value
+    mode.load_state_dict(state)
+    return mode
+
+
+def _run_node_main(run, target, node_id, node_type, monkeypatch):
+    import io
+
+    monkeypatch.setenv("REFACTORY_WORKDIR", str(run))
+    monkeypatch.setenv("DSH_WORKFLOW_NODE", json.dumps({"id": node_id, "type": node_type}))
+    err, out = io.StringIO(), io.StringIO()
+    old_err, old_out = sys.stderr, sys.stdout
+    sys.stderr, sys.stdout = err, out
+    try:
+        code = main([target, "--node", node_id])
+    finally:
+        sys.stderr, sys.stdout = old_err, old_out
+    return code, err.getvalue()
+
+
+def test_a_design_check_limit_ends_the_walker_run_with_the_stop(tmp_path):
+    """Design mode runs its check beside the reviews; at the check limit the run
+    still ends with a BuildLoopStop, not a plain ValueError."""
+    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+                               RESEARCH_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER, FakeModel,
+                               git_repo, render)
+
+    repo = git_repo(tmp_path / "repo")
+    emits = [render({"tool.py": f"print({i})\n"}) for i in range(8)]
+    answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+               DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+               *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
+    result = _design_mode(check_attempts=2, check_attempt_cap=0).run(
+        tmp_path / "run", model=FakeModel(answers), verdicts={"gate_strategy": "proceed"},
+        task={"name": "stop_tool", "brief": "a tool", "check": "exit 1", "target": str(repo)})
+    assert result.exit_ok is False
+    assert "BuildLoopStop" in (result.error or ""), result.error
+
+
+def test_a_design_check_limit_exits_3_on_the_spine(tmp_path, monkeypatch):
+    """The spine runs materialise, prepare_check, the check beside the reviews and
+    gate_check as separate processes; at the check limit gate_check exits 3 with the
+    marker, so the spine records the run failed and a CEO redo is refused (dm-202)."""
+    from refactory_dsh import design_ops, lowering, repo_change, worktree
+    from tests_support import git_repo, render
+
+    repo = git_repo(tmp_path / "repo")
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef777777", run)
+    lowering.write_declarations(_design_mode(check_attempts=1, check_attempt_cap=0).state_dict(), run)
+    (run / "facts.json").write_text(json.dumps({"name": "stop_tool", "brief": "a tool", "check": "exit 1"}))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 1, "check_attempt_cap": 0,
+                                                      "refusal_attempts": 3}))
+    (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
+    steps = [(f"{repo_change.OPS}:materialise", "materialise", "op"),
+             (f"{design_ops.__name__}:prepare_check", "prepare_check", "gate"),
+             (f"{design_ops.__name__}:check_beside_reviews", "check", "op"),
+             (f"{design_ops.__name__}:gate_check", "gate_check", "gate")]
+    codes = []
+    for target, node, kind in steps:
+        code, err = _run_node_main(run, target, node, kind, monkeypatch)
+        codes.append((node, code))
+        if code != 0:
+            break
+    assert codes[-1] == ("gate_check", 3), codes
+    assert FAILURE_MARKER in err
+
+
+def test_every_limit_raise_in_the_build_loop_is_a_stop():
+    """No limit in repair or _repair raises a plain ValueError: each is final on the spine."""
+    import inspect
+
+    from refactory_dsh import create_ops, fast_ops
+
+    for fn in (create_ops.repair, fast_ops._repair):
+        source = inspect.getsource(fn)
+        assert "raise ValueError(" not in source, fn.__name__
+        assert source.count("raise BuildLoopStop(") >= 3, fn.__name__
+
+
+def test_an_applied_emission_resets_the_refusal_count_across_processes(tmp_path, monkeypatch):
+    """refuse, refuse, apply, refuse, refuse: the applied emission resets the count,
+    so the run never stops, and the count is 2 at the end."""
+    from refactory_dsh import lowering, repo_change, worktree
+    from tests_support import git_repo, render
+
+    repo = git_repo(tmp_path / "repo")
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef666666", run)
+    lowering.write_declarations(_design_mode().state_dict(), run)
+    (run / "facts.json").write_text(json.dumps({"name": "reset_test", "brief": "a tool", "check": "true"}))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 3, "refusal_attempts": 3}))
+    bad = "===EDIT: app.py===\n<<<<<<< SEARCH\ntext not in file\n=======\nreplacement\n>>>>>>> REPLACE\n"
+    sequence = [bad, bad, render({"tool.py": "print(1)\n"}), bad, bad]
+    counts = []
+    for emission in sequence:
+        (run / "emit.txt").write_text(emission)
+        code, err = _run_node_main(run, f"{repo_change.OPS}:materialise", "materialise", "op", monkeypatch)
+        assert code == 0, err
+        counts.append(json.loads((run / "facts.json").read_text()).get("consecutive_refusals"))
+    assert counts == [1, 2, 0, 1, 2], counts
+
+
+def test_the_refusal_bound_follows_its_knob(tmp_path):
+    from refactory_dsh import create_ops, nn
+
+    ctx = nn.RunContext(tmp_path, facts={"name": "knob_pkg",
+                                         "package_root": str(tmp_path / "stage/.factory/packages/knob_pkg")},
+                        knobs={"refusal_attempts": 2})
+    ctx.enforce_writes = False
+    bad = "===EDIT: mode.py===\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n"
+    ctx.write_text("emit.txt", bad)
+    assert create_ops.materialise(ctx).get("emission_refused")
+    ctx.write_text("emit.txt", bad)
+    with pytest.raises(BuildLoopStop, match="emissions refused 2 consecutive times"):
+        create_ops.materialise(ctx)
+
+
+def test_create_materialise_stops_at_the_bound(tmp_path):
+    """The create side of the shared refusal helper counts and stops too."""
+    from refactory_dsh import create_ops, nn
+
+    ctx = nn.RunContext(tmp_path, facts={"name": "probe_pkg",
+                                         "package_root": str(tmp_path / "stage/.factory/packages/probe_pkg")},
+                        knobs={"refusal_attempts": 3})
+    ctx.enforce_writes = False
+    bad = "===EDIT: mode.py===\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n"
+    counts = []
+    for _ in range(2):
+        ctx.write_text("emit.txt", bad)
+        assert create_ops.materialise(ctx).get("emission_refused")
+        counts.append(ctx.facts.get("consecutive_refusals"))
+    assert counts == [1, 2]
+    ctx.write_text("emit.txt", bad)
+    with pytest.raises(BuildLoopStop, match="emissions refused 3 consecutive times"):
+        create_ops.materialise(ctx)
+
+
+def test_a_run_lowered_before_the_refusal_count_still_materialises(tmp_path):
+    from refactory_dsh import lowering, repo_change, worktree
+    from tests_support import git_repo, render
+
+    repo = git_repo(tmp_path / "repo")
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef445566", run)
+    lowering.write_declarations(_design_mode().state_dict(), run)
+    declarations = json.loads((run / lowering.DECLARATIONS).read_text())
+    declarations["materialise"]["produces"].remove("consecutive_refusals")
+    (run / lowering.DECLARATIONS).write_text(json.dumps(declarations))
+    (run / "facts.json").write_text(json.dumps({"name": "old_tool", "check": "python tool.py"}))
+    (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
+    run_node(f"{repo_change.OPS}:materialise", workdir=run, node_id="materialise")
+    assert json.loads((run / "facts.json").read_text())["files"] == ["tool.py"]
+
+
+def test_a_ceo_redo_keeps_the_refusal_count(tmp_path):
+    """A CEO redo cannot reset a limit count; the refusal count is one."""
+    from refactory_dsh import items, lowering
+
+    run = tmp_path / "run"
+    run.mkdir()
+    lowering.write_declarations(_design_mode().state_dict(), run)
+    (run / "facts.json").write_text(json.dumps({"consecutive_refusals": 2, "attempts_used": 1,
+                                                "check_attempts_used": 1}))
+    items.command_reset(run, {"nodes": ["emit", "materialise"], "start": "emit",
+                              "preserveAttemptFacts": True})
+    assert json.loads((run / "facts.json").read_text()).get("consecutive_refusals") == 2
+
+
+def test_a_short_message_with_a_test_id_comes_back_exactly_whole():
+    """The whole-message branch, not the reason-plus-ids fallback, answers a short message."""
+    exc = BuildLoopStop("check failed\nFAILED tests/test_x.py::test_y - boom")
+    assert format_failure_detail(exc) == "BuildLoopStop: check failed\nFAILED tests/test_x.py::test_y - boom"

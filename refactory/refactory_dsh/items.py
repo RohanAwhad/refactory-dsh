@@ -247,7 +247,8 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     if request.get('preserveAttemptFacts'):
         names = {n for n in names if not n.endswith(('attempts_used', 'repairs_used'))
                  and n not in ('convergence_extras_used', 'check_failures_history',
-                               'check_blocker_history', 'convergence_granted')}
+                               'check_blocker_history', 'convergence_granted',
+                               'consecutive_refusals')}
     path = workdir / FACTS
     prior = path.read_text() if path.exists() else '{}'
     facts = json.loads(prior)

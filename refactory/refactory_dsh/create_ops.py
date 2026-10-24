@@ -841,7 +841,8 @@ def materialise(ctx: Any) -> dict[str, Any]:
         registry.install_workspace(project_for_nodes())
     ctx.write_json(f"{STAGING}/manifest.json", {"package": name, "files": sorted(written)})
     cleared = {"emission_refused": ""} if ctx.facts.get("emission_refused") else {}
-    return {"package_path": str(root), "files": sorted(written), **cleared, "consecutive_refusals": 0}
+    reset_refusals = {"consecutive_refusals": 0} if ctx.facts.get("consecutive_refusals") else {}
+    return {"package_path": str(root), "files": sorted(written), **cleared, **reset_refusals}
 
 
 def parse_files(answer: str) -> dict[str, str]:

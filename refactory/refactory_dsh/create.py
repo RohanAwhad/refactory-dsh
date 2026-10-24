@@ -68,7 +68,7 @@ class CreateMode(Mode):
             ),
             "refusal_attempts": Knob(
                 3, "int", lo=1, hi=10, frozen=True,
-                description="consecutive no-op emissions before the run stops",
+                description="consecutive refused emissions before the run stops",
             ),
             "research_attempts": Knob(
                 3, "int", lo=1, hi=8,

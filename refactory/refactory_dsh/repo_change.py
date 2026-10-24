@@ -773,7 +773,9 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
         found = worktree.recorded(ctx.workdir)
         # Cleared only once set, so a run whose graph predates the fact still materialises.
         cleared = {"emission_refused": ""} if ctx.facts.get("emission_refused") else {}
-        reset_refusals = {"consecutive_refusals": 0}
+        # Like emission_refused: reset only when set, so a run lowered before the
+        # refusal count existed still materialises.
+        reset_refusals = {"consecutive_refusals": 0} if ctx.facts.get("consecutive_refusals") else {}
         if found is None:
             change = (f"The artifact directory is a copy of {source} with this run's files applied."
                       if source is not None else "The artifact directory holds only the files this run wrote.")

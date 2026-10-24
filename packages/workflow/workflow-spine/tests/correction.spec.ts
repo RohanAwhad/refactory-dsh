@@ -1319,14 +1319,6 @@ describe('applyControls integration', () => {
     expect(statusFile.last_failure).toBeDefined()
   })
 
-  it('failureDetailOf extracts post-marker text', () => {
-    // failureDetailOf is tested through the observable path: the error fields
-    // in the wf_next result and the spine-status.json file.  The exit-code-3
-    // and run-warnings-before-marker tests cover both the marker path and the
-    // reason-first assertion.  This test pins that the coverage is intentional.
-    expect(true).toBe(true)
-  })
-
   it('failureDetailOf falls back to head+tail when no marker', async () => {
     const workdir = scratch()
     // A 3000-char stderr without marker — more than STATUS_DETAIL
@@ -1459,8 +1451,65 @@ describe('applyControls integration', () => {
     // The recorded status is 'failed' because exit 3 + marker
     const statusFile = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
     expect(statusFile.status).toBe('failed')
-    // The last_failure error should lead with the reason, not the warning
-    expect(statusFile.last_failure.error).toContain('authoring unresolved')
+    // The last_failure error is the text after the marker: reason first, no warning
+    expect(statusFile.last_failure.error).toMatch(/: authoring unresolved after 3 attempt\(s\)\nFAILED tests\/test_create\.py::test_review$/)
+    expect(statusFile.last_failure.error).not.toContain('WARNING: something harmless')
+    expect(next.error).not.toContain('WARNING: something harmless')
+  })
+
+  it('a person rerun of a completed upstream node after an exit-3 stop applies and the run continues', async () => {
+    const workdir = scratch()
+    const flag = join(workdir, 'FLAG')
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'FnNode', id: 'a', command: `bash -c 'echo x >> ${workdir}/a-runs'`, reads: [], writes: [] },
+        b: { _type: 'FnNode', id: 'b',
+             command: `bash -c 'if [ -f ${flag} ]; then exit 0; fi; echo "--- refactory failure ---" >&2; echo "BuildLoopStop: limit" >&2; exit 3'`,
+             reads: [], writes: [] },
+        c: { _type: 'AgentNode', id: 'c', role: 'builder', prompt_template: 'C', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }, { source: 'b', target: 'c' }],
+    }
+    const ctx = await mount(graph, { workdir, executeCommands: true })
+    ctx.provide('shell', {
+      resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+        command: request.command, workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 10_000, onExpiry: 'kill',
+        stdoutMaxBytes: 1_000_000, env: request.env, sandboxPolicy: request.sandboxPolicy,
+      }),
+      execute: async (spec: { command: string }) => {
+        const result = spawnSync('bash', ['-c', spec.command], { encoding: 'utf8', timeout: 10_000 })
+        return { result: async () => ({
+          exitCode: result.status ?? 1, signal: result.signal, timedOut: false,
+          aborted: false, timeoutMs: 10_000,
+          stdout: { text: result.stdout ?? '', truncated: false },
+          stderr: { text: result.stderr ?? '', truncated: false },
+        }) }
+      },
+    })
+    let next = await call(ctx, 'wf_next') as { status: string; node?: string }
+    if (next.status !== 'failed') next = await call(ctx, 'wf_next') as { status: string; node?: string }
+    expect(next.status).toBe('failed')
+    expect(next.node).toBe('b')
+    const status1 = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
+    expect(status1.status).toBe('failed')
+    await expect(call(ctx, 'wf_redo', { node: 'a' })).rejects.toThrow(/CEO redo cannot/)
+    writeFileSync(flag, '')
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    writeRerunControl(workdir, 'a', { revision })
+    let after = await call(ctx, 'wf_next') as { status: string; nodes?: Array<{ id: string }> }
+    for (let i = 0; i < 3 && after.status === 'ready' && !(after.nodes ?? []).some(n => n.id === 'c'); i++) {
+      after = await call(ctx, 'wf_next') as { status: string; nodes?: Array<{ id: string }> }
+    }
+    const receipt = JSON.parse(readFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), 'utf8'))
+    expect(receipt.status).toBe('applied')
+    expect(readFileSync(join(workdir, 'a-runs'), 'utf8').trim().split('\n').length).toBe(2)
+    expect(after.status).toBe('ready')
+    expect((after.nodes ?? []).map(n => n.id)).toContain('c')
+    const status2 = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
+    expect(status2.status).not.toBe('failed')
   })
 
   it('a CEO redo asks the data bridge to keep the attempt facts', async () => {

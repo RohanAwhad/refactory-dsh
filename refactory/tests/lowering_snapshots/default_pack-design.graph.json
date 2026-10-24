@@ -1071,7 +1071,7 @@
       "enum": [],
       "values": [],
       "frozen": true,
-      "description": "consecutive no-op emissions before the run stops",
+      "description": "consecutive refused emissions before the run stops",
       "required": false
     },
     "target": {

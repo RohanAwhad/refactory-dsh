@@ -100,7 +100,7 @@ class DesignMode(Mode):
             # (`repo_change`), and how its work is delivered once its reviews pass (#350).
             "refusal_attempts": Knob(
                 3, "int", lo=1, hi=10, frozen=True,
-                description="consecutive no-op emissions before the run stops",
+                description="consecutive refused emissions before the run stops",
             ),
             **repo_change.knobs(),
             **delivery.knobs(),
