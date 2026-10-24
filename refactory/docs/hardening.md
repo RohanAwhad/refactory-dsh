@@ -2109,8 +2109,20 @@ failed to converge at ~$765.
 `classify_scale` (`design_ops.py`) runs after `gate_research` proceeds.  It reads
 every direction's `footprint` object from `research-plan.json` and applies a
 three-part rule: the change is scoped only when it touches at most two existing
-functions, adds nothing new, and changes no shared engine.  Anything else is full;
-so is a direction with no footprint key, or an entry without file:line evidence.
+functions, adds nothing new, and changes no shared engine.  Anything else is full.
+
+The classifier fails toward full, the path that loses nothing:
+- a direction that is not an object, or has no footprint, makes the run full;
+- a footprint must have exactly `existing_functions`, `new_items` and
+  `shared_engine`, each a list; a missing, misnamed or extra key is full;
+- each touched function is one `"path:line name"` entry with a real line number,
+  and functions are counted by file, name and line, so same-named methods in one
+  file count separately;
+- a cited path must name a file in the target's checkout (the run's worktree,
+  never the run directory). Research may cite it from the repository root, from a
+  package, or by a bare file name, and it counts when exactly one tracked file
+  ends with it. An absolute path or one with `..` never counts.
+
 The brief is never read by the classifier.
 
 ### The reason fact
@@ -2122,7 +2134,7 @@ The brief is never read by the classifier.
 - refine: that it is a refinement.
 
 The reason appears on `gate_strategy`'s card, in `design_review_status`'s output,
-and in the CLI print at design lines 937 and 1029.
+and in both of the CLI's prints when a run stops at a user gate.
 
 ### Tests that hold it
 
@@ -2141,6 +2153,16 @@ and in the CLI print at design lines 937 and 1029.
 - `test_design_scale.py::test_classify_scale_reason_in_design_review_status`
 - `test_design_scale.py::test_classify_scale_through_run`
 - `test_design_scale.py::test_same_named_functions_in_different_files_count_separately`
+- `test_design_scale.py::test_same_named_functions_in_one_file_count_separately`
+- `test_design_scale.py::test_a_footprint_needs_exactly_its_three_keys`
+- `test_design_scale.py::test_a_function_citation_needs_a_line_number_and_one_name`
+- `test_design_scale.py::test_a_citation_outside_the_checkout_never_counts`
+- `test_design_scale.py::test_citations_resolve_against_the_real_checkout_however_research_writes_them`
+- `test_design_scale.py::test_two_functions_stay_scoped_and_three_do_not`
+- `test_design_scale.py::test_a_rerun_reclassifies_a_scoped_run_from_its_footprint`
+- `test_design_scale.py::test_a_plan_in_prose_and_fences_is_read`
+- `test_design_scale.py::test_a_direction_that_is_not_an_object_is_full`
+- `test_design_scale.py::test_a_shared_engine_that_is_not_a_list_is_full`
 - `test_design_scale.py::test_research_director_footprint_instruction_clauses`
 - `test_design_short_path.py::test_the_design_graph_routes_on_the_scale`
 - `test_interactive.py::test_prepare_design_sets_full_even_when_brief_names_a_file`

@@ -12,6 +12,8 @@ person's gate and costs no round.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import re
 import sys
 
 from refactory_dsh.design import DesignMode
@@ -293,7 +295,7 @@ def test_footprint_entry_without_evidence_is_full():
     ctx2 = _scale_ctx(plan2)
     result2 = classify_scale(ctx2)
     assert result2["research_scope"] == "full"
-    assert "footprint without evidence" in result2["research_scope_reason"]
+    assert "adds new items" in result2["research_scope_reason"]
 
 
 def test_footprint_nonexistent_path_is_full(tmp_path):
@@ -343,24 +345,128 @@ def test_null_footprint_field_is_full():
 
 
 def test_a_shared_engine_that_is_not_a_list_is_full():
-    """A shared_engine given as a bare string, a number or an object is unreadable
-    evidence: the run is classed full, never scoped through a silent empty list."""
-    for value in ("refactory_dsh/nn/executor.py:10", 3, {"at": "x.py:1"}):
+    """shared_engine is a list of citations. A bare string, a number, an object,
+    None, True or False is unreadable, so the run is full; only [] means none."""
+    for value in ("refactory_dsh/nn/executor.py:10", 3, {"at": "x.py:1"}, None, True, False):
         plan = [
             {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
              "footprint": {"existing_functions": [], "new_items": [], "shared_engine": value}},
         ]
         result = classify_scale(_scale_ctx(plan))
         assert result["research_scope"] == "full", value
-        assert "footprint without evidence: shared_engine" in result["research_scope_reason"], value
-    # An explicit "no shared engine" stays readable.
-    for value in ([], None, False):
-        plan = [
-            {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
-             "footprint": {"existing_functions": [], "new_items": [], "shared_engine": value}},
-        ]
-        assert classify_scale(_scale_ctx(plan))["research_scope"] == "scoped", value
+        assert "shared_engine is not a list" in result["research_scope_reason"], value
+    plan = [{"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+             "footprint": {"existing_functions": [], "new_items": [], "shared_engine": []}}]
+    assert classify_scale(_scale_ctx(plan))["research_scope"] == "scoped"
 
+
+def _one(footprint, *, facts=None):
+    """classify_scale on a one-direction plan with *footprint*."""
+    plan = [{"focus": "q1", "slug": "s1", "finding": "f1", "ids": [], "footprint": footprint}]
+    return classify_scale(_scale_ctx(plan, facts=facts))
+
+
+def _fns(*entries):
+    return {"existing_functions": list(entries), "new_items": [], "shared_engine": []}
+
+
+def test_a_footprint_needs_exactly_its_three_keys():
+    for footprint in (
+        {},
+        {"shared_engine": []},
+        {"existingFunctions": ["a.py:1 f", "a.py:2 g", "a.py:3 h", "a.py:4 i"],
+         "new_items": [], "shared_engine": []},
+        {"existing_functions": [], "new_items": [], "shared_engines": ["executor.py:1"]},
+        {"existing_functions": [], "new_items": [], "shared_engine": [],
+         "touched_functions": ["a.py:1 f", "a.py:2 g", "a.py:3 h"]},
+    ):
+        result = _one(footprint)
+        assert result["research_scope"] == "full", footprint
+        assert "no usable footprint" in result["research_scope_reason"], footprint
+
+
+def test_a_function_citation_needs_a_line_number_and_one_name():
+    for entry in ("a.py: foo", "a.py:abc foo", "a.py:", "a.py:1", "a.py:0 foo",
+                  "a.py:1 f, g, h, k", "module.function"):
+        result = _one(_fns(entry))
+        assert result["research_scope"] == "full", entry
+        assert "footprint without evidence" in result["research_scope_reason"], entry
+    assert _one(_fns("a.py:12 Mode.build"))["research_scope"] == "scoped"
+
+
+def test_a_citation_outside_the_checkout_never_counts(tmp_path):
+    (tmp_path / "x.py").write_text("def f():\n    pass\n")
+    facts = {"source": str(tmp_path)}
+    for entry in ("/etc/hosts:1 foo", "../x.py:1 f", "~/x.py:1 f", ("a" * 300) + ".py:1 f"):
+        result = _one(_fns(entry), facts=facts)
+        assert result["research_scope"] == "full", entry
+    assert _one(_fns("x.py:1 f"), facts=facts)["research_scope"] == "scoped"
+
+
+def test_citations_resolve_against_the_real_checkout_however_research_writes_them():
+    """Research cites from the repository root, a package, or a bare file name.
+    Each resolves against the checkout's tracked files; a file that is not there,
+    or a name two files share, does not."""
+    repo = Path(__file__).resolve().parents[2]
+    facts = {"source": str(repo)}
+    for entry in ("refactory/refactory_dsh/create_ops.py:324 _plan",
+                  "refactory_dsh/create_ops.py:324 _plan",
+                  "create_ops.py:324 _plan"):
+        result = _one(_fns(entry), facts=facts)
+        assert result["research_scope"] == "scoped", (entry, result)
+        assert "refactory/refactory_dsh/create_ops.py:324" in result["research_scope_reason"]
+    assert _one(_fns("no_such_module_zz.py:1 f"), facts=facts)["research_scope"] == "full"
+    assert _one(_fns("__init__.py:1 f"), facts=facts)["research_scope"] == "full"
+
+
+def test_same_named_functions_in_one_file_count_separately():
+    result = _one(_fns("fast.py:10 build", "fast.py:200 build", "fast.py:300 build"))
+    assert result["research_scope"] == "full"
+    assert "touches 3 existing functions" in result["research_scope_reason"]
+
+
+def test_two_functions_stay_scoped_and_three_do_not():
+    assert _one(_fns("a.py:1 f", "b.py:2 g"))["research_scope"] == "scoped"
+    assert _one(_fns("a.py:1 f", "b.py:2 g", "c.py:3 h"))["research_scope"] == "full"
+
+
+def test_a_rerun_reclassifies_a_scoped_run_from_its_footprint():
+    """A non-refine run that an earlier visit classed scoped is classed again from
+    its footprint: research_scope, which classify_scale writes, is never read."""
+    facts = {"research_scope": "scoped",
+             "research_scope_reason": "touches 1 existing function(s), adds nothing new, no shared engine"}
+    result = _one(_fns("a.py:1 f", "b.py:2 g", "c.py:3 h"), facts=facts)
+    assert result["research_scope"] == "full"
+
+
+def test_a_plan_in_prose_and_fences_is_read():
+    raw = ("Here is the plan:\n```json\n"
+           + json.dumps([{"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+                          "footprint": _fns("a.py:1 f")}])
+           + "\n```\nDone.")
+    result = classify_scale(_scale_ctx(raw))
+    assert result["research_scope"] == "scoped"
+    assert "a.py:1" in result["research_scope_reason"]
+
+
+def test_a_direction_that_is_not_an_object_is_full():
+    plan = [{"focus": "q1", "slug": "s1", "finding": "f1", "ids": [], "footprint": _fns()},
+            "a stray string"]
+    result = classify_scale(_scale_ctx(plan))
+    assert result["research_scope"] == "full"
+    assert "not an object" in result["research_scope_reason"]
+
+
+def test_a_failing_full_design_review_shows_the_scale():
+    status = design_review_status({
+        "design_review_attempts_used": 1,
+        "design_review_findings": "- x.py: something",
+        "design_review_blocking": "- x.py: something",
+        "research_scope_reason": "touches 3 existing functions (max 2 for scoped): f, g, h",
+    })
+    assert "FAIL" in status
+    assert "Scale: full" in status
+    assert "touches 3 existing functions" in status
 
 def test_empty_directions_is_full():
     """An empty research plan (no directions) is classed full."""
@@ -608,7 +714,8 @@ def test_dm149_like_fixture_is_scoped():
         {"focus": "q3", "slug": "s3", "finding": "f3", "ids": [],
          "footprint": {"existing_functions": [], "new_items": [], "shared_engine": []}},
     ]
-    ctx = _scale_ctx(plan)
+    # Against the real checkout, as a run classifies it, not a vacuous no-source check.
+    ctx = _scale_ctx(plan, facts={"source": str(Path(__file__).resolve().parents[2])})
     result = classify_scale(ctx)
     assert result["research_scope"] == "scoped"
     assert "_plan" in result["research_scope_reason"]
@@ -642,3 +749,15 @@ def test_research_director_footprint_instruction_clauses():
     assert "Test files, test functions and docs are neither touched functions nor added items" in prompt
     # Size wording is a claim, not a footprint
     assert "claim to check against the code, never a footprint" in prompt
+    # Exactly the three keys, one function per entry with its real line
+    assert "with exactly these three keys, each a list" in prompt
+    assert "one function per entry, its real line number" in prompt
+    # A shared function is not an engine
+    assert "A function is not an engine because several gates or modes call it" in prompt
+    # What counts as a new item
+    assert ("a module, class, graph node, edge, node field, record or data shape, knob, "
+            "entry point, wiring helper, or any new non-test source file") in prompt
+    # The instruction works for any target: it names no file of this repository
+    section = prompt[prompt.index("## Footprint"):prompt.index("## What was wrong with the last plan")]
+    assert "refactory" not in section
+    assert not re.search(r"\b\w+\.(py|ts)\b", section)

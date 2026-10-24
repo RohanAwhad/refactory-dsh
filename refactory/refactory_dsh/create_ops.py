@@ -321,11 +321,12 @@ def prepare(ctx: Any) -> dict[str, Any]:
     }
 
 
-def _extract_json_array(text: str) -> list[dict[str, Any]]:
+def _extract_json_array(text: str) -> list[Any]:
     """Extract the first JSON array from *text*, tolerating fences and prose.
 
-    Returns the raw dicts (all keys preserved) or an empty list when the text
-    contains no parseable array.  Both ``_plan`` and ``classify_scale`` use this
+    Returns the array's items as written (objects keep every key; a caller decides
+    what a non-object item means) or an empty list when the text contains no
+    parseable array.  Both ``_plan`` and ``classify_scale`` use this
     so there is exactly one tolerant-array extractor.
     """
     start, end = text.find("["), text.rfind("]")
@@ -337,7 +338,7 @@ def _extract_json_array(text: str) -> list[dict[str, Any]]:
         return []
     if not isinstance(payload, list):
         return []
-    return [item for item in payload if isinstance(item, dict)]
+    return list(payload)
 
 
 def _plan(text: str) -> list[dict[str, Any]]:
@@ -350,6 +351,8 @@ def _plan(text: str) -> list[dict[str, Any]]:
     """
     entries: list[dict[str, Any]] = []
     for item in _extract_json_array(text):
+        if not isinstance(item, dict):
+            continue
         entries.append({
             key: str(item.get(key) or "").strip() for key in ("focus", "slug", "finding")
         } | {"ids": item.get("ids") or []})

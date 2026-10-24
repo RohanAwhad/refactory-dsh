@@ -592,6 +592,24 @@ def gate_design_review(ctx: Any) -> str:
     return Verdict("reloop", report)
 
 
+#: A research direction's footprint has exactly these keys, each a list (dm-200).
+FOOTPRINT_KEYS = ("existing_functions", "new_items", "shared_engine")
+
+#: One existing function a change touches: "path:line name", with a real line
+#: number and a single name.
+_FUNCTION_CITATION = _re.compile(
+    r"(?P<path>[^\s:]+):(?P<line>[1-9]\d*)\s+(?P<name>[A-Za-z_][\w.]*(?:\(\))?)")
+
+
+def _tracked_files(source: str) -> set[str] | None:
+    """The checkout's tracked files, or None when *source* is not a git checkout."""
+    try:
+        listing = worktree.git(Path(source), "ls-files", "-z")
+    except Exception:  # not a git checkout: the caller checks the file system instead
+        return None
+    return {name for name in listing.split("\0") if name}
+
+
 def classify_scale(ctx: Any) -> dict[str, Any]:
     """Deterministic op: classify the change's scale from the research footprint.
 
@@ -615,152 +633,85 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
     raw = ctx.read_text("research-plan.json") if ctx.exists("research-plan.json") else ""
     directions = _extract_json_array(raw)
 
+    def _full(reason: str) -> dict[str, Any]:
+        return {"research_scope": "full", "research_scope_reason": reason}
+
     if not directions:
-        return {
-            "research_scope": "full",
-            "research_scope_reason": "no usable footprint in the research",
-        }
+        return _full("no usable footprint in the research")
 
-    # ── resolve source for path existence checks ──────────────────────
+    # ── where cited code must exist ───────────────────────────────────
+    # The target's own checkout (the run's worktree), never the run directory.
     source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
+    tracked = _tracked_files(source) if source else None
 
-    def _path_exists(file_path: str) -> bool:
-        """True when *source* is known and *file_path* is a file under it."""
+    def _resolve(cited: str) -> str | None:
+        """The checkout file a citation names, or None when it names none.
+
+        Research cites paths from the repository root, from a package, or by a bare
+        file name; any of them counts when exactly one tracked file ends with it.
+        A path outside the checkout never counts.
+        """
         if not source:
-            return True  # no checkout to verify against
-        return (Path(source) / file_path).is_file()
+            return cited  # no checkout to verify against
+        if cited.startswith(("/", "~")) or ".." in Path(cited).parts:
+            return None
+        if tracked is not None:
+            if cited in tracked:
+                return cited
+            matches = [name for name in tracked if name.endswith("/" + cited)]
+            return matches[0] if len(matches) == 1 else None
+        try:
+            root = Path(source).resolve()
+            path = (root / cited).resolve()
+            return cited if path.is_relative_to(root) and path.is_file() else None
+        except OSError:  # a path too long for the file system names no file
+            return None
 
     # ── aggregate footprint ────────────────────────────────────────────
-    all_existing: dict[tuple[str, str], str] = {}   # (path, name) -> loc
-    all_new: dict[str, str] = {}        # name -> at
-    shared_engine_refs: list[str] = []
-    has_shared_engine = False
-
-    _FULL_NO_FP: dict[str, Any] = {
-        "research_scope": "full",
-        "research_scope_reason": "no usable footprint in the research",
-    }
-
-    for d in directions:
-        fp = d.get("footprint") if isinstance(d, dict) else None
-        if fp is None:
-            return dict(_FULL_NO_FP)
-        if not isinstance(fp, dict):
-            return dict(_FULL_NO_FP)
-
-        # existing_functions — each entry is "path:line name"
-        existing = fp.get("existing_functions", [])
-        if existing is None or not isinstance(existing, list):
-            return dict(_FULL_NO_FP)
-        for entry in existing:
-            if not isinstance(entry, str) or ":" not in entry:
-                return {
-                    "research_scope": "full",
-                    "research_scope_reason": f"footprint without evidence: {entry!r}",
-                }
-            # Parse "path:line name" — at least "x:1 y"
-            parts = entry.split(None, 1)
-            loc = parts[0] if parts else entry
-            name = parts[1] if len(parts) > 1 else loc
-            # Verify the cited path exists under the source checkout
-            file_path = loc.split(":")[0]
-            if not _path_exists(file_path):
-                return {
-                    "research_scope": "full",
-                    "research_scope_reason": f"footprint without evidence: {entry!r}",
-                }
-            all_existing[(file_path, name)] = loc
-
-        # new_items — each entry names what is added and the path
-        new_items_list = fp.get("new_items", [])
-        if new_items_list is None or not isinstance(new_items_list, list):
-            return dict(_FULL_NO_FP)
-        for entry in new_items_list:
-            if not isinstance(entry, str) or ":" not in entry:
-                return {
-                    "research_scope": "full",
-                    "research_scope_reason": f"footprint without evidence: {entry!r}",
-                }
-            # Verify the cited path exists under the source checkout
-            colon_idx = entry.index(":")
-            before_colon = entry[:colon_idx]
-            path_parts = before_colon.rsplit(None, 1)
-            file_path = path_parts[-1] if path_parts else before_colon
-            if not _path_exists(file_path):
-                return {
-                    "research_scope": "full",
-                    "research_scope_reason": f"footprint without evidence: {entry!r}",
-                }
-            all_new[entry] = entry
-
-        # shared_engine — list of "path:line" citations
-        se = fp.get("shared_engine", [])
-        if se is None or se is False:
-            se = []  # an explicit "no shared engine"
-        if not isinstance(se, list):
-            if se is True:
-                # tolerate boolean true with no evidence
-                return {
-                    "research_scope": "full",
-                    "research_scope_reason": "footprint without evidence: shared_engine true without citations",
-                }
-            # Any other shape (a bare "path:line" string, a number, an object) is
-            # unreadable evidence, so the safe class is full, never a silent [].
-            return {
-                "research_scope": "full",
-                "research_scope_reason": f"footprint without evidence: shared_engine {se!r}",
-            }
-        if se:
-            has_shared_engine = True
-            for ref in se:
-                if not isinstance(ref, str) or ":" not in ref:
-                    return {
-                        "research_scope": "full",
-                        "research_scope_reason": f"footprint without evidence: shared_engine {ref!r}",
-                    }
-                # Verify the cited path exists under the source checkout
-                file_path = ref.split(":")[0]
-                if not _path_exists(file_path):
-                    return {
-                        "research_scope": "full",
-                        "research_scope_reason": f"footprint without evidence: shared_engine {ref!r}",
-                    }
-                shared_engine_refs.append(ref)
+    touched: dict[tuple[str, str, str], str] = {}   # (file, name, line) -> citation
+    new_items: list[str] = []
+    engine: list[str] = []
+    for direction in directions:
+        if not isinstance(direction, dict):
+            return _full(f"no usable footprint: a direction is not an object: {direction!r}"[:300])
+        footprint = direction.get("footprint")
+        if not isinstance(footprint, dict):
+            return _full("no usable footprint in the research")
+        missing = [key for key in FOOTPRINT_KEYS if key not in footprint]
+        unknown = sorted(key for key in footprint if key not in FOOTPRINT_KEYS)
+        if missing or unknown:
+            return _full("no usable footprint: "
+                         + "; ".join(([f"missing {', '.join(missing)}"] if missing else [])
+                                     + ([f"unknown {', '.join(unknown)}"] if unknown else [])))
+        for key in FOOTPRINT_KEYS:
+            if not isinstance(footprint[key], list):
+                return _full(f"no usable footprint: {key} is not a list: {footprint[key]!r}"[:300])
+        for entry in footprint["existing_functions"]:
+            match = _FUNCTION_CITATION.fullmatch(entry.strip()) if isinstance(entry, str) else None
+            resolved = _resolve(match["path"]) if match else None
+            if resolved is None:
+                return _full(f"footprint without evidence: {entry!r}"[:300])
+            # By file, name and line: same-named methods in one file are different
+            # functions, and over-counting only ever errs toward full.
+            touched[(resolved, match["name"], match["line"])] = f"{resolved}:{match['line']}"
+        new_items.extend(str(item) for item in footprint["new_items"])
+        engine.extend(str(ref) for ref in footprint["shared_engine"])
 
     # ── apply the three-part rule ──────────────────────────────────────
-    if len(all_existing) > 2:
-        names = ", ".join(k[1] for k in sorted(all_existing)[:3])
-        return {
-            "research_scope": "full",
-            "research_scope_reason": (
-                f"touches {len(all_existing)} existing functions "
-                f"(max 2 for scoped): {names}"
-            ),
-        }
-
-    if all_new:
-        names = ", ".join(sorted(all_new)[:3])
-        return {
-            "research_scope": "full",
-            "research_scope_reason": f"adds new items: {names}",
-        }
-
-    if has_shared_engine:
-        return {
-            "research_scope": "full",
-            "research_scope_reason": "changes a shared engine",
-        }
-
-    # scoped
-    fn_keys = sorted(all_existing)
-    detail = ", ".join(f"{k[1]} at {all_existing[k]}" for k in fn_keys) if fn_keys else ""
+    if len(touched) > 2:
+        names = ", ".join(key[1] for key in sorted(touched)[:3])
+        return _full(f"touches {len(touched)} existing functions (max 2 for scoped): {names}")
+    if new_items:
+        return _full(f"adds new items: {', '.join(sorted(new_items)[:3])}")
+    if engine:
+        return _full(f"changes a shared engine: {', '.join(engine[:3])}")
+    detail = ", ".join(f"{key[1]} at {touched[key]}" for key in sorted(touched))
     reason = (
-        f"touches {len(all_existing)} existing function(s)"
+        f"touches {len(touched)} existing function(s)"
         + (f" ({detail})" if detail else "")
         + ", adds nothing new, no shared engine"
     )
     return {"research_scope": "scoped", "research_scope_reason": reason}
-
 
 def design_review_status(facts: dict) -> str:
     """One-line status for the approval gate, from the run's facts.
