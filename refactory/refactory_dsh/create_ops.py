@@ -21,7 +21,6 @@ from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
 from refactory_dsh.repo_change import refuse_truncated, EMISSION_PATH
-from refactory_dsh.worktree import AttemptRefused
 
 #: Where a create/edit run stages its package inside the run directory, so two
 #: parallel runs of the same package name never collide.  A git worktree is not
