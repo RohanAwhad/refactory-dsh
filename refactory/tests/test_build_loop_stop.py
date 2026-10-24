@@ -440,10 +440,17 @@ def test_every_limit_raise_in_the_build_loop_is_a_stop():
 
     from refactory_dsh import create_ops, fast_ops
 
+    import ast
+    import textwrap
+
     for fn in (create_ops.repair, fast_ops._repair):
-        source = inspect.getsource(fn)
-        assert "raise ValueError(" not in source, fn.__name__
-        assert source.count("raise BuildLoopStop(") >= 3, fn.__name__
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        raised = [node.exc for node in ast.walk(tree) if isinstance(node, ast.Raise) and node.exc]
+        assert len(raised) >= 3, fn.__name__
+        for exc in raised:
+            # Every raise in the build loop's repair is the stop, never another type.
+            assert isinstance(exc, ast.Call) and getattr(exc.func, "id", "") == "BuildLoopStop", (
+                fn.__name__, ast.unparse(exc)[:80])
 
 
 def test_an_applied_emission_resets_the_refusal_count_across_processes(tmp_path, monkeypatch):
@@ -539,3 +546,27 @@ def test_a_short_message_with_a_test_id_comes_back_exactly_whole():
     """The whole-message branch, not the reason-plus-ids fallback, answers a short message."""
     exc = BuildLoopStop("check failed\nFAILED tests/test_x.py::test_y - boom")
     assert format_failure_detail(exc) == "BuildLoopStop: check failed\nFAILED tests/test_x.py::test_y - boom"
+
+
+def test_an_applied_package_resets_the_create_refusal_count(tmp_path, monkeypatch):
+    """Create's materialise resets the count on an applied package: refuse, refuse,
+    apply, refuse, refuse never stops."""
+    from refactory_dsh import create_ops, nn
+
+    monkeypatch.setattr(create_ops.registry, "install_workspace", lambda *a, **k: None)
+    ctx = nn.RunContext(tmp_path, facts={"name": "reset_pkg",
+                                         "package_root": str(tmp_path / "stage/.factory/packages/reset_pkg")},
+                        knobs={"refusal_attempts": 3})
+    ctx.enforce_writes = False
+    bad = "===EDIT: mode.py===\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n"
+    from tests_support import render
+
+    good = render({"mode.py": "VALUE = 1\n"})
+    counts = []
+    for emission in (bad, bad, good, bad, bad):
+        ctx.write_text("emit.txt", emission)
+        # The executor writes an op's returned facts back; do the same here.
+        for key, value in create_ops.materialise(ctx).items():
+            ctx.set_fact(key, value)
+        counts.append(ctx.facts.get("consecutive_refusals"))
+    assert counts == [1, 2, 0, 1, 2], counts

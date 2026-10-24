@@ -791,11 +791,21 @@ head+tail for non-refactory commands.
 - `test_build_loop_stop.py::test_run_node_does_not_retry_build_loop_stop`
 - `test_build_loop_stop.py::test_walker_stop_reaches_run_result_error`
 - `test_build_loop_stop.py::test_consecutive_refusals_end_the_run`
-- `test_build_loop_stop.py::test_interleaved_refusals_and_successes_converge`
 - `test_build_loop_stop.py::test_refusal_bound_holds_across_node_processes`
 - `test_build_loop_stop.py::test_format_failure_detail_reason_first`
 - `test_build_loop_stop.py::test_format_failure_detail_short_message_comes_back_whole`
 - `test_build_loop_stop.py::test_format_failure_detail_1200_char_message_no_repeat`
+- `test_build_loop_stop.py::test_a_short_message_with_a_test_id_comes_back_exactly_whole`
+- `test_build_loop_stop.py::test_a_design_check_limit_ends_the_walker_run_with_the_stop`: design mode runs its check beside the reviews; `gate_check` raises the check's limit as a `BuildLoopStop` again
+- `test_build_loop_stop.py::test_a_design_check_limit_exits_3_on_the_spine`: the same path through the node runner, one process per node, ending at exit 3
+- `test_build_loop_stop.py::test_every_limit_raise_in_the_build_loop_is_a_stop`: every `raise` in `create_ops.repair` and `fast_ops._repair` is a `BuildLoopStop`
+- `test_build_loop_stop.py::test_an_applied_emission_resets_the_refusal_count_across_processes`
+- `test_build_loop_stop.py::test_an_applied_package_resets_the_create_refusal_count`
+- `test_build_loop_stop.py::test_create_materialise_stops_at_the_bound`
+- `test_build_loop_stop.py::test_the_refusal_bound_follows_its_knob`
+- `test_build_loop_stop.py::test_a_run_lowered_before_the_refusal_count_still_materialises`
+- `test_build_loop_stop.py::test_a_ceo_redo_keeps_the_refusal_count`
+- the spine's correction spec: exit 3 with the marker records `failed` and the CEO's tools refuse; exit 3 without it, or exit 1, records `ready`; the text after the marker is kept exactly; a person's rerun of a completed upstream node after a stop applies and the run continues
 - `correction.spec.ts: "exit code 3 with marker records failed and CEO tools refuse"`
 - `correction.spec.ts: "exit code 3 without marker records ready (dm-95 unchanged)"`
 - `correction.spec.ts: "exit code 1 records ready (dm-95 regression guard)"`
