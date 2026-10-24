@@ -64,6 +64,106 @@ def _clean_package():
     shutil.rmtree(root, ignore_errors=True)
 
 
+# ── T2: @-path accepted by parse_files ─────────────────────────────────────
+def test_parse_files_keeps_at_path():
+    files = parse_files("===FILE: packages/@types/index.d.ts===\ncontent\n")
+    assert "packages/@types/index.d.ts" in files
+    assert files["packages/@types/index.d.ts"] == "content\n"
+
+
+# ── T6: malformed header refused by parse_files ───────────────────────────
+@pytest.mark.parametrize("answer, fragment", [
+    ("===FILE: has space.txt===\ncontent\n", "has space.txt"),
+    ("===FILE:===\ncontent\n", "===FILE:==="),
+])
+def test_parse_files_refuses_malformed_header(answer, fragment):
+    import re as _re
+    with pytest.raises(ValueError, match=_re.escape(fragment)):
+        parse_files(answer)
+
+
+# ── T7: create-mode loop-back on malformed header (full graph) ────────────
+def test_create_mode_loops_back_on_malformed_header(tmp_path):
+    """A malformed header loops back to emit through the full create graph.
+
+    First emission has a space in the path (malformed); second is valid.
+    The run succeeds, emit runs twice, and the retry prompt quotes the bad line.
+    """
+    bad_emission = "===FILE: has space.txt===\ncontent\n"
+    model = FakeModel(create_script(NAME, [bad_emission, render(good_files(NAME))]))
+    result = create_module.create(
+        _config(name=NAME, brief="count to a target", workdir=tmp_path / "run"),
+        client=model,
+    )
+    assert result.package == NAME
+    emit_prompts = [p for p in model.prompts if "Write the package" in p]
+    assert len(emit_prompts) == 2, "emit must run twice"
+    assert "has space.txt" in emit_prompts[-1], "retry prompt must quote the bad line"
+
+
+def test_create_fast_mode_loops_back_on_malformed_header(tmp_path, monkeypatch):
+    """A malformed header loops back to emit through the full create_fast graph.
+
+    First emission has a space in the path (malformed); second is valid.
+    The run succeeds, emit runs twice, and the retry prompt quotes the bad line.
+    """
+    from refactory_dsh.fast import CreateFastMode
+
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    name = "fast_counter"
+    bad_emission = "===FILE: has space.txt===\ncontent\n"
+    good_emission = render(good_files(name))
+    QA_PASS = json.dumps({"status": "pass", "checks": [{"name": "structural admission",
+                         "command": "import check", "status": "pass",
+                         "evidence": "the package loads"}],
+                         "findings": [],
+                         "not_run": ["broad research and full reviewer campaign not requested"]})
+    mode = CreateFastMode()
+    state = mode.state_dict()
+    state["knobs"]["single_shot"]["value"] = True
+    mode.load_state_dict(state)
+    client = FakeModel([
+        "Change only the requested file, preserve its public behavior, and review the required check result.",
+        bad_emission,
+        good_emission,
+        QA_PASS,
+    ])
+    run = mode.run(tmp_path / "run", model=client,
+                   task={"name": name, "brief": "a reusable counter"})
+    assert run.exit_ok, run.error
+    emit_prompts = [p for p in client.prompts if "emit the package" in p]
+    assert len(emit_prompts) == 2, "emit must run twice"
+    assert "has space.txt" in emit_prompts[-1], "retry prompt must quote the bad line"
+
+
+# ── T8: EDIT and DELETE headers refused by parse_files (whole files only) ──
+@pytest.mark.parametrize("header", [
+    "===EDIT: src/main.py===",
+    "===DELETE: src/main.py===",
+])
+def test_parse_files_refuses_edit_header_with_whole_files_message(header):
+    """EDIT and DELETE headers are refused by parse_files, quoting the line
+    and saying this mode takes whole files only."""
+    import re as _re
+    answer = f"{header}\nsome body\n"
+    with pytest.raises(ValueError, match=_re.escape(header)) as exc_info:
+        parse_files(answer)
+    assert "whole files only" in str(exc_info.value)
+    assert "===FILE: <path>===" in str(exc_info.value)
+
+
+# ── T9b: backtick- and quote-wrapped paths refused by parse_files ──────────
+@pytest.mark.parametrize("answer, fragment", [
+    ("===FILE: `src/a.py`===\ncontent\n", "`src/a.py`"),
+    ("===FILE: 'src/a.py'===\ncontent\n", "'src/a.py'"),
+    ('===FILE: "src/a.py"===\ncontent\n', '"src/a.py"'),
+])
+def test_parse_files_refuses_backtick_and_quote_wrapped_paths(answer, fragment):
+    import re as _re
+    with pytest.raises(ValueError, match=_re.escape(fragment)):
+        parse_files(answer)
+
+
 def test_the_command_line_carries_the_persons_approval():
     """`--verdict gate=value` is how a headless create is told the person's answer.
 

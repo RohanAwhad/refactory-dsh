@@ -214,6 +214,12 @@ def gate_emit(ctx: Any) -> str:
 
 
 def validate_package(ctx: Any) -> str:
+    refused = str(ctx.facts.get("emission_refused") or "")
+    if refused:
+        detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
+        ctx.write_text("validation.txt", detail + "\n")
+        ctx.set_fact("repair_feedback", detail)
+        return Verdict("reloop", detail)
     brief = ctx.read_json("brief.json", {})
     # When the package is staged (prepare_create / prepare_package), the project for
     # validation is the staging base, not the shared checkout.

@@ -151,7 +151,7 @@ def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     """What a git command prints in ``repo``; a failure is refused in git's own words."""
     try:
         result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
-                                timeout=300, env=env)
+                                timeout=300, env={**(env or os.environ), "GIT_LITERAL_PATHSPECS": "1"})
     except (OSError, subprocess.SubprocessError) as error:
         raise ValueError(f"git {' '.join(args)} could not run in {repo}: {error}") from error
     if result.returncode != 0:
@@ -641,7 +641,8 @@ def committed_text(found: Worktree, relative: Path, rev: str = "") -> str | None
         return None
     try:
         result = subprocess.run(["git", "-C", found.path, "cat-file", "blob", f"{rev}:{relative.as_posix()}"],
-                                capture_output=True, timeout=300)
+                                capture_output=True, timeout=300,
+                                env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"})
     except (OSError, subprocess.SubprocessError) as error:
         raise ValueError(f"git cat-file could not run in {found.path}: {error}") from error
     if result.returncode != 0:
