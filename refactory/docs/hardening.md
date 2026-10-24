@@ -2134,7 +2134,8 @@ findings. It is a prompt rule, so
 it makes a misread less likely rather than impossible. Every site that
 showed the finding format in a code span now shows it as plain text. The
 parser (`blocking_findings`) is unchanged: a real finding at the start of a
-line, outside a fenced block or a blockquote, still blocks.
+line, outside a fenced block, a blockquote, or a section marked as a
+previous or superseded review, still blocks.
 
 **Held by.** `test_follow_ups.py::test_every_reviewer_carries_marker_rule`,
 `test_follow_ups.py::test_every_lowered_node_that_asks_for_findings_carries_the_rule`,

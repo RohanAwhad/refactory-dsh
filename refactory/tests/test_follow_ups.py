@@ -393,6 +393,16 @@ def test_marker_rule_keeps_its_wording():
     ):
         assert clause in MARKER_RULE, clause
     assert chr(96) not in MARKER_RULE
+    # And nothing else: an added sentence could contradict a pinned one.
+    assert MARKER_RULE == (
+        "Write the blocking marker only at the start of a finding line, in its plain form: "
+        "BLOCKING: <path>: <description>. Never wrap it in backticks, a code span, or "
+        "quotation marks while explaining a check or describing the parser. When "
+        "discussing the marker itself, call it \"the blocking marker\". Write every real "
+        "finding as a plain line outside any fenced code block, because fenced blocks are "
+        "not read as findings. When you show the format as an example rather than report "
+        "a finding, put the example inside a fenced code block."
+    )
 
 
 def _lowered_nodes(mode_cls, tmp_path):
@@ -416,10 +426,15 @@ def test_every_lowered_node_that_asks_for_findings_carries_the_rule(tmp_path, ke
     import re
 
     nodes = _lowered_nodes(mode_cls, tmp_path)
+    asking = 0
     for node_id, node in nodes.items():
         prompt = str(node.get("prompt_template") or "")
         if re.search(r"BLOCKING(?::| finding)", prompt.replace(MARKER_RULE, "")):
+            asking += 1
             assert MARKER_RULE in prompt, (key, node_id)
+    if key.startswith("default_pack-"):
+        # Every product mode has reviewers; a selector that stops matching must fail.
+        assert asking, f"{key}: no lowered node asks for blocking findings"
 
 
 @pytest.mark.parametrize("key, mode_cls", _shipped_modes(), ids=[k for k, _ in _shipped_modes()])
