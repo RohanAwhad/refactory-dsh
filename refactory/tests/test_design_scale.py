@@ -1,11 +1,13 @@
 """The design phase scales with the change, and its review blocks only on what changes the build.
 
-A scoped change (a refine, or one whose research footprint shows \u22642 functions touched,
-nothing new added, no shared engine changed) gets one research question, at most five pitfalls,
-one strategy perspective and one design-review round. At every scale the design-review gate
-sends a design back only for an unmet ask, a false claim the design relies on, a missing
-high-risk pitfall or a blocking finding from the review agent; everything else is listed as
-advisory at the person's gate and costs no round.
+A scoped change (a refine, or one whose research footprint shows \u22642 existing functions
+touched \u2014 counted by (path, name) \u2014 nothing new added, no shared engine changed) gets at
+most five pitfalls, one strategy perspective and one design-review round.  Non-refine
+research is always 3 to 5 directions; classify_scale runs after research and sets the
+class from the footprint.  At every scale the design-review gate sends a design back only
+for an unmet ask, a false claim the design relies on, a missing high-risk pitfall or a
+blocking finding from the review agent; everything else is listed as advisory at the
+person's gate and costs no round.
 """
 from __future__ import annotations
 
@@ -590,3 +592,33 @@ def test_dm149_like_fixture_is_scoped():
     result = classify_scale(ctx)
     assert result["research_scope"] == "scoped"
     assert "_plan" in result["research_scope_reason"]
+
+
+def test_same_named_functions_in_different_files_count_separately():
+    """Three `parse` functions in three files are counted as three and classed full."""
+    plan = [
+        {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+         "footprint": {"existing_functions": [
+             "a.py:10 parse", "b.py:20 parse", "c.py:30 parse",
+         ], "new_items": [], "shared_engine": []}},
+    ]
+    ctx = _scale_ctx(plan)
+    result = classify_scale(ctx)
+    assert result["research_scope"] == "full"
+    assert "3 existing functions" in result["research_scope_reason"]
+
+
+def test_research_director_footprint_instruction_clauses():
+    """Each clause of the footprint instruction is pinned; reverting any one fails."""
+    graph = DesignMode().build()
+    prompt = graph.nodes["research_director"].prompt_template
+    # Required footprint on every direction
+    assert "Record a `footprint` object on every direction" in prompt
+    # Evidence format for existing_functions
+    assert '"path:line name"' in prompt
+    # Shared-engine definition
+    assert "code that every run of the target passes through" in prompt
+    # Tests and docs do not count
+    assert "Test files, test functions and docs are neither touched functions nor added items" in prompt
+    # Size wording is a claim, not a footprint
+    assert "claim to check against the code, never a footprint" in prompt

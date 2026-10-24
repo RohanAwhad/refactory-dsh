@@ -2140,6 +2140,8 @@ and in the CLI print at design lines 937 and 1029.
 - `test_design_scale.py::test_refine_run_stays_scoped`
 - `test_design_scale.py::test_classify_scale_reason_in_design_review_status`
 - `test_design_scale.py::test_classify_scale_through_run`
+- `test_design_scale.py::test_same_named_functions_in_different_files_count_separately`
+- `test_design_scale.py::test_research_director_footprint_instruction_clauses`
 - `test_design_short_path.py::test_the_design_graph_routes_on_the_scale`
 - `test_interactive.py::test_prepare_design_sets_full_even_when_brief_names_a_file`
 

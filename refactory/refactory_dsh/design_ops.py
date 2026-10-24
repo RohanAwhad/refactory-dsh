@@ -631,7 +631,7 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
         return (Path(source) / file_path).is_file()
 
     # ── aggregate footprint ────────────────────────────────────────────
-    all_existing: dict[str, str] = {}   # name -> at
+    all_existing: dict[tuple[str, str], str] = {}   # (path, name) -> loc
     all_new: dict[str, str] = {}        # name -> at
     shared_engine_refs: list[str] = []
     has_shared_engine = False
@@ -669,7 +669,7 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
                     "research_scope": "full",
                     "research_scope_reason": f"footprint without evidence: {entry!r}",
                 }
-            all_existing[name] = loc
+            all_existing[(file_path, name)] = loc
 
         # new_items — each entry names what is added and the path
         new_items_list = fp.get("new_items", [])
@@ -724,7 +724,7 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
 
     # ── apply the three-part rule ──────────────────────────────────────
     if len(all_existing) > 2:
-        names = ", ".join(sorted(all_existing)[:3])
+        names = ", ".join(k[1] for k in sorted(all_existing)[:3])
         return {
             "research_scope": "full",
             "research_scope_reason": (
@@ -747,8 +747,8 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
         }
 
     # scoped
-    fn_names = sorted(all_existing)
-    detail = ", ".join(f"{n} at {all_existing[n]}" for n in fn_names) if fn_names else ""
+    fn_keys = sorted(all_existing)
+    detail = ", ".join(f"{k[1]} at {all_existing[k]}" for k in fn_keys) if fn_keys else ""
     reason = (
         f"touches {len(all_existing)} existing function(s)"
         + (f" ({detail})" if detail else "")

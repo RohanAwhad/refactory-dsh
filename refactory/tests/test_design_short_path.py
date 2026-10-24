@@ -160,6 +160,7 @@ def test_a_scoped_change_runs_the_short_path_end_to_end(tmp_path, monkeypatch):
     assert "no perspectives: this is a scoped change" in plan
     assert run.facts["design_review_status"].startswith(
         "Design review (automatic checks; scoped change")
+    assert ": PASS" in run.facts["design_review_status"]
 
 
 def test_a_scoped_design_the_checks_block_is_rewritten_once_before_the_gate(tmp_path):
@@ -178,6 +179,7 @@ def test_a_scoped_design_the_checks_block_is_rewritten_once_before_the_gate(tmp_
     assert "Ask mapping" in writes[1]
     assert run.facts["design_review_status"].startswith(
         "Design review (automatic checks; scoped change")
+    assert ": PASS" in run.facts["design_review_status"]
 
 
 def test_a_full_design_keeps_both_steps(tmp_path):
