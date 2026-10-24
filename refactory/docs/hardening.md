@@ -2106,3 +2106,32 @@ once; sign-off binding; the facts lock, an unreadable facts file refused, and a 
 writing back only the facts it changed; and a serial fork running past a failed optional
 branch. `spine.spec.ts` drives the fixture through the new fork and both `gate_check`
 routes.
+
+## 29. Marker placement rule (dm-198)
+
+**What the issue was.** On 2026-10-23, two dm-149 measurement runs
+(measure3-dm149_20261023_0351 and measure4-dm149_20261023_1337) failed at
+`gate_qa` with "review reloop limit reached after 3 review cycle(s)". In
+both, a reviewer wrote the blocking marker while explaining a parser check,
+and `create_ops.blocking_findings` read it as a core finding that came back
+every round.
+
+- In measure3, the code reviewer wrote a line opening with the inline code
+  `BLOCKING:` followed by explanatory text about the parser.
+- In measure4, the health checker logged its parser checks as list items
+  containing the marker form.
+
+No reviewer prompt said where the marker may appear, and the prompts
+themselves showed the finding form inside a code span, teaching reviewers
+the quoted form.
+
+**The rule.** `create_ops.MARKER_RULE` tells every reviewer to write the
+blocking marker only at the start of a finding line, in its plain form,
+and to call it "the blocking marker" when discussing it. Every site that
+showed the finding format in a code span now shows it as plain text. The
+parser (`blocking_findings`) is unchanged: a real finding written in any
+form still blocks.
+
+**Held by.** `test_follow_ups.py::test_every_reviewer_carries_marker_rule`,
+`test_follow_ups.py::test_verifier_prompt_carries_marker_rule`,
+`test_follow_ups.py::test_no_reviewer_prompt_shows_blocking_in_code_span`.
