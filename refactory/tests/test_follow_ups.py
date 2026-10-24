@@ -427,3 +427,15 @@ def test_verifier_prompt_no_code_span_blocking():
                          ("FULL_VERIFIER_PROMPT", FULL_VERIFIER_PROMPT)]:
         assert "`BLOCKING" not in prompt, f"{name} contains `BLOCKING code span"
         assert "BLOCKING:`" not in prompt, f"{name} contains BLOCKING:` code span"
+    # replay_harness builds its verifier prompt independently; check it too.
+    from refactory_dsh.replay_harness import _make_verifier_fn
+
+    class _Capture:
+        def complete(self, prompt, **kw):
+            self.prompt = prompt
+            return "VERDICT: PASS"
+
+    cap = _Capture()
+    _make_verifier_fn(cap)("brief", "diff")
+    assert "`BLOCKING" not in cap.prompt, "replay_harness verifier contains `BLOCKING code span"
+    assert "BLOCKING:`" not in cap.prompt, "replay_harness verifier contains BLOCKING:` code span"
