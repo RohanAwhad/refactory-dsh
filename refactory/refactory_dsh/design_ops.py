@@ -695,8 +695,8 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
 
         # shared_engine — list of "path:line" citations
         se = fp.get("shared_engine", [])
-        if se is None:
-            se = []
+        if se is None or se is False:
+            se = []  # an explicit "no shared engine"
         if not isinstance(se, list):
             if se is True:
                 # tolerate boolean true with no evidence
@@ -704,7 +704,12 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
                     "research_scope": "full",
                     "research_scope_reason": "footprint without evidence: shared_engine true without citations",
                 }
-            se = []
+            # Any other shape (a bare "path:line" string, a number, an object) is
+            # unreadable evidence, so the safe class is full, never a silent [].
+            return {
+                "research_scope": "full",
+                "research_scope_reason": f"footprint without evidence: shared_engine {se!r}",
+            }
         if se:
             has_shared_engine = True
             for ref in se:

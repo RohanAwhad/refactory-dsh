@@ -342,6 +342,26 @@ def test_null_footprint_field_is_full():
     assert "no usable footprint" in result2["research_scope_reason"]
 
 
+def test_a_shared_engine_that_is_not_a_list_is_full():
+    """A shared_engine given as a bare string, a number or an object is unreadable
+    evidence: the run is classed full, never scoped through a silent empty list."""
+    for value in ("refactory_dsh/nn/executor.py:10", 3, {"at": "x.py:1"}):
+        plan = [
+            {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+             "footprint": {"existing_functions": [], "new_items": [], "shared_engine": value}},
+        ]
+        result = classify_scale(_scale_ctx(plan))
+        assert result["research_scope"] == "full", value
+        assert "footprint without evidence: shared_engine" in result["research_scope_reason"], value
+    # An explicit "no shared engine" stays readable.
+    for value in ([], None, False):
+        plan = [
+            {"focus": "q1", "slug": "s1", "finding": "f1", "ids": [],
+             "footprint": {"existing_functions": [], "new_items": [], "shared_engine": value}},
+        ]
+        assert classify_scale(_scale_ctx(plan))["research_scope"] == "scoped", value
+
+
 def test_empty_directions_is_full():
     """An empty research plan (no directions) is classed full."""
     ctx = _scale_ctx([])
