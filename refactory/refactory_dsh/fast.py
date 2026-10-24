@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from refactory_dsh import delivery, repo_change
-from refactory_dsh.create_ops import SEVERITY_RULE
+from refactory_dsh.create_ops import MARKER_RULE, SEVERITY_RULE
 from refactory_dsh.create import CreateMode
 from refactory_dsh.design import DesignMode
 from refactory_dsh.edit import EditMode
@@ -111,7 +111,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
             '"callers":"...", "shared_state":"..."}]}',
         )
     focused_qa_prompt = (
-        qa_prompt + "\nEach entry in `findings` is a BLOCKING finding. " + SEVERITY_RULE
+        qa_prompt + "\nEach entry in `findings` is a BLOCKING finding. " + SEVERITY_RULE + " " + MARKER_RULE
         + " A check of something non-core that fails ends its name with `[non-core]`.\n"
         + (ARTIFACT_QA if artifact else "")
         + ("{{review_instructions}}\nChanged functions:\n{{changed_functions}}\n\n"
