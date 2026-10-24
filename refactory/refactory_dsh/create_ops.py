@@ -2176,7 +2176,8 @@ SEVERITY_RULE = (
     "not hold the change back; its pull request lists them as follow-ups."
 )
 
-#: What every reviewer is told about where and how to write the blocking marker.
+#: What every reviewer is told about where and how to write the blocking marker
+#: (dm-198).  Held by test_every_reviewer_carries_marker_rule.
 MARKER_RULE = (
     "Write the blocking marker only at the start of a finding line, in its "
     "plain form: BLOCKING: <path>: <description>. Never wrap it in backticks, "
