@@ -2206,6 +2206,16 @@ SEVERITY_RULE = (
     "not hold the change back; its pull request lists them as follow-ups."
 )
 
+#: What every reviewer is told about where and how to write the blocking marker
+#: (dm-198).  Held by test_every_reviewer_carries_marker_rule.
+MARKER_RULE = (
+    "Write the blocking marker only at the start of a finding line, in its "
+    "plain form: BLOCKING: <path>: <description>. Never wrap it in backticks, "
+    "a code span, or quotation marks while explaining a check or describing "
+    "the parser. When discussing the marker itself, call it \"the blocking "
+    "marker\"."
+)
+
 #: What the overwatch pass is told about its verdict, beside SEVERITY_RULE.
 OVERWATCH_VERDICT_RULE = (
     "State `VERDICT: FAIL` only for a core defect or an ask with no evidence; when every "
