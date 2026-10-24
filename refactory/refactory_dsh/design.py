@@ -145,8 +145,8 @@ class DesignMode(Mode):
                 '`{"existing_functions": [], "new_items": [], "shared_engine": []}`.\n\n'
                 "- `existing_functions`: each entry is a string `\"path:line name\"` "
                 "for an existing function the direction's change modifies: one function "
-                "per entry, its real line number, and its path as the target's checkout "
-                "shows it. Test "
+                "per entry, the line its definition starts on, and its path as the "
+                "target's checkout shows it. Test "
                 "files, test functions and docs are neither touched functions nor "
                 "added items.\n"
                 "- `new_items`: each entry is a string naming what is added and the "

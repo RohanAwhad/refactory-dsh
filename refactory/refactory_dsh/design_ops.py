@@ -595,10 +595,10 @@ def gate_design_review(ctx: Any) -> str:
 #: A research direction's footprint has exactly these keys, each a list (dm-200).
 FOOTPRINT_KEYS = ("existing_functions", "new_items", "shared_engine")
 
-#: One existing function a change touches: "path:line name", with a real line
-#: number and a single name.
+#: One existing function a change touches: "path:line name" (or "path:start-end
+#: name", counted by its start line), with a real line number and a single name.
 _FUNCTION_CITATION = _re.compile(
-    r"(?P<path>[^\s:]+):(?P<line>[1-9]\d*)\s+(?P<name>[A-Za-z_][\w.]*(?:\(\))?)")
+    r"(?P<path>[^\s:]+):(?P<line>[1-9]\d*)(?:-[1-9]\d*)?\s+(?P<name>[A-Za-z_][\w.]*(?:\(\))?)")
 
 
 def _tracked_files(source: str) -> set[str] | None:

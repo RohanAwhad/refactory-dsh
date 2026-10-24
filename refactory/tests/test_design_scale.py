@@ -392,6 +392,11 @@ def test_a_function_citation_needs_a_line_number_and_one_name():
         assert result["research_scope"] == "full", entry
         assert "footprint without evidence" in result["research_scope_reason"], entry
     assert _one(_fns("a.py:12 Mode.build"))["research_scope"] == "scoped"
+    # A line range is a citation too, counted by the line it starts on.
+    result = _one(_fns("a.py:2101-2141 blocking_findings"))
+    assert result["research_scope"] == "scoped"
+    assert "a.py:2101" in result["research_scope_reason"]
+    assert _one(_fns("a.py:5-x f"))["research_scope"] == "full"
 
 
 def test_a_citation_outside_the_checkout_never_counts(tmp_path):
@@ -416,6 +421,8 @@ def test_citations_resolve_against_the_real_checkout_however_research_writes_the
         assert result["research_scope"] == "scoped", (entry, result)
         assert "refactory/refactory_dsh/create_ops.py:324" in result["research_scope_reason"]
     assert _one(_fns("no_such_module_zz.py:1 f"), facts=facts)["research_scope"] == "full"
+    # A suffix counts only on a whole path segment: "eate_ops.py" is not create_ops.py.
+    assert _one(_fns("eate_ops.py:324 _plan"), facts=facts)["research_scope"] == "full"
     assert _one(_fns("__init__.py:1 f"), facts=facts)["research_scope"] == "full"
 
 
@@ -751,7 +758,7 @@ def test_research_director_footprint_instruction_clauses():
     assert "claim to check against the code, never a footprint" in prompt
     # Exactly the three keys, one function per entry with its real line
     assert "with exactly these three keys, each a list" in prompt
-    assert "one function per entry, its real line number" in prompt
+    assert "one function per entry, the line its definition starts on" in prompt
     # A shared function is not an engine
     assert "A function is not an engine because several gates or modes call it" in prompt
     # What counts as a new item
