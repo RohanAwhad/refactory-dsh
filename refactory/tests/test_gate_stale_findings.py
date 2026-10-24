@@ -48,6 +48,13 @@ def test_fenced_code_blocking_is_skipped():
         VERDICT: PASS
     """)
     assert blocking_findings(text) == []
+    tilde = dedent("""\
+        ~~~
+        BLOCKING: <path>: <description>
+        ~~~
+        BLOCKING: a.py: a real finding
+    """)
+    assert blocking_findings(tilde) == ["a.py: a real finding"]
 
 
 def test_blocking_none_is_not_a_finding():

@@ -104,11 +104,12 @@ missing entry is advisory: it is listed at the person's gate and never re-runs t
 Every reviewer prompt that can report BLOCKING findings carries
 `create_ops.MARKER_RULE`, which tells the reviewer to write the blocking
 marker only at the start of a finding line in its plain form, never to
-wrap it in backticks, a code span or quotation marks, and to put any
-example of the format inside a fenced code block, which the parser skips.
+wrap it in backticks, a code span or quotation marks, to write every real
+finding outside any fenced code block, and to put an example of the format
+inside one, because the parser skips fenced blocks.
 This makes it less likely that the `blocking_findings` parser reads an
-explanatory mention as a real finding. The parser itself is unchanged, so
-a review that ignores the rule can still trip it (tracker dm-220).
+explanatory mention as a real finding. The parser does not enforce the
+rule, so a review that ignores it can still trip the parser (tracker dm-220).
 
 ### Claim checking
 
