@@ -393,7 +393,7 @@ class CreateMode(Mode):
             "materialise", "op", call=f"{OPS}:materialise",
             reads=("emit.txt",),
             writes=("staging/manifest.json",),
-            produces=("package_path", "files"),
+            produces=("package_path", "files", "emission_refused"),
             notes="write the staged package to disk",
         ))
         # create-v2's `gate_build`: the built thing is checked before it is reviewed.

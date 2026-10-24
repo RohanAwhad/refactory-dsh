@@ -1414,6 +1414,7 @@ def _overlapping_hunks(attempt_path: Path, base: str, file_path: str,
     diff_output = _sp.run(
         ["git", "-C", str(attempt_path), "diff", "-U0", base, "HEAD", "--", file_path],
         capture_output=True, text=True, timeout=15, check=True,
+        env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"},
     ).stdout
     overlapping: list[str] = []
     current: list[str] = []
@@ -1720,6 +1721,7 @@ def compute_site_reverts(
                 _sp.run(
                     ["git", "-C", str(attempt_path), "checkout", "HEAD", "--", file_path],
                     capture_output=True, timeout=10,
+                    env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"},
                 )
             except Exception:
                 pass

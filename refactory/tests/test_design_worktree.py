@@ -458,7 +458,7 @@ def test_without_a_worktree_a_run_takes_whole_files_only(repo, tmp_path, monkeyp
 
 @pytest.mark.parametrize("answer, reason", [
     ("print('no blocks')\n", "holds no ===FILE:"),
-    ("===EDIT: a path with spaces===\n", "has a block header that is not"),
+    ("===EDIT: a path with spaces===\n", "malformed block header"),
     ("===FILE: a.py===\nx\n" + _edit("a.py", ("x\n", "y\n")), "more than one block.*===FILE:"),
     ("===DELETE: a.py===\nleftover\n", "a deletion takes none"),
     (f"===EDIT: a.py===\n{repo_change.SEARCH}\nx\n{repo_change.DIVIDER}\ny\n", "missing its"),
@@ -1965,6 +1965,110 @@ def test_guardedness_record_shows_new_test_failing_on_base(tmp_path):
         r["file"] == "test_tool.py" and r.get("file_level") == "cannot_run_on_base"
         for r in guardedness["results"]
     ), f"test_tool.py should be guarding or cannot_run_on_base but got: {guardedness}"
+
+
+# ── T1: @-paths accepted in all three emission block kinds ─────────────────
+def test_at_paths_are_accepted_in_emission():
+    at_path = "patches/@scope@1.0.0.patch"
+    # ===FILE: with body
+    files, _edits, _deletes = repo_change._emitted(
+        f"===FILE: {at_path}===\npatch content\n", edits=True)
+    assert Path(at_path) in files
+
+    # ===EDIT: with SEARCH/DIVIDER/REPLACE
+    edit_body = (
+        f"===EDIT: {at_path}===\n"
+        f"{repo_change.SEARCH}\nold line\n{repo_change.DIVIDER}\nnew line\n{repo_change.REPLACE}\n"
+    )
+    _files2, edits2, _deletes2 = repo_change._emitted(edit_body, edits=True)
+    assert Path(at_path) in edits2
+
+    # ===DELETE:
+    _files3, _edits3, deletes3 = repo_change._emitted(
+        f"===DELETE: {at_path}===\n", edits=True)
+    assert Path(at_path) in deletes3
+
+
+# ── T3: ..-path refused, naming the path ───────────────────────────────────
+def test_dotdot_path_is_refused_naming_the_path():
+    import re as _re
+    with pytest.raises(worktree.AttemptRefused, match=_re.escape("../etc/passwd")):
+        repo_change._emitted("===FILE: ../etc/passwd===\ncontent\n", edits=True)
+
+
+# ── T4: absolute path refused, naming the path ────────────────────────────
+def test_absolute_path_is_refused_naming_the_path():
+    import re as _re
+    with pytest.raises(worktree.AttemptRefused, match=_re.escape("/etc/passwd")):
+        repo_change._emitted("===FILE: /etc/passwd===\ncontent\n", edits=True)
+
+
+# ── T5: malformed header refused, quoting the line in _emitted ─────────────
+@pytest.mark.parametrize("header, fragment", [
+    ("===FILE: has space.txt===", "has space.txt"),
+    ("===FILE:===", "===FILE:==="),
+])
+def test_malformed_header_is_refused_quoting_the_line_in_emitted(header, fragment):
+    import re as _re
+    with pytest.raises(worktree.AttemptRefused, match=_re.escape(fragment)):
+        repo_change._emitted(f"{header}\ncontent\n", edits=True)
+
+
+# ── T9: backtick- and quote-wrapped paths refused in _emitted ──────────────
+@pytest.mark.parametrize("header, fragment", [
+    ("===FILE: `src/a.py`===", "`src/a.py`"),
+    ("===FILE: 'src/a.py'===", "'src/a.py'"),
+    ('===FILE: "src/a.py"===', '"src/a.py"'),
+])
+def test_backtick_and_quote_wrapped_paths_are_refused_in_emitted(header, fragment):
+    import re as _re
+    with pytest.raises(worktree.AttemptRefused, match=_re.escape(fragment)):
+        repo_change._emitted(f"{header}\ncontent\n", edits=True)
+
+
+# ── T10: worktree apply path with @-path files (all three block kinds) ─────
+def test_worktree_apply_at_path_all_three_block_kinds(tmp_path):
+    """The case b36b needed: FILE, EDIT and DELETE of @-path files through the
+    worktree apply path, committed in the attempt, and the committed tree
+    asserted.  Uses the real scoped-package name shape."""
+    repo = git_repo(tmp_path / "repo")
+    patch_dir = Path(repo) / "patches"
+    patch_dir.mkdir()
+    existing = "@deepseek-ai__dsh-subagent-claude-code@0.2.0-rc.2.patch"
+    to_delete = "@scope__other@2.0.0.patch"
+    (patch_dir / existing).write_text("old patch\n")
+    (patch_dir / to_delete).write_text("delete me\n")
+    git(repo, "add", "patches")
+    git(repo, "commit", "-q", "-m", "add patches")
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    found = worktree.create(repo, "HEAD", "atat0000aaaa", run)
+
+    new_file = "patches/@scope__new@3.0.0.patch"
+    edit_file = f"patches/{existing}"
+    delete_file = f"patches/{to_delete}"
+    emission = (
+        f"===FILE: {new_file}===\nnew patch content\n"
+        f"===EDIT: {edit_file}===\n"
+        f"{repo_change.SEARCH}\nold patch\n"
+        f"{repo_change.DIVIDER}\nnew patch\n"
+        f"{repo_change.REPLACE}\n"
+        f"===DELETE: {delete_file}===\n"
+    )
+
+    files, deletes, _rev, _repeated = repo_change.apply_emission(emission, found, run)
+    advanced = worktree.commit_attempt(run, files, "attempt 1", deletes)
+    wt = Path(found.path)
+
+    # ===FILE: new @-path file is committed
+    assert git(wt, "show", f"{advanced.head}:{new_file}") == "new patch content"
+    # ===EDIT: existing @-path file is updated
+    assert git(wt, "show", f"{advanced.head}:{edit_file}") == "new patch"
+    # ===DELETE: @-path file is removed from the committed tree
+    import subprocess
+    with pytest.raises(subprocess.CalledProcessError):
+        git(wt, "show", f"{advanced.head}:{delete_file}")
 
 
 def test_the_design_mode_declares_the_knobs_the_ceo_passes():

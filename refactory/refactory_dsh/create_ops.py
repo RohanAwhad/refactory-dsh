@@ -20,7 +20,7 @@ from typing import Any
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
-from refactory_dsh.repo_change import refuse_truncated
+from refactory_dsh.repo_change import refuse_truncated, EMISSION_PATH
 
 #: Where a create/edit run stages its package inside the run directory, so two
 #: parallel runs of the same package name never collide.  A git worktree is not
@@ -35,7 +35,7 @@ STAGING = "staging"
 
 #: The marker the emit agent uses to separate files. JSON would need every
 #: newline escaped, which is where a generated source file usually dies.
-FILE_MARKER = re.compile(r"^===FILE:\s*([A-Za-z0-9_./-]+)\s*===\s*$", re.MULTILINE)
+FILE_MARKER = re.compile(rf"^===FILE:\s*({EMISSION_PATH})\s*===\s*$", re.MULTILINE)
 
 REQUIRED_FILES = ("__init__.py",)
 
@@ -783,7 +783,10 @@ def _package_relative(relative: str, name: str) -> str:
 def materialise(ctx: Any) -> dict[str, Any]:
     """Turn the emit agent's answer into a package directory."""
     answer = ctx.read_text("emit.txt")
-    files = parse_files(answer)
+    try:
+        files = parse_files(answer)
+    except ValueError as exc:
+        return {"emission_refused": str(exc)}
     if not files:
         raise ValueError(
             "the answer contained no '===FILE: <name>===' blocks, so there is "
@@ -833,11 +836,24 @@ def materialise(ctx: Any) -> dict[str, Any]:
     else:
         registry.install_workspace(project_for_nodes())
     ctx.write_json(f"{STAGING}/manifest.json", {"package": name, "files": sorted(written)})
-    return {"package_path": str(root), "files": sorted(written)}
+    cleared = {"emission_refused": ""} if ctx.facts.get("emission_refused") else {}
+    return {"package_path": str(root), "files": sorted(written), **cleared}
 
 
 def parse_files(answer: str) -> dict[str, str]:
     """Split an answer into ``path -> source`` blocks."""
+    for line in answer.splitlines():
+        if line.startswith(("===EDIT:", "===DELETE:")):
+            raise ValueError(
+                f"this mode takes whole files only (===FILE: <path>===); "
+                f"got: {line!r}"
+            )
+        if line.startswith("===FILE:") and FILE_MARKER.fullmatch(line) is None:
+            raise ValueError(
+                f"malformed emission header: {line!r}; "
+                "a path may contain any characters except whitespace, '=', "
+                "backtick, or quotes"
+            )
     files: dict[str, str] = {}
     matches = list(FILE_MARKER.finditer(answer))
     for index, match in enumerate(matches):
@@ -853,6 +869,12 @@ def validate(ctx: Any) -> str:
     Every reason is written out and fed back into the next emit prompt, because a
     model that is told exactly which line broke can fix it in one attempt.
     """
+    refused = str(ctx.facts.get("emission_refused") or "")
+    if refused:
+        detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
+        ctx.write_text("validation.txt", detail + "\n")
+        ctx.set_fact("validation", detail)
+        return Verdict("reloop", detail)
     name = str(ctx.facts["name"])
     attempts = int(ctx.knob("attempts", 3))
     brief = ctx.read_json("brief.json", {}) or {}

@@ -7,6 +7,7 @@ so that the logic is not duplicated across two entry points.
 from __future__ import annotations
 
 import re
+import os
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -233,6 +234,7 @@ def detect_stuck(
             cp = subprocess.run(
                 ["git", "diff", "HEAD^..HEAD"] + file_args,
                 cwd=worktree_path, capture_output=True, text=True, timeout=10,
+                env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"},
             )
             diff_output = cp.stdout.strip()
         except (subprocess.TimeoutExpired, OSError):
