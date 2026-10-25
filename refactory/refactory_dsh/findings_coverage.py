@@ -178,7 +178,7 @@ def collect_findings(
 
 def finding_coverage(
     document_text: str, findings: list[dict],
-    section_heading: str = 'Research and perspective findings',
+    section_heading: str = 'Research and perspective findings', source: str = '',
 ) -> tuple[list[str], list[str], list[str]]:
     """Check finding id coverage in the named section.
 
@@ -188,7 +188,7 @@ def finding_coverage(
     parse_fnd_id and compare whole ids.
     """
     section = coverage_helpers.extract_section(document_text, section_heading)
-    sites = coverage_helpers.site_paths(document_text)
+    sites = coverage_helpers.site_paths(document_text, source=source)
     hdgs = coverage_helpers.headings(document_text)
 
     addressed: list[str] = []
@@ -331,7 +331,8 @@ def gate_problems(ctx: Any, document: str = 'design.md') -> list[str]:
     else:
         doc_text = ctx.read_text('design.md') if ctx.exists('design.md') else ''
         addressed, set_aside, missing_ids = finding_coverage(
-            doc_text, findings)
+            doc_text, findings,
+            source=str(ctx.facts.get('source') or ctx.facts.get('artifact') or ''))
 
     # Build coverage fact
     coverage_lines: list[str] = []

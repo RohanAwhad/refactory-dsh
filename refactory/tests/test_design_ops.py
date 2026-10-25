@@ -374,12 +374,15 @@ def test_count_fact_survives_on_proceed(tmp_path):
 def test_apply_corrections_updates_every_part_a_correction_touches():
     """The builder reads the whole design, so a correction must not leave ## Changes or
     ## Docs stating what it overrides (a lab run's corrected design kept a stale Changes
-    entry). The prompt asks for every touched part, those two sections included, and
-    keeps the untouched sections and the structure."""
+    entry). The prompt asks for every touched part -- the light template's sections and
+    any optional one the design has -- keeps the untouched sections and the structure,
+    and records the corrections in their own section."""
     from refactory_dsh.design import DesignMode
 
     prompt = " ".join(DesignMode().build().nodes["apply_corrections"].prompt_template.split())
     assert "Do not change the ## Docs section" not in prompt
-    assert "in ## Changes and ## Docs any wording, example text or file list" in prompt
+    assert "## Summary, ## Changes and ## Tests, and any optional section" in prompt
+    assert "(such as ## Rule and sites or ## Docs)" in prompt
+    assert "add a `## Corrections at approval` section" in prompt
     assert "Leave no part stating what a correction overrides" in prompt
     assert "keep the document's section headings and structure" in prompt

@@ -16,7 +16,6 @@ from refactory_dsh.nn import Verdict
 from test_pitfalls import _contract
 from tests_support import (
     DESIGN_DOC_ANSWER,
-    DESIGN_REVIEW_ANSWER,
     FakeModel,
     PITFALLS_ANSWER,
     RESEARCH_ANSWER,
@@ -348,7 +347,6 @@ def test_scripted_design_run_dropped_finding(tmp_path):
         "perspectives",
         "one plan",
         DESIGN_DOC_ANSWER,      # does not mention FND-extra-1
-        DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
         *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
@@ -367,7 +365,7 @@ def test_scripted_design_run_dropped_finding(tmp_path):
 
     # One design round: the uncovered finding did not send the design back.
     design_doc_prompts = [
-        p for p in model.prompts if 'What the design review found' in p
+        p for p in model.prompts if 'What the design checks found' in p
     ]
     assert len(design_doc_prompts) == 1
     assert 'FND-extra-1: MISSING' in result.facts['finding_coverage']
@@ -489,5 +487,5 @@ def test_dsh_run_node_reports_missing_finding(tmp_path):
 
     assert result == 'proceed'
     feedback = (d / 'reviews' / 'design-review-feedback.txt').read_text()
-    assert feedback.startswith('the design review passed')
+    assert feedback.startswith('nothing blocks the build')
     assert 'FND-foo-1' not in feedback

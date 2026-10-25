@@ -389,20 +389,14 @@ def record_findings(ctx: Any) -> dict[str, Any]:
     return {"findings_recorded": recorded}
 
 
-def gate_research(ctx: Any) -> str:
-    """Proceed only when the plan is a plan and its findings are on disk.
+def research_problems(ctx: Any, raw: str, research_scope: str, *,
+                      count: str = "required") -> list[str]:
+    """What is wrong with a research plan, one line each; [] when nothing is.
 
-    The stage exists to ground the design in facts, and a node that narrates its
-    intent instead of producing the array satisfies ``writes=("research-plan.json",)``
-    with any bytes at all: two real runs wrote a prose status message about subagents
-    "running in the background", left ``research/`` empty, and the design proceeded on
-    unverified assumptions. The reasons go to `research-review.txt` and back into the
-    next attempt's prompt, exactly as the design review's do.
+    Create's `gate_research` refuses a plan on these; design mode's
+    `design_ops.gate_design_research` lists them as advice (``count="suggested"``) and
+    proceeds.
     """
-    raw = ctx.read_text("research-plan.json")
-    allowed = int(ctx.knob("research_attempts", 3))
-    # Read research_scope from the run's facts, NOT from knobs.
-    research_scope = ctx.facts.get("research_scope", "full")
     problems: list[str] = []
     entries = _plan(raw)
     if not entries:
@@ -414,12 +408,12 @@ def gate_research(ctx: Any) -> str:
         if research_scope == "scoped":
             if not 1 <= len(entries) <= 3:
                 problems.append(
-                    f"the plan has {len(entries)} direction(s); one to three are required for a scoped change"
+                    f"the plan has {len(entries)} direction(s); one to three are {count} for a scoped change"
                 )
         else:
             if not 3 <= len(entries) <= 5:
                 problems.append(
-                    f"the plan has {len(entries)} direction(s); three to five are required"
+                    f"the plan has {len(entries)} direction(s); three to five are {count}"
                 )
         seen: set[str] = set()
         for index, entry in enumerate(entries):
@@ -462,6 +456,24 @@ def gate_research(ctx: Any) -> str:
                                 f"{label}: {path} has duplicate id {fid}"
                             )
                         seen_fids.add(fid)
+    return problems
+
+
+def gate_research(ctx: Any) -> str:
+    """Proceed only when the plan is a plan and its findings are on disk.
+
+    The stage exists to ground the design in facts, and a node that narrates its
+    intent instead of producing the array satisfies ``writes=("research-plan.json",)``
+    with any bytes at all: two real runs wrote a prose status message about subagents
+    "running in the background", left ``research/`` empty, and the design proceeded on
+    unverified assumptions. The reasons go to `research-review.txt` and back into the
+    next attempt's prompt, exactly as the design review's do.
+    """
+    raw = ctx.read_text("research-plan.json")
+    allowed = int(ctx.knob("research_attempts", 3))
+    # Read research_scope from the run's facts, NOT from knobs.
+    research_scope = ctx.facts.get("research_scope", "full")
+    problems = research_problems(ctx, raw, research_scope)
     used = int(ctx.facts.get("research_attempts_used", 0)) + 1
     report = "\n".join(f"- {problem}" for problem in problems)
     ctx.write_text("research-review.txt", report or "ok\n")

@@ -322,12 +322,9 @@ class DesignFastMode(DesignMode):
     @classmethod
     def declare(cls) -> dict[str, Knob]:
         knobs = super().declare()
-        knobs.pop("research_attempts")
         knobs.pop("check_attempts")
         knobs.pop("review_attempts")
         knobs.pop("design_review_attempts")
-        knobs.pop("pitfalls_attempts")
-        knobs.pop("claims_check_attempts")
         knobs.pop("self_check_fixups")
         knobs.pop("self_check_timeout_s")
         # It works where design works (`repo_change`), but delivers nothing: a pull request

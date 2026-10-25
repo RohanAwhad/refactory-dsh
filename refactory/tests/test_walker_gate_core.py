@@ -28,7 +28,6 @@ import pytest
 
 from tests_support import (
     DESIGN_DOC_ANSWER,
-    DESIGN_REVIEW_ANSWER,
     FakeModel,
     PITFALLS_ANSWER,
     RESEARCH_ANSWER,
@@ -47,7 +46,6 @@ PRE_GATE = [
     "perspectives",
     "one plan",
     DESIGN_DOC_ANSWER,
-    DESIGN_REVIEW_ANSWER,
 ]
 
 POST_GATE_PROCEED = [
@@ -60,7 +58,6 @@ POST_GATE_PROCEED = [
 POST_GATE_RELOOP = [
     "one plan",
     DESIGN_DOC_ANSWER,
-    DESIGN_REVIEW_ANSWER,
 ]
 
 

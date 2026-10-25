@@ -69,11 +69,6 @@ class DesignMode(Mode):
     @classmethod
     def declare(cls) -> dict[str, Knob]:
         return {
-            "research_attempts": Knob(
-                3, "int", lo=1, hi=8,
-                description="how many times the research step may be retried when its "
-                            "plan is not a plan or its findings were never written",
-            ),
             "check_attempts": Knob(
                 3, "int", lo=1, hi=5,
                 description="how many times the emit step may be retried when the "
@@ -94,19 +89,11 @@ class DesignMode(Mode):
                             "0 or a value at or below check_attempts disables the extension",
             ),
             "design_review_attempts": Knob(
-                2, "int", lo=1, hi=4,
-                description="how many times the design review may reloop before proceeding "
-                            "to the approval gate with its remaining findings",
-            ),
-            "pitfalls_attempts": Knob(
-                2, "int", lo=1, hi=5,
-                description="how many times the pitfalls step may be retried when its "
-                            "output is invalid",
-            ),
-            "claims_check_attempts": Knob(
-                2, "int", lo=1, hi=4,
-                description="how many times the claims checker may reloop before "
-                            "passing mismatches to the review",
+                1, "int", lo=0, hi=3,
+                description="how many times a design whose ## Changes section is missing "
+                            "or empty is sent back for a rewrite before it goes to the "
+                            "approval gate as it is; every other finding is advisory and "
+                            "never sends it back",
             ),
             # As in create: the walker passes these in the run's task, and a run on
             # DSH carries them as knobs.
@@ -164,7 +151,7 @@ class DesignMode(Mode):
                       "deliverable_kind", "review_instructions", "verification_methods",
                       *repo_change.produces(), "delivery", "delivery_plan",
                       "has_pitfalls_step", "pitfalls", "pitfalls_review",
-                      "claims_check_feedback", "claims_check_attempts_used", "design_review_status"),
+                      "claims_check_feedback", "design_review_status"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -229,14 +216,15 @@ class DesignMode(Mode):
             produces=("findings_recorded",),
             notes="write each direction's finding where the reviews will look for it",
         ))
+        # Design mode's own research gate: it never fails the run (create's still does).
         graph.add(Node(
-            "gate_research", "gate", evaluator="refactory_dsh.create_ops:gate_research",
+            "gate_research", "gate", evaluator=f"{OPS}:gate_design_research",
             reads=("research-plan.json",),
             writes=("research-review.txt",),
-            produces=("research_review", "research_attempts_used"),
-            knobs=("research_attempts",),
+            produces=("research_review", "research_attempts_used", "research_advisory"),
             max_iterations=8,
-            notes="proceed only when the plan is a plan and its findings exist",
+            notes="reloop once only when there is no parseable plan; otherwise proceed, "
+                  "with what is off listed on the approval card",
         ))
         graph.add(Node(
             "pitfalls_researcher", "agent",
@@ -287,13 +275,13 @@ class DesignMode(Mode):
             "gate_pitfalls", "gate", evaluator=f"{OPS}:gate_pitfalls",
             reads=("pitfalls.json",),
             writes=("pitfalls-review.txt",),
-            produces=("pitfalls_review", "pitfalls_attempts_used"),
-            knobs=("pitfalls_attempts",),
+            produces=("pitfalls_review", "pitfalls_attempts_used", "pitfalls_advisory"),
             max_iterations=8,
-            notes="proceed only when pitfalls.json is valid; reloop to pitfalls_researcher otherwise",
+            notes="reloop once only when there are no parseable pitfalls; otherwise proceed, "
+                  "with what is off listed on the approval card",
         ))
-        # A scoped change skips the perspectives step and, below, the design-review
-        # agent: both runtimes route on these gates' labels (`scoped`, or `proceed`).
+        # A scoped change skips the perspectives step: both runtimes route on this gate's
+        # labels (`scoped`, or `proceed`).
         graph.add(Node(
             "route_strategy", "gate", evaluator=f"{OPS}:route_strategy",
             writes=("strategy-plan.json", "strategy/"),
@@ -366,7 +354,7 @@ class DesignMode(Mode):
                 "The check, run from {{check_root}}:\n    {{check}}\n\n"
                 "## The plan\n{{strategy}}\n\n"
                 "## Pitfalls\n{{pitfalls}}\n\n"
-                "## What the design review found\n{{design_review_feedback}}\n\n"
+                "## What the design checks found\n{{design_review_feedback}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "Write the design document for this artifact: every file it will "
                 "add or change, what each one does, the interfaces between them, and how the "
@@ -388,23 +376,17 @@ class DesignMode(Mode):
                 "`name()` at `path/to/file.py:42`: `def name(self):`. The subject "
                 "(the backtick span before `at`) names the function, attribute or class "
                 "the claim is about; the quote (the backtick span after `:`) is the line "
-                "content at that position. This form is mechanically checked before the "
-                "design review runs. Bare citations without a quoted line (for files "
+                "content at that position. This form is mechanically checked, and a claim "
+                "the check cannot confirm is shown to the person who approves the design. "
+                "Bare citations without a quoted line (for files "
                 "being added, or site markers) are fine as-is.\n\n"
                 + design_contract.prompt_contract()
-                + "\n\n"
-                "9. `## Anti-patterns to avoid` (when the research produced pitfalls) — "
-                "for each high-risk pitfall id, either address it by naming the site (a "
-                "backticked `path:line` from Rule and sites) or the section (§ heading "
-                "name) that handles it, or set it aside with `[set-aside: <reason>]`. A "
-                "high-risk pitfall that is missing or set aside without a reason fails "
-                "the contract. Medium and low pitfalls appear only where they change a "
-                "decision.\n\n"
-                "10. Research and perspective findings \u2014 read research/*.md and "
+                + "\n"
+                "Research and perspective findings \u2014 read research/*.md and "
                 "strategy/*.md directly, and cite a finding id (FND-<slug>-<n>) where it "
                 "changes a decision. Do not list findings that change nothing; the "
                 "document is for building the change, not for accounting for the "
-                "research.\n"
+                "research. The person who approves the design reads it: keep it short.\n"
                 "\n\n## Claims check feedback\n{{claims_check_feedback}}"
             ),
             reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt",
@@ -413,103 +395,35 @@ class DesignMode(Mode):
             produces=("design",),
             notes="write the design document the code is written from",
         ))
+        # An op, not a gate: it never sends the design back (one design pass). What it
+        # cannot confirm is listed first on the approval gate's card.
         graph.add(Node(
-            "route_design_review", "gate", evaluator=f"{OPS}:route_design_review",
-            produces=("design_review_by",),
-            max_iterations=8,
-            notes="a scoped change's design is checked automatically; a full design is reviewed",
+            "check_design_claims", "op",
+            call="refactory_dsh.design_claims:check_design_claims",
+            reads=("design.md",),
+            produces=("claims_check", "claims_check_feedback"),
+            notes="deterministic check: cited paths exist, quoted lines match within a "
+                  "window, named identifiers are present; resolves drift, lists the rest",
         ))
         graph.add(Node(
-            "check_design_claims", "gate",
-            evaluator="refactory_dsh.design_claims:check_design_claims",
-            reads=("design.md",),
+            "gate_design_review", "gate",
+            evaluator=f"{OPS}:gate_design_review",
+            reads=("design.md", "brief.json", "pitfalls.json", "research/", "strategy/"),
             writes=("reviews/design-review-feedback.txt",),
-            produces=("claims_check_attempts_used", "claims_check_feedback",
-                      "design_review_feedback"),
-            knobs=("claims_check_attempts",),
-            max_iterations=4,
-            notes="deterministic check: cited paths exist, quoted lines match, "
-                  "named identifiers are present; reloop to design_doc on mismatch",
+            produces=("design_review_feedback", "design_review_attempts_used",
+                      "design_review_rewrites", "design_review_findings", "pitfall_coverage",
+                      "finding_coverage", "design_review_status",
+                      "design_review_advisory", "design_review_blocking"),
+            knobs=("design_review_attempts",),
+            max_iterations=6,
+            notes="reloop to design_doc only for a missing or empty ## Changes; list "
+                  "everything else on the approval card; never fail the run",
         ))
         # design-v2 puts the person's approval on the design document, after the plan
         # exists and before any code does.
         # The approval covers delivery too, which is the only step that reaches outside
         # the run: delivery.md says which pull request it opens, or which repository it
         # creates, and the approval is scoped to that file as it is to design.md.
-        graph.add(Node(
-            "design_review", "agent",
-            prompt_template=(
-                "## Pitfalls\n{{pitfalls}}\n\n"
-                "For every high-risk pitfall, confirm the design accounts for it in its "
-                "Anti-patterns section — either addressed with a site or section that "
-                "handles it, or set aside with a reason. A high pitfall that is missing "
-                "from the Anti-patterns section is BLOCKING.\n\n"
-                "Artifact name: {{name}}\nBrief: {{brief}}\n"
-                "Source: {{source}}\n\n"
-                "## Previous feedback\n{{design_review_feedback}}\n\n"
-                "Read the design document from `design.md` in the run directory. "
-                "Read the brief from `brief.json` in the run directory.\n\n"
-                "For every claim the design makes about existing code, read the "
-                "cited file and line range in {{source}} and confirm the claim "
-                "matches what is there. For every claim the design makes about "
-                "what the brief says, find the quoted text verbatim in the brief. "
-                "For every design choice, confirm that exactly one decision is made "
-                "and no alternative is left open.\n\n"
-                "Report as BLOCKING only what would make the build wrong or leave an ask "
-                "unmet:\n"
-                "- An open alternative or a choice left undecided.\n"
-                "- A claim about code you cannot confirm in the cited file.\n"
-                "- A claim about the brief the brief does not say (a difference only in "
-                "punctuation or formatting is a note, not a finding).\n"
-                "- A command, flag or file the design tells a person or the builder "
-                "to use that does not exist.\n"
-                "- A piece the design adds that nothing in the design uses or starts.\n"
-                "- A planned test that cannot fail when the code is wrong, such as one "
-                "that asserts on values it built itself, or reads through a stand-in "
-                "the real code would not provide.\n"
-                "- A new mechanism where the code already has one that does the job, "
-                "naming the existing one.\n"
-                "- A place in the code that applies or restates the same rule the design "
-                "changes, found by searching the source, that the design leaves unchanged "
-                "without giving a reason, or does not list at all in '## Rule and sites'. "
-                "Search every caller of a changed function in every mode and graph, not "
-                "only the brief's own path.\n"
-                "- An ask in the brief with no row in the Ask mapping table, or whose "
-                "named test does not exercise it.\n\n"
-                "List each finding as a line starting with BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. " + MARKER_RULE + "\n\n"
-                "Write anything else under `## Notes`, never as a blocking finding: a doc the "
-                "'## Docs' section leaves out, a missing or thin Failure trace, a "
-                "quotation that differs only in punctuation or formatting, and style or "
-                "structure that does not change the build. Notes do not send the design "
-                "back.\n\n"
-                "{{review_instructions}}\n\n"
-                "Trace the brief's own example through the code in time order, naming the route a "
-                "real run takes for every runtime that runs it. Write the trace in a section headed "
-                "`## Brief example trace`, with path:line citations for each step.\n\n"
-                "End with a line that is exactly `VERDICT: PASS` when there are "
-                "no blocking findings, or `VERDICT: FAIL` when there are any."
-            ),
-            reads=("brief.json", "design.md", "reviews/design-review-feedback.txt",
-                   "pitfalls.json"),
-            writes=("reviews/design-review.md",),
-            produces=("design_review_text",),
-            notes="review the design for open alternatives and unconfirmed claims",
-        ))
-        graph.add(Node(
-            "gate_design_review", "gate",
-            evaluator=f"{OPS}:gate_design_review",
-            reads=("reviews/design-review.md", "design.md", "brief.json",
-                   "pitfalls.json", "research/", "strategy/"),
-            writes=("reviews/design-review-feedback.txt",),
-            produces=("design_review_feedback", "design_review_attempts_used",
-                      "design_review_findings", "pitfall_coverage",
-                      "finding_coverage", "design_review_status",
-                      "design_review_advisory", "design_review_blocking"),
-            knobs=("design_review_attempts",),
-            max_iterations=6,
-            notes="proceed on PASS with no findings; reloop to design_doc otherwise; "
-                  "never fail the run",
-        ))
         graph.add(Node(
             "gate_strategy", "gate", gate_kind="user",
             reads=("design.md", "delivery.md"),
@@ -815,12 +729,15 @@ class DesignMode(Mode):
                 "The following gate corrections were given when the design was approved:\n\n"
                 "{{gate_corrections}}\n\n"
                 "Update `design.md` so that every part of it the corrections touch says what "
-                "they say: the ## Summary, the heading (H1), each site entry in ## Rule and "
-                "sites, and in ## Changes and ## Docs any wording, example text or file "
-                "list a correction replaces or adds to. Leave no part stating what a "
-                "correction overrides, because the builder reads the whole document. Keep "
-                "the sections the corrections do not touch as they are, and keep the "
-                "document's section headings and structure. Write the updated `design.md`. "
+                "they say: the heading (H1), ## Summary, ## Changes and ## Tests, and any "
+                "optional section the design has (such as ## Rule and sites or ## Docs) "
+                "whose wording, example text or file list a correction replaces or adds "
+                "to. Leave no part stating what a correction overrides, because the "
+                "builder reads the whole document. Keep the sections the corrections do "
+                "not touch as they are, and keep the document's section headings and "
+                "structure. Then add a `## Corrections at approval` section: one bullet "
+                "per correction, quoting it and naming the section(s) of the design that "
+                "now carry it. Write the updated `design.md`. "
                 "Return a short message listing what was changed."
             ),
             reads=("design.md",),
@@ -870,11 +787,7 @@ class DesignMode(Mode):
         graph.connect("strategy_director", "synthesize_strategy")
         graph.connect("synthesize_strategy", "design_doc")
         graph.connect("design_doc", "check_design_claims")
-        graph.connect("check_design_claims", "route_design_review", condition="proceed")
-        graph.connect("route_design_review", "design_review", condition="proceed")
-        graph.connect("route_design_review", "gate_design_review", condition="scoped")
-        graph.connect("check_design_claims", "design_doc", condition="reloop")
-        graph.connect("design_review", "gate_design_review")
+        graph.connect("check_design_claims", "gate_design_review")
         graph.connect("gate_design_review", "design_doc", condition="reloop")
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")

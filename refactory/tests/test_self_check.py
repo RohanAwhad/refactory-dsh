@@ -22,7 +22,7 @@ from refactory_dsh.fast import DesignFastMode
 from refactory_dsh.invocations import CHECK_PREP, SELF_CHECK_RECORD
 from refactory_dsh.paths import REPO_ROOT
 from refactory_dsh.run import main as node_main
-from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+from tests_support import (DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
                            RESEARCH_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER, FakeModel,
                            git, git_repo, render)
 
@@ -56,7 +56,7 @@ PINNED = {
 
 def _answers(*emits: str) -> list[str]:
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            DESIGN_DOC_ANSWER, *emits,
             *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 

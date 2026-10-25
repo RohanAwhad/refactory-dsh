@@ -867,7 +867,7 @@ def test_e2e_design_survives_guarded_test(tmp_path, monkeypatch):
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from refactory_dsh.design import DesignMode
     from tests_support import (FakeModel, render, DESIGN_DOC_ANSWER,
-                               DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+                               PITFALLS_ANSWER,
                                RESEARCH_ANSWER, VERIFICATION_ANSWER,
                                REVIEW_ANSWERS)
 
@@ -900,7 +900,7 @@ def test_e2e_design_survives_guarded_test(tmp_path, monkeypatch):
 
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         # The first attempt's failing test goes back from the self-check, before any
         # review runs (b41a); the reviews run once, on the second emission.
         first_emit, second_emit,

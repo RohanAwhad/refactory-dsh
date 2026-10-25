@@ -35,8 +35,8 @@ REPO_CHANGE_REVIEW_INSTRUCTIONS = (
     "Apply these verification methods to each changed function:\n"
     + M2_METHOD + "\n" + M3_METHOD + "\n" + M11_METHOD + "\n" + M12_METHOD + "\n\n"
     "## Repository questions\n"
-    "For each function listed below (or, for a design review, each "
-    "[changed] site), answer these three questions in a ```json fenced block with "
+    "For each function listed below, answer these three questions in a ```json "
+    "fenced block with "
     'this shape: [{"function":"<the entry exactly as listed under Changed functions, '
     'e.g. pkg/mod.py::Class.method>", "duplicates":"where else the '
     'repository does the same thing, with path:line evidence", "callers":"who calls '
@@ -781,7 +781,6 @@ def validate_repo_questions(
 
 def check_review_questions(
     review_text: str, changed_functions: list[str], reviewer_name: str,
-    *, require_brief_trace: bool = False, target: str = "",
 ) -> list[str]:
     """Validate the review text for repository questions (markdown reviewers).
 
@@ -823,40 +822,6 @@ def check_review_questions(
         return problems
 
     problems.extend(validate_repo_questions(record, changed_functions, reviewer_name))
-
-    # Brief-example trace check
-    if require_brief_trace:
-        bt_match = re.search(
-            r'(?:^|\n)##\s+Brief example trace\s*\n(.*?)(?:\n##\s+|\Z)',
-            review_text, re.DOTALL,
-        )
-        if bt_match is None:
-            problems.append(
-                f"[repo-questions] {reviewer_name}: the design review has no "
-                "'## Brief example trace' section with path:line evidence and runtime names"
-            )
-        else:
-            trace_text = bt_match.group(1)
-            citations = _PATH_LINE_RE.findall(trace_text)
-            if len(citations) < 2:
-                problems.append(
-                    f"[repo-questions] {reviewer_name}: the design review has no "
-                    "'## Brief example trace' section with path:line evidence and runtime names"
-                )
-            else:
-                # Check for runtime names
-                if target and "refactory" in target.lower():
-                    runtime_names = ("walker", "dsh", "ceo", "gui", "fast")
-                else:
-                    runtime_names = ("cli", "api", "server", "worker", "test",
-                                     "walker", "dsh", "ceo", "gui", "fast")
-                trace_lower = trace_text.lower()
-                has_runtime = any(name in trace_lower for name in runtime_names)
-                if not has_runtime:
-                    problems.append(
-                        f"[repo-questions] {reviewer_name}: the design review has no "
-                        "'## Brief example trace' section with path:line evidence and runtime names"
-                    )
 
     return problems
 
