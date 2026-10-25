@@ -660,7 +660,8 @@ def _committed_file(found: Worktree, relative: Path, rev: str = "") -> bool:
     return len(entry) >= 2 and entry[1] == "blob"
 
 
-def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tuple[Path, ...] = ()) -> Worktree:
+def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tuple[Path, ...] = (),
+                   *, amend: bool = False) -> Worktree:
     """Make one attempt's files the run's worktree, as one commit on its branch.
 
     Each attempt builds on the last: ``files`` are written and ``deletes`` removed on top
@@ -668,6 +669,10 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     paths are staged, never ``-A``, and none of the target's hooks run: the run's check is
     its gate. An attempt that died after its commit but before recording it is dropped,
     and this one replaces it.
+
+    With ``amend=True``, stages files and deletes with the same guards, then runs
+    ``git commit --amend --no-edit`` instead of a new commit. One code path for every
+    amendment.
     """
     found = recorded(run)
     if found is None:
@@ -725,7 +730,7 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     # rather than through the check and reviews on identical code.
     # During a merge-in-progress, a commit is ALWAYS needed to create the merge
     # commit (making main an ancestor of HEAD), even when content matches HEAD.
-    if not merge_in_progress:
+    if not merge_in_progress and not amend:
         try:
             git(path, "diff", "--cached", "--quiet")
         except ValueError:
@@ -735,9 +740,10 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
             raise AttemptRefused(
                 "the emission changed nothing: every file and edit in it is already in the last attempt"
             )
+    how = ("--amend", "--no-edit") if amend else ("-m", message)
     try:
         git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
-            "-m", message, env={**os.environ, **COMMITTER})
+            *how, env={**os.environ, **COMMITTER})
     except ValueError as exc:
         # When committing with unmerged paths, git refuses.  This can happen if
         # not every conflicted file was resolved by the emission.

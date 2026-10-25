@@ -505,6 +505,7 @@
         "check-record.json",
         "check-verdict.json",
         "check.txt",
+        "self-check-record.jsonl",
         "test-guardedness.json",
         "validation.txt"
       ],
@@ -514,8 +515,8 @@
       "evaluator_role": null,
       "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:prepare_check",
       "command_timeout_s": 6540,
-      "gate_prompt": "settle the commit the check and the reviews see, and rerun last attempt's failing tests",
-      "max_iterations": 8,
+      "gate_prompt": "settle the commit the check and the reviews see; run the self-check on the emission-touched tests before the review fork",
+      "max_iterations": 45,
       "_type": "GateNode"
     },
     "qa_director": {
@@ -946,6 +947,8 @@
     "brief": "",
     "check": "",
     "refusal_attempts": 3.0,
+    "self_check_fixups": 2.0,
+    "self_check_timeout_s": 300.0,
     "target": "",
     "base": "",
     "worktree": 1.0,
@@ -1089,6 +1092,28 @@
       "values": [],
       "frozen": true,
       "description": "consecutive refused emissions before the run stops",
+      "required": false
+    },
+    "self_check_fixups": {
+      "default": 2,
+      "kind": "int",
+      "lo": 0,
+      "hi": 5,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "max self-check fix-up reloops per attempt before the early stop spends it",
+      "required": false
+    },
+    "self_check_timeout_s": {
+      "default": 300,
+      "kind": "int",
+      "lo": 10,
+      "hi": 600,
+      "enum": [],
+      "values": [],
+      "frozen": false,
+      "description": "self-check test-run timeout; effective limit is min(self_check_timeout_s, check_timeout_s // 3)",
       "required": false
     },
     "target": {

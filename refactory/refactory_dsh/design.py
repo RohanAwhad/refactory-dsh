@@ -102,6 +102,14 @@ class DesignMode(Mode):
                 3, "int", lo=1, hi=10, frozen=True,
                 description="consecutive refused emissions before the run stops",
             ),
+            "self_check_fixups": Knob(
+                2, "int", lo=0, hi=5,
+                description="max self-check fix-up reloops per attempt before the early stop spends it",
+            ),
+            "self_check_timeout_s": Knob(
+                300, "int", lo=10, hi=600,
+                description="self-check test-run timeout; effective limit is min(self_check_timeout_s, check_timeout_s // 3)",
+            ),
             **repo_change.knobs(),
             **delivery.knobs(),
         }
@@ -527,12 +535,19 @@ class DesignMode(Mode):
             "prepare_check", "gate", evaluator=f"{OPS}:prepare_check", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP),
+            writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP,
+                    "self-check-record.jsonl"),
             produces=(*check_produces, *repo_change.CHECK_PRODUCES,
-                      "review_feedback", "review_baseline"),
-            knobs=check_knobs, max_iterations=8,
-            notes="settle the commit the check and the reviews see, and rerun last "
-                  "attempt's failing tests",
+                      "review_feedback", "review_baseline",
+                      "self_check_fixup_count", "self_check_fixup_pending",
+                      "total_self_check_fixups_used"),
+            knobs=(*check_knobs, "self_check_fixups", "self_check_timeout_s"),
+            # Applied emissions ≤ check_attempt_cap + per-run fix-ups (8 + 6 = 14).
+            # Refusals ≤ refusal_attempts − 1 = 2 before each.
+            # prepare_check reloops ≤ (8 + 6 + 1) × 2 + 6 + 8 = 44; 45 holds.
+            max_iterations=45,
+            notes="settle the commit the check and the reviews see; run the "
+                  "self-check on the emission-touched tests before the review fork",
         ))
         graph.add(Node(
             "check", "op", call=f"{OPS}:check_beside_reviews", role="validation",

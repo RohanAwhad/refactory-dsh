@@ -1803,6 +1803,14 @@ the base, the next check runs those tests first through the
 targeted-command builder (`build_probe_command`), with a short timeout of
 `min(check_timeout_s // 3, 120)`.
 
+In `prepare_check`, the pre-pass is now part of the self-check (b41a): the
+last check's failing tests join the emission-touched selection, and
+`prepare_check` has one test-running path.  A test that failed in the last
+check and still fails gets up to 2 fix-ups (spending no attempt) before
+the early stop spends one.  Today it spends an attempt at once.  The
+pre-pass's other callers (`check_artifact` and `focused_check`) are
+unchanged — they pass no self-check keyword arguments.
+
 **Early stop**: the pre-pass stops early — skipping the full check — only
 when **all** of the following hold:
 
@@ -1839,6 +1847,115 @@ pre-pass uses at most `min(budget // 3, 120)` plus one install (normally a
 cache hit), which the `3 × INSTALL_TIMEOUT_S` slack absorbs.  The total of
 pre-pass + full check ≤ `4/3 × budget`, well within the `3 × budget` in the
 envelope.  b33b extracts the envelope and will adjust if needed.
+
+
+## Self-check inside the attempt (b41a)
+
+### Evidence
+
+Two runs on 2026-10-24 (b39a, b39b) showed that every round-1 failure was
+mechanical — a stale lowering snapshot, an undeclared knob, a pinned test
+that a new node displaced — and every one was in a test file that directly
+imports a module the emission changed.
+
+- **b39a round 1**: 5 of 2,841 pytest tests failed (pnpm 989/989 passing).
+  Fixing them took a second emit ($15) and a second fork ($45), about $60
+  and 37 min for the mechanical round.
+- **b39b round 1**: 14 of 2,835 pytest tests failed (pnpm 996/996 passing).
+  Round 2's emit ($38) fixed all of them; that round cost about $90 and
+  49 min.
+
+### The self-check
+
+Before an attempt reaches the review fork, `prepare_check` runs the tests
+affected by the emission:
+
+- **When:** after `prepare_attempt` has installed, run generate (amending
+  its output into the attempt) and run setup, and before `prepare_check`
+  proceeds to `fork_qa`.
+- **On every applied attempt, round 1 included.**
+- **The dm-128 pre-pass is part of it:** the last check's failing tests join
+  the selection.
+
+### Selection
+
+The selection is built from the emission's changed files:
+
+- Tier 1: test files the emission touched directly.
+- Tier 2: the last check's failures (non-inherited).
+- Tier 3: tests that import a module the emission changed, sorted by the
+  number of touched modules they import (most-touched first).
+
+When a high-fan-in module changed (a module imported by more test files
+than the median), the tests importing it sort first overall, ahead of
+tiers 1–3.  No file or path names in the engine.
+
+A docs-only emission selects nothing and runs nothing.
+
+For a TypeScript runner: the spec files the emission touched, plus
+vitest `--related` for touched source files.
+
+### The cut
+
+The ordered selection is split into chunks, each its own targeted command.
+The self-check runs chunks sequentially and starts no new chunk once the
+time limit is spent.  A finished chunk's failures count and go back as a
+fix-up.  Only a chunk killed by the limit is inconclusive, and the failures
+of the chunks before it still count.
+
+### Fix-up route and bound
+
+A failure goes back to the builder as a fix-up, spending no attempt,
+through the same `Verdict("reloop")` path a refused emission takes.
+
+- At most `self_check_fixups` fix-ups per attempt (default 2).
+- Per-run cap: `self_check_fixups × check_attempts` (default 6).
+- At the bound: the early stop spends the attempt through
+  `repair(early_stop=True)`.
+
+### Inherited-failure filtering
+
+A selected test that also fails on the base is inherited and not sent to
+the builder.  On round 2+, the inherited set from the full check is used.
+On round 1, the failing IDs are run on the base worktree with a short
+timeout; base unavailable (timeout, prep failure) means the failures are
+sent to the builder unfiltered.
+
+### Record
+
+Each self-check appends one JSON-lines entry to `self-check-record.jsonl`:
+attempt, fix-up number, selection, what ran, what was cut, duration,
+outcome (`pass`, `fixup`, `exhausted`, `inconclusive`), failing IDs.
+
+### Knobs
+
+- `self_check_fixups` (default 2, tunable, lo=0, hi=5): max fix-up
+  reloops per attempt.
+- `self_check_timeout_s` (default 300, tunable, lo=10, hi=600): timeout
+  for the self-check; effective limit is
+  `min(self_check_timeout_s, check_timeout_s // 3)`.
+
+### Iteration budget
+
+`prepare_check`'s `max_iterations` changes from 8 to 45.  Applied
+emissions ≤ check_attempt_cap + per-run fix-ups (8 + 6 = 14).  Refusals
+≤ refusal_attempts − 1 = 2 before each.  So prepare_check reloops
+≤ (8 + 6 + 1) × 2 + 6 + 8 = 44 times; 45 holds.
+
+### Tests
+
+- `test_self_check.py::test_self_check_fixes_stale_generated_and_pinned_test`
+- `test_self_check.py::test_clean_emission_goes_straight_to_fork`
+- `test_self_check.py::test_fixup_bound_then_early_stop`
+- `test_self_check.py::test_inherited_failures_not_sent_to_builder`
+- `test_self_check.py::test_base_timeout_sends_failure_back`
+- `test_self_check.py::test_inconclusive_self_check_proceeds_to_fork`
+- `test_self_check.py::test_chunk_cut_sends_first_chunk_failure_back`
+- `test_self_check.py::test_spine_fixup_count_carries_across_processes`
+- `test_self_check.py::test_selection_matches_b39_failures`
+- `test_self_check.py::test_design_fast_focused_check_unchanged`
+- `test_self_check.py::test_worst_case_ends_in_build_loop_stop`
+- `test_self_check.py::test_docs_only_emission_selects_nothing`
 
 
 ## Stuck detection (dm-128)

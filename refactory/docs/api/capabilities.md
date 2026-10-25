@@ -8176,9 +8176,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "knobs": [
         "check_attempts",
         "check_timeout_s",
-        "check_attempt_cap"
+        "check_attempt_cap",
+        "self_check_fixups",
+        "self_check_timeout_s"
       ],
-      "notes": "settle the commit the check and the reviews see, and rerun last attempt's failing tests",
+      "notes": "settle the commit the check and the reviews see; run the self-check on the emission-touched tests before the review fork",
       "role": "validation"
     },
     {
@@ -8509,6 +8511,30 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": false,
       "values": []
     },
+    "self_check_fixups": {
+      "default": 2,
+      "description": "max self-check fix-up reloops per attempt before the early stop spends it",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        0,
+        5
+      ],
+      "value": 2,
+      "values": []
+    },
+    "self_check_timeout_s": {
+      "default": 300,
+      "description": "self-check test-run timeout; effective limit is min(self_check_timeout_s, check_timeout_s // 3)",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        10,
+        600
+      ],
+      "value": 300,
+      "values": []
+    },
     "setup": {
       "default": "",
       "description": "a command run in the worktree before each check, after its dependencies are installed, such as a build",
@@ -8584,7 +8610,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "16f816548ff5e5d50e786c1aa0bd71ccb13d9688fb5871ab86063035ada524a5"
+    "reviewed_schema": "2ae773f2dacc45a5fd1cb3b910924948104ef85f3625c22fc93e7a735661c372"
   }
 }
 ```

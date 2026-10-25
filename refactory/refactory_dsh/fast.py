@@ -328,6 +328,8 @@ class DesignFastMode(DesignMode):
         knobs.pop("design_review_attempts")
         knobs.pop("pitfalls_attempts")
         knobs.pop("claims_check_attempts")
+        knobs.pop("self_check_fixups")
+        knobs.pop("self_check_timeout_s")
         # It works where design works (`repo_change`), but delivers nothing: a pull request
         # is opened only behind an approval gate that names it (#350), and fast mode has
         # none. Its work stays on the run's branch.

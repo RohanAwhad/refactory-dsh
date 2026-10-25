@@ -316,7 +316,8 @@ def _strip_pytest_positional_paths(step: str) -> str:
     return shlex.join(kept)
 
 
-def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path | None' = None) -> tuple[str, str | None]:
+def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path | None' = None,
+                        related_files: list[str] | None = None) -> tuple[str, str | None]:
     """Build a targeted command per runner from the check command and failing test IDs.
 
     Returns (command, None) on success or ("", refusal_reason) on failure.
@@ -327,6 +328,11 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
     root:
         Directory to read ``package.json`` from for the pnpm/vitest check.
         Defaults to ``Path(".")`` (the process's cwd).
+    related_files:
+        Source file paths for vitest ``--related`` selection. When passed, vitest
+        steps use ``--related <files>`` instead of explicit test IDs. A Python-only
+        emission that passes no vitest IDs and no related files skips the vitest step
+        entirely — it does not run the whole vitest suite.
     """
     from pathlib import Path
     if not test_ids:
@@ -366,6 +372,13 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
             targeted_parts.append(f"{base} {' '.join(shlex.quote(tid) for tid in pytest_ids)}")
         elif "vitest" in step:
             found_recognized = True
+            if not vitest_ids and not related_files:
+                continue
+            if related_files and not vitest_ids:
+                # Use --related for vitest when we have source files but no test IDs
+                rel_args = " ".join(shlex.quote(f) for f in sorted(related_files))
+                targeted_parts.append(f"{step} --related {rel_args}")
+                continue
             if not vitest_ids:
                 continue
             # Map vitest ids to file filters plus -t patterns
@@ -382,8 +395,8 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
             targeted_parts.append(f"{step} {file_args} {pattern_args}".strip())
         elif "pnpm test" in step:
             found_recognized = True
-            if not vitest_ids:
-                continue  # No vitest IDs target this step — skip silently
+            if not vitest_ids and not related_files:
+                continue  # No vitest IDs and no related files — skip silently
             # Target only when package.json's "test" script is vitest.
             import json as _json
             pkg_root = root if root is not None else Path(".")
@@ -394,6 +407,11 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
                 test_script = ""
             if "vitest" not in test_script:
                 return "", "pnpm test targeting requires vitest as the test script"
+            if related_files and not vitest_ids:
+                # Use --related for pnpm test (vitest under the hood)
+                rel_args = " ".join(shlex.quote(f) for f in sorted(related_files))
+                targeted_parts.append(f"{step} --related {rel_args}")
+                continue
             files: set[str] = set()
             patterns: set[str] = set()
             for vid in vitest_ids:
