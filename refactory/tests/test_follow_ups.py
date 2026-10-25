@@ -378,6 +378,76 @@ def test_every_reviewer_carries_marker_rule(tmp_path, mode_path, reviewers):
         )
 
 
+def test_marker_rule_keeps_its_wording():
+    # The rule's wording is the whole fix (dm-198, dm-225): pin each clause, so
+    # emptying or shortening it fails, not only removing it from a prompt.
+    for clause in (
+        "only at the start of a finding line",
+        "plain form: BLOCKING: <path>: <description>",
+        "Never wrap it in backticks, a code span, or quotation marks",
+        'call it "the blocking marker"',
+        "Write every real finding as a plain line outside any fenced code block, "
+        "because fenced blocks are not read as findings",
+        "When you show the format as an example rather than report a finding, "
+        "put the example inside a fenced code block",
+    ):
+        assert clause in MARKER_RULE, clause
+    assert chr(96) not in MARKER_RULE
+    # And nothing else: an added sentence could contradict a pinned one.
+    assert MARKER_RULE == (
+        "Write the blocking marker only at the start of a finding line, in its plain form: "
+        "BLOCKING: <path>: <description>. Never wrap it in backticks, a code span, or "
+        "quotation marks while explaining a check or describing the parser. When "
+        "discussing the marker itself, call it \"the blocking marker\". Write every real "
+        "finding as a plain line outside any fenced code block, because fenced blocks are "
+        "not read as findings. When you show the format as an example rather than report "
+        "a finding, put the example inside a fenced code block."
+    )
+
+
+def _lowered_nodes(mode_cls, tmp_path):
+    import json
+
+    path, _workflow = lowering.write_mode_graph(mode_cls().state_dict(), tmp_path, name="x")
+    return json.loads(path.read_text())["nodes"]
+
+
+def _shipped_modes():
+    from test_lowering_smoke import _mode_classes
+
+    return _mode_classes()
+
+
+@pytest.mark.parametrize("key, mode_cls", _shipped_modes(), ids=[k for k, _ in _shipped_modes()])
+def test_every_lowered_node_that_asks_for_findings_carries_the_rule(tmp_path, key, mode_cls):
+    # Not a hand-kept list of reviewers or modes: in every shipped mode, every node
+    # whose own text asks for blocking findings (the rule's example aside) carries
+    # the rule, the verifiers and fix_pack's included.
+    import re
+
+    nodes = _lowered_nodes(mode_cls, tmp_path)
+    asking = 0
+    for node_id, node in nodes.items():
+        prompt = str(node.get("prompt_template") or "")
+        if re.search(r"BLOCKING(?::| finding)", prompt.replace(MARKER_RULE, "")):
+            asking += 1
+            assert MARKER_RULE in prompt, (key, node_id)
+    if key.startswith("default_pack-"):
+        # Every product mode has reviewers; a selector that stops matching must fail.
+        assert asking, f"{key}: no lowered node asks for blocking findings"
+
+
+@pytest.mark.parametrize("key, mode_cls", _shipped_modes(), ids=[k for k, _ in _shipped_modes()])
+def test_no_lowered_prompt_uses_the_marker_in_prose(tmp_path, key, mode_cls):
+    # The finding form is the only place a prompt writes the marker with a colon;
+    # prose says "a blocking finding" instead (dm-225).
+    import re
+
+    for node_id, node in _lowered_nodes(mode_cls, tmp_path).items():
+        prompt = str(node.get("prompt_template") or "")
+        assert not re.search(r"BLOCKING:(?! <)", prompt), (key, node_id)
+
+
 def test_verifier_prompt_carries_marker_rule():
     from refactory_dsh.verification import VERIFIER_PROMPT, FULL_VERIFIER_PROMPT
     assert MARKER_RULE in VERIFIER_PROMPT
@@ -419,6 +489,8 @@ def test_no_reviewer_prompt_shows_blocking_in_code_span(mode_path, reviewers):
         prompt = nodes[reviewer].prompt_template
         assert "`BLOCKING" not in prompt, f"{reviewer} prompt contains `BLOCKING code span"
         assert "BLOCKING:`" not in prompt, f"{reviewer} prompt contains BLOCKING:` code span"
+        for quote in ('"', "'", "\u201c", "\u2018"):
+            assert quote + "BLOCKING" not in prompt, f"{reviewer} prompt quotes the marker"
 
 
 def test_verifier_prompt_no_code_span_blocking():
@@ -439,3 +511,7 @@ def test_verifier_prompt_no_code_span_blocking():
     _make_verifier_fn(cap)("brief", "diff")
     assert "`BLOCKING" not in cap.prompt, "replay_harness verifier contains `BLOCKING code span"
     assert "BLOCKING:`" not in cap.prompt, "replay_harness verifier contains BLOCKING:` code span"
+    for name, prompt in [("VERIFIER_PROMPT", VERIFIER_PROMPT), ("FULL_VERIFIER_PROMPT", FULL_VERIFIER_PROMPT),
+                         ("replay_harness", cap.prompt)]:
+        for quote in ('"', "'", "\u201c", "\u2018"):
+            assert quote + "BLOCKING" not in prompt, f"{name} quotes the marker"

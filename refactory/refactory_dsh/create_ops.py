@@ -322,13 +322,13 @@ def prepare(ctx: Any) -> dict[str, Any]:
     }
 
 
-def _plan(text: str) -> list[dict[str, Any]]:
-    """The plan's entries, or an empty list when the answer is not a plan.
+def _extract_json_array(text: str) -> list[Any]:
+    """Extract the first JSON array from *text*, tolerating fences and prose.
 
-    Tolerant about the fences and prose around the array — a model that writes
-    "here is the plan:" before it has still written a plan — and intolerant about
-    everything else, because the alternative is a downstream stage that runs on a
-    stage which did nothing.
+    Returns the array's items as written (objects keep every key; a caller decides
+    what a non-object item means) or an empty list when the text contains no
+    parseable array.  Both ``_plan`` and ``classify_scale`` use this
+    so there is exactly one tolerant-array extractor.
     """
     start, end = text.find("["), text.rfind("]")
     if start < 0 or end < start:
@@ -339,8 +339,19 @@ def _plan(text: str) -> list[dict[str, Any]]:
         return []
     if not isinstance(payload, list):
         return []
+    return list(payload)
+
+
+def _plan(text: str) -> list[dict[str, Any]]:
+    """The plan's entries, or an empty list when the answer is not a plan.
+
+    Tolerant about the fences and prose around the array — a model that writes
+    "here is the plan:" before it has still written a plan — and intolerant about
+    everything else, because the alternative is a downstream stage that runs on a
+    stage which did nothing.
+    """
     entries: list[dict[str, Any]] = []
-    for item in payload:
+    for item in _extract_json_array(text):
         if not isinstance(item, dict):
             continue
         entries.append({
@@ -2210,7 +2221,10 @@ MARKER_RULE = (
     "plain form: BLOCKING: <path>: <description>. Never wrap it in backticks, "
     "a code span, or quotation marks while explaining a check or describing "
     "the parser. When discussing the marker itself, call it \"the blocking "
-    "marker\"."
+    "marker\". Write every real finding as a plain line outside any fenced "
+    "code block, because fenced blocks are not read as findings. When you show "
+    "the format as an example rather than report a finding, put the example "
+    "inside a fenced code block."
 )
 
 #: What the overwatch pass is told about its verdict, beside SEVERITY_RULE.

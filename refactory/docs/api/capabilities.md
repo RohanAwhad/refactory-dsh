@@ -7638,6 +7638,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "condition": null,
+      "source": "classify_scale",
+      "target": "pitfalls_researcher"
+    },
+    {
+      "condition": null,
       "source": "deliver",
       "target": "delivery_gate"
     },
@@ -7729,7 +7734,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "gate_research",
-      "target": "pitfalls_researcher"
+      "target": "classify_scale"
     },
     {
       "condition": "reloop",
@@ -7933,6 +7938,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         "claims_check_attempts"
       ],
       "notes": "deterministic check: cited paths exist, quoted lines match, named identifiers are present; reloop to design_doc on mismatch",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.design_ops:classify_scale",
+      "id": "classify_scale",
+      "kind": "op",
+      "knobs": [],
+      "notes": "classify the change's scale from the research footprint",
       "role": "ceo"
     },
     {
@@ -8571,7 +8584,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "ddd6fc4286789b6944cb8607747f6bcb679d9611ca44678515c7ed9da0aeb4ab"
+    "reviewed_schema": "16f816548ff5e5d50e786c1aa0bd71ccb13d9688fb5871ab86063035ada524a5"
   }
 }
 ```

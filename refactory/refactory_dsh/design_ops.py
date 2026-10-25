@@ -21,9 +21,10 @@ from refactory_dsh import delivery, repo_change, sandbox, unbuilt_check, worktre
 from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT
 from refactory_dsh.nn import Verdict
 
-_FILE_EXT_RE = _re.compile(
-    r'\b[\w/.-]+\.(?:py|ts|js|mjs|cjs|jsx|tsx|json|md|yaml|yml|toml|go|rs|rb|java|c|cpp|h|sh|css|html)\b'
-)
+#: The reason prepare_design writes when the run is a refinement.  classify_scale
+#: recognises a refine by this constant rather than reading research_scope (which
+#: classify_scale itself writes), so a rerun reclassifies from the footprint.
+REFINE_SCOPE_REASON = "refinement of an open pull request"
 
 STAGING = "staging"
 
@@ -151,13 +152,14 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
                                  needs_worktree=("refine",) if deliver else (),
                                  output_only=PLANNING_STEPS)
 
-    # Compute research_scope: 'scoped' for --refine or briefs naming files.
+    # Compute research_scope.  A refine is always scoped; everything else starts
+    # as full and is reclassified by classify_scale after research.
     if str(task.get("refine") or "").strip():
         research_scope = "scoped"
-    elif _FILE_EXT_RE.search(brief):
-        research_scope = "scoped"
+        research_scope_reason = REFINE_SCOPE_REASON
     else:
         research_scope = "full"
+        research_scope_reason = ""
 
     # Match create/edit: inspect the exact nested route before launching research.
     # Other ModelClient implementations retain their own readiness contract.
@@ -221,7 +223,8 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         "design_review_status": "",
     } if deliver else {}
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
-            "research_review": "(no research review has run yet)", "research_scope": research_scope,
+            "research_review": "(no research review has run yet)",
+            "research_scope": research_scope, "research_scope_reason": research_scope_reason,
             "design_review_feedback": "(no design review has run yet)",
             "design_review_findings": "(no findings yet)",
             "deliverable_kind": deliverable_kind,
@@ -589,6 +592,127 @@ def gate_design_review(ctx: Any) -> str:
     return Verdict("reloop", report)
 
 
+#: A research direction's footprint has exactly these keys, each a list (dm-200).
+FOOTPRINT_KEYS = ("existing_functions", "new_items", "shared_engine")
+
+#: One existing function a change touches: "path:line name" (or "path:start-end
+#: name", counted by its start line), with a real line number and a single name.
+_FUNCTION_CITATION = _re.compile(
+    r"(?P<path>[^\s:]+):(?P<line>[1-9]\d*)(?:-[1-9]\d*)?\s+(?P<name>[A-Za-z_][\w.]*(?:\(\))?)")
+
+
+def _tracked_files(source: str) -> set[str] | None:
+    """The checkout's tracked files, or None when *source* is not a git checkout."""
+    try:
+        listing = worktree.git(Path(source), "ls-files", "-z")
+    except Exception:  # not a git checkout: the caller checks the file system instead
+        return None
+    return {name for name in listing.split("\0") if name}
+
+
+def classify_scale(ctx: Any) -> dict[str, Any]:
+    """Deterministic op: classify the change's scale from the research footprint.
+
+    Reads research-plan.json as raw JSON (not via ``_plan()``, which strips
+    entries to only focus/slug/finding/ids).  Every direction must carry a
+    ``footprint`` object.  The three-part rule decides scoped vs full; the
+    brief is never read.
+    """
+    # ── refine detection ───────────────────────────────────────────────
+    # prepare writes REFINE_SCOPE_REASON for a refine run.  Detect that
+    # constant rather than reading research_scope (which we write ourselves).
+    if ctx.facts.get("research_scope_reason") == REFINE_SCOPE_REASON:
+        return {
+            "research_scope": "scoped",
+            "research_scope_reason": REFINE_SCOPE_REASON,
+        }
+
+    # ── read directions ────────────────────────────────────────────────
+    from refactory_dsh.create_ops import _extract_json_array
+
+    raw = ctx.read_text("research-plan.json") if ctx.exists("research-plan.json") else ""
+    directions = _extract_json_array(raw)
+
+    def _full(reason: str) -> dict[str, Any]:
+        return {"research_scope": "full", "research_scope_reason": reason}
+
+    if not directions:
+        return _full("no usable footprint in the research")
+
+    # ── where cited code must exist ───────────────────────────────────
+    # The target's own checkout (the run's worktree), never the run directory.
+    source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
+    tracked = _tracked_files(source) if source else None
+
+    def _resolve(cited: str) -> str | None:
+        """The checkout file a citation names, or None when it names none.
+
+        Research cites paths from the repository root, from a package, or by a bare
+        file name; any of them counts when exactly one tracked file ends with it.
+        A path outside the checkout never counts.
+        """
+        if not source:
+            return cited  # no checkout to verify against
+        if cited.startswith(("/", "~")) or ".." in Path(cited).parts:
+            return None
+        if tracked is not None:
+            if cited in tracked:
+                return cited
+            matches = [name for name in tracked if name.endswith("/" + cited)]
+            return matches[0] if len(matches) == 1 else None
+        try:
+            root = Path(source).resolve()
+            path = (root / cited).resolve()
+            return cited if path.is_relative_to(root) and path.is_file() else None
+        except OSError:  # a path too long for the file system names no file
+            return None
+
+    # ── aggregate footprint ────────────────────────────────────────────
+    touched: dict[tuple[str, str, str], str] = {}   # (file, name, line) -> citation
+    new_items: list[str] = []
+    engine: list[str] = []
+    for direction in directions:
+        if not isinstance(direction, dict):
+            return _full(f"no usable footprint: a direction is not an object: {direction!r}"[:300])
+        footprint = direction.get("footprint")
+        if not isinstance(footprint, dict):
+            return _full("no usable footprint in the research")
+        missing = [key for key in FOOTPRINT_KEYS if key not in footprint]
+        unknown = sorted(key for key in footprint if key not in FOOTPRINT_KEYS)
+        if missing or unknown:
+            return _full("no usable footprint: "
+                         + "; ".join(([f"missing {', '.join(missing)}"] if missing else [])
+                                     + ([f"unknown {', '.join(unknown)}"] if unknown else [])))
+        for key in FOOTPRINT_KEYS:
+            if not isinstance(footprint[key], list):
+                return _full(f"no usable footprint: {key} is not a list: {footprint[key]!r}"[:300])
+        for entry in footprint["existing_functions"]:
+            match = _FUNCTION_CITATION.fullmatch(entry.strip()) if isinstance(entry, str) else None
+            resolved = _resolve(match["path"]) if match else None
+            if resolved is None:
+                return _full(f"footprint without evidence: {entry!r}"[:300])
+            # By file, name and line: same-named methods in one file are different
+            # functions, and over-counting only ever errs toward full.
+            touched[(resolved, match["name"], match["line"])] = f"{resolved}:{match['line']}"
+        new_items.extend(str(item) for item in footprint["new_items"])
+        engine.extend(str(ref) for ref in footprint["shared_engine"])
+
+    # ── apply the three-part rule ──────────────────────────────────────
+    if len(touched) > 2:
+        names = ", ".join(key[1] for key in sorted(touched)[:3])
+        return _full(f"touches {len(touched)} existing functions (max 2 for scoped): {names}")
+    if new_items:
+        return _full(f"adds new items: {', '.join(sorted(new_items)[:3])}")
+    if engine:
+        return _full(f"changes a shared engine: {', '.join(engine[:3])}")
+    detail = ", ".join(f"{key[1]} at {touched[key]}" for key in sorted(touched))
+    reason = (
+        f"touches {len(touched)} existing function(s)"
+        + (f" ({detail})" if detail else "")
+        + ", adds nothing new, no shared engine"
+    )
+    return {"research_scope": "scoped", "research_scope_reason": reason}
+
 def design_review_status(facts: dict) -> str:
     """One-line status for the approval gate, from the run's facts.
 
@@ -606,11 +730,18 @@ def design_review_status(facts: dict) -> str:
     advisory_n = sum(1 for ln in str(facts.get("design_review_advisory", "")).splitlines()
                      if ln.startswith("- "))
     advisory = f", {advisory_n} advisory" if advisory_n else ""
+    reason = facts.get("research_scope_reason", "")
     # A scoped change's design had no review agent; the person is told so.
-    automatic = (" (automatic checks; scoped change)"
-                 if facts.get("design_review_by") == "automatic" else "")
+    automatic = ""
+    if facts.get("design_review_by") == "automatic":
+        automatic = (" (automatic checks; scoped change"
+                     + (f" — {reason}" if reason else "")
+                     + ")")
     if "(none: the design review" in findings:
-        return f"Design review{automatic}: PASS{advisory}"
+        status = f"Design review{automatic}: PASS{advisory}"
+        if not automatic and reason:
+            status += f"\nScale: full — {reason}"
+        return status
     blocking = facts.get("design_review_blocking")
     source = str(blocking) if blocking is not None else findings
     lines = [
@@ -619,10 +750,13 @@ def design_review_status(facts: dict) -> str:
         and not ln.startswith("- the review did not state 'VERDICT: PASS'")
     ]
     n = len(lines)
-    return (
+    status = (
         f"Design review{automatic}: FAIL, {n} unresolved{advisory}\n"
         + "\n".join(lines)
     )
+    if not automatic and reason:
+        status += f"\nScale: full — {reason}"
+    return status
 
 
 def _quote_words(text: str) -> str:
