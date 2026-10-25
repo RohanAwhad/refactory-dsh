@@ -99,6 +99,11 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
         }
         if node_id in optional_ids:
             entry["optional"] = True
+        if node.kind == "agent" and node.writes:
+            # The output an agent's answer is captured into when it wrote none, and the
+            # fact it produces is read from: its first declared write, as the walker takes
+            # it. The IR keeps writes as a set, so their order cannot carry this.
+            entry["answer_file"] = node.writes[0]
         if node.kind == "data":
             entry["data"] = {
                 "subgraph_entry": node.subgraph_entry,

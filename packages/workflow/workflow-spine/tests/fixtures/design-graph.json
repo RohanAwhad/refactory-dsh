@@ -317,6 +317,11 @@
     },
     {
       "source": "gate_overwatch",
+      "target": "overwatch",
+      "condition": "reread"
+    },
+    {
+      "source": "gate_overwatch",
       "target": "report",
       "condition": "proceed"
     },
@@ -339,6 +344,11 @@
       "source": "gate_qa",
       "target": "emit",
       "condition": "reloop"
+    },
+    {
+      "source": "gate_qa",
+      "target": "qa_judge",
+      "condition": "reread"
     },
     {
       "source": "gate_research",

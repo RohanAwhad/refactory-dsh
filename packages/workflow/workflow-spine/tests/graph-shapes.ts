@@ -321,8 +321,10 @@ export const designGraph: ShapeEntry = {
   graph: designFixture,
   directors: {}, dataPasses: {},
   // gate_qa and gate_overwatch route on their judges' JSON verdicts (qa_judge, overwatch):
-  // reloop to emit or proceed. gate_overwatch has no `audit` round back to the overwatch;
-  // the correction audit (audit_corrections) runs once between gate_qa and the overwatch.
+  // reloop to emit, proceed, or `reread`, which asks the judge alone again when its verdict
+  // could not be read (bounded in code by the judge_rereads knob; the driver never picks it).
+  // gate_overwatch has no `audit` round back to the overwatch; the correction audit
+  // (audit_corrections) runs once between gate_qa and the overwatch.
   gatesWithReloop: ['gate_research', 'gate_pitfalls', 'gate_design_review', 'gate_strategy', 'prepare_check', 'gate_check', 'gate_qa', 'gate_overwatch'],
   // A full design: perspectives and the design-review agent run.
   fixedVerdicts: { route_strategy: 'proceed', route_design_review: 'proceed' }, large: true,

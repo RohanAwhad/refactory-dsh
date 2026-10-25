@@ -39,12 +39,15 @@ HEALTH, CODE, QA = "health: ran it, it prints built", "code review: matches the 
 
 
 def _round(emission: str, *, reviews: tuple[str, str, str] = (HEALTH, CODE, QA),
-           verifier: str = VERIFICATION_ANSWER, judge: str | None = None,
-           overwatch: str | None = None) -> list[str]:
+           verifier: str = VERIFICATION_ANSWER, judge: str | list[str] | None = None,
+           overwatch: str | list[str] | None = None) -> list[str]:
     """One attempt's answers: the emission, the three reviews and the verifier beside the
-    check, then the judges (each left to its default when not given)."""
-    return [emission, *reviews, verifier, *([judge] if judge else []),
-            *([overwatch] if overwatch else [])]
+    check, then the judges (each left to its default when not given, and given a list
+    when it is asked again)."""
+    def answers(value: str | list[str] | None) -> list[str]:
+        return [] if value is None else [value] if isinstance(value, str) else list(value)
+
+    return [emission, *reviews, verifier, *answers(judge), *answers(overwatch)]
 
 
 def _answers(*rounds: list[str]) -> list[str]:
@@ -155,7 +158,8 @@ def test_a_failing_check_goes_back_before_any_judge(tmp_path):
     repo = git_repo(tmp_path / "repo")
     # The first attempt's reviews are answered by default beside its failing check: the
     # script's next answer is the second emission.
-    model = FakeModel(_answers([_tool("built", 1)], _round(_tool("built"))))
+    model = FakeModel(_answers([_tool("built", 1)],
+                               _round(_tool("built"), overwatch=overwatch_judgment("pass"))))
     run = tmp_path / "run"
     result = _design(run, model, repo)
 
@@ -170,30 +174,45 @@ def test_a_failing_check_goes_back_before_any_judge(tmp_path):
 
 
 # ── b39b: the correction audit is the overwatch's evidence, not a verdict ─────
-CALC = "def validate(x):\n    return x > 0\n"
+CALC = "def validate(x):\n    return x > 0\n\n\ndef legacy():\n    return 1\n"
 CALC_TEST = "from calc import validate\n\n\ndef test_unrelated():\n    assert validate(5) is True\n"
-CORRECTION = "make zero valid, and leave app.py alone"
+CORRECTION = "make zero valid, drop legacy(), and leave app.py alone"
 #: Sites the evidence map names for the correction: app.py, which the change leaves as
-#: the base has it (a correction that removes a site leaves that), and the comparison in
-#: calc.py, whose cited test passes with the change reverted.
+#: the base has it (as b39b's dropped guard was left); the comparison in calc.py, whose
+#: cited test passes with the change reverted; and legacy(), which the change deletes.
 SITES = [{"site": "app.py:1", "tests": ["test_calc.py::test_unrelated"], "scope": "local"},
-         {"site": "calc.py:2", "tests": ["test_calc.py::test_unrelated"], "scope": "local"}]
+         {"site": "calc.py:2", "tests": ["test_calc.py::test_unrelated"], "scope": "local"},
+         {"site": "calc.py:5", "tests": ["test_calc.py::test_unrelated"], "scope": "local"}]
 
 
-def test_b39b_removed_and_untested_sites_with_a_passing_overwatch_reach_the_report(tmp_path):
-    """b39b: the audit reports a removed site and a site no cited test reaches; the
-    overwatch reads that, passes, and the run reaches its report and delivers. The audit
-    the overwatch gate ran before would have refused the same evidence."""
+def _calc_repo(tmp_path: Path) -> Path:
     repo = git_repo(tmp_path / "repo")
     (repo / "calc.py").write_text(CALC)
     (repo / "test_calc.py").write_text(CALC_TEST)
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "calc")
+    return repo
+
+
+def _correction_run(tmp_path: Path, correction: str) -> tuple[Path, str]:
+    """A run directory whose ledger holds one correction from the person, and its id."""
     run = tmp_path / "run"
     run.mkdir()
-    Ledger.seed(run, "a calc whose validate accepts zero").note("correction", CORRECTION)
+    Ledger.seed(run, "a calc whose validate accepts zero").note("correction", correction)
     [key] = [f"ledger-{index + 1}" for index, entry in enumerate(evidence.intent(run))
              if entry["kind"] == "correction"]
+    return run, key
+
+
+def test_b39b_removed_unchanged_and_untested_sites_with_a_passing_overwatch_reach_the_report(tmp_path):
+    """b39b: the audit reports a site the change left as the base has it as unchanged --
+    measured as not met, for the overwatch to decide -- a deleted site as removed, and a
+    site no cited test reaches. The overwatch reads that, judges the correction met with
+    evidence, passes, and the run reaches its report and delivers. The pull request says
+    what the overwatch judged. The audit the overwatch gate ran before would have refused
+    the same evidence."""
+    repo = _calc_repo(tmp_path)
+    run, key = _correction_run(tmp_path, CORRECTION)
     verdict = overwatch_judgment("pass", corrections=[
         {"id": key, "met": True, "evidence": "calc.py:2 returns x >= 0; app.py is unchanged"}])
     emission = render({"calc.py": "def validate(x):\n    return x >= 0\n"})
@@ -205,12 +224,16 @@ def test_b39b_removed_and_untested_sites_with_a_passing_overwatch_reach_the_repo
     assert result.exit_ok, result.error
     [item] = json.loads((run / "correction-audit.json").read_text())
     sites = {site["site"]: site for clause in item["clauses"] for site in clause["sites"]}
-    assert sites["app.py:1"]["status"] == "removed" and sites["app.py:1"]["removed"] == "unchanged"
+    assert sites["app.py:1"]["status"] == "unchanged"
+    assert sites["calc.py:5"]["status"] == "removed" and sites["calc.py:5"]["removed"] == "deleted"
     assert sites["calc.py:2"]["status"] == "fail"
     assert [t["revert_result"] for t in sites["calc.py:2"]["tests"]] == ["pass"]
-    # The overwatch read the audit, both findings in it, before judging.
+    # Measured as not met: never a pass, whatever the overwatch then decides.
+    assert item["status"] == "fail" and [c["status"] for c in item["clauses"]] == ["fail"]
+    # The overwatch read the audit, every finding in it, before judging.
     [asked] = [model.prompts[i] for i in _prompts(model, OVERWATCH_JUDGE_MARK)]
-    assert "app.py:1: removed (unchanged)" in asked
+    assert "app.py:1: unchanged" in asked and "calc.py:5: removed (deleted)" in asked
+    assert f"{key} clause 1: site app.py:1 is unchanged" in asked
     assert "site calc.py:2 not reached by any test" in asked
     # It passed, the report ran, and nothing was sent back.
     assert (run / "design.json").exists()
@@ -218,16 +241,75 @@ def test_b39b_removed_and_untested_sites_with_a_passing_overwatch_reach_the_repo
     assert not result.facts.get("review_attempts_used")
     follow_ups = (run / "reviews/follow-ups.md").read_text()
     assert "did not judge" not in follow_ups
-    # The pull request lists the audit's by-hand check, and counts the overwatch's pass
-    # as the audit's, though the audit has a clause it measured as not met.
+    # The pull request takes its wording from the overwatch's verdict, not the audit's.
     body = (run / delivery.BODY).read_text()
-    assert "site app.py:1 is removed from the change" in body
+    assert "- **Corrections, as the overwatch judged them:**" in body
+    assert f"{key}: met — calc.py:2 returns x >= 0; app.py is unchanged" in body
+    assert "Correction-audit checks to confirm by hand" not in body
+    assert "site app.py:1 is unchanged" not in body and "site calc.py:5 is removed" not in body
     assert "and the overwatch audit passed" in body, body
     # The audit as the overwatch gate ran it refuses the same evidence.
     ctx = nn.RunContext(run, facts=result.facts, enforce_writes=False)
     old = evidence.correction_audit_problems(ctx)
     assert any("site app.py:1 is not in the diff" in problem for problem in old), old
     assert any("site calc.py:2 not reached by any test" in problem for problem in old), old
+
+
+ZERO_TEST = "from calc import validate\n\n\ndef test_zero():\n    assert validate(0) is True\n"
+
+
+def test_an_unapplied_correction_is_not_met_and_a_pass_that_says_so_goes_back(tmp_path):
+    """D2 and D4: a correction the change never applied leaves its site unchanged, and the
+    audit measures that as not met. An overwatch that marks the correction not met sends
+    the change back even with a pass, naming the correction and its evidence, and spends a
+    review attempt; the next round applies it and passes."""
+    repo = git_repo(tmp_path / "repo")
+    (repo / "calc.py").write_text("def validate(x):\n    return x > 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "calc")
+    run, key = _correction_run(tmp_path, "make zero valid in calc.validate")
+    unmet = overwatch_judgment("pass", corrections=[
+        {"id": key, "met": False, "evidence": "calc.py:2 still returns x > 0"}])
+    met = overwatch_judgment("pass", corrections=[{"id": key, "met": True, "evidence": "calc.py:2"}])
+    model = FakeModel(_answers(
+        _round(render({"README.md": "calc\n"}), overwatch=unmet),
+        _round(render({"calc.py": "def validate(x):\n    return x >= 0\n",
+                       "test_calc.py": ZERO_TEST}), overwatch=met)))
+    model._correction_sites = {"make zero valid in calc.validate": [
+        {"site": "calc.py:2", "tests": ["test_calc.py::test_zero"], "scope": "local"}]}
+    result = _design(run, model, repo, check="true")
+
+    assert result.exit_ok, result.error
+    emits = _prompts(model, EMIT_MARK)
+    assert len(emits) == 2 and result.facts["review_attempts_used"] == 1
+    assert f"- correction {key}: NOT met — calc.py:2 still returns x > 0" in model.prompts[emits[1]]
+    first, second = [model.prompts[i] for i in _prompts(model, OVERWATCH_JUDGE_MARK)]
+    assert f"{key} clause 1: site calc.py:2 is unchanged" in first
+    assert "What the audit measured as not met" in first
+    assert "site calc.py:2 is unchanged" not in second
+    assert (run / "reviews/overwatch-gate.txt").read_text().startswith("proceed: overwatch passed")
+
+
+def test_a_site_outside_the_change_is_removed_only_when_the_change_deletes_it(tmp_path):
+    """R07a, R07b: a deleted site is removed and an untouched one unchanged; a line past
+    the end of its file, or a file that does not exist, names no code at all."""
+    from refactory_dsh import base_check
+
+    repo = _calc_repo(tmp_path)
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "run-branch")
+    (repo / "calc.py").write_text("def validate(x):\n    return x >= 0\n")
+    git(repo, "commit", "-q", "-am", "change")
+    run = tmp_path / "run"
+    (run / ".refactory").mkdir(parents=True)
+    (run / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base, "head": git(repo, "rev-parse", "HEAD"),
+        "branch": "run-branch", "target": str(repo), "run": str(run)}))
+    ctx = nn.RunContext(run)
+    assert base_check.site_outside_change(ctx, "calc.py:5") == "deleted"
+    assert base_check.site_outside_change(ctx, "app.py:1") == "unchanged"
+    assert base_check.site_outside_change(ctx, "app.py:9") == ""
+    assert base_check.site_outside_change(ctx, "missing.py:1") == ""
 
 
 def test_an_overwatch_redo_counts_toward_the_review_limit_and_stops_at_it(tmp_path):
@@ -249,23 +331,68 @@ def test_an_overwatch_redo_counts_toward_the_review_limit_and_stops_at_it(tmp_pa
     assert "tool.py:1: no test shows built is printed" in model.prompts[emits[1]]
 
 
-def test_an_unreadable_judge_file_proceeds_with_a_note(tmp_path):
-    """A QA judge whose file is not a verdict: the gate proceeds, says why in its status
-    and in the follow-ups, and the overwatch still judges."""
+def test_a_judge_whose_verdict_cannot_be_read_is_asked_again_with_no_builder_round(tmp_path):
+    """D3: each judge's unreadable verdict is read again once, judge only: the judge is
+    asked again with the reason in its prompt, and no builder round or review attempt is
+    spent. Both readable second answers decide the run."""
     repo = git_repo(tmp_path / "repo")
-    model = FakeModel(_answers(_round(_tool("built"), judge=Scripted("Looks fine to me."),
-                                      overwatch=overwatch_judgment("pass"))))
+    model = FakeModel(_answers(_round(
+        _tool("built"), judge=[Scripted("Looks fine to me."), qa_judgment("proceed")],
+        overwatch=[Scripted("PASS, everything holds"), overwatch_judgment("pass")])))
     run = tmp_path / "run"
     result = _design(run, model, repo)
 
     assert result.exit_ok, result.error
-    assert (run / judges.QA_JUDGE).read_text() == "Looks fine to me."
+    assert len(_prompts(model, EMIT_MARK)) == 1
+    assert not result.facts.get("review_attempts_used")
+    qa_first, qa_second = [model.prompts[i] for i in _prompts(model, QA_JUDGE_MARK)]
+    assert "Your last verdict could not be read" not in qa_first
+    assert ("## Your last verdict could not be read\nqa-judge.json holds no JSON object"
+            in qa_second)
+    ow_first, ow_second = [model.prompts[i] for i in _prompts(model, OVERWATCH_JUDGE_MARK)]
+    assert "Your last verdict could not be read" not in ow_first
+    assert "overwatch-verdict.json holds no JSON object" in ow_second
+    assert (run / "reviews/qa-gate.txt").read_text().startswith(
+        "proceed: the QA judge found nothing that must be fixed")
+    assert (run / "reviews/overwatch-gate.txt").read_text().startswith("proceed: overwatch passed")
+
+
+def test_a_verdict_still_unreadable_goes_on_with_a_note_the_pull_request_carries(tmp_path):
+    """D3, R11: a judge whose verdict is unreadable again is not asked a third time. The
+    QA gate goes on to the overwatch with a note; the overwatch gate goes on with a note
+    that acceptance was not judged; and the pull request does not say the audit passed."""
+    repo = git_repo(tmp_path / "repo")
+    model = FakeModel(_answers(_round(
+        _tool("built"), judge=[Scripted("Looks fine to me."), Scripted("Still fine.")],
+        overwatch=[Scripted("VERDICT: PASS (in prose)"), Scripted("VERDICT: PASS")])))
+    run = tmp_path / "run"
+    result = _design(run, model, repo)
+
+    assert result.exit_ok, result.error
+    assert len(_prompts(model, QA_JUDGE_MARK)) == 2
+    assert len(_prompts(model, OVERWATCH_JUDGE_MARK)) == 2
+    assert not result.facts.get("review_attempts_used")
     gate = (run / "reviews/qa-gate.txt").read_text()
     assert gate.startswith("proceed: the QA judge's verdict could not be read "
-                           "(qa-judge.json is not JSON"), gate
-    assert "the change went on to the overwatch without it" in (run / "reviews/follow-ups.md").read_text()
-    assert len(_prompts(model, OVERWATCH_JUDGE_MARK)) == 1
-    assert not result.facts.get("review_attempts_used")
+                           "(qa-judge.json holds no JSON object), also when it was asked again"), gate
+    follow_ups = (run / "reviews/follow-ups.md").read_text()
+    assert "the change went on to the overwatch without it. It wrote: Still fine." in follow_ups
+    assert "acceptance was not judged, so check each ask and correction by hand" in follow_ups
+    body = (run / delivery.BODY).read_text()
+    assert "- **Reviews:** not all review steps completed." in body
+    assert "overwatch audit passed" not in body
+
+
+@pytest.mark.parametrize("allowed, verdicts", [(0, ["proceed"]), (1, ["reread", "proceed"]),
+                                              (2, ["reread", "reread", "proceed"])])
+def test_the_rereads_follow_their_knob(tmp_path, allowed, verdicts):
+    """The reread count is code-side: a fact the gate keeps, capped by the frozen
+    `judge_rereads` knob."""
+    ctx = _gate_ctx(tmp_path, "not a verdict")
+    ctx.knobs["judge_rereads"] = allowed
+    assert [str(design_ops.gate_qa(ctx)) for _ in verdicts] == verdicts
+    assert ctx.facts.get("qa_judge_rereads", 0) == allowed
+    assert not ctx.facts.get("review_attempts_used")
 
 
 # ── the other modes keep the parser gates ─────────────────────────────────────
@@ -287,75 +414,152 @@ def test_create_and_edit_keep_their_gates(mode):
 
 def test_the_design_graph_has_judges_and_no_free_audit_round():
     graph = DesignMode().build()
+    assert graph.nodes["synthesize_qa"].call == "refactory_dsh.design_ops:synthesize_qa"
     assert graph.nodes["gate_qa"].evaluator == "refactory_dsh.design_ops:gate_qa"
     assert graph.nodes["gate_overwatch"].evaluator == "refactory_dsh.design_ops:gate_overwatch"
     assert [e.target for e in graph.out_edges("synthesize_qa")] == ["qa_judge"]
+    # A reread goes back to the judge alone; only a reloop reaches the builder.
     assert {(e.target, e.condition) for e in graph.out_edges("gate_qa")} == {
-        ("emit", "reloop"), ("audit_corrections", "proceed")}
+        ("emit", "reloop"), ("qa_judge", "reread"), ("audit_corrections", "proceed")}
     assert [e.target for e in graph.out_edges("audit_corrections")] == ["overwatch"]
     assert {(e.target, e.condition) for e in graph.out_edges("gate_overwatch")} == {
-        ("emit", "reloop"), ("report", "proceed")}
+        ("emit", "reloop"), ("overwatch", "reread"), ("report", "proceed")}
+    for gate, count in (("gate_qa", "qa_judge_rereads"), ("gate_overwatch", "overwatch_rereads")):
+        assert count in graph.nodes[gate].produces and "judge_rereads" in graph.nodes[gate].knobs
+    knob = DesignMode.declare()["judge_rereads"]
+    assert (knob.default, knob.frozen) == (1, True)
     # The QA judge writes the evidence map the audit measures; the overwatch reads it.
     assert evidence.AUDIT in graph.nodes["qa_judge"].writes
     assert "Write intent-audit.json as" in graph.nodes["qa_judge"].prompt_template
     assert evidence.AUDIT not in graph.nodes["overwatch"].writes
     assert "Write intent-audit.json as" not in graph.nodes["overwatch"].prompt_template
+    # The QA judge reads the whole design and the validation receipt.
+    assert {"design.md", evidence.EVIDENCE} <= set(graph.nodes["qa_judge"].reads)
     # On the spine an agent's declared inputs must exist: no judge declares the optional
-    # verifier's report, and the overwatch does not declare what a skipped QA judge leaves.
+    # verifier's report, and the overwatch declares nothing a skipped QA judge or a skipped
+    # correction audit would not leave.
     for node in ("qa_judge", "overwatch"):
         assert "reviews/verification.md" not in graph.nodes[node].reads
-    assert judges.QA_JUDGE not in graph.nodes["overwatch"].reads
-    assert evidence.AUDIT not in graph.nodes["overwatch"].reads
-    assert "correction-audit.json" in graph.nodes["overwatch"].reads
+    for name in (judges.QA_JUDGE, evidence.AUDIT, "correction-audit.json"):
+        assert name not in graph.nodes["overwatch"].reads
+
+
+def test_the_judges_answer_in_their_verdicts_not_in_review_markers():
+    """R17: neither judge inherits the review context that says to write `UNAVAILABLE:`
+    into a report or to resolve errors in its own report; each is told that a missing
+    dependency is a must-fix item in its JSON."""
+    from refactory_dsh.authoring_evidence import FULL_REVIEW_CONTEXT
+
+    assert "write `UNAVAILABLE:`" in FULL_REVIEW_CONTEXT
+    graph = DesignMode().build()
+    for node in ("qa_judge", "overwatch"):
+        prompt = graph.nodes[node].prompt_template
+        assert "write `UNAVAILABLE:`" not in prompt, node
+        assert "in your own report" not in prompt, node
+        assert "BLOCKING" not in prompt and "VERDICT:" not in prompt, node
+        assert "must_fix item whose `what` starts with `UNAVAILABLE:`" in prompt, node
+        assert '"severity": "critical" | "high" | "medium" | "low"' in prompt, node
+    assert "{{runtime_evidence}}" in graph.nodes["overwatch"].prompt_template
 
 
 # ── the judges' files ──────────────────────────────────────────────────────────
-def test_a_judgment_is_json_and_a_redo_names_what_to_fix():
-    fenced = "```json\n" + qa_judgment("proceed", follow_ups=["docs"]) + "\n```"
-    assert judges.parse(fenced, judges.QA_VERDICTS).follow_ups == ("docs",)
-    for text, why in (("VERDICT: PASS", "is not JSON"),
-                      ("Here it is: " + qa_judgment(), "is not JSON"),
+def test_a_judgment_is_one_json_object_and_a_redo_names_what_to_fix():
+    """D9: the file's only JSON content is one object -- bare, fenced, or among prose.
+    Two objects are unreadable; braces in prose are not objects."""
+    verdict = qa_judgment("proceed", follow_ups=["docs"])
+    for text in (verdict, "```json\n" + verdict + "\n```",
+                 "Here is my verdict:\n```json\n" + verdict + "\n```\nThat is all {really}.",
+                 "Verdict follows " + verdict + " -- done."):
+        assert judges.parse(text, judges.QA_VERDICTS).follow_ups == ("docs",), text
+    for text, why in (("VERDICT: PASS", "holds no JSON object"),
+                      ("Example: " + qa_judgment("redo", must_fix=["x"]) + "\nMine: " + verdict,
+                       "holds 2 JSON objects; it must hold exactly one"),
                       (json.dumps({"verdict": "maybe"}), "has verdict 'maybe'"),
                       (qa_judgment("redo"), "says redo but names nothing to fix"),
                       (json.dumps({"verdict": "proceed", "must_fix": "x"}), "must_fix is not a list")):
         with pytest.raises(judges.Unreadable, match=why):
             judges.parse(text, judges.QA_VERDICTS)
-    unmet = overwatch_judgment("redo", corrections=[{"id": "ledger-3", "met": False, "evidence": ""}])
-    assert judges.parse(unmet, judges.OVERWATCH_VERDICTS).unmet == [
-        {"id": "ledger-3", "met": False, "evidence": ""}]
+    parsed = judges.parse(overwatch_judgment("redo", corrections=[
+        {"id": "ledger-3", "met": False, "evidence": "x"}, {"id": "ledger-4", "met": None}]),
+        judges.OVERWATCH_VERDICTS)
+    assert [item["id"] for item in parsed.unmet] == ["ledger-3"]
+    assert [item["id"] for item in parsed.unjudged] == ["ledger-4"]
+    # A must-fix item with no severity is high: a missing label never lets a defect through.
+    [item] = judges.parse(qa_judgment("redo", must_fix=[{"what": "x"}]), judges.QA_VERDICTS).must_fix
+    assert (item["severity"], item["breaks"], judges.blocks(item)) == ("high", "none", True)
 
 
 def test_the_synthesis_carries_every_review_unread_and_the_verifier_only_when_it_reported(tmp_path):
+    """R05: each review goes to the QA judge exactly as written, with nothing a parser read
+    out of it, and the verifier only when it reported."""
     ctx = nn.RunContext(tmp_path, facts={"check": "python tool.py", "validation": "(the check passed)"})
     for name, _ in design_ops.DESIGN_QA_REVIEWS:
-        ctx.write_text(name, f"{name}: BLOCKING: tool.py: quoted\n")
+        ctx.write_text(name, f"{name}: BLOCKING: tool.py: quoted\nmore prose\n")
     ctx.write_text("design.md", "# T\n\n## Changes\n\n- tool.py\n\n## Docs\n\n- none\n")
     body = design_ops.synthesize_qa(ctx)["qa"]
-    for name, _ in design_ops.DESIGN_QA_REVIEWS:
-        assert f"{name}: BLOCKING: tool.py: quoted" in body
+    for name, who in design_ops.DESIGN_QA_REVIEWS:
+        assert f"## {name} (the {who})\n\n{name}: BLOCKING: tool.py: quoted\nmore prose\n\n" in body
     assert "verification" not in body, "a verifier that left nothing is simply absent"
     assert "## The design's Changes\n\n- tool.py\n" in body
     ctx.write_text(design_ops.VERIFICATION, "the verifier's report\n")
     assert "the verifier's report" in design_ops.synthesize_qa(ctx)["qa"]
 
 
-def _gate_ctx(tmp_path: Path, judgment: str) -> nn.RunContext:
+def test_each_round_starts_with_nothing_an_earlier_round_judged(tmp_path):
+    """A skipped judge or audit leaves nothing for its gate or the overwatch: the last
+    round's verdicts, evidence map and audit are set aside, kept, when the round starts."""
+    ctx = nn.RunContext(tmp_path, facts={"check": "true"})
+    for name in design_ops.JUDGING_FILES:
+        ctx.write_text(name, f"{name} from the last round")
+    produced = design_ops.synthesize_qa(ctx)
+    assert not any((tmp_path / name).exists() for name in design_ops.JUDGING_FILES)
+    [kept] = list((tmp_path / design_ops.JUDGING_HISTORY).iterdir())
+    assert sorted(path.name for path in kept.iterdir()) == sorted(design_ops.JUDGING_FILES)
+    assert (produced["qa_judge_rereads"], produced["overwatch_rereads"]) == (0, 0)
+    assert produced["correction_audit"] == "(the correction audit has not run this round)"
+
+
+def _gate_ctx(tmp_path: Path, judgment: str, **facts) -> nn.RunContext:
     """A run directory with this attempt's three reviews and the QA judge's file."""
-    ctx = nn.RunContext(tmp_path)
+    ctx = nn.RunContext(tmp_path, facts=facts)
     for name, _ in design_ops.DESIGN_QA_REVIEWS:
         ctx.write_text(name, "ran it; fine\n")
     ctx.write_text(judges.QA_JUDGE, judgment)
     return ctx
 
 
-def test_a_judge_that_needs_an_unavailable_tool_stops_the_run(tmp_path):
-    """A judge says a dependency is missing in a must-fix item, and the run stops for a
-    person instead of sending the builder a defect it cannot fix."""
-    ctx = _gate_ctx(tmp_path, qa_judgment("redo", must_fix=[
-        {"what": "UNAVAILABLE: no browser to render the page; install chromium"}]))
+def _overwatch_ctx(tmp_path: Path, judgment: str, **facts) -> nn.RunContext:
+    ctx = nn.RunContext(tmp_path, facts=facts)
+    ctx.write_text(judges.OVERWATCH_VERDICT, judgment)
+    return ctx
+
+
+UNAVAILABLE_ITEM = {"what": "UNAVAILABLE: no browser to render the page; install chromium"}
+
+
+@pytest.mark.parametrize("gate, context, text", [
+    ("gate_qa", _gate_ctx, qa_judgment("redo", must_fix=[UNAVAILABLE_ITEM])),
+    ("gate_overwatch", _overwatch_ctx, overwatch_judgment("redo", must_fix=[UNAVAILABLE_ITEM])),
+    ("gate_qa", _gate_ctx, "UNAVAILABLE: no browser to render the page; install chromium"),
+    ("gate_overwatch", _overwatch_ctx,
+     "UNAVAILABLE: no browser to render the page; install chromium\n" + overwatch_judgment("pass")),
+])
+def test_a_judge_that_needs_an_unavailable_tool_stops_the_run(tmp_path, gate, context, text):
+    """R17: a judge says a dependency is missing in a must-fix item, or its file holds an
+    `UNAVAILABLE:` line as create's overwatch report would, and the run stops for a person
+    instead of sending the builder a defect it cannot fix, or reading the judge again."""
+    ctx = context(tmp_path, text)
     with pytest.raises(ValueError, match="validation unavailable: UNAVAILABLE: no browser"):
+        getattr(design_ops, gate)(ctx)
+    assert not ctx.facts.get("review_attempts_used") and not ctx.facts.get("qa_judge_rereads")
+
+
+def test_a_review_that_says_a_tool_is_unavailable_stops_the_run(tmp_path):
+    """R14: as before, a review line starting `UNAVAILABLE:` stops the run."""
+    ctx = _gate_ctx(tmp_path, qa_judgment("proceed"))
+    ctx.write_text("reviews/qa.md", "ran what I could\nUNAVAILABLE: no display; run under xvfb\n")
+    with pytest.raises(ValueError, match="validation unavailable: UNAVAILABLE: no display"):
         design_ops.gate_qa(ctx)
-    assert not ctx.facts.get("review_attempts_used")
 
 
 def test_a_review_that_left_nothing_sends_the_change_back_whatever_the_judge_says(tmp_path):
@@ -367,11 +571,130 @@ def test_a_review_that_left_nothing_sends_the_change_back_whatever_the_judge_say
     assert ctx.facts["review_attempts_used"] == 1
 
 
-def test_an_unreadable_overwatch_verdict_proceeds_with_a_note_that_quotes_it(tmp_path):
-    """Sending the builder back cannot repair a judge's file, so the change goes on, and
-    the pull request says acceptance was not judged and what the overwatch wrote."""
-    ctx = nn.RunContext(tmp_path)
-    ctx.write_text(judges.OVERWATCH_VERDICT, "VERDICT: FAIL\nthe ask has no evidence")
+@pytest.mark.parametrize("gate, context, text", [
+    ("gate_qa", _gate_ctx, qa_judgment("proceed")),
+    ("gate_overwatch", _overwatch_ctx, overwatch_judgment("pass")),
+])
+def test_a_stale_sign_off_sends_the_change_back_whatever_the_judge_says(tmp_path, gate, context, text):
+    """R13, R18: a review or overwatch whose sign-off is not current for this attempt --
+    here, runtime evidence the run recorded but cannot find -- sends the change back even
+    when its judge proceeds or passes."""
+    ctx = context(tmp_path, text, runtime_evidence="recorded")
+    verdict = getattr(design_ops, gate)(ctx)
+    assert verdict == "reloop" and "authoritative runtime evidence is missing" in verdict.reason
+    assert ctx.facts["review_attempts_used"] == 1
+
+
+MINOR = {"source": "code_reviewer", "where": "tool.py:3", "what": "no --quiet flag",
+         "why": "nice to have", "severity": "low", "breaks": "none"}
+
+
+@pytest.mark.parametrize("item, back", [
+    (MINOR, False),
+    ({**MINOR, "severity": "medium"}, False),
+    ({**MINOR, "severity": "high"}, True),
+    ({**MINOR, "severity": "critical"}, True),
+    ({**MINOR, "severity": "medium", "breaks": "ask"}, True),
+    ({**MINOR, "severity": "low", "breaks": "correction"}, True),
+    ({**MINOR, "severity": "low", "breaks": "health"}, True),
+    ({key: value for key, value in MINOR.items() if key != "severity"}, True),
+])
+def test_only_what_holds_the_change_back_sends_it_back(tmp_path, item, back):
+    """The severity bar (remote-factory design-v2's rule): a redo goes back only for an
+    item that is critical or high, or breaks an ask, a correction or the health check.
+    Otherwise the change goes on and the items are follow-ups (R15)."""
+    ctx = _gate_ctx(tmp_path, qa_judgment("redo", must_fix=[item]))
+    verdict = design_ops.gate_qa(ctx)
+    assert str(verdict) == ("reloop" if back else "proceed")
+    if not back:
+        follow_ups = (tmp_path / "reviews/follow-ups.md").read_text()
+        assert "[code_reviewer] tool.py:3: no --quiet flag" in follow_ups
+        assert "asked for a redo, but nothing it named is critical or high" in follow_ups
+
+
+def test_a_proceed_lists_the_must_fix_items_it_left(tmp_path):
+    """R15: a proceed that still names must-fix items lists them on the pull request."""
+    ctx = _gate_ctx(tmp_path, qa_judgment("proceed", must_fix=[{**MINOR, "severity": "high"}]))
+    assert design_ops.gate_qa(ctx) == "proceed"
+    assert ("[code_reviewer] tool.py:3: no --quiet flag (why: nice to have) (high) "
+            "(the QA judge proceeded with this listed as must-fix)"
+            in (tmp_path / "reviews/follow-ups.md").read_text())
+
+
+def test_an_overwatch_pass_with_an_unmet_correction_goes_back_naming_it(tmp_path):
+    """D4: a correction the overwatch finds not met does not ship, whatever its verdict:
+    the change goes back with the correction and the overwatch's evidence, and spends a
+    review attempt."""
+    ctx = _overwatch_ctx(tmp_path, overwatch_judgment("pass", corrections=[
+        {"id": "ledger-2", "met": False, "evidence": "calc.py:2 still returns x > 0"}]))
+    verdict = design_ops.gate_overwatch(ctx)
+    assert verdict == "reloop"
+    assert "- correction ledger-2: NOT met — calc.py:2 still returns x > 0" in verdict.reason
+    assert ctx.facts["review_attempts_used"] == 1
+    assert "ledger-2: NOT met" in ctx.facts["overwatch_review"]
+
+
+@pytest.mark.parametrize("corrections, shown", [
+    ([{"id": "ledger-2", "met": False, "evidence": "UNMET-EVIDENCE-42"}],
+     "- correction ledger-2: NOT met — UNMET-EVIDENCE-42"),
+    ([{"id": "ledger-3", "met": None}], "- correction ledger-3: not judged"),
+])
+def test_an_overwatch_redo_for_a_correction_tells_the_builder_which_and_why(tmp_path, corrections, shown):
+    """R09, R20: a redo that names only a correction, unmet or not judged, sends the
+    builder that correction with the overwatch's evidence."""
+    ctx = _overwatch_ctx(tmp_path, overwatch_judgment("redo", corrections=corrections))
+    verdict = design_ops.gate_overwatch(ctx)
+    assert verdict == "reloop" and shown in verdict.reason
+    assert shown in ctx.facts["validation"]
+
+
+def test_a_minor_overwatch_redo_goes_on_but_an_unmet_correction_still_goes_back(tmp_path):
+    """The severity bar applies to the overwatch's must-fix items, except that an unmet
+    correction always sends the change back."""
+    ctx = _overwatch_ctx(tmp_path, overwatch_judgment("redo", must_fix=[MINOR]))
+    assert design_ops.gate_overwatch(ctx) == "proceed"
+    assert "no --quiet flag" in (tmp_path / "reviews/follow-ups.md").read_text()
+    ctx = _overwatch_ctx(tmp_path, overwatch_judgment("redo", must_fix=[MINOR], corrections=[
+        {"id": "ledger-2", "met": False, "evidence": "e"}]))
+    assert design_ops.gate_overwatch(ctx) == "reloop"
+
+
+def test_a_pass_lists_what_it_did_not_judge_and_the_must_fix_it_left(tmp_path, monkeypatch):
+    """R10, R16: a pass ships, and the pull request names every correction the overwatch
+    did not judge -- listed without a decision, or not listed at all -- and every must-fix
+    item it left."""
+    monkeypatch.setattr(evidence, "current_problems", lambda ctx, workers: [])
+    ctx = _overwatch_ctx(tmp_path, overwatch_judgment(
+        "pass", must_fix=[{**MINOR, "severity": "high"}],
+        corrections=[{"id": "ledger-2", "met": None, "evidence": "could not run it"}]))
+    ctx.write_json(evidence.EVIDENCE, {"requirements": [
+        {"id": "ledger-2", "kind": "correction", "text": "a"},
+        {"id": "ledger-3", "kind": "constraint", "text": "b"}]})
+    assert design_ops.gate_overwatch(ctx) == "proceed"
+    follow_ups = (tmp_path / "reviews/follow-ups.md").read_text()
+    assert ("correction ledger-2: not judged — could not run it (the overwatch could not judge it)"
+            in follow_ups)
+    assert "correction ledger-3: the overwatch did not judge it" in follow_ups
+    assert "no --quiet flag" in follow_ups and "(the overwatch passed with this listed as must-fix)" in follow_ups
+
+
+def test_a_verdict_among_prose_is_read(tmp_path):
+    """D9: the overwatch's one JSON object, fenced among prose, decides the gate."""
+    ctx = _overwatch_ctx(tmp_path, "Here is my verdict:\n```json\n" + overwatch_judgment("pass")
+                         + "\n```\nAll asks have evidence.")
+    assert design_ops.gate_overwatch(ctx) == "proceed"
+    assert (tmp_path / "reviews/overwatch-gate.txt").read_text().startswith("proceed: overwatch passed")
+
+
+def test_an_unreadable_overwatch_verdict_is_read_again_then_goes_on_with_a_note(tmp_path):
+    """Sending the builder back cannot repair a judge's file: it is read again once, and
+    then the change goes on, with the pull request saying acceptance was not judged and
+    what the overwatch wrote."""
+    ctx = _overwatch_ctx(tmp_path, "VERDICT: FAIL\nthe ask has no evidence")
+    first = design_ops.gate_overwatch(ctx)
+    assert first == "reread" and "holds no JSON object" in first.reason
+    assert ctx.facts["overwatch_rereads"] == 1
+    assert "overwatch-verdict.json holds no JSON object" in ctx.facts["overwatch_reread"]
     assert design_ops.gate_overwatch(ctx) == "proceed"
     notes = (tmp_path / "reviews/follow-ups.md").read_text()
     assert "acceptance was not judged" in notes
@@ -380,8 +703,7 @@ def test_an_unreadable_overwatch_verdict_proceeds_with_a_note_that_quotes_it(tmp
 
 
 def test_the_audit_writes_its_file_every_round_even_with_nothing_to_measure(tmp_path):
-    """The overwatch declares correction-audit.json as an input, and on the spine a
-    declared input must exist: a round with nothing to audit still writes this round's."""
+    """A round with nothing to audit still writes this round's audit, for the overwatch."""
     ctx = nn.RunContext(tmp_path)
     ctx.write_json("correction-audit.json", [{"id": "ledger-9", "clauses": []}])
     produced = design_ops.audit_corrections(ctx)
@@ -389,13 +711,21 @@ def test_the_audit_writes_its_file_every_round_even_with_nothing_to_measure(tmp_
     assert produced["correction_audit"].startswith("No correction or constraint")
 
 
-def test_a_pass_that_leaves_a_correction_unmet_lists_it_for_the_pull_request(tmp_path):
-    ctx = nn.RunContext(tmp_path)
-    ctx.write_text(judges.OVERWATCH_VERDICT, overwatch_judgment("pass", corrections=[
-        {"id": "ledger-2", "met": False, "evidence": "calc.py:2"}]))
-    assert design_ops.gate_overwatch(ctx) == "proceed"
-    assert ("correction ledger-2: NOT met — calc.py:2 (the overwatch passed the change with it)"
-            in (tmp_path / "reviews/follow-ups.md").read_text())
+def test_the_report_refuses_a_sign_off_that_is_no_longer_current(tmp_path):
+    """R12: the judged report still refuses when a review's sign-off is not current: here
+    the approved design changed after the reviews signed off."""
+    repo = git_repo(tmp_path / "repo")
+    model = FakeModel(_answers(_round(_tool("built"), overwatch=overwatch_judgment("pass"))))
+    run = tmp_path / "run"
+    result = _design(run, model, repo)
+    assert result.exit_ok, result.error
+    # The knobs the check recorded its settings under, as the run's own context has them.
+    settings = json.loads((run / evidence.EVIDENCE).read_text())["settings"]
+    ctx = nn.RunContext(run, knobs=settings, facts=result.facts, enforce_writes=False)
+    design_ops.report_judged(ctx)
+    (run / "design.md").write_text((run / "design.md").read_text() + "\nchanged after review\n")
+    with pytest.raises(ValueError, match="authoring sign-off is incomplete or stale"):
+        design_ops.report_judged(ctx)
 
 
 # ── the gates on the spine: each its own process, through refactory_dsh.run ───
@@ -467,10 +797,18 @@ def test_gate_qa_on_the_spine_stops_at_the_review_limit(tmp_path, monkeypatch):
 
 
 def test_gate_qa_on_the_spine_proceeds_without_a_judge_file(tmp_path, monkeypatch):
-    """A judge that left no file does not stall the gate: it proceeds with the note."""
+    """A judge that left no file does not stall the gate: it is asked again once, with no
+    builder round, and then the gate proceeds with the note."""
     run = _spine_run(tmp_path, "")
     (run / judges.QA_JUDGE).unlink()
-    code, out, err = _gate_qa_on_the_spine(run, monkeypatch, {"review_attempts": 3})
+    knobs = {"review_attempts": 3, "judge_rereads": 1}
+    code, out, err = _gate_qa_on_the_spine(run, monkeypatch, knobs)
+    assert code == 0, err
+    assert out.split()[-1] == "reread" and "qa-judge.json was not written" in out
+    facts = json.loads((run / "facts.json").read_text())
+    assert facts["qa_judge_rereads"] == 1 and not facts.get("review_attempts_used")
+    assert "qa-judge.json was not written" in facts["qa_judge_reread"]
+    code, out, err = _gate_qa_on_the_spine(run, monkeypatch, knobs)
     assert code == 0, err
     assert out.split()[-1] == "proceed"
     assert "qa-judge.json was not written" in (run / "reviews/qa-gate.txt").read_text()
@@ -484,7 +822,15 @@ def test_the_qa_tail_runs_node_by_node_on_the_spine(tmp_path, monkeypatch):
     run = _spine_run(tmp_path, qa_judgment("proceed"))
     (run / "design.md").write_text("# T\n\n## Changes\n\n- tool.py\n")
     (run / "check-record.json").write_text(json.dumps({"status": "pass"}))
-    for node, kind in (("synthesize_qa", "op"), ("gate_qa", "gate"), ("audit_corrections", "op")):
+    code, out, err = _on_the_spine(run, monkeypatch, "synthesize_qa", "op", knobs)
+    assert code == 0, err
+    # The round starts with nothing an earlier round judged: _spine_run's judge file is
+    # set aside, and the judge writes this round's.
+    assert not (run / judges.QA_JUDGE).exists()
+    assert json.loads((run / "facts.json").read_text())["correction_audit"] == (
+        "(the correction audit has not run this round)")
+    (run / judges.QA_JUDGE).write_text(qa_judgment("proceed"))
+    for node, kind in (("gate_qa", "gate"), ("audit_corrections", "op")):
         code, out, err = _on_the_spine(run, monkeypatch, node, kind, knobs)
         assert code == 0, (node, err)
     assert "## The design's Changes\n\n- tool.py" in (run / "reviews/qa-synthesized.md").read_text()
@@ -504,3 +850,80 @@ def test_the_qa_tail_runs_node_by_node_on_the_spine(tmp_path, monkeypatch):
     assert code == 0, err
     assert out.split()[-1] == "proceed"
     assert (run / "reviews/overwatch-gate.txt").read_text().startswith("proceed: overwatch passed")
+
+
+def test_a_skipped_judge_never_reads_an_earlier_rounds_verdict_on_the_spine(tmp_path, monkeypatch):
+    """A person skips the QA judge on round 2: the gate does not read round 1's redo
+    again. The round's start set it aside, so the judge is asked again instead, with no
+    builder round."""
+    knobs = {"review_attempts": 3, "check_attempts": 3}
+    run = _spine_run(tmp_path, qa_judgment("redo", must_fix=[{"what": "round one's defect"}]))
+    code, out, _ = _gate_qa_on_the_spine(run, monkeypatch, knobs)
+    assert out.split()[-1] == "reloop"
+    code, out, err = _on_the_spine(run, monkeypatch, "synthesize_qa", "op", knobs)
+    assert code == 0, err
+    code, out, err = _gate_qa_on_the_spine(run, monkeypatch, knobs)
+    assert code == 0, err
+    assert out.split()[-1] == "reread" and "round one's defect" not in out
+    assert json.loads((run / "facts.json").read_text())["review_attempts_used"] == 1
+
+
+def test_an_unmet_correction_reaches_the_builders_prompt_on_the_spine(tmp_path, monkeypatch):
+    """R09 on the spine: gate_overwatch's reason and facts carry an unmet correction and the
+    overwatch's evidence into emit's rendered prompt, across processes."""
+    from refactory_dsh.nn.executor import render
+
+    run = _spine_run(tmp_path, qa_judgment("proceed"))
+    (run / judges.OVERWATCH_VERDICT).write_text(overwatch_judgment("redo", corrections=[
+        {"id": "ledger-2", "met": False, "evidence": "UNMET-EVIDENCE-42"}]))
+    code, out, err = _on_the_spine(run, monkeypatch, "gate_overwatch", "gate",
+                                   {"review_attempts": 3, "check_attempts": 3})
+    assert code == 0, err
+    assert out.split()[-1] == "reloop"
+    facts = json.loads((run / "facts.json").read_text())
+    emit = DesignMode().build().nodes["emit"].prompt_template
+    assert "ledger-2: NOT met — UNMET-EVIDENCE-42" in render(emit, nn.RunContext(run, facts=facts))
+
+
+@pytest.mark.parametrize("node, answer_file, other", [
+    ("qa_judge", judges.QA_JUDGE, evidence.AUDIT),
+    ("overwatch", judges.OVERWATCH_VERDICT, None),
+])
+def test_a_judge_that_answers_in_its_message_is_captured_into_its_verdict_file(
+        tmp_path, monkeypatch, node, answer_file, other):
+    """Spine and walker parity: the spine's worker captures an answer the agent did not
+    write into the node's first declared output, as the walker does -- the verdict file,
+    not whichever declared file sorts first (intent-audit.json for the QA judge)."""
+    import shlex
+
+    from refactory_dsh import workers
+    from refactory_dsh.model import DshModelClient
+    from refactory_dsh.worker_node import execute
+
+    verdict = qa_judgment("proceed") if node == "qa_judge" else overwatch_judgment("pass")
+
+    def complete(self, prompt, *, system="", workdir=None):
+        if other:
+            (Path(workdir) / other).write_text(json.dumps({"requirements": []}))
+        return verdict
+
+    monkeypatch.setattr(DshModelClient, "complete", complete)
+    monkeypatch.setenv("REFACTORY_WORKER_BACKEND", "dsh")
+    run = tmp_path / "run"
+    run.mkdir()
+    state = DesignMode().state_dict()
+    lowering.write_declarations(state, run)
+    lowered = workers.lower_workflow(lowering.to_workflow(state), run,
+                                     DshModelClient(python_bin=Path(sys.executable).parent).context(),
+                                     lowering.node_declarations(state))
+    spec = json.loads(Path(shlex.split(lowered.nodes[node].dispatch_command)[-1]).read_text())
+    assert spec["writes"][0] == answer_file
+    for name in spec["reads"]:
+        (run / name).parent.mkdir(parents=True, exist_ok=True)
+        (run / name).write_text("{}")
+    (run / evidence.EVIDENCE).write_text(json.dumps({"identity": {"root": str(run)}}))
+    monkeypatch.setenv("DSH_WORKFLOW_NODE", json.dumps({"id": node, "type": "AgentNode"}))
+    receipt = execute(spec, run)
+    assert receipt["status"] == "delivered", receipt
+    assert receipt["captured_final"] == answer_file
+    assert json.loads((run / answer_file).read_text())["verdict"] in ("proceed", "pass")

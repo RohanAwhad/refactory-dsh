@@ -328,6 +328,7 @@ class DesignFastMode(DesignMode):
         knobs.pop("design_review_attempts")
         knobs.pop("pitfalls_attempts")
         knobs.pop("claims_check_attempts")
+        knobs.pop("judge_rereads")  # design's judges; design_fast has a focused QA instead
         # It works where design works (`repo_change`), but delivers nothing: a pull request
         # is opened only behind an approval gate that names it (#350), and fast mode has
         # none. Its work stays on the run's branch.

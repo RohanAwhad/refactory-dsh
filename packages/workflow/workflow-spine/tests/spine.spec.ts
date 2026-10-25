@@ -275,9 +275,32 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     expect(ids(s)).toEqual(['overwatch'])
     s.complete('overwatch')
     expect(ids(s)).toEqual(['gate_overwatch'])
-    expect(spineEdges(graph, 'gate_overwatch')).toEqual([['emit', 'reloop'], ['report', 'proceed']])
+    expect(spineEdges(graph, 'gate_overwatch')).toEqual(
+      [['emit', 'reloop'], ['overwatch', 'reread'], ['report', 'proceed']])
     s.verdict('gate_overwatch', 'reloop', 'the overwatch sent it back')
     expect(ids(s)).toEqual(['emit'])
+  })
+
+  it('a judge whose verdict could not be read is asked again, and only the judge runs', () => {
+    const s = new Spine(graph)
+    advance(s, 'fork_qa', 'proceed')
+    s.complete('fork_qa')
+    for (const n of ['check', 'health_checker', 'code_reviewer', 'qa_director', 'verifier']) s.complete(n)
+    s.complete('join_qa')
+    s.verdict('gate_check', 'proceed')
+    s.complete('synthesize_qa')
+    s.complete('qa_judge')
+    s.verdict('gate_qa', 'reread', 'qa-judge.json holds no JSON object')
+    expect(ids(s)).toEqual(['qa_judge'])
+    s.complete('qa_judge')
+    s.verdict('gate_qa', 'proceed')
+    s.complete('audit_corrections')
+    s.complete('overwatch')
+    s.verdict('gate_overwatch', 'reread', 'overwatch-verdict.json holds no JSON object')
+    expect(ids(s)).toEqual(['overwatch'])
+    s.complete('overwatch')
+    s.verdict('gate_overwatch', 'proceed')
+    expect(ids(s)).toEqual(['report'])
   })
 
   it('a QA judge redo sends the build back to emit', () => {

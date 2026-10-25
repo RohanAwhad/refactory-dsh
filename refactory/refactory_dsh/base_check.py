@@ -1503,8 +1503,10 @@ def site_outside_change(ctx: Any, site: str) -> str:
     ``"deleted"`` when the change deletes lines the site names, counted in the base: the
     code it cites is gone. ``"unchanged"`` when the file is in HEAD with the site's lines and
     the change leaves them as the base has them: what a correction that drops a planned
-    change leaves. ``""`` when it names no code (no such file or line) or the run has no
-    worktree. The design-mode correction audit reports either reason as a removed site
+    change leaves, and also what a correction the change never applied leaves. ``""`` when
+    it names no code (a line past the end of its file, or a file HEAD does not have) or the
+    run has no worktree. The design-mode correction audit reports ``deleted`` as removed
+    and ``unchanged`` as measured not met, for the overwatch to decide
     (`authoring_evidence.correction_audit_problems` with ``removed_sites``).
     """
     import subprocess as _sp

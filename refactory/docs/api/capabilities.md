@@ -7615,7 +7615,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only a defect that breaks an ask or a correction, a correctness or safety bug, or a regression sends the build back; other findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
 
 ```json
 {
@@ -7707,6 +7707,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "emit"
     },
     {
+      "condition": "reread",
+      "source": "gate_overwatch",
+      "target": "overwatch"
+    },
+    {
       "condition": "proceed",
       "source": "gate_overwatch",
       "target": "report"
@@ -7730,6 +7735,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": "reloop",
       "source": "gate_qa",
       "target": "emit"
+    },
+    {
+      "condition": "reread",
+      "source": "gate_qa",
+      "target": "qa_judge"
     },
     {
       "condition": "proceed",
@@ -8060,9 +8070,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "gate_overwatch",
       "kind": "gate",
       "knobs": [
+        "judge_rereads",
         "review_attempts"
       ],
-      "notes": "route on the overwatch's verdict: redo goes back to the builder, pass to the report; unmet corrections and follow-ups go to the pull request",
+      "notes": "route on the overwatch's verdict: an unmet correction or a redo for what holds the change back goes to the builder, a pass to the report; an unreadable verdict is read again once; follow-ups go to the pull request",
       "role": "ceo"
     },
     {
@@ -8082,9 +8093,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "gate_qa",
       "kind": "gate",
       "knobs": [
+        "judge_rereads",
         "review_attempts"
       ],
-      "notes": "route on the QA judge's verdict: redo goes back to the builder with what must be fixed; follow-ups go to the pull request",
+      "notes": "route on the QA judge's verdict: a redo for what holds the change back goes to the builder; an unreadable verdict is read again once; follow-ups go to the pull request",
       "role": "ceo"
     },
     {
@@ -8406,6 +8418,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": false,
       "values": []
     },
+    "judge_rereads": {
+      "default": 1,
+      "description": "how many times a round a judge whose verdict could not be read is asked again, with no builder round, before its gate goes on without it",
+      "frozen": true,
+      "kind": "int",
+      "range": [
+        0,
+        3
+      ],
+      "value": 1,
+      "values": []
+    },
     "name": {
       "default": "",
       "description": "the artifact to design (empty takes the name from the brief)",
@@ -8604,8 +8628,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only a defect that breaks an ask or a correction, a correctness or safety bug, or a regression sends the build back; other findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "c280427af743daf0bf479b1df6e0999bc0298fd9043a09ec2565b12c2bbe8223"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
+    "reviewed_schema": "d1664ebda3ac34743f8bbd8bf25007232e99f8e5bec6f0d3a6b501f5402b1f3d"
   }
 }
 ```

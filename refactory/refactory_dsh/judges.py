@@ -11,6 +11,12 @@ tests.
 Design mode has two judges (``refactory_dsh.design``): ``qa_judge`` after the review
 fork, and ``overwatch`` before delivery. Their gates are ``design_ops.gate_qa`` and
 ``design_ops.gate_overwatch``.
+
+What holds a change back is remote-factory design-v2's rule: an ask, the health check,
+or a critical or high defect. Each must-fix item carries its ``severity`` and what it
+``breaks``; an item that is neither critical nor high and breaks none of those is a
+follow-up whatever the verdict says (`blocks`). A correction the person gave and the
+overwatch finds unmet always sends the change back.
 """
 
 from __future__ import annotations
@@ -32,13 +38,27 @@ OVERWATCH_VERDICTS = ("pass", "redo")
 #: person instead of sending the builder a defect it cannot fix.
 UNAVAILABLE = "UNAVAILABLE:"
 
-#: A file that is one fenced block and nothing else: the one wrapper a model commonly
-#: puts around JSON. Anything else around the JSON makes the file unreadable.
-_FENCED = re.compile(r"\A```[A-Za-z]*[ \t]*\n(.*)\n```\Z", re.S)
+#: A line of a judge's file that starts with the marker: the run stops, as create's
+#: overwatch gate stops on one. A JSON string cannot hold a raw line break, so no line
+#: of a JSON verdict starts with it; only prose around or instead of the JSON can.
+UNAVAILABLE_LINE = re.compile(r"(?im)^\s*UNAVAILABLE:.*$")
+
+#: The severities a must-fix item may carry, and those that block on their own.
+SEVERITIES = ("critical", "high", "medium", "low")
+BLOCKING_SEVERITIES = ("critical", "high")
+
+#: What a must-fix item may break; all but ``none`` block whatever its severity.
+BREAKS = ("ask", "correction", "health", "none")
 
 
 class Unreadable(ValueError):
-    """The judge's file is missing, is not JSON, or is not a verdict."""
+    """The judge's file is missing, is not one JSON object, or is not a verdict."""
+
+
+def blocks(item: dict[str, str]) -> bool:
+    """Whether a must-fix item holds the change back: critical or high, or it breaks an
+    ask, a correction the person gave, or the health check."""
+    return item.get("severity") in BLOCKING_SEVERITIES or item.get("breaks") not in ("none", "")
 
 
 @dataclass(frozen=True)
@@ -46,7 +66,7 @@ class Judgment:
     """A judge's verdict, as its gate reads it."""
 
     verdict: str
-    #: Each defect the builder must fix: ``source``, ``where``, ``what``, ``why``.
+    #: Each defect: ``source``, ``where``, ``what``, ``why``, ``severity``, ``breaks``.
     must_fix: tuple[dict[str, str], ...] = ()
     follow_ups: tuple[str, ...] = ()
     #: Findings the judge set aside: ``source``, ``finding``, ``why``.
@@ -55,9 +75,19 @@ class Judgment:
     corrections: tuple[dict[str, Any], ...] = field(default=())
 
     @property
+    def blocking(self) -> list[dict[str, str]]:
+        """The must-fix items that hold the change back (`blocks`)."""
+        return [item for item in self.must_fix if blocks(item)]
+
+    @property
     def unmet(self) -> list[dict[str, Any]]:
         """The corrections the judge says are not met."""
-        return [item for item in self.corrections if item.get("met") is not True]
+        return [item for item in self.corrections if item.get("met") is False]
+
+    @property
+    def unjudged(self) -> list[dict[str, Any]]:
+        """The corrections the judge lists without saying whether they are met."""
+        return [item for item in self.corrections if item.get("met") is None]
 
 
 def _text(value: Any) -> str:
@@ -73,6 +103,17 @@ def _record(value: Any, keys: tuple[str, ...], main: str) -> dict[str, str]:
     if isinstance(value, dict):
         return {key: _text(value.get(key)) for key in keys}
     return {key: (_text(value) if key == main else "") for key in keys}
+
+
+def _must_fix(value: Any) -> dict[str, str]:
+    """A must-fix item. A severity it does not give, or one it misspells, is high: a
+    missing label never lets a defect through. What it breaks defaults to nothing."""
+    item = _record(value, ("source", "where", "what", "why", "severity", "breaks"), "what")
+    severity = item["severity"].lower()
+    item["severity"] = severity if severity in SEVERITIES else "high"
+    breaks = item["breaks"].lower()
+    item["breaks"] = breaks if breaks in BREAKS else ("none" if not breaks else breaks)
+    return item
 
 
 def _follow_up(value: Any) -> str:
@@ -92,25 +133,43 @@ def _met(value: Any) -> bool | None:
     return None
 
 
+def _objects(text: str) -> list[Any]:
+    """Every top-level JSON object in ``text``, bare, fenced or among prose, in order.
+
+    A brace that does not start a JSON object (prose such as ``{x}``) is skipped, and an
+    object's own nested objects are part of it, not further objects.
+    """
+    decoder = json.JSONDecoder()
+    found: list[Any] = []
+    index = text.find("{")
+    while index >= 0:
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except ValueError:
+            index = text.find("{", index + 1)
+            continue
+        found.append(value)
+        index = text.find("{", end)
+    return found
+
+
 def parse(text: str, verdicts: tuple[str, ...], *, name: str = "the judge's file") -> Judgment:
     """Read a judge's JSON verdict, or raise :class:`Unreadable` saying why.
 
-    The verdict decides. A ``redo`` must name what to fix (a ``must_fix`` item, or for
-    the overwatch an unmet correction): a redo with nothing in it gives the builder
-    nothing to do, so it is unreadable rather than a round spent on nothing.
+    The file's only JSON content must be one JSON object: on its own, in a code fence,
+    or among prose. Two or more objects are unreadable, because which is the verdict
+    would be a guess. A ``redo`` must name what to fix (a ``must_fix`` item, or for the
+    overwatch a correction it found unmet or could not judge): a redo with nothing in it
+    gives the builder nothing to do.
     """
-    raw = text.strip()
-    fenced = _FENCED.match(raw)
-    if fenced:
-        raw = fenced[1].strip()
-    if not raw:
+    if not text.strip():
         raise Unreadable(f"{name} is empty")
-    try:
-        data = json.loads(raw)
-    except ValueError as exc:
-        raise Unreadable(f"{name} is not JSON ({exc})") from None
-    if not isinstance(data, dict):
-        raise Unreadable(f"{name} is not a JSON object")
+    objects = _objects(text)
+    if not objects:
+        raise Unreadable(f"{name} holds no JSON object")
+    if len(objects) > 1:
+        raise Unreadable(f"{name} holds {len(objects)} JSON objects; it must hold exactly one")
+    data = objects[0]
     verdict = data.get("verdict")
     if not isinstance(verdict, str) or verdict.strip().lower() not in verdicts:
         raise Unreadable(f"{name} has verdict {verdict!r}; expected one of {', '.join(verdicts)}")
@@ -130,27 +189,31 @@ def parse(text: str, verdicts: tuple[str, ...], *, name: str = "the judge's file
                             "evidence": _text(item.get("evidence"))})
     judgment = Judgment(
         verdict=verdict.strip().lower(),
-        must_fix=tuple(_record(item, ("source", "where", "what", "why"), "what")
-                       for item in lists["must_fix"]),
+        must_fix=tuple(_must_fix(item) for item in lists["must_fix"]),
         follow_ups=tuple(text for text in (_follow_up(item) for item in lists["follow_ups"]) if text),
         dismissed=tuple(_record(item, ("source", "finding", "why"), "finding")
                         for item in lists["dismissed"]),
         corrections=tuple(corrections),
     )
-    if judgment.verdict == "redo" and not judgment.must_fix and not judgment.unmet:
+    if (judgment.verdict == "redo" and not judgment.must_fix and not judgment.unmet
+            and not judgment.unjudged):
         raise Unreadable(f"{name} says redo but names nothing to fix")
     return judgment
 
 
 def read(ctx: Any, name: str, verdicts: tuple[str, ...]) -> Judgment:
     """The judgment in the run directory's ``name``; :class:`Unreadable` when there is none."""
+    return parse(text_of(ctx, name), verdicts, name=name)
+
+
+def text_of(ctx: Any, name: str) -> str:
+    """A judge's file as text; :class:`Unreadable` when it is missing or not text."""
     if not ctx.exists(name):
         raise Unreadable(f"{name} was not written")
     try:
-        text = ctx.read_text(name)
+        return ctx.read_text(name)
     except (OSError, UnicodeDecodeError) as exc:
         raise Unreadable(f"{name} could not be read ({exc})") from None
-    return parse(text, verdicts, name=name)
 
 
 def excerpt(ctx: Any, name: str, limit: int = 300) -> str:
@@ -174,29 +237,40 @@ def must_fix_line(item: dict[str, str]) -> str:
     """One must-fix item as a line of feedback: where, what, and why it matters."""
     head = f"[{item['source']}] " if item.get("source") else ""
     where = f"{item['where']}: " if item.get("where") else ""
+    label = [item.get("severity", "")]
+    if item.get("breaks") not in ("", "none", None):
+        label.append(f"breaks {item['breaks']}")
+    tag = f" ({', '.join(part for part in label if part)})" if any(label) else ""
     why = f" (why: {item['why']})" if item.get("why") else ""
-    return f"{head}{where}{item.get('what', '')}{why}".strip()
+    return f"{head}{where}{item.get('what', '')}{why}{tag}".strip()
 
 
 def correction_line(item: dict[str, Any]) -> str:
-    """One correction as the overwatch judged it."""
+    """One correction as the overwatch judged it, with its evidence."""
     met = {True: "met", False: "NOT met", None: "not judged"}[item.get("met")]
     evidence = f" — {item['evidence']}" if item.get("evidence") else ""
     return f"{item.get('id') or '(no id)'}: {met}{evidence}"
 
 
-def feedback(judgment: Judgment, judge: str) -> str:
+def feedback(judgment: Judgment, judge: str, *, passed: bool = False) -> str:
     """What the builder is told when ``judge`` sends the change back.
 
-    The must-fix items, each with where and why; the corrections the judge found unmet;
-    then the follow-ups, which the builder may fix if it is cheap and the pull request
-    lists otherwise.
+    The must-fix items, each with where, why and severity; every correction the judge
+    found unmet or could not judge, with its evidence; then the follow-ups, which the
+    builder may fix if it is cheap and the pull request lists otherwise. ``passed`` is a
+    pass the gate turned into a redo because it leaves a correction unmet.
     """
-    lines = [f"The {judge} sent the change back. Fix each of these:"]
-    lines += [f"- {must_fix_line(item)}" for item in judgment.must_fix]
+    lines = [f"The {judge} passed the change but found corrections the person gave not met. "
+             "Fix each of these:" if passed else
+             f"The {judge} sent the change back. Fix each of these:"]
+    lines += [f"- {must_fix_line(item)}" for item in (judgment.must_fix if not passed else ())]
     lines += [f"- correction {correction_line(item)}" for item in judgment.unmet]
-    if judgment.follow_ups:
+    lines += [f"- correction {correction_line(item)}" for item in
+              (judgment.unjudged if not passed else ())]
+    leftovers = [*judgment.follow_ups,
+                 *(must_fix_line(item) for item in (judgment.must_fix if passed else ()))]
+    if leftovers:
         lines.append("Follow-ups (fix them only if it is cheap; otherwise the pull request "
                      "lists them):")
-        lines += [f"- {item}" for item in judgment.follow_ups]
+        lines += [f"- {item}" for item in leftovers]
     return "\n".join(lines)

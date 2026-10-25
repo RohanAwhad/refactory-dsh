@@ -231,9 +231,17 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
             # The node's own bound is its model session's wall (`Node.timeout_s`).
             selected_context['node_wall_s'] = node.timeout
         is_optional = bool((declarations or {}).get(name, {}).get('optional'))
+        # The worker captures an answer it was not written into the first write, and reads
+        # the produced fact from it (`agent_delivery.finish`, `worker_node.execute`), as the
+        # walker does with the node's first declared write. The IR's writes are a set, so
+        # that output comes from the declarations, and the rest stay sorted.
+        writes = sorted(node.writes)
+        answer = (declarations or {}).get(name, {}).get('answer_file')
+        if answer in writes:
+            writes = [answer, *(item for item in writes if item != answer)]
         payload = {'schema_version': 1, 'node_id': name,
                                     'prompt': node.prompt_template, 'reads': sorted(node.reads),
-                                    'writes': sorted(node.writes),
+                                    'writes': writes,
                                     'produces': list((declarations or {}).get(name, {}).get('produces', [])),
                                     'post_checks': [check.model_dump() for check in node.post_checks],
                                     'model_context': selected_context}
