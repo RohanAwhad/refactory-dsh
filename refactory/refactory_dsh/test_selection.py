@@ -240,31 +240,75 @@ def runnable(test_id: str) -> str:
 def costs_from_record(entries: list[dict[str, Any]], root: Path) -> dict[str, float]:
     """Each test file's seconds, from the chunks earlier self-checks timed.
 
-    Each file of a counted chunk gets the chunk's full elapsed time as its estimate
-    (not a size-proportional share), because per-file timing would require separate
-    subprocesses that defeat chunking.  A non-timed-out entry always overwrites a
-    timed-out entry; a later non-timed-out entry overwrites an earlier one.
+    When a chunk carries ``"durations"`` (per-test seconds from ``--junitxml``),
+    its files' costs come from the sum of their tests' durations.  Without
+    ``"durations"``: a single-file chunk assigns its elapsed time to that file;
+    a multi-file chunk without durations leaves each file's existing estimate
+    unchanged (a file with no better information keeps its size estimate).
+
+    A lower bound (``timed_out=True``) only ever raises an estimate (``max``),
+    never lowers one.  A non-timed-out measurement always wins over a
+    timed-out one, but among non-timed-out values the highest is kept.  When a
+    chunk lists only individual test ids (``::``), not the whole file, the sum
+    of those ids' durations is a lower bound.
     """
     costs: dict[str, float] = {}
     timed_out_flag: dict[str, bool] = {}  # True when the best entry is timed_out
+
     for entry in entries:
         for chunk in entry.get("timings", []):
             if not chunk.get("counted"):
                 continue
-            chunk_files = list(dict.fromkeys(_file_of(name) for name in chunk.get("tests", [])))
+            chunk_files = list(dict.fromkeys(
+                _file_of(name) for name in chunk.get("tests", [])))
             is_timed_out = bool(chunk.get("timed_out"))
             s = float(chunk.get("s", 0))
-            for name in chunk_files:
+            durations = chunk.get("durations")
+
+            # Build per-file costs for this chunk.
+            file_costs: dict[str, float] = {}
+            file_is_bound: dict[str, bool] = {}  # True when the value is a lower bound
+
+            if durations:
+                # Sum per-test durations by file.
+                for d in durations:
+                    f = _file_of(d["test_id"])
+                    file_costs[f] = file_costs.get(f, 0.0) + d["seconds"]
+                # Check whether each file's cost is from whole-file entries or
+                # only individual test ids. If the chunk listed only ids (not
+                # the whole file), the summed duration is a lower bound.
+                whole_files = {_file_of(name) for name in chunk.get("tests", [])
+                               if "::" not in name and " > " not in name}
+                for f in file_costs:
+                    file_is_bound[f] = is_timed_out or (f not in whole_files)
+            elif len(chunk_files) == 1:
+                # Single-file chunk without durations: use the chunk's total.
+                file_costs[chunk_files[0]] = s
+                file_is_bound[chunk_files[0]] = is_timed_out
+            # else: multi-file chunk without durations: leave unchanged.
+
+            # Merge into costs with max-only semantics.
+            for name, value in file_costs.items():
+                bound = file_is_bound.get(name, is_timed_out)
                 prev_timed_out = timed_out_flag.get(name, True)
-                if is_timed_out:
-                    # A timed_out entry sets the cost only when no entry yet or only timed_out.
-                    if name not in costs or prev_timed_out:
-                        costs[name] = s
+                if bound:
+                    # A lower bound only raises: max with existing.
+                    if name not in costs:
+                        costs[name] = value
                         timed_out_flag[name] = True
+                    elif prev_timed_out:
+                        costs[name] = max(costs[name], value)
+                    # else: a non-timed-out value already exists; bound does not lower it.
                 else:
-                    # A non-timed_out entry always overwrites.
-                    costs[name] = s
-                    timed_out_flag[name] = False
+                    # A non-timed-out measurement: wins over timed_out, and
+                    # uses max among non-timed-out values.
+                    if prev_timed_out:
+                        costs[name] = value
+                        timed_out_flag[name] = False
+                    else:
+                        costs[name] = max(costs[name], value)
+                        timed_out_flag[name] = False
+
     return costs
 
 

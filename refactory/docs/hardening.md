@@ -2104,8 +2104,11 @@ The engine reads the repository's own imports; it names no test or file.
   resolves to the submodule), and the structural tests when a source changed but no
   hub did: **cheapest first**, so a slow file at the limit does not hide cheap ones
   behind it. A file's cost is the seconds an earlier self-check of the run timed it
-  at (a chunk's time shared among its files by size), else its size, put in seconds
-  at the rate the timed files ran.
+  at (per-file cost from the chunk's per-test durations via ``--junitxml``, written
+  outside the worktree and appended only for single-pytest-invocation chunks; falling
+  back to the chunk's total elapsed time only for single-file chunks without per-test
+  data; multi-file chunks without durations leave each file's existing estimate
+  unchanged), else its size, put in seconds at the rate the timed files ran.
 
 Only tests the check's pytest steps collect are selected (their path arguments),
 and the hubs are counted among them. A TypeScript runner gets only the spec files
@@ -2126,8 +2129,10 @@ own targeted command and each holding one runner's tests: the targeted command
 keeps the check's `&&` between steps, so a failing vitest step would otherwise
 stop the Python files beside it. The limit is `min(self_check_timeout_s, check_timeout_s // 3)` (300 s
 with the lab's 1,800 s check). No chunk starts once the limit is spent; a chunk
-still running at the limit is stopped and does not count, because a killed runner
-names no failure, but every finished chunk's failures do. A chunk that reports
+still running at the limit is stopped and does not count toward the self-check's
+pass/fail decision, because a killed runner names no failure, but its elapsed time
+is recorded as a lower bound for cost estimation — the bound can only raise an
+estimate, never lower one. Every finished chunk's failures do count. A chunk that reports
 nothing (no failure named, its environment failed) ran nothing that counts, so its
 tests are recorded as not run. A module that does not import is that file's
 failure (pytest's `ERROR <file>` line); pytest then stops before the chunk's other
@@ -2171,8 +2176,9 @@ before its fix-ups (`review_feedback`).
   fix-up that takes the attempt back to the commit it builds on is refused too
   ("the emission undoes the whole attempt"), rather than amended into an empty
   commit, which git refuses. When the generate step's amendment is what empties the
-  attempt (it regenerates the only files the attempt still changed), it is kept as
-  an attempt that changes nothing (`--allow-empty`), checked and reviewed as such.
+  attempt (it regenerates the only files the attempt still changed), it is
+  intercepted as ``empty_diff_fixup``: if the fix-up budget allows, the attempt
+  loops back to emit; otherwise the build early-stops as exhausted.
 - A result that says nothing (a chunk stopped at the limit, a runner it cannot
   target, nothing collected, a failure that names no test) goes on to the reviews
   and the whole check.
@@ -2194,10 +2200,21 @@ Each self-check appends one line to `self-check-record.jsonl` in the run
 directory: the attempt, the commit, the fix-ups before it, the selection and how
 it was made, what ran and what was cut, the commands, the limit, the duration,
 the outcome (`pass`, `fixup`, `exhausted`, `inherited`, `inconclusive`,
-`nothing selected`), the failing ids, the ones inherited and what the base said.
+`nothing selected`, `empty_diff_fixup`), the failing ids, the ones inherited and
+what the base said.
 It also prints one `refactory: self-check …` line, as a gate logs. `refactory
 status` shows a fix-up through the lines it already prints: the gate's reloop
 reason and `validation`.
+
+### Not-found retry
+
+When pytest exits 4 because of stale test ids in a chunk, the self-check drops
+those ids (matched against the chunk's own names by path suffix and bracket
+prefix, so ``tests/test_x.py::test_y`` matches ``refactory/tests/test_x.py::test_y``
+and a bracket-less ``tests/test_x.py::test_p`` covers
+``refactory/tests/test_x.py::test_p[2.5]``) and retries the chunk's remaining
+tests.  When the rerun succeeds, its failures are recorded; when no time remains
+for the rerun, a lower-bound timing entry is recorded and the chunk is cut.
 
 ### Tests
 

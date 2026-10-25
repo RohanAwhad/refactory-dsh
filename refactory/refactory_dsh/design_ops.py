@@ -1267,9 +1267,12 @@ def prepare_check(ctx: Any) -> Any:
         return verdict
     # BUG-4: detect empty-diff attempts (generate put back everything).
     found = worktree.recorded(ctx.workdir)
-    if found is not None:
-        head_tree = worktree.git(Path(found.path), "rev-parse", f"{found.head}^{{tree}}")
-        parent_tree = worktree.git(Path(found.path), "rev-parse", f"{found.head}~1^{{tree}}")
+    if found is not None and found.head != found.base:
+        try:
+            head_tree = worktree.git(Path(found.path), "rev-parse", f"{found.head}^{{tree}}")
+            parent_tree = worktree.git(Path(found.path), "rev-parse", f"{found.head}~1^{{tree}}")
+        except ValueError:
+            head_tree, parent_tree = "", "x"  # cannot compare; skip
         if head_tree.strip() == parent_tree.strip():
             used = _fixups_used(ctx)
             allowed = int(ctx.knob("self_check_fixups", 2))
@@ -1281,7 +1284,7 @@ def prepare_check(ctx: Any) -> Any:
                 "fixups_before": used,
                 "selection": [], "how_selected": {},
                 "ran": [], "cut": [], "commands": [],
-                "notes": ["generate put back everything this attempt changed"],
+                "notes": ["the attempt's tree equals its first parent's"],
                 "limit_s": 0, "duration_s": 0, "timings": [],
                 "failing_ids": [], "inherited_filtered": [], "base": "",
             }
@@ -1298,11 +1301,10 @@ def prepare_check(ctx: Any) -> Any:
                    else f"{run_used} of {run_cap} fix-ups used on this run")
             _record_self_check(ctx, {**entry, "outcome": "exhausted", "why": why})
             _end_fixups(ctx)
-            from refactory_dsh.failfast import targeted_prepass
-            empty_prepass = targeted_prepass(prev_record, command,
-                lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False,
-                                                            prepared=True),
-                check_timeout, root=found.path, selection=[], self_check_timeout_s=300)
+            from refactory_dsh.failfast import PrepassResult
+            empty_prepass = PrepassResult(
+                ran=False, early_stop=False, targeted_command=None,
+                check_mode="full", result=None, digest_text="", runners=[], raw_tail="")
             empty_prepass.digest_text = (
                 f"generate put back everything this attempt changed (empty diff); {why}")
             return _early_stop(ctx, empty_prepass, prev_record, saved_base_unavailable)
