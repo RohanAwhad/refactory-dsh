@@ -2327,10 +2327,20 @@ design go straight to the person's gate, and that gate is the design check.
   - A quoted line that begins within ±20 lines (`QUOTE_WINDOW`) of its citation counts,
     and the note says "cited N, found at M"; the nearest match wins, and blank lines
     inside a quote that spans lines are skipped.
-  - A quote with "…" or "..." matches where its parts appear in order, all of them inside
-    that window.
+  - A quote with "…" or "..." matches where its parts appear in order within the lines
+    it cites plus two (`ELLIPSIS_SLACK`), never more than five (`ELLIPSIS_MAX_LINES`):
+    room for a signature wrapped over a line or two, not for `load(` paired with the
+    `) -> None:` of the method below it. Each part must hold a word: `(…)` would match
+    any parenthesised line.
+  - Only the window is searched, with the few lines after it that a quote beginning on
+    its last line could run into. For the card, the lines elsewhere in the file where an
+    unverified quote (one without an ellipsis) does appear are found in one linear pass.
+    On a 1.2 MB file the earlier whole-file search took 279 s.
   - A bare or package-relative path names the one tracked file that ends with it. This
-    is `design_ops.cited_candidates`, the resolver `classify_scale` uses (dm-200).
+    is `design_ops.cited_candidates`, the resolver `classify_scale` uses (dm-200). A path
+    that is absolute, holds `..`, or whose real path (a tracked symlink followed) is
+    outside the checkout names nothing, so no line from outside the checkout reaches the
+    card.
   - What still cannot be confirmed is an **unverified claim**: a quote not in the window,
     a path not in the checkout or naming several files, an identifier the file does not
     define, or a probe id `probes.jsonl` does not hold. It is listed first on the card,
@@ -2342,6 +2352,12 @@ design go straight to the person's gate, and that gate is the design check.
   listed on the card (`research_advisory`, `pitfalls_advisory`). Create mode keeps
   `create_ops.gate_research` exactly as it was; both use `create_ops.research_problems`.
   `research_attempts` and `pitfalls_attempts` are gone from design mode.
+- **Optional sections stay optional for corrections and pitfalls.** Delivery restores
+  the pre-correction design only when it had `## Summary` or `## Changes` and the
+  corrections lost it, so a design without a Summary keeps its corrections. A design
+  without `## Anti-patterns to avoid` is not checked against the pitfalls, and the card
+  names the high-risk ones that leaves unchecked; one without `## Rule and sites` takes
+  any `path:line` it cites as a site, so a pitfall answered with its site counts.
 
 ### The card
 
@@ -2378,6 +2394,8 @@ design mode, because nothing reads them; validation V7 refuses an unused knob.
 - `test_design_one_pass.py::test_the_gate_runs_through_the_node_runner` (proceed, reloop)
 - `test_design_one_pass.py::test_a_light_design_is_read_as_a_contract_design`
 - `test_design_one_pass.py::test_corrections_keep_a_light_design_and_restore_one_that_lost_its_changes`
+- `test_design_one_pass.py::test_corrections_restore_only_a_section_the_design_had`
+- `test_delivery.py::test_gate_corrections_on_a_design_without_a_summary_reach_the_pr`
 - `test_design_one_pass.py::test_research_with_one_direction_proceeds_with_a_card_note`
 - `test_design_one_pass.py::test_unparseable_research_goes_back_once_then_proceeds`
 - `test_design_one_pass.py::test_unparseable_pitfalls_go_back_once_then_proceed`
@@ -2387,12 +2405,20 @@ design mode, because nothing reads them; validation V7 refuses an unused knob.
 - `test_design_claims.py::test_quote_beyond_the_window_is_unverified`
 - `test_design_claims.py::test_an_ellipsis_quote_matches_its_parts_in_order`
 - `test_design_claims.py::test_an_ellipsis_quote_needs_its_parts_inside_the_window`
+- `test_design_claims.py::test_an_ellipsis_quote_does_not_pair_unrelated_code`
+- `test_design_claims.py::test_an_ellipsis_quote_over_one_or_two_lines_still_verifies`
+- `test_design_claims.py::test_an_ellipsis_quote_spans_its_cited_lines_plus_two_and_never_more_than_five`
+- `test_design_claims.py::test_a_large_file_is_searched_only_near_the_citation`
+- `test_design_claims.py::test_a_path_leading_out_of_the_checkout_is_unverified`
 - `test_design_claims.py::test_a_quote_that_begins_inside_the_window_counts`
 - `test_design_claims.py::test_the_nearest_match_in_the_window_is_the_one_noted`
 - `test_design_claims.py::test_a_quote_spanning_a_blank_line_matches`
 - `test_design_claims.py::test_a_bare_or_package_relative_path_names_its_one_tracked_file`
 - `test_design_scale.py::test_only_a_missing_or_empty_changes_section_sends_the_design_back`
 - `test_design_scale.py::test_a_light_design_passes_with_nothing_to_list`
+- `test_design_scale.py::test_a_light_design_names_the_high_risk_pitfalls_it_leaves_unchecked`
+- `test_design_scale.py::test_a_tracked_symlink_out_of_the_checkout_names_nothing`
+- `test_pitfalls.py::test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites`
 - `test_design_scale.py::test_every_scale_gets_one_rewrite_for_a_missing_section`
 - `test_design_contract_extensions.py::test_prompt_contract_requires_only_summary_changes_and_tests`
 - `test_design_contract_extensions.py::test_an_optional_section_left_out_is_not_checked`

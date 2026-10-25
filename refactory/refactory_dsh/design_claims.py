@@ -1,15 +1,16 @@
 """Deterministic claims checker for design documents (dm-126).
 
 A design's claims about existing code — paths, quoted lines and named
-identifiers — are verified mechanically before the design judge runs. A line that
-drifted, a quote with an ellipsis and a bare file name are resolved here rather than
-sent back; what still cannot be confirmed is listed for the person at the approval
-gate. The check never sends the design back (one design pass).
+identifiers — are verified mechanically between design_doc and the design-review gate.
+A line that drifted, a quote with an ellipsis and a bare file name are resolved here
+rather than sent back; what still cannot be confirmed is listed for the person at the
+approval gate. The check never sends the design back (one design pass).
 """
 
 from __future__ import annotations
 
 import ast
+import bisect
 import json
 import re
 from pathlib import Path
@@ -86,15 +87,20 @@ def _resolve_path(source: str, file_path: str,
 
     The second step is #498's resolver (`design_ops.cited_candidates`), shared with
     classify_scale, so a bare or package-relative path names a file here exactly when it
-    does there. Returns (resolved_path, why it is unverified).
+    does there. A path that is absolute, holds ``..``, or whose real path (a symlink
+    followed) is outside the checkout names nothing: the check never reads, or puts on
+    the card, a line from outside the checkout. Returns (resolved_path, why it is
+    unverified).
     """
-    from refactory_dsh.design_ops import cited_candidates
+    from refactory_dsh.design_ops import cited_candidates, inside_checkout
 
     if not source:
         return None, f"`{file_path}`: no checkout to check it against"
     if not file_path.startswith(("/", "~")) and ".." not in Path(file_path).parts:
         full = Path(source) / file_path
         if full.is_file():
+            if not inside_checkout(source, file_path):
+                return None, f"`{file_path}` resolves outside the checkout"
             return full, None
     candidates = cited_candidates(source, file_path, tracked)
     if len(candidates) == 1:
@@ -116,80 +122,132 @@ QUOTE_WINDOW = 20
 #: An ellipsis in a quote stands for the text it leaves out: "…" or "...".
 _ELLIPSIS = re.compile(r'\s*(?:…|\.\.\.)\s*')
 
+#: Each part of a quote with an ellipsis must name something: a word, not only
+#: punctuation. ``(…)`` would otherwise match any line with a parenthesis in it.
+_WORD = re.compile(r'[^\W\d]\w*')
 
-def _joined(file_lines: list[str], first: int, last: int) -> tuple[str, list[tuple[int, int]]]:
-    """Lines *first*..*last* (1-based) as one collapsed text, and where each line starts.
+#: A quote with an ellipsis leaves out text inside a statement, so its parts must all lie
+#: within the lines it cites plus ELLIPSIS_SLACK more: room for a signature or a call
+#: wrapped over a line or two (``def load(self,`` / ``path) -> None:``), not for the start
+#: of one statement paired with the end of another (``load(`` with the ``) -> None:`` of
+#: the method below it).
+ELLIPSIS_SLACK = 2
+#: ...and never more lines than this, however many lines the claim cites.
+ELLIPSIS_MAX_LINES = 5
+
+
+def _ellipsis_parts(quote: str) -> list[str] | None:
+    """The parts between a quote's ellipses, or None when the quote has none."""
+    if not _ELLIPSIS.search(quote):
+        return None
+    return [part for part in _ELLIPSIS.split(quote) if part]
+
+
+def _wordless_part(parts: list[str]) -> str | None:
+    """The first part that names nothing ('' for a quote that is only an ellipsis)."""
+    if not parts:
+        return ""
+    return next((part for part in parts if not _WORD.search(part)), None)
+
+
+def _ellipsis_span(start: int, end: int) -> int:
+    """How many lines an ellipsis quote's parts may lie across (see ELLIPSIS_SLACK)."""
+    return min(end - start + 1 + ELLIPSIS_SLACK, ELLIPSIS_MAX_LINES)
+
+
+def _joined(file_lines: list[str], first: int, last: int) -> tuple[str, list[int], list[int]]:
+    """Lines *first*..*last* (1-based) as one collapsed text, with where each line starts
+    in it and its number.
 
     Blank lines are left out, so a quote that spans lines matches across them as it
     matches across the whitespace it collapses.
     """
     parts: list[str] = []
-    starts: list[tuple[int, int]] = []
+    offsets: list[int] = []
+    numbers: list[int] = []
     offset = 0
     for number in range(first, last + 1):
         text = _collapse(file_lines[number - 1])
         if not text:
             continue
-        starts.append((offset, number))
+        offsets.append(offset)
+        numbers.append(number)
         parts.append(text)
         offset += len(text) + 1
-    return " ".join(parts), starts
+    return " ".join(parts), offsets, numbers
 
 
-def _quote_matches(text: str, quote: str) -> list[tuple[int, int]]:
-    """Where *quote* matches in *text*, as (start, end) offsets.
+def _exact_begins(file_lines: list[str], first: int, last: int, quote: str,
+                  limit: int | None = None) -> list[int]:
+    """The lines in *first*..*last* where *quote* begins, as written (whitespace collapsed).
 
-    The whole quote matches as written. A quote with an ellipsis also matches where its
-    parts appear in order: `def run(…) -> None:` matches `def run(self, x) -> None:`.
+    Only those lines are read, and after them only as many as a quote beginning on the
+    last of them could run into. *limit* stops after that many lines are found.
     """
-    found = [(match.start(), match.end()) for match in re.finditer(re.escape(quote), text)]
-    if found or not _ELLIPSIS.search(quote):
-        return found
-    parts = [part for part in _ELLIPSIS.split(quote) if part]
-    if not parts:
-        return []
-    matches: list[tuple[int, int]] = []
-    for match in re.finditer(re.escape(parts[0]), text):
-        position = match.end()
+    stop, room = last, 0
+    while stop < len(file_lines) and room < len(quote):
+        stop += 1
+        room += len(_collapse(file_lines[stop - 1])) + 1
+    text, offsets, numbers = _joined(file_lines, first, stop)
+    begins: list[int] = []
+    index = text.find(quote)
+    while index >= 0:
+        number = numbers[bisect.bisect_right(offsets, index) - 1]
+        if number > last:
+            break
+        if number not in begins:
+            begins.append(number)
+            if limit is not None and len(begins) >= limit:
+                break
+        index = text.find(quote, index + 1)
+    return begins
+
+
+def _ellipsis_begins(file_lines: list[str], first: int, last: int, parts: list[str],
+                     span: int) -> list[int]:
+    """The lines in *first*..*last* where an ellipsis quote begins: its first part begins
+    on that line, and every part follows in order within *span* lines of it."""
+    begins: list[int] = []
+    for number in range(first, last + 1):
+        head = _collapse(file_lines[number - 1])
+        if not head:
+            continue
+        text, _, _ = _joined(file_lines, number, min(len(file_lines), number + span - 1))
+        index = text.find(parts[0])
+        if not 0 <= index < len(head):
+            continue
+        position = index + len(parts[0])
         for part in parts[1:]:
             index = text.find(part, position)
             if index < 0:
                 break
             position = index + len(part)
         else:
-            matches.append((match.start(), position))
-    return matches
+            begins.append(number)
+    return begins
 
 
 def _locate_quote(file_lines: list[str], start: int, end: int, quote: str,
-                  window: int = QUOTE_WINDOW) -> tuple[int | None, list[int]]:
-    """Where a quoted line is: (the nearest line within *window* lines of the cited range
-    where it begins, or None; every line in the file where it begins).
+                  window: int = QUOTE_WINDOW) -> int | None:
+    """The nearest line within *window* lines of the cited range where *quote* begins.
 
-    A match counts when it begins inside the window, wherever a quote spanning lines
-    ends; a quote with an ellipsis also needs all of its parts inside the window.
+    Only the window is searched. A match counts when it begins inside it, wherever a
+    quote spanning lines ends. A quote with an ellipsis that does not match as written
+    matches where its parts appear in order within a few lines (`_ellipsis_span`),
+    provided each part names something (`_WORD`).
     """
-    if not file_lines:
-        return None, []
     first, last = max(1, start - window), min(len(file_lines), end + window)
-    text, starts = _joined(file_lines, 1, len(file_lines))
-    # Where the window's last line ends in the joined text.
-    limit = next((offset + len(_collapse(file_lines[number - 1]))
-                  for offset, number in reversed(starts) if number <= last), 0)
-    split = not re.search(re.escape(quote), text) and bool(_ELLIPSIS.search(quote))
-    anywhere: list[int] = []
-    near: list[int] = []
-    for begin, stop in _quote_matches(text, quote):
-        number = next(n for offset, n in reversed(starts) if offset <= begin)
-        if number not in anywhere:
-            anywhere.append(number)
-        if first <= number <= last and (not split or stop <= limit) and number not in near:
-            near.append(number)
+    if first > last:
+        return None
+    near = _exact_begins(file_lines, first, last, quote)
+    parts = _ellipsis_parts(quote)
+    if not near and parts is not None and _wordless_part(parts) is None:
+        near = _ellipsis_begins(file_lines, first, last, parts, _ellipsis_span(start, end))
 
     def distance(number: int) -> int:
         return 0 if start <= number <= end else min(abs(number - start), abs(number - end))
 
-    return (min(near, key=distance) if near else None), anywhere
+    return min(near, key=distance) if near else None
 
 
 def _check_quote(resolved: Path, start: int, end: int, quote: str,
@@ -207,23 +265,28 @@ def _check_quote(resolved: Path, start: int, end: int, quote: str,
     if not collapsed_quote:
         return None, None
     span = f"{start}" if start == end else f"{start}-{end}"
-    found, anywhere = _locate_quote(file_lines, start, end, collapsed_quote)
+    found = _locate_quote(file_lines, start, end, collapsed_quote)
     if found is not None:
         if start <= found <= end:
             return None, None
         return f"`{cited}`: cited {span}, found at {found}", None
     actual = (f"line {start} is `{file_lines[start - 1].strip()}`" if 1 <= start <= len(file_lines)
               else f"the file has {len(file_lines)} lines")
-    inside = [n for n in anywhere if start - QUOTE_WINDOW <= n <= end + QUOTE_WINDOW]
-    far = [n for n in anywhere if n not in inside]
-    if inside:
-        where = (f"its parts begin at line {inside[0]} but do not all lie within "
-                 f"{QUOTE_WINDOW} lines of the citation")
-    elif far:
-        where = (f"found at line {', '.join(str(n) for n in far[:3])}, more than "
-                 f"{QUOTE_WINDOW} lines away")
+    parts = _ellipsis_parts(collapsed_quote)
+    wordless = _wordless_part(parts) if parts is not None else None
+    if wordless is not None:
+        where = ("a part beside its ellipsis names nothing"
+                 + (f" (`{wordless}`)" if wordless else "")
+                 + ", so it would match almost any line; quote a word of it")
+    elif parts is not None:
+        where = (f"its parts do not all appear, in order, within "
+                 f"{_ellipsis_span(start, end)} lines")
     else:
-        where = "not found anywhere in the file"
+        # Where it is instead, for the person: the first three lines, in one pass over the
+        # file (none of them is in the window, or the quote would have been found there).
+        elsewhere = _exact_begins(file_lines, 1, len(file_lines), collapsed_quote, limit=3)
+        where = (f"found at line {', '.join(str(n) for n in elsewhere)}, more than "
+                 f"{QUOTE_WINDOW} lines away" if elsewhere else "not found anywhere in the file")
     return None, (f"quote `{quote}` not within {QUOTE_WINDOW} lines of `{cited}`: "
                   f"{actual}; {where}")
 
@@ -382,13 +445,13 @@ def check_design_claims(ctx: Any) -> dict[str, Any]:
 
     Each claim in subject-at-citation-quote form names a file, a line and the line's
     text. A quote within ±QUOTE_WINDOW lines of its citation counts (a note says where
-    it was found), a quote with an ellipsis counts when its parts appear in order there,
-    and a bare or package-relative path counts when exactly one tracked file ends with
-    it. What still cannot be confirmed -- a quote not there, a path not in the checkout,
-    a named identifier the file does not define, a probe id probes.jsonl does not hold
-    -- is an unverified claim: listed first on the approval gate's card as a
-    high-severity advisory, and given to the design judge. Nothing here sends the design
-    back.
+    it was found); a quote with an ellipsis counts when its parts, each naming
+    something, appear in order there within a few lines of one another; and a bare or
+    package-relative path counts when exactly one tracked file ends with it. What still
+    cannot be confirmed -- a quote not there, a path not in the checkout (or leading out
+    of it), a named identifier the file does not define, a probe id probes.jsonl does
+    not hold -- is an unverified claim: listed first on the approval gate's card as a
+    high-severity advisory. Nothing here sends the design back.
 
     Returns the ``claims_check`` fact, ``{"unverified": [...], "notes": [...]}``, and
     ``claims_check_feedback``, the same as lines for the prompts that read it.

@@ -274,8 +274,9 @@ def gate_design_review(ctx: Any) -> str:
     claims check's unverified claims and notes (`design_claims.check_design_claims`), and
     this gate's own checks -- the light template's other required sections, citations,
     quotations of the brief, and the optional sections a design has (rule-site markers,
-    pitfall answers). An optional section a design leaves out is not checked. Never
-    reads a review, and never fails the run.
+    pitfall answers). An optional section a design leaves out is not checked; for a
+    design without ``## Anti-patterns to avoid`` the card names the high-risk pitfalls
+    that leaves unchecked. Never reads a review, and never fails the run.
     """
     from refactory_dsh import design_contract
     from refactory_dsh.nn import Verdict
@@ -402,10 +403,16 @@ def gate_design_review(ctx: Any) -> str:
     answers_pitfalls = not design_contract.missing_sections(
         design_text, (design_contract.ANTI_PATTERNS,))
     if has_pitfalls and not answers_pitfalls:
-        # An optional section: a design without it is not checked against the pitfalls.
+        # An optional section: a design without it is not checked against the pitfalls,
+        # and the card says which high-risk pitfalls that leaves unchecked.
         ctx.set_fact("pitfall_coverage",
                      "pitfall coverage not checked: the design has no "
                      "## Anti-patterns to avoid section (optional)")
+        unchecked = _high_risk_pitfalls(ctx)
+        if unchecked:
+            advisories.append(
+                "high-risk pitfall(s) not checked: the design has no "
+                f"## Anti-patterns to avoid section: {', '.join(unchecked)}")
     elif has_pitfalls:
         from refactory_dsh import pitfalls as pitfalls_mod
 
@@ -499,6 +506,19 @@ def gate_design_review(ctx: Any) -> str:
     return "proceed"
 
 
+def _high_risk_pitfalls(ctx: Any) -> list[str]:
+    """The ids of pitfalls.json's high-risk pitfalls; none when it is missing or unreadable
+    (gate_pitfalls has already put that on the card)."""
+    try:
+        data = json.loads(ctx.read_text("pitfalls.json")) if ctx.exists("pitfalls.json") else []
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(entry.get("id") or "?") for entry in data
+            if isinstance(entry, dict) and entry.get("risk") == "high"]
+
+
 #: A research direction's footprint has exactly these keys, each a list (dm-200).
 FOOTPRINT_KEYS = ("existing_functions", "new_items", "shared_engine")
 
@@ -523,20 +543,31 @@ def cited_candidates(source: str, cited: str, tracked: set[str] | None) -> list[
     A citation names a path from the repository root, from a package, or a bare file
     name; *tracked* (`tracked_files`) is what counts: the path itself when it is
     tracked, otherwise every tracked file ending with ``/<cited>``. Without a git
-    checkout the file system decides. A path outside the checkout names nothing.
+    checkout the file system decides. A path outside the checkout names nothing: an
+    absolute path, one with ``..``, or a tracked symlink whose target is outside it.
     """
     if cited.startswith(("/", "~")) or ".." in Path(cited).parts:
         return []
     if tracked is not None:
         if cited in tracked:
-            return [cited]
-        return sorted(name for name in tracked if name.endswith("/" + cited))
+            names = [cited]
+        else:
+            names = sorted(name for name in tracked if name.endswith("/" + cited))
+        return [name for name in names if inside_checkout(source, name)]
     try:
-        root = Path(source).resolve()
-        path = (root / cited).resolve()
-        return [cited] if path.is_relative_to(root) and path.is_file() else []
+        named = inside_checkout(source, cited) and (Path(source) / cited).is_file()
+        return [cited] if named else []
     except OSError:  # a path too long for the file system names no file
         return []
+
+
+def inside_checkout(source: str, name: str) -> bool:
+    """Whether checkout path *name*, every symlink followed, is still inside *source*."""
+    try:
+        root = Path(source).resolve()
+        return (root / name).resolve().is_relative_to(root)
+    except (OSError, RuntimeError):  # too long a path, or a symlink loop
+        return False
 
 
 def resolve_cited(source: str, cited: str, tracked: set[str] | None) -> str | None:
@@ -750,8 +781,9 @@ def gate_design_research(ctx: Any) -> Any:
 def gate_pitfalls(ctx: Any) -> Any:
     """Design mode's pitfalls gate: pitfalls guide the design and never fail the run.
 
-    pitfalls.json is sent back once only when it holds no parseable pitfalls (not JSON,
-    or no object in a non-empty array); then the run proceeds with whatever exists.
+    pitfalls.json is sent back once only when it holds no parseable pitfalls: it is not
+    JSON, not an array, or an array with no object in it -- an empty array ``[]``
+    included. Then the run proceeds with whatever exists.
     Anything else `pitfalls.validate_pitfalls` finds is listed as advisory
     (``pitfalls_advisory``) on the approval gate's card. Never raises.
     """

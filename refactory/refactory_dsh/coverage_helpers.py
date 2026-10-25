@@ -29,8 +29,20 @@ def extract_section(text: str, heading: str) -> str:
     return "\n".join(result)
 
 
+#: A cited site: a file and a line, ``path/to/file.py:12`` or ``file.py:12-20``.
+_SITE_CITATION = re.compile(r'[\w./-]*\w\.\w+:\d+(?:-\d+)?')
+
+
 def site_paths(text: str) -> list[str]:
-    """Extract backticked paths from the Rule and sites section."""
+    """The design's sites: the backticked paths in its ``## Rule and sites`` section.
+
+    That section is optional. A design without it names its sites where it uses them, so
+    for such a design every backticked ``path:line`` citation in it is a site: a pitfall
+    or finding answered with the site that handles it (``tool.py:1``) counts.
+    """
+    if not any(line.strip().lower() == "## rule and sites" for line in text.splitlines()):
+        return [token for m in re.finditer(r'`([^`]+)`', text)
+                if _SITE_CITATION.fullmatch(token := m.group(1).strip())]
     section = extract_section(text, "Rule and sites")
     return [m.group(1).strip() for m in re.finditer(r'`([^`]+)`', section)]
 

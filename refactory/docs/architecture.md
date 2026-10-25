@@ -388,8 +388,9 @@ design go straight to the person's gate: **no reviewer** sits between `design_do
 `gate_strategy`, at either scale. Two deterministic steps run there. The
 `check_design_claims` op verifies each claim in the subject-at-citation-quote format:
 that the cited path names a file (as written, or the one tracked file that ends with it,
-by the resolver `classify_scale` uses), that the quoted line is within ±20 lines of the
-citation (a quote with an ellipsis matches where its parts appear in order there, and a
+by the resolver `classify_scale` uses, and never a file outside the checkout), that the quoted line is within ±20 lines of the
+citation (a quote with an ellipsis matches where its parts appear in order there,
+within the cited lines plus two and never more than five, each part holding a word; a
 line that drifted gets the note "cited N, found at M"), and that named identifiers from
 the claim's subject are present (Python via `ast`, TypeScript via word-boundary search).
 What it cannot confirm is an **unverified claim**; it never sends the design back. Then
@@ -407,8 +408,9 @@ or empty, at most `design_review_attempts` times (default 1). Everything else is
 claims check's notes, then a missing `## Summary` or `## Tests`, a citation past the end
 of its file, a quotation the brief does not contain (or differs from only in
 punctuation), rule-site marker and title formatting, and — when the design has an
-`## Anti-patterns to avoid` section — a high-risk pitfall it does not answer. An
-optional section a design leaves out is not checked. Research and perspective findings
+`## Anti-patterns to avoid` section — a high-risk pitfall it does not answer (without
+that section, one line naming the high-risk pitfalls left unchecked). An optional
+section a design leaves out is not checked. Research and perspective findings
 the design does not cite are recorded in the `finding_coverage` fact and not listed at
 all. When its rewrite is spent the gate proceeds to `gate_strategy` with the gap shown —
 it never reads a review and never fails the run. In design mode the research and

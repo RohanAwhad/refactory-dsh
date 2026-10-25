@@ -247,6 +247,27 @@ def test_corrections_keep_a_light_design_and_restore_one_that_lost_its_changes(t
     assert (tmp_path / "design.md").read_text() == LIGHT
 
 
+NO_SUMMARY = LIGHT.replace("## Summary\n\nIt prints nothing now.\n\n", "")
+CORRECTION = "\n## Corrections at approval\n\n- \"print the name\" \u2014 \u00a7 Changes\n"
+
+
+@pytest.mark.parametrize("before, after, restored", [
+    # A section the design never had is not lost: the corrections stay.
+    (NO_SUMMARY, NO_SUMMARY + CORRECTION, False),
+    # A section it had and the corrections deleted, or emptied, is.
+    (LIGHT, LIGHT.replace("## Summary", "## Notes") + CORRECTION, True),
+    (LIGHT, LIGHT.replace("It prints nothing now.", "") + CORRECTION, True),
+    (NO_SUMMARY, NO_SUMMARY.replace("## Changes", "## Notes") + CORRECTION, True),
+], ids=["never-had-summary", "lost-summary", "emptied-summary", "no-summary-lost-changes"])
+def test_corrections_restore_only_a_section_the_design_had(tmp_path, before, after, restored):
+    from refactory_dsh.delivery import _validate_design_after_corrections
+
+    (tmp_path / "design.md.pre_corrections").write_text(before)
+    (tmp_path / "design.md").write_text(after)
+    _validate_design_after_corrections(tmp_path)
+    assert (tmp_path / "design.md").read_text() == (before if restored else after)
+
+
 # ── research and pitfalls never fail a design run ───────────────────────────────
 
 ONE_DIRECTION = json.dumps([{"focus": "where the tool prints", "slug": "printing",

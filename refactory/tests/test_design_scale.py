@@ -60,11 +60,29 @@ def test_a_light_design_passes_with_nothing_to_list():
              "## Changes\n\n- `tool.py` \u2014 print the built name\n\n"
              "## Tests\n\n- `tests/test_tool.py::test_build` \u2014 the name is printed\n")
     ctx, verdict = _gate(light, pitfalls=[
-        {"id": "PIT-001", "risk": "high", "text": "the cache key ignores the base"}])
+        {"id": "PIT-002", "risk": "low", "text": "the log line moves"}])
     assert verdict == "proceed"
     assert ctx.facts["design_review_advisory"] == ""
     assert ctx.facts["design_review_status"] == "Design review: PASS"
     # No Anti-patterns section: the pitfalls are not checked against it.
+    assert "not checked" in ctx.facts["pitfall_coverage"]
+
+
+def test_a_light_design_names_the_high_risk_pitfalls_it_leaves_unchecked():
+    """Without an Anti-patterns section nothing is checked against the pitfalls; the card
+    says which high-risk ones that leaves, in one line."""
+    light = ("# Make the tool print what it built\n\n## Summary\n\nIt prints nothing now.\n\n"
+             "## Changes\n\n- `tool.py` \u2014 print the built name\n\n"
+             "## Tests\n\n- `tests/test_tool.py::test_build` \u2014 the name is printed\n")
+    ctx, verdict = _gate(light, pitfalls=[
+        {"id": "PIT-001", "risk": "high", "text": "the cache key ignores the base"},
+        {"id": "PIT-002", "risk": "low", "text": "the log line moves"},
+        {"id": "PIT-003", "risk": "high", "text": "a caller passes None"}])
+    assert verdict == "proceed"
+    assert ctx.facts["design_review_status"] == (
+        "Design review: PASS\nOther advisories: 1\n"
+        "- high-risk pitfall(s) not checked: the design has no ## Anti-patterns to avoid "
+        "section: PIT-001, PIT-003")
     assert "not checked" in ctx.facts["pitfall_coverage"]
 
 
@@ -430,6 +448,36 @@ def test_a_citation_outside_the_checkout_never_counts(tmp_path):
         result = _one(_fns(entry), facts=facts)
         assert result["research_scope"] == "full", entry
     assert _one(_fns("x.py:1 f"), facts=facts)["research_scope"] == "scoped"
+
+
+def test_a_tracked_symlink_out_of_the_checkout_names_nothing(tmp_path):
+    """The shared resolver follows symlinks: a tracked one whose target is outside the
+    checkout names no checkout file, so the gate never reads the target either."""
+    import os
+    import subprocess
+
+    from refactory_dsh.design_ops import cited_candidates, resolve_cited, tracked_files
+
+    (tmp_path / "outside.py").write_text("a = 1\nb = 2\n")
+    source = tmp_path / "src"
+    (source / "pkg").mkdir(parents=True)
+    (source / "pkg" / "inside.py").write_text("c = 3\n")
+    os.symlink(tmp_path / "outside.py", source / "pkg" / "link.py")
+    os.symlink(source / "pkg" / "inside.py", source / "alias.py")
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=source, check=True)
+    tracked = tracked_files(str(source))
+    assert "pkg/link.py" in tracked
+    for cited in ("pkg/link.py", "link.py"):
+        assert cited_candidates(str(source), cited, tracked) == [], cited
+        assert resolve_cited(str(source), cited, tracked) is None, cited
+    # A symlink that stays inside the checkout is a checkout file.
+    assert resolve_cited(str(source), "alias.py", tracked) == "alias.py"
+    # The gate's citation check does not report the outside file's length.
+    design = _make_design().replace("## Changes", "`pkg/link.py:40` is cited.\n\n## Changes")
+    ctx, verdict = _gate(design, source=str(source))
+    assert verdict == "proceed"
+    assert "lines, not 40" not in ctx.facts["design_review_advisory"]
 
 
 def test_citations_resolve_against_the_real_checkout_however_research_writes_them():

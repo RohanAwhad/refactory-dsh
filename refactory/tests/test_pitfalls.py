@@ -246,12 +246,43 @@ def test_gate_design_review_lists_missing_high_pitfall(tmp_path):
     assert "high-risk pitfall(s) not addressed in the design: PIT-001" in (
         ctx.facts["design_review_advisory"])
     assert "PIT-001 (high): MISSING" in ctx.facts["pitfall_coverage"]
-    # The section is optional: a design without it is not checked against the pitfalls.
+    # The section is optional: a design without it is not checked against the pitfalls,
+    # and the card says which high-risk pitfall that leaves unchecked.
     ctx.write_text("design.md", _contract())
     ctx.facts["design_review_attempts_used"] = 0
     assert ops.gate_design_review(ctx) == "proceed"
-    assert "PIT-001" not in ctx.facts["design_review_advisory"]
+    advisory = ctx.facts["design_review_advisory"].splitlines()
+    assert [line for line in advisory if "pitfall" in line] == [
+        "- high-risk pitfall(s) not checked: the design has no ## Anti-patterns to avoid "
+        "section: PIT-001"]
     assert "not checked" in ctx.facts["pitfall_coverage"]
+
+
+def test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites(tmp_path):
+    """Rule and sites is optional. A light design answers a pitfall with the site that
+    handles it, which the template allows; that site, cited in the entry, counts."""
+    light = ("# Make the tool print\n\n## Summary\n\nIt prints.\n\n"
+             "## Changes\n\n- `tool.py` \u2014 print the name\n\n"
+             "## Tests\n\n- `tests/test_tool.py::test_build` \u2014 it prints\n\n"
+             "## Anti-patterns to avoid\n\n")
+    for entry in ("- PIT-001: guarded at `tool.py:1`",
+                  "- **PIT-001** (high): handled by `pkg/tool.py:3-9`"):
+        assert pitfalls_mod.pitfall_coverage(light + entry + "\n", [_pit()]) == (
+            ["PIT-001"], [], []), entry
+    # Something that is not a site still does not answer it.
+    for entry in ("- PIT-001: handled by `retry()`", "- PIT-001: guarded in tool.py",
+                  "- PIT-001: handled by `self.cache`"):
+        assert pitfalls_mod.pitfall_coverage(light + entry + "\n", [_pit()]) == (
+            [], [], ["PIT-001"]), entry
+    # Through the gate: addressed, and nothing listed for the person.
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": "", "has_pitfalls_step": True})
+    ctx.write_text("design.md", light + "- PIT-001: guarded at `tool.py:1`\n")
+    ctx.write_json("pitfalls.json", [_pit()])
+    import refactory_dsh.design_ops as ops
+    assert ops.gate_design_review(ctx) == "proceed"
+    assert "PIT-001 (high): addressed" in ctx.facts["pitfall_coverage"]
+    assert ctx.facts["design_review_advisory"] == ""
 
 
 def test_gate_design_review_passes_set_aside(tmp_path):

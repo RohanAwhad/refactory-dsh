@@ -3546,6 +3546,55 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
         "process note should not appear in design.md"
 
 
+def test_gate_corrections_on_a_design_without_a_summary_reach_the_pr(github, tmp_path):
+    """A light design need not have ## Summary. Approved with a correction, its corrected
+    design is the one delivered: design.md keeps the correction, and the pull request's
+    title and text come from it.
+
+    Fails without the change: delivery read the missing Summary as a broken contract and
+    restored the pre-correction design, so the correction was dropped from both.
+    """
+    from refactory_dsh.steering import Ledger
+
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/no-summary", repo)
+    polling = ("# Use a polling loop to check for updates\n\n"
+               "## Changes\n\n- `tool.py` \u2014 poll for updates in a loop\n\n"
+               "## Tests\n\n- `tool.py` \u2014 prints built\n")
+    websockets = ("# Use websockets to receive updates\n\n"
+                  "## Changes\n\n- `tool.py` \u2014 receive updates over websockets\n\n"
+                  "## Tests\n\n- `tool.py` \u2014 prints built\n\n"
+                  "## Corrections at approval\n\n"
+                  "- \"use websockets instead of a polling loop\" \u2014 \u00a7 Changes\n")
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    ledger = Ledger.seed(run, "Build a tool\nthat prints built.")
+    ledger.verdict("gate_strategy", "proceed", approval=True)
+    ledger.note("constraint", "use websockets instead of a polling loop")
+    model = FakeModel([
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        polling,      # design_doc
+        websockets,   # apply_corrections
+        render({"tool.py": "print('built')\n"}),
+        *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3],
+    ])
+    model._siteless_clause = {"kind": "design", "heading": "Changes"}
+    result = DesignMode().run(
+        run, model=model, verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    assert result.exit_ok, result.error
+
+    assert (run / "design.md").read_text() == websockets
+    assert _record(run)["title"] == "Use websockets to receive updates"
+    pr_text = (run / delivery.BODY).read_text()
+    heading = "## Corrections given at approval\n\n"
+    assert heading + "> - use websockets instead of a polling loop\n" in pr_text, pr_text
+    before, after = pr_text.split(heading, 1)
+    assert "polling" not in (before + after.split("\n## ", 1)[1]).lower(), pr_text
+
+
 def test_unparseable_design_after_corrections_is_restored(tmp_path):
     """When apply_corrections produces unparseable design.md, the pre-correction
     version is restored and a warning is emitted.

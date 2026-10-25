@@ -243,8 +243,156 @@ def test_an_ellipsis_quote_needs_its_parts_inside_the_window(tmp_path):
     ctx.write_text("design.md", "`sample.py:1`: `def run(\u2026) -> None:`\n")
     assert _unverified(ctx) == (
         "quote `def run(\u2026) -> None:` not within 20 lines of `sample.py:1`: line 1 is "
-        "`def run(self,`; its parts begin at line 1 but do not all lie within 20 lines of "
-        "the citation")
+        "`def run(self,`; its parts do not all appear, in order, within 3 lines")
+
+
+# The review's wrong claims (PR 499): an ellipsis quote whose parts were matched anywhere
+# in the window, across unrelated code.
+_STORE = (
+    "class Store:\n"                       # 1
+    "    def load(self, path):\n"          # 2
+    "        self.path = path\n"           # 3
+    "        self.data = read(path)\n"     # 4
+    "        return self.data\n"           # 5
+    "\n"                                   # 6
+    "    def peek(self):\n"                # 7
+    "        return self.data\n"           # 8
+    "    def close(self) -> None:\n"       # 9
+    "        self.data = None\n"           # 10
+    "\n"                                   # 11
+    "    def save(self, path):\n"          # 12
+    "        write(path, self.data)\n"     # 13
+)
+
+
+@pytest.mark.parametrize("claim, why", [
+    # `load(` paired with the `) -> None:` of close(), seven lines below.
+    ("`sample.py:2`: `def load(\u2026) -> None:`",
+     "line 2 is `def load(self, path):`; its parts do not all appear, in order, within 3 lines"),
+    # One quote across three methods.
+    ("`sample.py:2`: `def load(\u2026 def peek(\u2026 def save(self, path):`",
+     "line 2 is `def load(self, path):`; its parts do not all appear, in order, within 3 lines"),
+    # Parts that name nothing would match any parenthesised line.
+    ("`sample.py:4`: `(\u2026)`",
+     "line 4 is `self.data = read(path)`; a part beside its ellipsis names nothing (`(`), so "
+     "it would match almost any line; quote a word of it"),
+], ids=["load-paired-with-close", "three-methods", "only-punctuation"])
+def test_an_ellipsis_quote_does_not_pair_unrelated_code(tmp_path, claim, why):
+    (tmp_path / "sample.py").write_text(_STORE)
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path)})
+    ctx.write_text("design.md", claim + "\n")
+    quote = claim.split(": ", 1)[1].strip("`")
+    cited = claim.split("`")[1]
+    assert _unverified(ctx) == f"quote `{quote}` not within 20 lines of `{cited}`: {why}"
+
+
+def test_an_ellipsis_quote_over_one_or_two_lines_still_verifies(tmp_path):
+    (tmp_path / "sample.py").write_text(
+        "def run(self, config, *, retries=3) -> int:\n"
+        "    return 1\n"
+        "def load(self,\n"
+        "         path: str) -> None:\n"
+        "    pass\n")
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path)})
+    for claim in ("`sample.py:1`: `def run(\u2026) -> int:`",
+                  "`sample.py:3`: `def load(\u2026) -> None:`",
+                  "`sample.py:3-4`: `def load(self, \u2026 path: str) -> None:`"):
+        ctx.write_text("design.md", claim + "\n")
+        assert check_design_claims(ctx)["claims_check"] == {"unverified": [], "notes": []}, claim
+    # A drifted one is found where it is, as a quote without an ellipsis is.
+    ctx.write_text("design.md", "`sample.py:1`: `def load(\u2026) -> None:`\n")
+    assert check_design_claims(ctx)["claims_check"] == {
+        "unverified": [], "notes": ["`sample.py:1`: cited 1, found at 3"]}
+
+
+def test_an_ellipsis_quote_spans_its_cited_lines_plus_two_and_never_more_than_five(tmp_path):
+    lines = ["def build(",            # 1
+             "    first,",            # 2
+             "    second,",           # 3
+             "    third,",            # 4
+             "    fourth,",           # 5
+             ") -> None:",            # 6
+             "    pass"]
+    (tmp_path / "sample.py").write_text("\n".join(lines) + "\n")
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path)})
+
+    def verified(cited: str, quote: str) -> bool:
+        ctx.write_text("design.md", f"`{cited}`: `{quote}`\n")
+        return check_design_claims(ctx)["claims_check"]["unverified"] == []
+
+    # One cited line: the parts may lie across three lines.
+    assert verified("sample.py:1", "def build(\u2026 second,")
+    assert not verified("sample.py:1", "def build(\u2026 third,")
+    # Two cited lines: across four.
+    assert verified("sample.py:1-2", "def build(\u2026 third,")
+    assert not verified("sample.py:1-2", "def build(\u2026 fourth,")
+    # However many lines are cited, never across more than five.
+    assert verified("sample.py:1-6", "def build(\u2026 fourth,")
+    assert not verified("sample.py:1-6", "def build(\u2026) -> None:")
+
+
+def test_a_large_file_is_searched_only_near_the_citation(tmp_path):
+    """A 1.2 MB file, where the review timed the whole-file search at 279 s."""
+    import signal
+    import time
+
+    (tmp_path / "big.py").write_text("def f(x):\n    return x\n" * 52000)
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path)})
+    ctx.write_text("design.md", "`big.py:100`: `return x`\n"
+                                "`big.py:100`: `def f(\u2026) -> None:`\n"
+                                "`big.py:100`: `def g(x):`\n")
+
+    def too_slow(signum, frame):
+        raise TimeoutError("the claims check took more than 10 s")
+
+    previous = signal.signal(signal.SIGALRM, too_slow)
+    signal.alarm(10)
+    try:
+        began = time.monotonic()
+        result = check_design_claims(ctx)["claims_check"]
+        elapsed = time.monotonic() - began
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert elapsed < 2, f"{elapsed:.1f} s"
+    assert result == {"notes": [], "unverified": [
+        "quote `def f(\u2026) -> None:` not within 20 lines of `big.py:100`: line 100 is "
+        "`return x`; its parts do not all appear, in order, within 3 lines",
+        "quote `def g(x):` not within 20 lines of `big.py:100`: line 100 is `return x`; "
+        "not found anywhere in the file"]}
+
+
+def test_a_path_leading_out_of_the_checkout_is_unverified(tmp_path):
+    """A tracked symlink to a file outside the checkout, or a path through `..`, names no
+    checkout file: the check never reads it, so no line of it reaches the card."""
+    import os
+    import subprocess
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.py").write_text("TOKEN = 'outside-value'\n")
+    source = tmp_path / "src"
+    (source / "pkg").mkdir(parents=True)
+    (source / "pkg" / "__init__.py").write_text("")
+    (source / "tool.py").write_text("x = 1\n")
+    os.symlink(outside / "secret.py", source / "link.py")
+    os.symlink(outside / "secret.py", source / "pkg" / "nested.py")
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=source, check=True)
+    (tmp_path / "run").mkdir()
+    ctx = nn.RunContext(tmp_path / "run")
+    ctx.facts.update({"source": str(source)})
+    ctx.write_text("design.md", "`link.py:1`: `TOKEN = 'guess'`\n"
+                                "`nested.py:1`: `TOKEN = 'guess'`\n"
+                                "`pkg/../tool.py:1`: `x = 1`\n")
+    assert check_design_claims(ctx)["claims_check"] == {"notes": [], "unverified": [
+        "`link.py` resolves outside the checkout",
+        "`nested.py` is not in the checkout",
+        "`pkg/../tool.py` is not in the checkout"]}
 
 
 def test_unverified_claims_never_touch_the_review_feedback(tmp_path):
