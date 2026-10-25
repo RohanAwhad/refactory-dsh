@@ -1306,7 +1306,12 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
     else:
         root = Path(str(ctx.facts.get("artifact") or ctx.workdir))
         touched = []
-    selection = test_selection.select(touched, root, prev_record, check_command=command)
+    earlier = _self_checks(ctx)
+    # On a fix-up, what the last self-check found failing runs first.
+    first = list(earlier[-1].get("failing_ids", [])) if _fixups_used(ctx) and earlier else []
+    selection = test_selection.select(touched, root, prev_record, check_command=command,
+                                      first=first,
+                                      costs=test_selection.costs_from_record(earlier, root))
     prepass = targeted_prepass(
         prev_record, command,
         lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False,
@@ -1330,6 +1335,7 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
         "selection": prepass.selection, "how_selected": selection.record(),
         "ran": prepass.ran_ids, "cut": prepass.cut_ids, "commands": prepass.commands,
         "notes": prepass.notes, "limit_s": prepass.limit_s, "duration_s": prepass.elapsed_s,
+        "timings": prepass.timings,
         "failing_ids": failing, "inherited_filtered": inherited, "base": base,
     }
     if failing:
@@ -1386,6 +1392,19 @@ def _the_changes_failures(ctx: Any, command: str, failing: list[str], check_time
                                             design).inherited
     return ([test_id for test_id in failing if test_id not in inherited], sorted(inherited),
             f"compared with {source}")
+
+
+def _self_checks(ctx: Any) -> list[dict[str, Any]]:
+    """The self-checks this run recorded, oldest first."""
+    if not ctx.exists(SELF_CHECK_RECORD):
+        return []
+    entries = []
+    for line in ctx.read_text(SELF_CHECK_RECORD).splitlines():
+        try:
+            entries.append(json.loads(line))
+        except ValueError:
+            continue
+    return entries
 
 
 def _record_self_check(ctx: Any, entry: dict[str, Any]) -> None:

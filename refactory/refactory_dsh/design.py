@@ -38,6 +38,23 @@ _ACCEPTANCE_BASELINE = (
 )
 
 
+def prepare_check_iterations(knobs: dict[str, Any]) -> int:
+    """prepare_check's iteration limit: one more than the most reloops its knobs allow.
+
+    It reloops for a fix-up, an early stop or a refused emission. Attempts reach at most
+    ``check_attempt_cap`` (when it is above ``check_attempts``), the run's fix-ups are at
+    most ``self_check_fixups x check_attempts``, and each applied emission comes after at
+    most ``refusal_attempts - 1`` refusals, so the reloops are at most
+    ``(attempts + fix-ups + 1) x refusals + fix-ups + attempts``: (8 + 6 + 1) x 2 + 6 + 8
+    = 44 with the defaults. Past that, b39b's stop has already ended the run.
+    """
+    attempts = int(knobs.get("check_attempts", 3))
+    reach = max(attempts, int(knobs.get("check_attempt_cap", 8)))
+    fixups = int(knobs.get("self_check_fixups", 2)) * attempts
+    refusals = max(int(knobs.get("refusal_attempts", 3)) - 1, 0)
+    return (reach + fixups + 1) * refusals + fixups + reach + 1
+
+
 class DesignMode(Mode):
     """Design, emit and check a software artifact.
 
@@ -116,6 +133,22 @@ class DesignMode(Mode):
             **repo_change.knobs(),
             **delivery.knobs(),
         }
+
+    def graph(self) -> Graph:
+        """The graph, with prepare_check's iteration limit following the knobs' values."""
+        graph = super().graph()
+        if "prepare_check" in graph.nodes:
+            graph.nodes["prepare_check"].max_iterations = prepare_check_iterations(self.values())
+        return graph
+
+    def state_dict(self) -> dict[str, Any]:
+        """The state, with prepare_check's iteration limit following the knobs' values, so a
+        lowered run (the spine) gets the limit the walker does."""
+        state = super().state_dict()
+        node = state["graph"].get("nodes", {}).get("prepare_check")
+        if node is not None:
+            node["max_iterations"] = prepare_check_iterations(self.values())
+        return state
 
     def build(self) -> Graph:
         graph = Graph()
@@ -543,10 +576,10 @@ class DesignMode(Mode):
                       "review_feedback", "review_baseline",
                       "self_check_fixup_count", "total_self_check_fixups_used"),
             knobs=(*check_knobs, "self_check_fixups", "self_check_timeout_s"),
-            # Its reloops: a fix-up, an early stop or a refusal. Applied emissions are at
-            # most check_attempt_cap + the run's fix-ups (8 + 2 x 3), each after at most
-            # refusal_attempts - 1 (2) refusals, so (8 + 6 + 1) x 2 + 6 + 8 = 44 < 45.
-            max_iterations=45,
+            # From the knobs, so the build loop's stop always comes first: 45 with the
+            # defaults (`prepare_check_iterations`; `DesignMode.graph` follows the knobs).
+            max_iterations=prepare_check_iterations({name: knob.default
+                                                     for name, knob in self.declare().items()}),
             notes="settle the commit the check and the reviews see, and run the tests the "
                   "change can break first: a failure goes back to emit as a fix-up, "
                   "spending no attempt and running no review",

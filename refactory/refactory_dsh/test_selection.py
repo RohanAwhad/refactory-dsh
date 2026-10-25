@@ -6,6 +6,7 @@ module imports it.
 
 The selection, in order:
 
+- **On a fix-up, the tests the last self-check found failing**, as ids.
 - **Engine tests**, only when the emission changed a hub. A *hub* is a source module at
   least a quarter of the repository's Python test files import (`HUB_SHARE`): the
   engine or graph modules most of the suite is built on. The engine tests are the
@@ -14,9 +15,9 @@ The selection, in order:
   and the tests that import every hub, the ones built on the whole engine.
 - **The test files the emission touched.**
 - **The last check's failures** that are not inherited (dm-128's set), as test ids.
-- **The tests that import a module the emission changed**, depth 1, the ones importing
-  the most changed modules first.
-- **The structural tests**, last, when a source file changed but no hub did.
+- **The tests that import a module the emission changed**, depth 1, and, when a source
+  file changed but no hub did, the structural tests: cheapest first, so a slow file at
+  the time limit does not hide cheap ones behind it (`estimated_costs`).
 
 For a TypeScript runner only the spec files the emission touched are selected: the
 check's own vitest invocation (``vitest run``) has no related-file selection, and
@@ -51,9 +52,10 @@ class Selection:
     last_failures: list[str] = field(default_factory=list)
     importers: list[str] = field(default_factory=list)
     structural: list[str] = field(default_factory=list)
+    first: list[str] = field(default_factory=list)
 
     def record(self) -> dict[str, Any]:
-        return {"engine": self.engine, "hubs_changed": self.hubs_changed,
+        return {"first": self.first, "engine": self.engine, "hubs_changed": self.hubs_changed,
                 "touched_tests": self.touched_tests, "last_failures": self.last_failures,
                 "importers": self.importers, "structural": self.structural}
 
@@ -220,16 +222,59 @@ def _failures(prev_record: dict[str, Any], root: Path) -> list[str]:
     return ids
 
 
+def _file_of(test_id: str) -> str:
+    return test_id.split("::")[0] if "::" in test_id else test_id.split(" > ")[0].strip()
+
+
+def costs_from_record(entries: list[dict[str, Any]], root: Path) -> dict[str, float]:
+    """Each test file's seconds, from the chunks earlier self-checks timed.
+
+    A chunk's time is shared among its files by their size; the latest chunk wins.
+    """
+    costs: dict[str, float] = {}
+    for entry in entries:
+        for chunk in entry.get("timings", []):
+            if not chunk.get("counted"):
+                continue
+            chunk_files = list(dict.fromkeys(_file_of(name) for name in chunk.get("tests", [])))
+            sizes = {name: _size(root, name) for name in chunk_files}
+            total = sum(sizes.values()) or 1
+            for name in chunk_files:
+                costs[name] = float(chunk.get("s", 0)) * sizes[name] / total
+    return costs
+
+
+def _size(root: Path, name: str) -> int:
+    try:
+        return max(1, (root / name).stat().st_size)
+    except OSError:
+        return 1
+
+
+def estimated_costs(tests: list[str], root: Path, known: dict[str, float]) -> dict[str, float]:
+    """A test file's cost: the seconds a self-check timed it at, else its size.
+
+    Sizes are put in seconds at the rate the timed files ran, when there are any.
+    """
+    timed = [name for name in tests if name in known]
+    rate = (sum(known[name] for name in timed) / sum(_size(root, name) for name in timed)
+            if timed else 1.0)
+    return {name: known[name] if name in known else _size(root, name) * rate for name in tests}
+
+
 def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = None, *,
            check_command: str = "", files: list[str] | None = None,
-           imports: dict[str, set[str]] | None = None) -> Selection:
+           imports: dict[str, set[str]] | None = None, first: list[str] = (),
+           costs: dict[str, float] | None = None) -> Selection:
     """The self-check's selection for an emission that changed ``touched`` in ``root``.
 
     ``touched`` are paths from the repository root (`base_check._all_changed_files`);
     ``files`` the repository's files, listed from git when not given. Only Python tests
     the check's pytest steps collect are selected (`pytest_scope`), and the hubs are
     counted among them. ``imports`` stands for `import_map` when given: the imports of
-    a tree as it was, for a selection replayed on it.
+    a tree as it was, for a selection replayed on it. ``first`` are the ids the last
+    self-check found failing, on a fix-up; ``costs`` the seconds earlier self-checks
+    timed test files at (`costs_from_record`).
     """
     from refactory_dsh.changed_functions import is_generated
 
@@ -247,8 +292,10 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
                 touched_tests.append(name)
         else:
             sources.append(name)
-    selection = Selection(touched_tests=sorted(touched_tests), last_failures=last_failures)
+    selection = Selection(touched_tests=sorted(touched_tests), last_failures=last_failures,
+                          first=[test_id for test_id in first if (root / _file_of(test_id)).is_file()])
     if not sources and not touched_tests and not last_failures:
+        selection.tests = list(dict.fromkeys(selection.first))
         return selection
     if imports is None:
         imports = import_map(root, files, tuple(sources), scope)
@@ -262,21 +309,23 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
                               key=lambda test: (len(imports[test]), test))
         selection.engine = [*structural, *whole_engine]
     importers = [test for test, modules in imports.items() if modules & changed]
-    selection.importers = sorted(importers, key=lambda test: (
-        -len(imports[test] & changed), len(imports[test]), test))
     if sources and not selection.hubs_changed:
         selection.structural = structural
-    ordered: list[str] = []
+    rest = list(dict.fromkeys([*importers, *selection.structural]))
+    cost = estimated_costs(rest, root, costs or {})
+    rest.sort(key=lambda test: (cost[test], test))
+    selection.importers = [test for test in rest if test in importers]
+    selection.structural = [test for test in rest if test not in importers]
+    ordered: list[str] = list(dict.fromkeys(selection.first))
     whole: set[str] = set()
     for name in [*selection.engine, *selection.touched_tests]:
         if name not in whole:
             whole.add(name)
             ordered.append(name)
     for test_id in last_failures:
-        file = test_id.split("::")[0] if "::" in test_id else test_id.split(" > ")[0].strip()
-        if file not in whole:
+        if _file_of(test_id) not in whole and test_id not in ordered:
             ordered.append(test_id)
-    for name in [*selection.importers, *selection.structural]:
+    for name in rest:
         if name not in whole:
             whole.add(name)
             ordered.append(name)

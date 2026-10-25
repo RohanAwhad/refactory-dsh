@@ -741,6 +741,16 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
             raise AttemptRefused(
                 "the emission changed nothing: every file and edit in it is already in the last attempt"
             )
+        # A fix-up that takes the attempt back to what it built on would leave it changing
+        # nothing: refused, as an emission that changes nothing is, not amended away.
+        if amending and _staged_as_parent(path):
+            git(path, *NO_HOOKS, "reset", "-q", "--hard", "HEAD")
+            pending.unlink(missing_ok=True)
+            raise AttemptRefused(
+                "the emission undoes the whole attempt: with it, the attempt would change nothing "
+                "against the commit it builds on. Fix what failed without reverting the change; "
+                "if part of the change is wrong, change that part"
+            )
     try:
         if amending:
             amend(found, run, [str(name) for name in files], message)
@@ -776,6 +786,15 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     _write_json(Path(run) / RECORD, asdict(advanced))
     pending.unlink(missing_ok=True)
     return advanced
+
+
+def _staged_as_parent(path: Path) -> bool:
+    """Whether what is staged is the tree of HEAD's parent: amended in, it empties HEAD."""
+    try:
+        git(path, "diff", "--cached", "--quiet", "HEAD^", "--")
+    except ValueError:
+        return False  # it differs, or HEAD has no parent
+    return True
 
 
 def _died_after_commit(path: Path, head: str, amended: bool) -> bool:
@@ -1293,14 +1312,23 @@ def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktre
     the base the run was pinned to is never rewritten -- the amendment is a fresh
     commit rather than an amend.
 
-    One code path for every amendment -- a lockfile an install writes and a file a
-    generate command rewrites -- so the git add, the amend-or-commit, the new head
-    and the record write are in one place.
+    One code path for every amendment -- a lockfile an install writes, a file a
+    generate command rewrites, a self-check fix-up -- so the git add, the
+    amend-or-commit, the new head and the record write are in one place.
+
+    An amendment that leaves the attempt's tree its parent's is kept, as an attempt that
+    changes nothing: a generate command can regenerate the only files an attempt changed
+    back to what they were. git refuses such an amend without ``--allow-empty``, and the
+    run would end there; kept, the attempt goes to its check and its reviews, which judge
+    a change that does nothing. A fix-up's own emission that does this is refused before
+    it gets here (`commit_attempt`).
     """
     path = Path(found.path)
     if paths:
         git(path, "add", "-f", "--", *paths)
-    how = ("--amend", "--no-edit") if found.head != found.base else ("-m", message)
+    how = ("-m", message)
+    if found.head != found.base:
+        how = ("--amend", "--no-edit", *(("--allow-empty",) if _staged_as_parent(path) else ()))
     git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", *how,
         env={**os.environ, **COMMITTER})
     found = replace(found, head=git(path, "rev-parse", "HEAD").strip())
