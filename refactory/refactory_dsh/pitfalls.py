@@ -143,8 +143,7 @@ def pitfall_coverage(
     checked against (`coverage_helpers.site_paths`).
     """
     anti = coverage_helpers.extract_section(design_text, "Anti-patterns to avoid")
-    sites = coverage_helpers.site_paths(design_text, exclude="Anti-patterns to avoid",
-                                        source=source)
+    sites = coverage_helpers.site_paths(design_text, source=source)
     hdgs = coverage_helpers.headings(design_text)
 
     addressed: list[str] = []

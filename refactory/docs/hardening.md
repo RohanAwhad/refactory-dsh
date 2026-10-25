@@ -2456,9 +2456,9 @@ design go straight to the person's gate, and that gate is the design check.
   corrections lost it, so a design without a Summary keeps its corrections. A design
   without `## Anti-patterns to avoid` is not checked against the pitfalls, and the card
   names the high-risk ones that leaves unchecked. For one without `## Rule and sites`,
-  a site is a `path:line` it cites outside the section being checked whose file is in
-  the checkout or named in `## Changes`: a pitfall answered with such a site counts,
-  and an entry cannot make its own made-up citation a site.
+  a site is a `path:line` it cites anywhere, the entry itself included, whose file is
+  in the checkout or named in `## Changes`: a pitfall answered with the site that
+  handles it counts, and a made-up `nowhere/made_up.py:999` does not.
 
 ### The card
 
@@ -2524,7 +2524,7 @@ design mode, because nothing reads them; validation V7 refuses an unused knob.
 - `test_design_scale.py::test_a_light_design_names_the_high_risk_pitfalls_it_leaves_unchecked`
 - `test_design_scale.py::test_a_tracked_symlink_out_of_the_checkout_names_nothing`
 - `test_pitfalls.py::test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites`
-- `test_pitfalls.py::test_a_pitfall_entry_cannot_make_its_own_citation_a_site`
+- `test_pitfalls.py::test_a_cited_site_counts_when_its_file_is_real_or_changed`
 - `test_design_scale.py::test_every_scale_gets_one_rewrite_for_a_missing_section`
 - `test_design_contract_extensions.py::test_prompt_contract_requires_only_summary_changes_and_tests`
 - `test_design_contract_extensions.py::test_an_optional_section_left_out_is_not_checked`

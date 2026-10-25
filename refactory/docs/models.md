@@ -156,7 +156,7 @@ Every other section is **optional**, and every consumer of one treats its absenc
 |---|---|
 | `## Failure trace` | Not checked. |
 | `## Ask mapping` | Not checked. |
-| `## Rule and sites` (with `[changed]` / `[left: <reason>]` markers) | `gate_design_review` lists unmarked or reasonless sites only when there are sites; the PR body's "What changed" lists the diff's files; the check's feedback carries no `[left]` design constraints; for pitfall and finding coverage a site is a backticked `path:line` citation outside the section being checked whose file is in the checkout or named in `## Changes`, so an entry answered with a site the design cites (`tool.py:1`) counts and a made-up one does not. |
+| `## Rule and sites` (with `[changed]` / `[left: <reason>]` markers) | `gate_design_review` lists unmarked or reasonless sites only when there are sites; the PR body's "What changed" lists the diff's files; the check's feedback carries no `[left]` design constraints; for pitfall and finding coverage a site is a backticked `path:line` citation anywhere in the design, the entry itself included, whose file is in the checkout or named in `## Changes`, so an entry answered with the site that handles it (`tool.py:12`) counts and a made-up one does not. |
 | `## Test guardedness exemptions` | `enforce_guardedness` exempts nothing, so a new test that passes on the base is rejected. |
 | `## Site revert exemptions` | The correction audit exempts no site. |
 | `## Anti-patterns to avoid` | `gate_design_review` does not check the pitfalls (`pitfall_coverage` says so), and lists one advisory naming the high-risk pitfalls that leaves unchecked. |

@@ -268,8 +268,8 @@ def _light(summary: str = "It prints.", changes: str = "- `tool.py` \u2014 print
 
 
 def test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites(tmp_path):
-    """Rule and sites is optional. A light design answers a pitfall with a site it cites
-    elsewhere, in its Changes or as a claim about code in the checkout; that counts."""
+    """Rule and sites is optional. A light design answers a pitfall with a site whose file
+    is named in its Changes or is in the checkout; that counts."""
     (tmp_path / "helper.py").write_text("def guard():\n    pass\n")
     light = _light(summary="`guard()` at `helper.py:1`: `def guard():` checks the input.",
                    changes="- `tool.py:1` \u2014 print the name")
@@ -293,22 +293,32 @@ def test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites(tmp_pa
     assert ctx.facts["design_review_advisory"] == ""
 
 
-@pytest.mark.parametrize("summary, entry", [
+@pytest.mark.parametrize("summary, changes, entry, addressed", [
+    # The first review's case: the site that handles it, in a real file, cited in the entry
+    # (Changes names another file, so the checkout alone makes it a site).
+    ("It prints.", "- `other.py` \u2014 print the name", "- PIT-001: addressed at `tool.py:12`",
+     True),
+    # A file the design adds, named in ## Changes, cited in the entry.
+    ("It prints.", "- `new_tool.py` \u2014 a new module", "- PIT-001: guarded at `new_tool.py:3`",
+     True),
     # The second review's case: a made-up site, cited only in the entry.
-    ("It prints.", "- PIT-001: addressed at `nowhere/made_up.py:999`"),
+    ("It prints.", None, "- PIT-001: addressed at `nowhere/made_up.py:999`", False),
     # Cited outside the entry too, but no such file is in the checkout or in Changes.
-    ("See `nowhere/made_up.py:999`.", "- PIT-001: addressed at `nowhere/made_up.py:999`"),
-    # A real file, but the site is cited only in the entry itself.
-    ("It prints.", "- PIT-001: guarded at `tool.py:1`"),
+    ("See `nowhere/made_up.py:999`.", None, "- PIT-001: addressed at `nowhere/made_up.py:999`",
+     False),
     # A file named without a line is not a site, though Changes names it.
-    ("It prints.", "- PIT-001: guarded in `tool.py`"),
-], ids=["made-up-only-in-the-entry", "made-up-cited-elsewhere", "real-file-only-in-the-entry",
-        "a-file-without-a-line"])
-def test_a_pitfall_entry_cannot_make_its_own_citation_a_site(tmp_path, summary, entry):
-    (tmp_path / "tool.py").write_text("x = 1\n")
-    design = _light(summary=summary) + entry + "\n"
-    assert pitfalls_mod.pitfall_coverage(design, [_pit()], source=str(tmp_path)) == (
-        [], [], ["PIT-001"])
+    ("It prints.", None, "- PIT-001: guarded in `tool.py`", False),
+], ids=["real-file-in-the-entry", "changed-file-in-the-entry", "made-up-only-in-the-entry",
+        "made-up-cited-elsewhere", "a-file-without-a-line"])
+def test_a_cited_site_counts_when_its_file_is_real_or_changed(
+        tmp_path, summary, changes, entry, addressed):
+    """Without Rule and sites, a backticked path:line anywhere in the design, the pitfall's
+    own entry included, is a site when its file is in the checkout or named in Changes."""
+    (tmp_path / "tool.py").write_text("x = 1\n" * 20)
+    design = (_light(summary=summary) if changes is None
+              else _light(summary=summary, changes=changes)) + entry + "\n"
+    expected = (["PIT-001"], [], []) if addressed else ([], [], ["PIT-001"])
+    assert pitfalls_mod.pitfall_coverage(design, [_pit()], source=str(tmp_path)) == expected
     ctx = nn.RunContext(tmp_path)
     ctx.facts.update({"source": str(tmp_path), "has_pitfalls_step": True})
     ctx.write_text("design.md", design)
@@ -316,7 +326,7 @@ def test_a_pitfall_entry_cannot_make_its_own_citation_a_site(tmp_path, summary, 
     import refactory_dsh.design_ops as ops
     assert ops.gate_design_review(ctx) == "proceed"
     assert ctx.facts["design_review_advisory"] == (
-        "- high-risk pitfall(s) not addressed in the design: PIT-001")
+        "" if addressed else "- high-risk pitfall(s) not addressed in the design: PIT-001")
 
 
 def test_gate_design_review_passes_set_aside(tmp_path):

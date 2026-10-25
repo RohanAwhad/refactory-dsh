@@ -188,8 +188,7 @@ def finding_coverage(
     parse_fnd_id and compare whole ids.
     """
     section = coverage_helpers.extract_section(document_text, section_heading)
-    sites = coverage_helpers.site_paths(document_text, exclude=section_heading,
-                                        source=source)
+    sites = coverage_helpers.site_paths(document_text, source=source)
     hdgs = coverage_helpers.headings(document_text)
 
     addressed: list[str] = []
