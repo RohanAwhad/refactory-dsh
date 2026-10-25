@@ -83,6 +83,7 @@ QA_JUDGE_PROMPT = (
     "Artifact directory (absolute): {{artifact}}\n{{change}}\n"
     "The check: {{check}}\n\n"
     "## Corrections the person gave when approving the design\n{{gate_corrections}}\n\n"
+    "## What sent this attempt back\n{{review_feedback}}\n\n"
     "## What to read\n"
     "`reviews/qa-synthesized.md` in the run directory holds, in full, this attempt's "
     "health check, code review and QA director's attack, and the design-blind verifier's "

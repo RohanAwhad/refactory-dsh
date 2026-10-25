@@ -856,8 +856,8 @@ tests.
     round's. It puts this attempt's three reviews and, when it reported, the verifier's
     into `reviews/qa-synthesized.md` exactly as written, with the check's result, the
     diff stat and the design's Changes section. Nothing reads them for markers.
-  - `qa_judge` reads that, the whole `design.md`, the brief, the corrections and the
-    validation receipt. It writes `qa-judge.json`:
+  - `qa_judge` reads that, the whole `design.md`, the brief, the corrections, what
+    sent the attempt back and the validation receipt. It writes `qa-judge.json`:
     `{"verdict": "proceed"|"redo", "must_fix": [{"source", "where", "what", "why",
     "severity", "breaks"}], "follow_ups": [...], "dismissed": [{"source", "finding",
     "why"}]}`. A finding that does not hold against the code, or that only quotes a
@@ -890,6 +890,10 @@ tests.
   `JUDGE_REVIEW_CONTEXT` (`wire_reviews(..., judge_nodes=("overwatch",))`), not the
   reviewers' context, which asks for `UNAVAILABLE:` lines in a report and for errors to
   be resolved "in your own report". The QA judge gets no review context.
+- **Both judges see what sent the attempt back.** That is `review_feedback`, which
+  `prepare_check` sets before the reviews and keeps across the self-check's fix-ups,
+  as the reviewers beside the check get it. `validation` would not do: by the time a
+  judge runs it holds only this round's check and QA results.
 - **The evidence map moves to the QA judge.** The correction audit measures the sites
   the map (`intent-audit.json`) names for each correction, so the map has to exist before
   the overwatch reads the audit. `wire_reviews(..., audit_node="qa_judge")` gives the QA
@@ -961,6 +965,7 @@ named otherwise:
   - `test_the_judges_answer_in_their_verdicts_not_in_review_markers`.
 - **Routing.**
   - `test_a_judge_redo_sends_its_must_fix_to_the_builder_once`;
+  - `test_the_judges_see_what_sent_the_attempt_back`;
   - `test_a_failing_check_goes_back_before_any_judge`;
   - `test_an_overwatch_redo_counts_toward_the_review_limit_and_stops_at_it`;
   - `test_only_what_holds_the_change_back_sends_it_back` (the severity bar);

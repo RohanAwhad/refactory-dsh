@@ -152,6 +152,31 @@ def test_a_judge_redo_sends_its_must_fix_to_the_builder_once(tmp_path):
     assert (run / "reviews/qa-gate.txt").read_text().startswith("proceed:")
 
 
+def test_the_judges_see_what_sent_the_attempt_back(tmp_path):
+    """Both judges get `review_feedback`, what sent this attempt back, as the reviewers
+    beside the check do. By the time a judge runs, `validation` holds only this round's
+    check and QA results, so a judge given that could not tell whether the attempt fixed
+    what an earlier round named."""
+    repo = git_repo(tmp_path / "repo")
+    must_fix = {"source": "code_reviewer", "where": "tool.py:1", "what": "prints the wrong word",
+                "why": "the brief asks for built"}
+    model = FakeModel(_answers(
+        _round(_tool("bilt"), judge=qa_judgment("redo", must_fix=[must_fix])),
+        _round(_tool("built"), overwatch=overwatch_judgment("pass"))))
+    run = tmp_path / "run"
+    result = _design(run, model, repo)
+
+    assert result.exit_ok, result.error
+    first, second = (model.prompts[index] for index in _prompts(model, QA_JUDGE_MARK))
+    (overwatch,) = (model.prompts[index] for index in _prompts(model, OVERWATCH_JUDGE_MARK))
+    sent_back = "[code_reviewer] tool.py:1: prints the wrong word (why: the brief asks for built)"
+    assert sent_back not in first
+    assert f"## What sent this attempt back\n{result.facts['review_feedback']}" in second
+    assert sent_back in second
+    assert f"What sent this attempt back: {result.facts['review_feedback']}" in overwatch
+    assert sent_back in overwatch
+
+
 def test_a_failing_check_goes_back_before_any_judge(tmp_path):
     """The check stays binding: an attempt whose check fails goes back to emit from
     gate_check, and no judge is asked about it. The judge sees only the passing attempt."""

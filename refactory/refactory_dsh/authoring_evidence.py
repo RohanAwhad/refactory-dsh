@@ -131,13 +131,15 @@ BESIDE_CHECK_REVIEW_CONTEXT = (
 
 #: The review context of a judge (`wire_reviews` with ``judge_nodes``): the receipt and
 #: the rules of evidence, as a reviewer gets them, but everything it decides goes in its
-#: JSON verdict, so it is told nothing about writing markers or reports.
+#: JSON verdict, so it is told nothing about writing markers or reports. What sent the
+#: attempt back is `review_feedback`, as the reviewers beside the check get it: by the
+#: time a judge runs, `validation` holds only this round's check and QA results.
 JUDGE_REVIEW_CONTEXT = (
     "\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\n"
     "Large requirement inputs (design, strategy, plan) are referenced by path and "
     "sha256 above rather than inlined. Read those files from the run directory and "
     "read authoring-evidence.json for the full validation receipt.\n"
-    "What earlier rounds sent back: {{validation}}\n{{qa_gate}}\n{{overwatch_review}}\n"
+    "What sent this attempt back: {{review_feedback}}\n{{qa_gate}}\n{{overwatch_review}}\n"
     "The runtime has already run the check on this revision. Read its receipt and actual "
     "output files; do not run it again. Use targeted spot checks only for a concrete "
     "uncovered requirement. A numeric score, source inspection and requirement coverage "
