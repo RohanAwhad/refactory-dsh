@@ -661,7 +661,7 @@ def _committed_file(found: Worktree, relative: Path, rev: str = "") -> bool:
 
 
 def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tuple[Path, ...] = (),
-                   *, amend: bool = False) -> Worktree:
+                   *, amending: bool = False) -> Worktree:
     """Make one attempt's files the run's worktree, as one commit on its branch.
 
     Each attempt builds on the last: ``files`` are written and ``deletes`` removed on top
@@ -670,9 +670,9 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     its gate. An attempt that died after its commit but before recording it is dropped,
     and this one replaces it.
 
-    With ``amend=True``, stages files and deletes with the same guards, then runs
-    ``git commit --amend --no-edit`` instead of a new commit. One code path for every
-    amendment.
+    With ``amending``, the files are staged the same way and folded into the last attempt
+    through `amend`, the one path every amendment takes: a self-check fix-up finishes
+    the attempt it was sent back from (b41a).
     """
     found = recorded(run)
     if found is None:
@@ -690,7 +690,7 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     died = _json(pending)
     if died.get("parent") == found.head and path.is_dir():
         head = git(path, "rev-parse", "HEAD").strip()
-        if head != found.head and git(path, "rev-parse", "HEAD^").strip() == found.head:
+        if head != found.head and _died_after_commit(path, found.head, bool(died.get("amending"))):
             git(path, *NO_HOOKS, "reset", "-q", "--hard", found.head)
     _require_current(found)
     # When a merge is in progress (MERGE_HEAD present), skip _restore: the staged
@@ -716,7 +716,8 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
             if parent != Path(".") and (path / parent).exists() and not (path / parent).is_dir():
                 raise AttemptRefused(f"{relative} would be inside {parent}, which is a file of the last attempt; "
                                      "choose another path")
-    _write_json(pending, {"files": sorted(str(name) for name in (*files, *deletes)), "parent": found.head})
+    _write_json(pending, {"files": sorted(str(name) for name in (*files, *deletes)), "parent": found.head,
+                          "amending": amending})
     for relative in deletes:
         git(path, "rm", "-q", "-f", "--", str(relative))
     for relative, content in files.items():
@@ -730,7 +731,7 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     # rather than through the check and reviews on identical code.
     # During a merge-in-progress, a commit is ALWAYS needed to create the merge
     # commit (making main an ancestor of HEAD), even when content matches HEAD.
-    if not merge_in_progress and not amend:
+    if not merge_in_progress:
         try:
             git(path, "diff", "--cached", "--quiet")
         except ValueError:
@@ -740,10 +741,12 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
             raise AttemptRefused(
                 "the emission changed nothing: every file and edit in it is already in the last attempt"
             )
-    how = ("--amend", "--no-edit") if amend else ("-m", message)
     try:
-        git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
-            *how, env={**os.environ, **COMMITTER})
+        if amending:
+            amend(found, run, [str(name) for name in files], message)
+        else:
+            git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
+                "-m", message, env={**os.environ, **COMMITTER})
     except ValueError as exc:
         # When committing with unmerged paths, git refuses.  This can happen if
         # not every conflicted file was resolved by the emission.
@@ -773,6 +776,20 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     _write_json(Path(run) / RECORD, asdict(advanced))
     pending.unlink(missing_ok=True)
     return advanced
+
+
+def _died_after_commit(path: Path, head: str, amended: bool) -> bool:
+    """Whether HEAD is the commit an attempt that died made on ``head``, so it can be dropped.
+
+    A new attempt is a child of ``head``; an amendment replaces ``head``, so it is a
+    sibling: another commit on ``head``'s parent.
+    """
+    try:
+        if amended:
+            return git(path, "rev-parse", "HEAD^").strip() == git(path, "rev-parse", f"{head}^").strip()
+        return git(path, "rev-parse", "HEAD^").strip() == head
+    except ValueError:
+        return False
 
 
 def require_current(run: Path) -> Worktree:
@@ -1281,7 +1298,8 @@ def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktre
     and the record write are in one place.
     """
     path = Path(found.path)
-    git(path, "add", "-f", "--", *paths)
+    if paths:
+        git(path, "add", "-f", "--", *paths)
     how = ("--amend", "--no-edit") if found.head != found.base else ("-m", message)
     git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", *how,
         env={**os.environ, **COMMITTER})

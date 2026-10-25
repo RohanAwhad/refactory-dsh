@@ -1,247 +1,285 @@
-"""Build the import-based test selection for the self-check.
+"""Which tests design mode's self-check runs for an emission, in the order it runs them (b41a).
 
-Classified as a *product* module in ``data/boundary.json`` — no core module
-imports it (b39b's lesson: ``test_boundary::test_no_core_imports_product_static``).
+The engine reads the repository's own imports; it names no test or file of any
+repository. Classified as a *product* module in ``data/boundary.json``, and no core
+module imports it.
 
-The module owns the "which tests to run" question: given the files an emission
-touched, it returns an ordered list of test file paths that the self-check
-should run, plus the touched source files (for vitest ``--related``).
+The selection, in order:
+
+- **Engine tests**, only when the emission changed a hub. A *hub* is a source module at
+  least a quarter of the repository's Python test files import (`HUB_SHARE`): the
+  engine or graph modules most of the suite is built on. The engine tests are the
+  structural tests (test files that import no module of the repository: they read it
+  as files, its layout, records and docs, so no import says a change cannot reach them)
+  and the tests that import every hub, the ones built on the whole engine.
+- **The test files the emission touched.**
+- **The last check's failures** that are not inherited (dm-128's set), as test ids.
+- **The tests that import a module the emission changed**, depth 1, the ones importing
+  the most changed modules first.
+- **The structural tests**, last, when a source file changed but no hub did.
+
+For a TypeScript runner only the spec files the emission touched are selected: the
+check's own vitest invocation (``vitest run``) has no related-file selection, and
+``--related`` there is an unknown option. A docs-only emission selects nothing.
 """
 
 from __future__ import annotations
 
 import ast
-import re
+import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+#: A source module at least this share of the Python test files import is a hub.
+HUB_SHARE = 0.25
 
-def _find_python_roots(source_root: Path) -> list[Path]:
-    """Find Python package roots (directories with pyproject.toml or setup.py).
+#: Files that are only read, never run or imported: an emission of these alone selects nothing.
+DOC_SUFFIXES = (".md", ".rst", ".txt")
 
-    Returns paths relative to source_root that could be on PYTHONPATH, plus
-    source_root itself.
-    """
-    roots = [source_root]
-    for marker in ("pyproject.toml", "setup.py", "setup.cfg"):
-        for found in source_root.rglob(marker):
-            parent = found.parent
-            if parent != source_root and "node_modules" not in str(parent):
-                if parent not in roots:
-                    roots.append(parent)
+_PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
+
+
+@dataclass
+class Selection:
+    """The ordered selection, and how it was made, for the self-check's record."""
+
+    tests: list[str] = field(default_factory=list)
+    engine: list[str] = field(default_factory=list)
+    hubs_changed: list[str] = field(default_factory=list)
+    touched_tests: list[str] = field(default_factory=list)
+    last_failures: list[str] = field(default_factory=list)
+    importers: list[str] = field(default_factory=list)
+    structural: list[str] = field(default_factory=list)
+
+    def record(self) -> dict[str, Any]:
+        return {"engine": self.engine, "hubs_changed": self.hubs_changed,
+                "touched_tests": self.touched_tests, "last_failures": self.last_failures,
+                "importers": self.importers, "structural": self.structural}
+
+
+def _test_file_pattern():
+    from refactory_dsh.base_check import _TEST_FILE_PATTERNS
+
+    return _TEST_FILE_PATTERNS
+
+
+def is_test_file(path: str) -> bool:
+    """Whether a runner collects ``path`` as a test module (pytest's or vitest's naming)."""
+    return bool(_test_file_pattern().search(path))
+
+
+def repository_files(root: Path) -> list[str]:
+    """The repository's files, from git; a directory that is not a checkout is walked."""
+    try:
+        listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True,
+                                timeout=60, check=True).stdout.decode(errors="replace")
+        return [name for name in listed.split("\0") if name]
+    except (OSError, subprocess.SubprocessError):
+        skip = {".git", ".venv", "node_modules", "__pycache__"}
+        return [str(path.relative_to(root)) for path in root.rglob("*")
+                if path.is_file() and not skip & set(path.relative_to(root).parts)]
+
+
+def _import_roots(files: list[str]) -> list[Path]:
+    """Where an absolute import resolves from: the root, each Python project, its ``src``."""
+    projects = {Path(name).parent for name in files if Path(name).name in _PROJECT_MARKERS}
+    roots = [Path("")]
+    for project in sorted(projects, key=lambda p: (len(p.parts), str(p))):
+        roots += [project, project / "src"]
     return roots
 
 
-def build_import_map(source_root: Path) -> dict[str, list[str]]:
-    """Build a depth-1 import reverse map: source file → [test files that import it].
+def _resolve(module: str, roots: list[Path], known: set[str]) -> str | None:
+    parts = module.replace(".", "/")
+    for base in roots:
+        for candidate in (f"{parts}.py", f"{parts}/__init__.py"):
+            name = (base / candidate).as_posix()
+            if name in known:
+                return name
+    return None
 
-    For Python test files (``is_test_path``): parse ``import`` and ``from … import``
-    statements and resolve dotted names to relative file paths.
 
-    For TypeScript/JS test files (``.spec.ts``, ``.test.ts``, etc.): regex-extract
-    ``import … from '…'`` and ``require('…')`` and resolve relative paths.
+def imports_of(test: str, text: str, roots: list[Path], known: set[str]) -> set[str]:
+    """The repository files a Python test file imports, depth 1.
 
-    Depth-1 only.  The b39 evidence shows depth-1 caught 4/4 (b39a) and 8/9 (b39b)
-    round-1 failures.  The full check is the backstop.
+    ``from package import name`` resolves to the submodule when ``name`` is one, and to
+    the package otherwise. A test's own directory comes first, as pytest puts it on the
+    path; a relative import resolves from the test's package.
     """
-    from refactory_dsh.changed_functions import is_test_path
+    try:
+        tree = ast.parse(text, filename=test)
+    except (SyntaxError, ValueError):
+        return set()
+    own = [Path(test).parent, *roots]
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                resolved = _resolve(alias.name, own, known)
+                if resolved:
+                    found.add(resolved)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                package = Path(test).parent
+                for _ in range(node.level - 1):
+                    package = package.parent
+                bases, module = [package], node.module or ""
+            else:
+                bases, module = own, node.module or ""
+            for alias in node.names:
+                dotted = f"{module}.{alias.name}" if module else alias.name
+                resolved = _resolve(dotted, bases, known) or (
+                    _resolve(module, bases, known) if module else None)
+                if resolved:
+                    found.add(resolved)
+    return found
 
-    reverse: dict[str, list[str]] = {}  # source_rel → [test_rel, …]
-    python_roots = _find_python_roots(source_root)
 
-    # ── Python test files ──
-    for py_file in sorted(source_root.rglob("*.py")):
-        if "node_modules" in str(py_file) or ".venv" in str(py_file):
-            continue
-        rel = str(py_file.relative_to(source_root))
-        if not is_test_path(rel):
+def import_map(root: Path, files: list[str], extra: tuple[str, ...] = (),
+               scope: list[str] | None = None) -> dict[str, set[str]]:
+    """Each Python test file the check runs (in ``scope``) and the repository files it imports.
+
+    ``extra`` names files that resolve though they are gone, the ones an emission
+    deleted, so a test still importing one is found.
+    """
+    known = set(files) | set(extra)
+    roots = _import_roots(files)
+    found: dict[str, set[str]] = {}
+    for name in files:
+        if not name.endswith(".py") or not is_test_file(name) or not _in_scope(name, scope):
             continue
         try:
-            tree = ast.parse(py_file.read_text(errors="replace"), filename=rel)
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            modules: list[str] = []
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    modules.append(alias.name)
-            elif isinstance(node, ast.ImportFrom):
-                if node.module:
-                    modules.append(node.module)
-            for mod in modules:
-                # Resolve dotted import name → relative file path
-                # Try each Python root as a base for resolution
-                parts = mod.replace(".", "/")
-                candidates = [parts + ".py", parts + "/__init__.py"]
-                resolved = False
-                for py_root in python_roots:
-                    for cand in candidates:
-                        abs_path = py_root / cand
-                        if abs_path.is_file():
-                            # Store relative to source_root
-                            try:
-                                rel_source = str(abs_path.relative_to(source_root))
-                            except ValueError:
-                                continue
-                            reverse.setdefault(rel_source, [])
-                            if rel not in reverse[rel_source]:
-                                reverse[rel_source].append(rel)
-                            resolved = True
-                            break
-                    if resolved:
-                        break
-
-    # ── TypeScript / JS test files ──
-    _TS_TEST = re.compile(r"\.(spec|test)\.(ts|tsx|js|jsx|mjs|cjs)$")
-    _TS_IMPORT = re.compile(
-        r"""(?:import\s+.*?\s+from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\))""",
-    )
-    _TS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
-    for ts_file in sorted(source_root.rglob("*")):
-        rel = str(ts_file.relative_to(source_root))
-        if not _TS_TEST.search(rel):
-            continue
-        try:
-            text = ts_file.read_text(errors="replace")
+            text = (root / name).read_text(errors="replace")
         except OSError:
             continue
-        for m in _TS_IMPORT.finditer(text):
-            target = m.group(1) or m.group(2)
-            if not target or not target.startswith("."):
-                continue
-            resolved = (ts_file.parent / target).resolve()
-            # Try with and without extensions
-            for ext in ("", *_TS_EXT):
-                candidate = Path(str(resolved) + ext)
-                if candidate.is_file():
-                    try:
-                        cand_rel = str(candidate.relative_to(source_root))
-                    except ValueError:
-                        continue
-                    reverse.setdefault(cand_rel, [])
-                    if rel not in reverse[cand_rel]:
-                        reverse[cand_rel].append(rel)
-                    break
-
-    return reverse
+        found[name] = imports_of(name, text, roots, known) - {name}
+    return found
 
 
-def _fan_in(import_map: dict[str, list[str]], touched_sources: list[str]) -> dict[str, int]:
-    """For each touched source, count how many test files import it (fan-in)."""
-    return {src: len(import_map.get(src, [])) for src in touched_sources}
+def pytest_scope(check_command: str, root: Path) -> list[str] | None:
+    """The paths the check's pytest steps collect from, or None when one collects everything.
 
-
-def select_test_ids(
-    touched_files: list[str],
-    source_root: Path,
-    prev_record: dict[str, Any],
-    check_command: str,
-) -> tuple[list[str], list[str]]:
-    """Return ``(ordered_test_ids, touched_source_files)`` for the self-check.
-
-    Partitions ``touched_files`` using ``is_test_path`` and ``is_generated``:
-
-    - **Test files** → tier (a), directly touched.
-    - **Generated files** → skipped.
-    - **Source files** → lookup targets for ``build_import_map``.
-
-    The ordering:
-
-    - **Engine-fan-in tests** — when a high-fan-in module changed, the tests
-      importing it sort first overall.  High-fan-in means the touched module
-      is imported by more test files than the median of all modules' fan-ins.
-      No file or path names in the engine.
-    - **Tier 1:** Test files the emission touched directly.
-    - **Tier 2:** The last check's failures (from ``prev_record``), filtered
-      to non-inherited.
-    - **Tier 3:** Tests that import the touched source modules, sorted by the
-      number of touched modules they import (most-touched first).
-
-    A docs-only emission (all ``.md`` or generated files) returns empty lists.
+    A path is a step's argument that names a file or directory of the repository; a step
+    that names none collects from the root, and so does a check with no pytest step.
     """
-    from refactory_dsh.changed_functions import is_generated, is_test_path
+    import shlex
 
+    from refactory_dsh.base_check import _runner, _steps
+
+    scope: list[str] = []
+    steps = [step for step in _steps(check_command) if _runner(step) == "pytest"]
+    if not steps:
+        return None
+    for step in steps:
+        try:
+            words = shlex.split(step)
+        except ValueError:
+            return None
+        named = [word.rstrip("/") for word in words[1:]
+                 if not word.startswith("-") and (root / word).exists()
+                 and Path(word).name not in ("python", "python3", "pytest")]
+        if not named:
+            return None
+        scope += named
+    return scope
+
+
+def _in_scope(path: str, scope: list[str] | None) -> bool:
+    return scope is None or any(path == entry or path.startswith(entry + "/") for entry in scope)
+
+
+def _source(path: str) -> bool:
+    from refactory_dsh.changed_functions import is_test_path
+
+    return not is_test_path(path)
+
+
+def hubs(imports: dict[str, set[str]]) -> set[str]:
+    """The source modules at least `HUB_SHARE` of the test files import."""
+    if not imports:
+        return set()
+    counts: dict[str, int] = {}
+    for modules in imports.values():
+        for module in modules:
+            counts[module] = counts.get(module, 0) + 1
+    floor = HUB_SHARE * len(imports)
+    return {module for module, count in counts.items() if count >= floor and _source(module)}
+
+
+def _failures(prev_record: dict[str, Any], root: Path) -> list[str]:
+    """The last check's failures that are not inherited, as ids, in the order it found them."""
+    if prev_record.get("status") != "fail":
+        return []
+    inherited = set(prev_record.get("inherited", []))
+    ids: list[str] = []
+    for runner in prev_record.get("runners", []):
+        for failure in runner.get("failures", []):
+            test_id = str(failure.get("test_id") or "")
+            if not test_id or test_id in inherited or test_id in ids:
+                continue
+            file = test_id.split("::")[0] if "::" in test_id else test_id.split(" > ")[0].strip()
+            if (root / file).is_file():
+                ids.append(test_id)
+    return ids
+
+
+def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = None, *,
+           check_command: str = "", files: list[str] | None = None) -> Selection:
+    """The self-check's selection for an emission that changed ``touched`` in ``root``.
+
+    ``touched`` are paths from the repository root (`base_check._all_changed_files`);
+    ``files`` the repository's files, listed from git when not given. Only Python tests
+    the check's pytest steps collect are selected (`pytest_scope`), and the hubs are
+    counted among them.
+    """
+    from refactory_dsh.changed_functions import is_generated
+
+    root = Path(root)
+    files = repository_files(root) if files is None else files
+    scope = pytest_scope(check_command, root) if check_command else None
+    last_failures = _failures(prev_record or {}, root)
     touched_tests: list[str] = []
-    touched_sources: list[str] = []
-
-    for f in touched_files:
-        if not f.strip():
+    sources: list[str] = []
+    for name in dict.fromkeys(path.strip() for path in touched if path.strip()):
+        if name.endswith(DOC_SUFFIXES) or is_generated(root, name):
             continue
-        # Skip .md files
-        if f.endswith(".md"):
-            continue
-        if is_generated(source_root, f):
-            continue
-        if is_test_path(f):
-            touched_tests.append(f)
+        if is_test_file(name):
+            if (root / name).is_file() and (not name.endswith(".py") or _in_scope(name, scope)):
+                touched_tests.append(name)
         else:
-            touched_sources.append(f)
-
-    if not touched_tests and not touched_sources:
-        return [], []
-
-    # Build import map
-    import_map = build_import_map(source_root)
-    fan_in_counts = _fan_in(import_map, touched_sources)
-
-    # Detect high-fan-in modules: those with fan-in above the median of all
-    # modules' fan-ins in the import map.
-    all_fan_ins = sorted(len(tests) for tests in import_map.values()) if import_map else []
-    median_fan_in = all_fan_ins[len(all_fan_ins) // 2] if all_fan_ins else 0
-    high_fan_in_sources = [
-        src for src in touched_sources
-        if fan_in_counts.get(src, 0) > median_fan_in and fan_in_counts.get(src, 0) > 0
-    ]
-
-    # Tier 0: engine-fan-in tests — tests importing high-fan-in touched modules
-    engine_tests: list[str] = []
-    if high_fan_in_sources:
-        engine_test_set: set[str] = set()
-        for src in high_fan_in_sources:
-            for test_file in import_map.get(src, []):
-                engine_test_set.add(test_file)
-        # Sort by number of high-fan-in modules imported (descending)
-        def _engine_sort_key(tf: str) -> int:
-            return -sum(1 for src in high_fan_in_sources if tf in import_map.get(src, []))
-        engine_tests = sorted(engine_test_set, key=_engine_sort_key)
-
-    # Tier 2: last check's failures, non-inherited
-    prev_failing_files: list[str] = []
-    inherited_set = set(prev_record.get("inherited", []))
-    if prev_record.get("status") == "fail":
-        for runner in prev_record.get("runners", []):
-            for f in runner.get("failures", []):
-                tid = f.get("test_id", "")
-                if tid and tid not in inherited_set:
-                    # Extract the file part
-                    if "::" in tid:
-                        tf = tid.split("::")[0]
-                    elif " > " in tid:
-                        tf = tid.split(" > ")[0].strip()
-                    else:
-                        tf = tid
-                    if tf and tf not in prev_failing_files:
-                        prev_failing_files.append(tf)
-
-    # Tier 3: tests importing touched source modules
-    import_tests: list[str] = []
-    for src in touched_sources:
-        for test_file in import_map.get(src, []):
-            if test_file not in import_tests:
-                import_tests.append(test_file)
-    # Sort by number of touched modules imported (descending)
-    def _import_sort_key(tf: str) -> tuple[int, str]:
-        count = sum(1 for src in touched_sources if tf in import_map.get(src, []))
-        return (-count, tf)
-    import_tests.sort(key=_import_sort_key)
-
-    # Merge with dedup preserving priority order
-    seen: set[str] = set()
+            sources.append(name)
+    selection = Selection(touched_tests=sorted(touched_tests), last_failures=last_failures)
+    if not sources and not touched_tests and not last_failures:
+        return selection
+    imports = import_map(root, files, tuple(sources), scope)
+    hub_set = hubs(imports)
+    structural = sorted(test for test, modules in imports.items() if not modules)
+    changed = set(sources)
+    selection.hubs_changed = sorted(changed & hub_set)
+    if selection.hubs_changed:
+        whole_engine = sorted((test for test, modules in imports.items()
+                               if modules and hub_set <= modules),
+                              key=lambda test: (len(imports[test]), test))
+        selection.engine = [*structural, *whole_engine]
+    importers = [test for test, modules in imports.items() if modules & changed]
+    selection.importers = sorted(importers, key=lambda test: (
+        -len(imports[test] & changed), len(imports[test]), test))
+    if sources and not selection.hubs_changed:
+        selection.structural = structural
     ordered: list[str] = []
-    for tier in (engine_tests, touched_tests, prev_failing_files, import_tests):
-        for tf in tier:
-            if tf not in seen:
-                seen.add(tf)
-                ordered.append(tf)
-
-    return ordered, touched_sources
+    whole: set[str] = set()
+    for name in [*selection.engine, *selection.touched_tests]:
+        if name not in whole:
+            whole.add(name)
+            ordered.append(name)
+    for test_id in last_failures:
+        file = test_id.split("::")[0] if "::" in test_id else test_id.split(" > ")[0].strip()
+        if file not in whole:
+            ordered.append(test_id)
+    for name in [*selection.importers, *selection.structural]:
+        if name not in whole:
+            whole.add(name)
+            ordered.append(name)
+    selection.tests = ordered
+    return selection

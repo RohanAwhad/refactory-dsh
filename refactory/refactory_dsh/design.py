@@ -15,7 +15,7 @@ from typing import Any
 
 from refactory_dsh import delivery, design_contract, pitfalls, repo_change
 from refactory_dsh.create_ops import API, MARKER_RULE, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE
-from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT
+from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT, SELF_CHECK_RECORD
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
@@ -104,11 +104,14 @@ class DesignMode(Mode):
             ),
             "self_check_fixups": Knob(
                 2, "int", lo=0, hi=5,
-                description="max self-check fix-up reloops per attempt before the early stop spends it",
+                description="how many times the self-check may send an attempt back to emit, "
+                            "spending nothing, before the early stop spends it; a run gets "
+                            "this many times check_attempts",
             ),
             "self_check_timeout_s": Knob(
                 300, "int", lo=10, hi=600,
-                description="self-check test-run timeout; effective limit is min(self_check_timeout_s, check_timeout_s // 3)",
+                description="how long the self-check's tests may run before the reviews; "
+                            "never more than a third of check_timeout_s",
             ),
             **repo_change.knobs(),
             **delivery.knobs(),
@@ -535,19 +538,18 @@ class DesignMode(Mode):
             "prepare_check", "gate", evaluator=f"{OPS}:prepare_check", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP,
-                    "self-check-record.jsonl"),
+            writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP, SELF_CHECK_RECORD),
             produces=(*check_produces, *repo_change.CHECK_PRODUCES,
                       "review_feedback", "review_baseline",
-                      "self_check_fixup_count", "self_check_fixup_pending",
-                      "total_self_check_fixups_used"),
+                      "self_check_fixup_count", "total_self_check_fixups_used"),
             knobs=(*check_knobs, "self_check_fixups", "self_check_timeout_s"),
-            # Applied emissions ≤ check_attempt_cap + per-run fix-ups (8 + 6 = 14).
-            # Refusals ≤ refusal_attempts − 1 = 2 before each.
-            # prepare_check reloops ≤ (8 + 6 + 1) × 2 + 6 + 8 = 44; 45 holds.
+            # Its reloops: a fix-up, an early stop or a refusal. Applied emissions are at
+            # most check_attempt_cap + the run's fix-ups (8 + 2 x 3), each after at most
+            # refusal_attempts - 1 (2) refusals, so (8 + 6 + 1) x 2 + 6 + 8 = 44 < 45.
             max_iterations=45,
-            notes="settle the commit the check and the reviews see; run the "
-                  "self-check on the emission-touched tests before the review fork",
+            notes="settle the commit the check and the reviews see, and run the tests the "
+                  "change can break first: a failure goes back to emit as a fix-up, "
+                  "spending no attempt and running no review",
         ))
         graph.add(Node(
             "check", "op", call=f"{OPS}:check_beside_reviews", role="validation",

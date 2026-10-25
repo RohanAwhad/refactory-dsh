@@ -1,16 +1,26 @@
 """Fail-fast targeted pre-pass, stuck detection, and convergence history helpers.
 
 Shared by ``check_artifact`` (design mode) and ``focused_check`` (fast mode)
-so that the logic is not duplicated across two entry points.
+so that the logic is not duplicated across two entry points. Design mode's
+``prepare_check`` runs the same pre-pass as its self-check (b41a): given a
+selection, it runs those tests in chunks within a time limit.
 """
 
 from __future__ import annotations
 
+import math
 import re
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+#: How many chunks the self-check cuts its selection into. Each chunk is its own
+#: targeted command, so a limit that runs out stops between chunks and every
+#: finished chunk reports; more chunks cut closer to the limit, but each pays the
+#: runner's start-up again.
+SELF_CHECK_CHUNKS = 6
 
 
 @dataclass
@@ -25,12 +35,17 @@ class PrepassResult:
     digest_text: str  # formatted digest, or ""
     runners: list[dict] = field(default_factory=list)  # parsed runner dicts
     raw_tail: str = ""  # raw_tail from the targeted digest
-    is_self_check: bool = False  # whether this was a self-check pre-pass
-    fixup_number: int = 0  # current fix-up number for self-check
-    selection_size: int = 0  # number of test files selected
-    ran_ids: list[str] = field(default_factory=list)  # test ids that ran (finished chunks)
-    cut_ids: list[str] = field(default_factory=list)  # test ids that were cut (not started)
-    failing_ids: list[str] = field(default_factory=list)  # failing test ids found
+    # ── the self-check's account (b41a); empty for the dm-128 pre-pass ──
+    selection: list[str] = field(default_factory=list)  # what it set out to run, in order
+    ran_ids: list[str] = field(default_factory=list)  # in chunks that finished
+    cut_ids: list[str] = field(default_factory=list)  # not started, or killed by the limit
+    failing_ids: list[str] = field(default_factory=list)  # failed, and not inherited
+    commands: list[str] = field(default_factory=list)  # one per chunk that ran
+    notes: list[str] = field(default_factory=list)  # why a chunk did not count
+    limit_s: float = 0.0
+    elapsed_s: float = 0.0
+    outputs: list[str] = field(default_factory=list)  # each failing chunk's output
+    left_out: list[str] = field(default_factory=list)  # failures not shown: inherited
 
 
 def _skip() -> PrepassResult:
@@ -40,6 +55,163 @@ def _skip() -> PrepassResult:
     )
 
 
+def self_check_limit(self_check_timeout_s: float, check_timeout_s: float) -> float:
+    """The self-check's time limit: its own knob, and never more than a third of the check's."""
+    return float(min(self_check_timeout_s, check_timeout_s // 3))
+
+
+def _chunks(selection: list[str]) -> list[list[str]]:
+    size = max(1, math.ceil(len(selection) / SELF_CHECK_CHUNKS))
+    return [selection[start:start + size] for start in range(0, len(selection), size)]
+
+
+def _output(result: Any) -> str:
+    return "\n".join(filter(None, [
+        getattr(result, "stdout", None) or "",
+        getattr(result, "stderr", None) or "",
+    ])).strip()
+
+
+def _chunk_failures(result: Any, inherited: set[str]) -> tuple[set[str], str]:
+    """The chunk's failures that are not inherited, or why the chunk says nothing.
+
+    The same rule as the pre-pass's early stop: a preparation failure, a failure that
+    is not the code's (a timeout, a signal), and pytest's "nothing collected" exits are
+    not a verdict on the tests, and neither is a failure that names no test.
+    """
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh import base_check
+
+    if getattr(result, "ok", False):
+        return set(), ""
+    if getattr(result, "prep_failure", None) is not None:
+        return set(), "its environment could not be prepared"
+    if evidence.check_failure_kind(result) != "code_failure":
+        return set(), "it did not fail on the code (a timeout or a signal)"
+    rc = getattr(result, "returncode", None)
+    if rc in (4, 5):
+        return set(), f"pytest collected no test (exit {rc})"
+    found = base_check.parse_test_failures(_output(result))
+    if not found:
+        return set(), f"it failed (exit {rc}) without naming a failing test"
+    return found - inherited, ""
+
+
+def _self_check(
+    selection: list[str],
+    prev_record: dict[str, Any],
+    check_command: str,
+    run_check_fn: Callable[[str, float], Any],
+    limit_s: float,
+    root: str | None,
+) -> PrepassResult:
+    """Run ``selection`` in chunks until the limit is spent; report what failed.
+
+    The cut is never made by killing the runner, because a killed runner reports
+    no failure: no new chunk starts once the limit is spent, and a finished chunk's
+    failures count even when a later chunk is killed. Tests ``build_probe_command``
+    cannot target (a runner it does not support) are left out and named.
+    """
+    from pathlib import Path
+
+    from refactory_dsh.check_digest import build_probe_command
+
+    inherited = set(prev_record.get("inherited", []))
+    root_path = Path(root) if root else None
+    started = time.monotonic()
+    ran: list[str] = []
+    cut: list[str] = []
+    failing: list[str] = []
+    commands: list[str] = []
+    notes: list[str] = []
+    failed_outputs: list[str] = []
+    last = None
+    chunks = _chunks(selection)
+    for index, chunk in enumerate(chunks):
+        remaining = limit_s - (time.monotonic() - started)
+        if remaining < 1:
+            for later in chunks[index:]:
+                cut.extend(later)
+            notes.append(f"the {limit_s:.0f} s limit was spent before chunk {index + 1} "
+                          f"of {len(chunks)}; it and the rest did not run")
+            break
+        ids = [name for name in chunk if "::" in name or " > " in name]
+        files = [name for name in chunk if name not in ids]
+        command, refusal = build_probe_command(check_command, ids, root=root_path, test_files=files)
+        if refusal:
+            cut.extend(chunk)
+            notes.append(f"chunk {index + 1} could not be targeted: {refusal}")
+            continue
+        result = run_check_fn(command, remaining)
+        last = result
+        if getattr(result, "timed_out", False):
+            for later in chunks[index:]:
+                cut.extend(later)
+            notes.append(f"chunk {index + 1} of {len(chunks)} was stopped at the "
+                         f"{limit_s:.0f} s limit, so it and the rest did not report")
+            break
+        ran.extend(chunk)
+        commands.append(command)
+        found, why_not = _chunk_failures(result, inherited)
+        if why_not:
+            notes.append(f"chunk {index + 1} did not count: {why_not}")
+        for test_id in sorted(found):
+            if test_id not in failing:
+                failing.append(test_id)
+        if found:
+            failed_outputs.append(_output(result))
+    digest_text, runners, raw_tail = failure_digest(failed_outputs, inherited)
+    return PrepassResult(
+        ran=bool(commands), early_stop=bool(failing),
+        targeted_command="\n".join(commands) or None,
+        check_mode="targeted" if failing else "full", result=last,
+        digest_text=digest_text, runners=runners, raw_tail=raw_tail,
+        selection=list(selection), ran_ids=ran, cut_ids=cut, failing_ids=failing,
+        commands=commands, notes=notes, limit_s=limit_s,
+        elapsed_s=round(time.monotonic() - started, 1),
+        outputs=failed_outputs, left_out=sorted(inherited),
+    )
+
+
+def without_failures(prepass: PrepassResult, test_ids: list[str]) -> PrepassResult:
+    """The self-check's result with ``test_ids`` gone from its failures and its digest."""
+    from dataclasses import replace
+
+    leave_out = {*prepass.left_out, *test_ids}
+    digest_text, runners, raw_tail = failure_digest(prepass.outputs, leave_out)
+    failing = [test_id for test_id in prepass.failing_ids if test_id not in leave_out]
+    return replace(prepass, failing_ids=failing, early_stop=bool(failing),
+                   check_mode="targeted" if failing else "full",
+                   digest_text=digest_text if failing else "", runners=runners if failing else [],
+                   raw_tail=raw_tail if failing else "", left_out=sorted(leave_out))
+
+
+def failure_digest(outputs: list[str], leave_out: set[str]) -> tuple[str, list[dict], str]:
+    """The digest of the failing chunks' outputs, without the failures in ``leave_out``.
+
+    Each output is digested on its own, as one runner's report, and the runners merged:
+    the builder is shown the failures it is sent back for, and no inherited one.
+    """
+    from refactory_dsh.check_digest import CheckDigest, RunnerDigest, digest_check_output, format_digest
+
+    if not outputs:
+        return "", [], ""
+    merged: dict[str, RunnerDigest] = {}
+    tail = ""
+    for output in outputs:
+        digest = digest_check_output(output)
+        tail = digest.raw_tail or tail
+        for runner in digest.runners:
+            kept = [entry for entry in runner.failures if entry.test_id not in leave_out]
+            if not kept:
+                continue
+            into = merged.setdefault(runner.name, RunnerDigest(name=runner.name, passed=False))
+            into.failures.extend(entry for entry in kept
+                                 if entry.test_id not in {f.test_id for f in into.failures})
+    combined = CheckDigest(runners=list(merged.values()), raw_tail=tail)
+    return format_digest(combined), combined.to_dict()["runners"], tail[-500:]
+
+
 def targeted_prepass(
     prev_record: dict[str, Any],
     check_command: str,
@@ -47,22 +219,10 @@ def targeted_prepass(
     check_timeout_s: float,
     *,
     root: str | None = None,
-    touched_test_ids: list[str] | None = None,
-    touched_source_modules: list[str] | None = None,
-    self_check_timeout_s: int | None = None,
-    self_check_fixups: int | None = None,
+    selection: list[str] | None = None,
+    self_check_timeout_s: float | None = None,
 ) -> PrepassResult:
     """Run previously-failing tests first and stop early while one still fails.
-
-    When the self-check keyword arguments are present (passed by ``prepare_check``),
-    the function enters the self-check path: the skip condition relaxes (runs on
-    round 1), the selection merges emission-touched tests with import-based tests
-    and previous failures, the timeout uses ``self_check_timeout_s``, and the result
-    carries ``is_self_check=True``.
-
-    When all four keyword arguments are ``None`` (the default), the function behaves
-    exactly as before: ``check_artifact`` and ``focused_check`` pass no keyword
-    arguments and see no change.
 
     Parameters
     ----------
@@ -78,182 +238,22 @@ def targeted_prepass(
     root:
         Working directory root for ``build_probe_command``'s package.json
         lookup (correction item 4).
-    touched_test_ids:
-        Test file paths the emission touched (self-check tier a).
-    touched_source_modules:
-        Source file paths the emission changed, for import-map lookup.
+    selection:
+        The self-check's tests, in the order they run (`test_selection`): whole test
+        files and test ids, the last check's failures among them. Given, the pre-pass
+        runs on every attempt, round 1 included, in chunks within
+        ``self_check_limit(self_check_timeout_s, check_timeout_s)``, and reports every
+        failure it found that is not inherited. Not given (``check_artifact`` and
+        ``focused_check``), it is the dm-128 pre-pass, unchanged.
     self_check_timeout_s:
-        Self-check timeout knob value.
-    self_check_fixups:
-        Self-check fixup limit knob value.
+        The self-check's own time limit (its knob), used with ``selection``.
     """
-    is_self_check = (touched_test_ids is not None or touched_source_modules is not None)
-
-    # 1. Skip when previous record is not a failure — but self-check always proceeds.
-    if not is_self_check and prev_record.get("status") != "fail":
-        return _skip()
-
-    from pathlib import Path
-    from refactory_dsh.check_digest import build_probe_command
-
-    root_path = Path(root) if root else None
-
-    if is_self_check:
-        # ── Self-check path ────────────────────────────────────────────
-        # Merge selection: emission-touched tests + import-based tests + prev failures
-        all_test_ids = list(touched_test_ids or [])
-
-        # Add previous failures (dm-128 set)
-        inherited_set = set(prev_record.get("inherited", []))
-        if prev_record.get("status") == "fail":
-            for runner in prev_record.get("runners", []):
-                for f in runner.get("failures", []):
-                    tid = f.get("test_id")
-                    if tid and tid not in inherited_set:
-                        if "::" in tid:
-                            tf = tid.split("::")[0]
-                        elif " > " in tid:
-                            tf = tid.split(" > ")[0].strip()
-                        else:
-                            tf = tid
-                        if tf not in all_test_ids:
-                            all_test_ids.append(tf)
-
-        # Import-based tests are already in touched_test_ids (select_test_ids merges them)
-
-        if not all_test_ids:
-            return PrepassResult(
-                ran=False, early_stop=False, targeted_command=None,
-                check_mode="full", result=None, digest_text="", runners=[], raw_tail="",
-                is_self_check=True, selection_size=0,
-            )
-
-        # Effective timeout: min(self_check_timeout_s, check_timeout_s // 3)
-        effective_timeout = min(
-            self_check_timeout_s if self_check_timeout_s is not None else 300,
-            int(check_timeout_s) // 3,
-        )
-
-        # ── Chunk-based execution ──────────────────────────────────────
-        # Split the selection into chunks.  Run chunks sequentially; stop
-        # when the time limit is spent.  A finished chunk's failures count;
-        # only a killed chunk is inconclusive.
-        import time as _time
-        chunk_size = max(5, len(all_test_ids) // 4)  # at least 4 chunks or 5 per chunk
-        chunks: list[list[str]] = []
-        for i in range(0, len(all_test_ids), chunk_size):
-            chunks.append(all_test_ids[i:i + chunk_size])
-
-        all_runners: list[dict] = []
-        all_failing: list[str] = []
-        all_ran: list[str] = []
-        all_cut: list[str] = []
-        any_early_stop = False
-        combined_digest_text = ""
-        combined_result = None
-        combined_raw_tail = ""
-        start_time = _time.monotonic()
-        timed_out_chunk = False
-
-        for ci, chunk in enumerate(chunks):
-            elapsed = _time.monotonic() - start_time
-            remaining = effective_timeout - elapsed
-            if remaining <= 0:
-                # Time limit spent; cut remaining chunks
-                for later in chunks[ci:]:
-                    all_cut.extend(later)
-                break
-
-            targeted_cmd, refusal = build_probe_command(check_command, chunk, root=root_path)
-            if refusal:
-                # This runner cannot be targeted — inconclusive
-                all_cut.extend(chunk)
-                continue
-
-            result = run_check_fn(targeted_cmd, remaining)
-            combined_result = result
-
-            # Parse output
-            from refactory_dsh import authoring_evidence as evidence
-            from refactory_dsh import base_check
-            from refactory_dsh.check_digest import digest_check_output, format_digest
-
-            raw_combined = "\n".join(filter(None, [
-                getattr(result, "stdout", None) or "",
-                getattr(result, "stderr", None) or "",
-            ])).strip()
-
-            # Check if this chunk timed out
-            if getattr(result, "timed_out", False):
-                timed_out_chunk = True
-                all_cut.extend(chunk)
-                # Failures from earlier finished chunks still count
-                break
-
-            all_ran.extend(chunk)
-
-            digest = digest_check_output(raw_combined)
-            digest_text = format_digest(digest)
-            runners = digest.to_dict().get("runners", [])
-            all_runners.extend(runners)
-            combined_digest_text = digest_text
-            combined_raw_tail = digest.raw_tail[-500:]
-
-            # Check if this chunk has failures
-            chunk_early_stop = True
-
-            if getattr(result, "prep_failure", None) is not None:
-                chunk_early_stop = False
-
-            if chunk_early_stop and evidence.check_failure_kind(result) != "code_failure":
-                chunk_early_stop = False
-
-            rc = getattr(result, "returncode", None)
-            if chunk_early_stop and rc is not None and rc in (4, 5):
-                chunk_early_stop = False
-
-            if chunk_early_stop:
-                found_failures = base_check.parse_test_failures(raw_combined)
-                chunk_non_inherited = found_failures - inherited_set
-                if chunk_non_inherited:
-                    all_failing.extend(sorted(chunk_non_inherited))
-                    any_early_stop = True
-                else:
-                    chunk_early_stop = False
-
-        # If only timed-out chunks and no failures found, inconclusive
-        if timed_out_chunk and not all_failing:
-            return PrepassResult(
-                ran=True, early_stop=False, check_mode="full",
-                targeted_command=None, result=combined_result,
-                digest_text=combined_digest_text, runners=all_runners,
-                raw_tail=combined_raw_tail,
-                is_self_check=True, selection_size=len(all_test_ids),
-                ran_ids=all_ran, cut_ids=all_cut,
-            )
-
-        if any_early_stop and all_failing:
-            return PrepassResult(
-                ran=True, early_stop=True, check_mode="targeted",
-                targeted_command=None, result=combined_result,
-                digest_text=combined_digest_text, runners=all_runners,
-                raw_tail=combined_raw_tail,
-                is_self_check=True, selection_size=len(all_test_ids),
-                ran_ids=all_ran, cut_ids=all_cut,
-                failing_ids=all_failing,
-            )
-
-        # No failures — pass
-        return PrepassResult(
-            ran=bool(all_ran), early_stop=False, check_mode="full",
-            targeted_command=None, result=combined_result,
-            digest_text=combined_digest_text, runners=all_runners,
-            raw_tail=combined_raw_tail,
-            is_self_check=True, selection_size=len(all_test_ids),
-            ran_ids=all_ran, cut_ids=all_cut,
-        )
-
-    # ── Original dm-128 pre-pass path (no self-check params) ───────────
+    if selection is not None:
+        if not selection:
+            return _skip()
+        limit = self_check_limit(300 if self_check_timeout_s is None else self_check_timeout_s,
+                                 check_timeout_s)
+        return _self_check(selection, prev_record, check_command, run_check_fn, limit, root)
 
     # 1. Skip when previous record is not a failure.
     if prev_record.get("status") != "fail":
@@ -279,6 +279,9 @@ def targeted_prepass(
         return _skip()
 
     # 5. Build targeted command.
+    from pathlib import Path
+    from refactory_dsh.check_digest import build_probe_command
+    root_path = Path(root) if root else None
     targeted_cmd, refusal = build_probe_command(check_command, non_inherited, root=root_path)
     if refusal:
         return _skip()

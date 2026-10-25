@@ -515,7 +515,7 @@
       "evaluator_role": null,
       "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:prepare_check",
       "command_timeout_s": 6540,
-      "gate_prompt": "settle the commit the check and the reviews see; run the self-check on the emission-touched tests before the review fork",
+      "gate_prompt": "settle the commit the check and the reviews see, and run the tests the change can break first: a failure goes back to emit as a fix-up, spending no attempt and running no review",
       "max_iterations": 45,
       "_type": "GateNode"
     },
@@ -1102,7 +1102,7 @@
       "enum": [],
       "values": [],
       "frozen": false,
-      "description": "max self-check fix-up reloops per attempt before the early stop spends it",
+      "description": "how many times the self-check may send an attempt back to emit, spending nothing, before the early stop spends it; a run gets this many times check_attempts",
       "required": false
     },
     "self_check_timeout_s": {
@@ -1113,7 +1113,7 @@
       "enum": [],
       "values": [],
       "frozen": false,
-      "description": "self-check test-run timeout; effective limit is min(self_check_timeout_s, check_timeout_s // 3)",
+      "description": "how long the self-check's tests may run before the reviews; never more than a third of check_timeout_s",
       "required": false
     },
     "target": {

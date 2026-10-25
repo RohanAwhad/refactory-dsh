@@ -18,8 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import delivery, repo_change, sandbox, unbuilt_check, worktree
-from refactory_dsh.failfast import PrepassResult
-from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT
+from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT, SELF_CHECK_RECORD
 from refactory_dsh.nn import Verdict
 
 #: The reason prepare_design writes when the run is a refinement.  classify_scale
@@ -848,6 +847,21 @@ def _refused_verdict(ctx: Any) -> Verdict | None:
     return Verdict("reloop", detail)
 
 
+def _design_constraints(ctx: Any) -> list[str]:
+    """R5: the design's ``[left: …]`` sites, as lines that tell the builder not to undo them."""
+    from refactory_dsh import design_contract
+    run_name = str(ctx.facts.get("name") or "")
+    parsed = design_contract.parse(
+        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
+    )
+    return [
+        f"Design constraint: {site['path']} [left: {site['reason']}] "
+        "— do not change this; fix the tests or callers instead."
+        for site in parsed.rule_sites
+        if site.get("status") == "left" and site.get("reason")
+    ]
+
+
 def _early_stop(ctx: Any, prepass: Any, prev_record: dict[str, Any],
                 _saved_base_unavailable: str) -> Any:
     """Send the attempt back because the tests that failed last time still fail."""
@@ -861,17 +875,7 @@ def _early_stop(ctx: Any, prepass: Any, prev_record: dict[str, Any],
     ctx.set_fact("validation", detail)
 
     # R5: keep design-constraint lines in early-stop feedback.
-    from refactory_dsh import design_contract
-    run_name = str(ctx.facts.get("name") or "")
-    parsed = design_contract.parse(
-        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
-    )
-    left_lines = [
-        f"Design constraint: {site['path']} [left: {site['reason']}] "
-        "— do not change this; fix the tests or callers instead."
-        for site in parsed.rule_sites
-        if site.get("status") == "left" and site.get("reason")
-    ]
+    left_lines = _design_constraints(ctx)
     if left_lines:
         detail = "\n".join(left_lines) + "\n\n" + detail
 
@@ -1227,148 +1231,20 @@ def _full_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
     return repair(ctx, [detail])
 
 
-def _self_check_fixup(ctx: Any, prepass: Any, fixup_count: int, fixup_limit: int) -> Any:
-    """Send the self-check's failures back to the builder as a fix-up, without spending an attempt."""
-    # R5: design-constraint lines
-    from refactory_dsh import design_contract
-    run_name = str(ctx.facts.get("name") or "")
-    parsed = design_contract.parse(
-        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
-    )
-    left_lines = [
-        f"Design constraint: {site['path']} [left: {site['reason']}] "
-        "— do not change this; fix the tests or callers instead."
-        for site in parsed.rule_sites
-        if site.get("status") == "left" and site.get("reason")
-    ]
-
-    failing_text = "\n".join(
-        f"  {tid}" for tid in prepass.failing_ids[:30]
-    )
-    header = f"self-check fix-up {fixup_count + 1} of {fixup_limit}"
-    detail_parts = [header, "", "## Failing tests", "", failing_text]
-    if left_lines:
-        detail_parts = left_lines + [""] + detail_parts
-
-    detail = "\n".join(detail_parts)
-    ctx.write_text("check.txt", detail + "\n")
-    ctx.set_fact("validation", detail)
-    ctx.set_fact("self_check_fixup_count", fixup_count + 1)
-    ctx.set_fact("total_self_check_fixups_used",
-                 int(ctx.facts.get("total_self_check_fixups_used", 0)) + 1)
-    ctx.set_fact("self_check_fixup_pending", True)
-    _write_self_check_record(ctx, prepass, fixup_count, "fixup")
-    ctx.log(f"self-check fix-up {fixup_count + 1} of {fixup_limit}: "
-            f"{len(prepass.failing_ids)} failing test(s)")
-    return Verdict("reloop", detail)
-
-
-def _write_self_check_record(ctx: Any, prepass: Any, fixup_number: int, outcome: str) -> None:
-    """Append one self-check entry to self-check-record.jsonl."""
-    import time as _time
-    entry = json.dumps({
-        "attempt": str(ctx.facts.get("commit", "")),
-        "fixup_number": fixup_number,
-        "selection": prepass.ran_ids + prepass.cut_ids if prepass.ran else [],
-        "selection_size": prepass.selection_size,
-        "ran": prepass.ran_ids,
-        "cut": prepass.cut_ids,
-        "command": prepass.targeted_command,
-        "duration_s": getattr(prepass.result, "elapsed_s", 0) if prepass.result else 0,
-        "outcome": outcome,
-        "failing_ids": prepass.failing_ids,
-        "timestamp": _time.time(),
-    })
-    record_path = ctx.path("self-check-record.jsonl")
-    with open(record_path, "a") as f:
-        f.write(entry + "\n")
-
-
-def _filter_inherited_self_check(
-    ctx: Any, failing_ids: list[str], check_command: str, check_timeout: int,
-    prev_record: dict[str, Any],
-) -> list[str]:
-    """Remove failures that also fail on the base (inherited).
-
-    On round 2+, the inherited set from the full check is used.
-    On round 1, runs only the failing IDs on the base worktree.
-    """
-    from refactory_dsh import base_check
-
-    # Round 2+ — use the inherited set from the last full check
-    if prev_record.get("inherited"):
-        inherited_set = set(prev_record["inherited"])
-        return [tid for tid in failing_ids if tid not in inherited_set]
-
-    # Round 1 — run failing IDs on the base
-    found = worktree.recorded(ctx.workdir)
-    if found is None:
-        return failing_ids  # No worktree — cannot compare
-
-    # Reuse base_check's prepared base worktree
-    base_wt_path = base_check._base_worktree_path(Path(found.target), Path(found.path).name.removeprefix("run-"))
-    if not base_wt_path.exists():
-        # Try to prepare a minimal base worktree
-        try:
-            from refactory_dsh.check_digest import build_probe_command
-            targeted_cmd, refusal = build_probe_command(check_command, failing_ids)
-            if refusal:
-                return failing_ids  # Cannot target — send all back
-            base_timeout = min(
-                int(ctx.knob("self_check_timeout_s", 300)),
-                30,
-            )
-            # Run on the base using run_check
-            base_result = repo_change.run_check(ctx, targeted_cmd, base_timeout, triage_prep=False)
-            if getattr(base_result, "timed_out", False):
-                return failing_ids  # Base timed out — unavailable; send all back
-            raw_output = "\n".join(filter(None, [
-                getattr(base_result, "stdout", None) or "",
-                getattr(base_result, "stderr", None) or "",
-            ])).strip()
-            base_failures = base_check.parse_test_failures(raw_output)
-            # Filter: only send back failures NOT on the base
-            changed_files = set(base_check._all_changed_files(Path(found.path), found.base))
-            return [
-                tid for tid in failing_ids
-                if tid not in base_failures or (
-                    "::" in tid and tid.split("::")[0] in changed_files
-                )
-            ]
-        except Exception:
-            return failing_ids  # Base unavailable — send all back
-
-    return failing_ids
-
-
 def prepare_check(ctx: Any) -> Any:
     """Gate: bring the attempt to the commit its check and its reviewers both see.
 
-    The check runs beside the reviews (``check_beside_reviews``), so everything that can
+    The check runs beside the reviews (`check_beside_reviews`), so everything that can
     still move the commit happens here first: the environment install, the ``generate``
-    command and the ``setup`` build (``repo_change.prepare_attempt``).  Then the self-check
-    runs the tests affected by the emission:
-
-    - On every applied attempt, round 1 included.
-    - After ``prepare_attempt`` has installed, run generate (amending its output into
-      the attempt) and run setup, and before ``prepare_check`` proceeds to ``fork_qa``.
-    - The dm-128 pre-pass is part of it: the last check's failing tests join the
-      selection, and ``prepare_check`` has one test-running path.
-
-    A failure goes back to the builder as a fix-up without spending an attempt, through
-    the same ``Verdict("reloop")`` path a refused emission takes.  At the fix-up bound
-    (per-attempt and per-run), the early stop spends the attempt.  Inconclusive results
-    proceed to the fork.
-
-    A preparation that fails is judged here by the whole check, as it always was,
-    which reports it with its triage.
+    command and the ``setup`` build (`repo_change.prepare_attempt`). Then the self-check
+    (`_self_check`) runs the tests the change can break, the last check's failures among
+    them, and a failure goes back to the builder before any review starts. A
+    preparation that fails is judged here by the whole check, as it always was, which
+    reports it with its triage.
     """
     import uuid
 
     from refactory_dsh import authoring_evidence as evidence
-    from refactory_dsh import base_check
-    from refactory_dsh.failfast import targeted_prepass
-    from refactory_dsh.test_selection import select_test_ids
 
     # Nothing a last attempt prepared or decided may stand for this one.
     for name in (CHECK_PREP, CHECK_VERDICT):
@@ -1380,97 +1256,180 @@ def prepare_check(ctx: Any) -> Any:
     check_timeout = int(ctx.knob("check_timeout_s", 180))
     attempt = uuid.uuid4().hex
     # What sent the build back, for the reviewers: the check beside them rewrites
-    # `validation` while they run.
-    ctx.set_fact("review_feedback", str(ctx.facts.get("validation") or ""))
+    # `validation` while they run. A self-check fix-up is not what they judge the
+    # attempt against, so it keeps what sent the attempt back before it.
+    if not _fixups_used(ctx):
+        ctx.set_fact("review_feedback", str(ctx.facts.get("validation") or ""))
     ctx.set_fact("review_baseline", json.dumps(evidence.requirements(ctx), indent=1))
     prev_record = ctx.read_json("check-record.json", {})
     saved_base_unavailable = ctx.facts.get("base_unavailable") or ""
     if repo_change.prepare_attempt(ctx, check_timeout):
+        _end_fixups(ctx)
         verdict = check_artifact(ctx, check_attempt=attempt)
         _record_prepared(ctx, attempt, None)
         _record_check_verdict(ctx, attempt, verdict)
         return verdict
+    return _self_check(ctx, command, check_timeout, prev_record, saved_base_unavailable, attempt)
 
-    # ── Self-check: select and run tests affected by the emission ──────
+
+def _fixups_used(ctx: Any) -> int:
+    """The self-check fix-ups this attempt has had; while it is above 0, emit amends the attempt."""
+    return int(ctx.facts.get("self_check_fixup_count") or 0)
+
+
+def _end_fixups(ctx: Any) -> None:
+    """The attempt goes on to the fork or is spent: the next emission is a new attempt."""
+    if _fixups_used(ctx):
+        ctx.set_fact("self_check_fixup_count", 0)
+
+
+def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[str, Any],
+                saved_base_unavailable: str, attempt: str) -> Any:
+    """Run the tests this change can break, and send the change's failures back (b41a).
+
+    The selection (`test_selection.select`) runs in chunks within its time limit
+    (`failfast.targeted_prepass`), in the attempt's prepared worktree. A failure the
+    base has too is not the change's (`_the_changes_failures`). The change's failures
+    go back to emit as a fix-up, which spends no attempt and runs no review, at most
+    ``self_check_fixups`` times an attempt and that many times ``check_attempts`` a run.
+    Past the bound, a still-failing self-check is the early stop, which spends the
+    attempt. Anything else, a pass or a result that says nothing (a timeout, a runner
+    it cannot target, nothing collected), goes on to the reviews and the whole check.
+    """
+    from refactory_dsh import base_check, test_selection
+    from refactory_dsh.failfast import targeted_prepass, without_failures
+
     found = worktree.recorded(ctx.workdir)
-    source_root = Path(found.path) if found is not None else None
-
-    # Build the selection from the emission's touched files
-    touched_files: list[str] = []
     if found is not None:
-        touched_files = base_check._all_changed_files(Path(found.path), found.base)
-
-    test_ids: list[str] = []
-    touched_sources: list[str] = []
-    if source_root is not None and touched_files:
-        test_ids, touched_sources = select_test_ids(
-            touched_files, source_root, prev_record, command,
-        )
-
-    # Self-check knobs
-    sc_fixups = int(ctx.knob("self_check_fixups", 2))
-    sc_timeout = int(ctx.knob("self_check_timeout_s", 300))
-    total_fixup_cap = sc_fixups * int(ctx.knob("check_attempts", 3))
-
-    # Read fix-up counters
-    fixup_count = int(ctx.facts.get("self_check_fixup_count", 0))
-    total_fixups_used = int(ctx.facts.get("total_self_check_fixups_used", 0))
-
-    # If this is a fix-up re-entry, preserve the count; otherwise reset
-    if not ctx.facts.get("self_check_fixup_pending"):
-        fixup_count = 0
-
+        root = Path(found.path)
+        touched = base_check._all_changed_files(root, found.base)
+    else:
+        root = Path(str(ctx.facts.get("artifact") or ctx.workdir))
+        touched = []
+    selection = test_selection.select(touched, root, prev_record, check_command=command)
     prepass = targeted_prepass(
         prev_record, command,
         lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False,
                                                    prepared=True),
         check_timeout, root=found.path if found is not None else None,
-        touched_test_ids=test_ids if test_ids else None,
-        touched_source_modules=touched_sources if touched_sources else None,
-        self_check_timeout_s=sc_timeout,
-        self_check_fixups=sc_fixups,
+        selection=selection.tests,
+        self_check_timeout_s=int(ctx.knob("self_check_timeout_s", 300)),
     )
-
-    if prepass.early_stop and prepass.is_self_check:
-        # Filter inherited failures
-        non_inherited = _filter_inherited_self_check(
-            ctx, prepass.failing_ids, command, check_timeout, prev_record,
-        )
-        if not non_inherited:
-            # All failures are inherited — proceed to fork
-            prepass = PrepassResult(
-                ran=prepass.ran, early_stop=False, check_mode="full",
-                targeted_command=prepass.targeted_command, result=prepass.result,
-                digest_text=prepass.digest_text, runners=prepass.runners,
-                raw_tail=prepass.raw_tail,
-                is_self_check=True, selection_size=prepass.selection_size,
-                ran_ids=prepass.ran_ids, cut_ids=prepass.cut_ids,
-            )
-        else:
-            # Update failing_ids to non-inherited only
-            prepass.failing_ids = non_inherited
-
-    if prepass.early_stop and prepass.is_self_check:
-        if fixup_count < sc_fixups and total_fixups_used < total_fixup_cap:
-            return _self_check_fixup(ctx, prepass, fixup_count, sc_fixups)
-        else:
-            # Exhausted — early stop spends the attempt
-            ctx.set_fact("self_check_fixup_pending", "")
-            ctx.set_fact("self_check_fixup_count", 0)
-            _write_self_check_record(ctx, prepass, fixup_count, "exhausted")
-            return _early_stop(ctx, prepass, prev_record, saved_base_unavailable)
-
-    if prepass.early_stop and not prepass.is_self_check:
-        # Original dm-128 path (from check_artifact caller, not self-check)
-        return _early_stop(ctx, prepass, prev_record, saved_base_unavailable)
-
-    # No early stop — proceed to fork
-    ctx.set_fact("self_check_fixup_pending", "")
-    ctx.set_fact("self_check_fixup_count", 0)
-    if prepass.is_self_check:
-        _write_self_check_record(ctx, prepass, 0, "pass")
+    failing, inherited, base = (list(prepass.failing_ids), [], "")
+    if failing:
+        failing, inherited, base = _the_changes_failures(
+            ctx, command, failing, check_timeout, prepass.limit_s or check_timeout // 3)
+    used = _fixups_used(ctx)
+    allowed = int(ctx.knob("self_check_fixups", 2))
+    run_used = int(ctx.facts.get("total_self_check_fixups_used") or 0)
+    run_cap = allowed * int(ctx.knob("check_attempts", 3))
+    entry = {
+        "attempt": int(ctx.facts.get("attempts_used", 0)) + 1,
+        "commit": str(ctx.facts.get("commit") or ""),
+        "fixups_before": used,
+        "selection": prepass.selection, "how_selected": selection.record(),
+        "ran": prepass.ran_ids, "cut": prepass.cut_ids, "commands": prepass.commands,
+        "notes": prepass.notes, "limit_s": prepass.limit_s, "duration_s": prepass.elapsed_s,
+        "failing_ids": failing, "inherited_filtered": inherited, "base": base,
+    }
+    if failing:
+        shown = without_failures(prepass, inherited)
+        if used < allowed and run_used < run_cap:
+            return _self_check_fixup(ctx, shown, entry, used + 1, allowed, run_used + 1, base)
+        why = (f"{used} of {allowed} fix-ups used on this attempt" if used >= allowed
+               else f"{run_used} of {run_cap} fix-ups used on this run")
+        _record_self_check(ctx, {**entry, "outcome": "exhausted", "why": why})
+        _end_fixups(ctx)
+        # The base's failures stay out of what the next check counts as this change's.
+        prior = {**prev_record, "inherited": sorted({*prev_record.get("inherited", []), *inherited})}
+        return _early_stop(ctx, shown, prior, saved_base_unavailable)
+    outcome = ("nothing selected" if not prepass.selection else
+               "inherited" if inherited else
+               "pass" if prepass.ran and not prepass.cut_ids and not prepass.notes else
+               "inconclusive")
+    _record_self_check(ctx, {**entry, "outcome": outcome})
+    _end_fixups(ctx)
     _record_prepared(ctx, attempt, prepass.targeted_command if prepass.ran else None)
     return "proceed"
+
+
+def _the_changes_failures(ctx: Any, command: str, failing: list[str], check_timeout: int,
+                          limit_s: float) -> tuple[list[str], list[str], str]:
+    """Split the self-check's failures into the change's and the base's.
+
+    The rule is the check's own (`base_check.compare_failures`): a failure is inherited
+    only when the base fails the same test, the change did not touch its file, and
+    neither the brief nor the design names it. Only failures that could be inherited
+    are run on the base (`base_check.targeted_base_failures`). A base that is
+    unavailable lets none be inherited: they all go to the builder.
+
+    Returns the change's failures, the inherited ones, and what the base said.
+    """
+    from refactory_dsh import base_check
+
+    found = worktree.recorded(ctx.workdir)
+    if found is None:
+        return failing, [], "no base: the run has no worktree"
+    changed = base_check._all_changed_files(Path(found.path), found.base)
+    brief = str(ctx.facts.get("brief") or "")
+    design = ctx.read_text("design.md") if ctx.exists("design.md") else ""
+    # Were the base to fail them all, these would be inherited; only they need the base.
+    could_be = base_check.compare_failures(set(failing), set(failing), changed, brief, design).inherited
+    if not could_be:
+        return failing, [], ("not needed: each failure is in a file the change touched, "
+                             "or one the brief or the design names")
+    result, source = base_check.targeted_base_failures(
+        ctx, command, sorted(could_be), prepare_timeout=check_timeout, timeout=limit_s)
+    if result.environment_failure:
+        return failing, [], f"unavailable, so nothing is inherited: {result.environment_failure}"
+    inherited = base_check.compare_failures(result.failures, set(failing), changed, brief,
+                                            design).inherited
+    return ([test_id for test_id in failing if test_id not in inherited], sorted(inherited),
+            f"compared with {source}")
+
+
+def _record_self_check(ctx: Any, entry: dict[str, Any]) -> None:
+    """Append the self-check to its record, and say what it did on stderr, as a gate logs."""
+    import sys
+
+    ctx.append_text(SELF_CHECK_RECORD, json.dumps(entry, default=str) + "\n")
+    ran, cut = len(entry["ran"]), len(entry["cut"])
+    print(f"refactory: self-check on attempt {entry['attempt']}: {entry['outcome']}; "
+          f"{ran} of {len(entry['selection'])} selected test(s) ran in {entry['duration_s']} s"
+          + (f", {cut} cut at the limit" if cut else "")
+          + (f"; {len(entry['failing_ids'])} failing" if entry["failing_ids"] else ""),
+          file=sys.stderr)
+
+
+def _self_check_fixup(ctx: Any, prepass: Any, entry: dict[str, Any], number: int, allowed: int,
+                      run_used: int, base: str) -> Verdict:
+    """Send the change's failures back to emit, spending no attempt and running no review.
+
+    The reloop `_refused_verdict` takes: ``validation`` carries the failures to emit on
+    the walker, and the verdict's reason does on the spine. The next emission is amended
+    into this attempt (`repo_change._commit_emission`), so the attempt stays one commit.
+    """
+    lead = (f"self-check fix-up {number} of {allowed}: {len(prepass.failing_ids)} test(s) "
+            "this change can break fail on this attempt, before any review ran. Fix them and "
+            "emit again; this attempt is not spent.")
+    parts = [lead, "", *(f"- {test_id}" for test_id in prepass.failing_ids)]
+    if prepass.digest_text:
+        parts += ["", prepass.digest_text]
+    left_lines = _design_constraints(ctx)
+    if left_lines:
+        parts += ["", *left_lines]
+    if entry["inherited_filtered"]:
+        parts += ["", "These fail on the base too, so they are not this change's: "
+                  + ", ".join(entry["inherited_filtered"])]
+    if base.startswith("unavailable"):
+        parts += ["", f"The base comparison was {base}."]
+    detail = "\n".join(parts)
+    ctx.write_text("check.txt", detail + "\n")
+    ctx.set_fact("validation", detail)
+    ctx.set_fact("self_check_fixup_count", number)
+    ctx.set_fact("total_self_check_fixups_used", run_used)
+    _record_self_check(ctx, {**entry, "outcome": "fixup", "fixup": number})
+    return Verdict("reloop", detail)
 
 
 def _record_prepared(ctx: Any, attempt: str, targeted_command: str | None) -> None:

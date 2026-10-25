@@ -776,6 +776,84 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     return result
 
 
+#: What the self-check learned about single tests on the base (b41a), by `cache_key`.
+TARGETED_CACHE_FILE = Path(".refactory") / "base-targeted.json"
+
+
+def targeted_base_failures(ctx: Any, command: str, test_ids: list[str], *,
+                           prepare_timeout: float, timeout: float) -> tuple[BaseCheckResult, str]:
+    """Which of ``test_ids`` fail on the unchanged base: the self-check's comparison (b41a).
+
+    It is the base the check compares with. When the check's own base result is cached
+    for this base and command (`run_base_check`), that answers. Otherwise only these
+    tests run, in the base worktree `_ensure_base_worktree` prepares, after the run's
+    generate and setup there, with the base's own HOME, as `run_base_check` runs the
+    whole check. What a run learns about a test is kept, so a fix-up does not prepare
+    the base again for the same tests.
+
+    A base that cannot be prepared, runs out of ``timeout`` or reports no result is
+    unavailable: ``environment_failure`` says why, and nothing may be inherited from it.
+    Returns the result and where it came from.
+    """
+    found = worktree.recorded(ctx.workdir)
+
+    def unavailable(why: str) -> tuple[BaseCheckResult, str]:
+        return BaseCheckResult(ok=False, failures=set(), output=why, exit_code=-1,
+                               environment_failure=why), "unavailable"
+
+    if found is None:
+        return unavailable("the run has no worktree, so it has no base")
+    setup = str(ctx.facts.get("setup") or "").strip()
+    generate = str(ctx.facts.get("generate") or "").strip()
+    key = cache_key(found.base, setup, generate, command)
+    cached = _read_cache(ctx.workdir, key)
+    if cached is not None and not cached.environment_failure:
+        return cached, "the check's base result"
+    known_path = ctx.workdir / TARGETED_CACHE_FILE
+    known = _read_json(known_path)
+    learned: dict[str, bool] = dict(known.get("tests", {})) if known.get("cache_key") == key else {}
+    missing = [test_id for test_id in test_ids if test_id not in learned]
+    source = "earlier runs of these tests on the base"
+    if missing:
+        from refactory_dsh.check_digest import build_probe_command
+        from refactory_dsh.repo_change import prepare_commands
+
+        try:
+            base_path, base_found, _ = _ensure_base_worktree(ctx)
+        except ValueError as exc:
+            return unavailable(f"the base could not be prepared: {exc}")
+        home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
+        home.mkdir(parents=True, exist_ok=True)
+        env = worktree.check_environment(base_path, home)
+        budget = getattr(ctx, "budget", None)
+        _, problems, _ = prepare_commands(ctx, base_found, env, home, prepare_timeout, budget,
+                                          amend=False)
+        if problems:
+            return unavailable("the base's generate or setup failed: " + "\n".join(problems)[:1000])
+        targeted, refusal = build_probe_command(command, missing, root=base_path)
+        if refusal:
+            return unavailable(f"the tests cannot be targeted on the base: {refusal}")
+        result = sandbox.run_command(targeted, workdir=base_path, timeout_s=timeout, budget=budget,
+                                     env=env, home=home, exact_env=True)
+        if result.timed_out:
+            return unavailable(f"the base run of {len(missing)} test(s) was stopped at its "
+                               f"{timeout:.0f} s limit")
+        crashed, signal = sandbox.is_signal_crash(result)
+        if crashed:
+            return unavailable(f"the base run {signal}")
+        output = "\n".join((result.stdout or "", result.stderr or "")).strip()
+        failed = parse_test_failures(output)
+        if not result.ok and not failed:
+            return unavailable(f"the base run failed (exit {result.returncode}) without "
+                               "naming a failing test")
+        learned.update({test_id: test_id in failed for test_id in missing})
+        known_path.parent.mkdir(parents=True, exist_ok=True)
+        known_path.write_text(json.dumps({"cache_key": key, "tests": learned}, indent=2) + "\n")
+        source = f"a run of {len(missing)} test(s) on the base"
+    failures = {test_id for test_id in test_ids if learned.get(test_id)}
+    return BaseCheckResult(ok=not failures, failures=failures, output="", exit_code=0), source
+
+
 # ── prep triage: compare a preparation failure against the base ──────────
 
 PREP_CACHE_FILE = Path(".refactory") / "base-prep.json"

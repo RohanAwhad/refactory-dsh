@@ -316,8 +316,32 @@ def _strip_pytest_positional_paths(step: str) -> str:
     return shlex.join(kept)
 
 
+#: A test file vitest (or jest) runs whole when it is named: a spec or test script.
+_SCRIPT_TEST_FILE = re.compile(r"\.(?:spec|test)\.[cm]?[jt]sx?$")
+
+
+def _vitest_files(vitest_ids: list[str], whole_files: list[str]) -> tuple[str, str]:
+    """The file arguments and ``-t`` pattern a vitest step gets for these ids and whole files.
+
+    A file named whole runs every test in it, so once any is named the ids' files are
+    run whole too: a ``-t`` pattern would filter the whole files down to the ids' tests.
+    """
+    files: set[str] = set(whole_files)
+    patterns: set[str] = set()
+    for vid in vitest_ids:
+        parts = vid.split(" > ")
+        if parts:
+            files.add(parts[0].strip())
+        if len(parts) > 1:
+            patterns.add(re.escape(parts[-1].strip()))
+    file_args = " ".join(shlex.quote(f) for f in sorted(files))
+    pattern_args = (f"-t {shlex.quote('|'.join(sorted(patterns)))}"
+                    if patterns and not whole_files else "")
+    return file_args, pattern_args
+
+
 def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path | None' = None,
-                        related_files: list[str] | None = None) -> tuple[str, str | None]:
+                        test_files: list[str] | None = None) -> tuple[str, str | None]:
     """Build a targeted command per runner from the check command and failing test IDs.
 
     Returns (command, None) on success or ("", refusal_reason) on failure.
@@ -328,14 +352,16 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
     root:
         Directory to read ``package.json`` from for the pnpm/vitest check.
         Defaults to ``Path(".")`` (the process's cwd).
-    related_files:
-        Source file paths for vitest ``--related`` selection. When passed, vitest
-        steps use ``--related <files>`` instead of explicit test IDs. A Python-only
-        emission that passes no vitest IDs and no related files skips the vitest step
-        entirely — it does not run the whole vitest suite.
+    test_files:
+        Test files to run whole (the self-check's selection, b41a), as paths from the
+        repository root. Both runners take a file path where they take a test id: a
+        ``.py`` file goes to each pytest step, a spec or test script to each vitest
+        step. A step with neither ids nor files of its runner is left out, as it is for
+        ids alone, so a selection of Python files never starts the vitest step.
     """
     from pathlib import Path
-    if not test_ids:
+    whole = list(test_files or ())
+    if not test_ids and not whole:
         return "", "no test IDs to target"
 
     from refactory_dsh.base_check import _steps
@@ -351,8 +377,12 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
             vitest_ids.append(tid)
         else:
             node_ids.append(tid)
+    pytest_files = [name for name in whole if name.endswith(".py")]
+    vitest_files = [name for name in whole if _SCRIPT_TEST_FILE.search(name)]
+    # An id in a file that runs whole is already run by it.
+    pytest_ids = [tid for tid in pytest_ids if tid.split("::")[0] not in pytest_files]
 
-    if node_ids and not pytest_ids and not vitest_ids:
+    if node_ids and not pytest_ids and not vitest_ids and not pytest_files and not vitest_files:
         return "", "targeting node's test runner is not supported"
 
     steps = _steps(check_command)
@@ -365,38 +395,23 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
         # Detect runner for this step
         if "pytest" in step or "python -m pytest" in step:
             found_recognized = True
-            if not pytest_ids:
+            if not pytest_ids and not pytest_files:
                 continue  # skip steps with no failures
             # Strip positional paths and append only the named test IDs
             base = _strip_pytest_positional_paths(step)
-            targeted_parts.append(f"{base} {' '.join(shlex.quote(tid) for tid in pytest_ids)}")
+            named = [*pytest_files, *pytest_ids]
+            targeted_parts.append(f"{base} {' '.join(shlex.quote(tid) for tid in named)}")
         elif "vitest" in step:
             found_recognized = True
-            if not vitest_ids and not related_files:
-                continue
-            if related_files and not vitest_ids:
-                # Use --related for vitest when we have source files but no test IDs
-                rel_args = " ".join(shlex.quote(f) for f in sorted(related_files))
-                targeted_parts.append(f"{step} --related {rel_args}")
-                continue
-            if not vitest_ids:
+            if not vitest_ids and not vitest_files:
                 continue
             # Map vitest ids to file filters plus -t patterns
-            files: set[str] = set()
-            patterns: set[str] = set()
-            for vid in vitest_ids:
-                parts = vid.split(" > ")
-                if parts:
-                    files.add(parts[0].strip())
-                if len(parts) > 1:
-                    patterns.add(re.escape(parts[-1].strip()))
-            file_args = " ".join(shlex.quote(f) for f in sorted(files))
-            pattern_args = f"-t {shlex.quote('|'.join(sorted(patterns)))}" if patterns else ""
+            file_args, pattern_args = _vitest_files(vitest_ids, vitest_files)
             targeted_parts.append(f"{step} {file_args} {pattern_args}".strip())
         elif "pnpm test" in step:
             found_recognized = True
-            if not vitest_ids and not related_files:
-                continue  # No vitest IDs and no related files — skip silently
+            if not vitest_ids and not vitest_files:
+                continue  # No vitest IDs target this step — skip silently
             # Target only when package.json's "test" script is vitest.
             import json as _json
             pkg_root = root if root is not None else Path(".")
@@ -407,21 +422,7 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
                 test_script = ""
             if "vitest" not in test_script:
                 return "", "pnpm test targeting requires vitest as the test script"
-            if related_files and not vitest_ids:
-                # Use --related for pnpm test (vitest under the hood)
-                rel_args = " ".join(shlex.quote(f) for f in sorted(related_files))
-                targeted_parts.append(f"{step} --related {rel_args}")
-                continue
-            files: set[str] = set()
-            patterns: set[str] = set()
-            for vid in vitest_ids:
-                parts = vid.split(" > ")
-                if parts:
-                    files.add(parts[0].strip())
-                if len(parts) > 1:
-                    patterns.add(re.escape(parts[-1].strip()))
-            file_args = " ".join(shlex.quote(f) for f in sorted(files))
-            pattern_args = f"-t {shlex.quote('|'.join(sorted(patterns)))}" if patterns else ""
+            file_args, pattern_args = _vitest_files(vitest_ids, vitest_files)
             targeted_parts.append(f"{step} {file_args} {pattern_args}".strip())
         elif "node " in step and ("--test" in step or "node_modules" not in step):
             found_recognized = True

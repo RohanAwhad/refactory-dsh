@@ -7615,7 +7615,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
 
 ```json
 {
@@ -8180,7 +8180,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         "self_check_fixups",
         "self_check_timeout_s"
       ],
-      "notes": "settle the commit the check and the reviews see; run the self-check on the emission-touched tests before the review fork",
+      "notes": "settle the commit the check and the reviews see, and run the tests the change can break first: a failure goes back to emit as a fix-up, spending no attempt and running no review",
       "role": "validation"
     },
     {
@@ -8513,7 +8513,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     "self_check_fixups": {
       "default": 2,
-      "description": "max self-check fix-up reloops per attempt before the early stop spends it",
+      "description": "how many times the self-check may send an attempt back to emit, spending nothing, before the early stop spends it; a run gets this many times check_attempts",
       "frozen": false,
       "kind": "int",
       "range": [
@@ -8525,7 +8525,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     "self_check_timeout_s": {
       "default": 300,
-      "description": "self-check test-run timeout; effective limit is min(self_check_timeout_s, check_timeout_s // 3)",
+      "description": "how long the self-check's tests may run before the reviews; never more than a third of check_timeout_s",
       "frozen": false,
       "kind": "int",
       "range": [
@@ -8609,8 +8609,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "2ae773f2dacc45a5fd1cb3b910924948104ef85f3625c22fc93e7a735661c372"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`); a scoped change (a refine, or a brief naming files) skips the perspectives step and the review agent, and its design is checked automatically. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
+    "reviewed_schema": "dbbfb74672a8ae4f28e59934274fdfff68b1463f1f36e0ef76d4847e47ca6e41"
   }
 }
 ```
