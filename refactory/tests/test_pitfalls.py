@@ -258,31 +258,65 @@ def test_gate_design_review_lists_missing_high_pitfall(tmp_path):
     assert "not checked" in ctx.facts["pitfall_coverage"]
 
 
+def _light(summary: str = "It prints.", changes: str = "- `tool.py` \u2014 print the name") -> str:
+    """A light design: no Rule and sites; its Anti-patterns entry is appended."""
+    return ("# Make the tool print\n\n"
+            f"## Summary\n\n{summary}\n\n"
+            f"## Changes\n\n{changes}\n\n"
+            "## Tests\n\n- `tests/test_tool.py::test_build` \u2014 it prints\n\n"
+            "## Anti-patterns to avoid\n\n")
+
+
 def test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites(tmp_path):
-    """Rule and sites is optional. A light design answers a pitfall with the site that
-    handles it, which the template allows; that site, cited in the entry, counts."""
-    light = ("# Make the tool print\n\n## Summary\n\nIt prints.\n\n"
-             "## Changes\n\n- `tool.py` \u2014 print the name\n\n"
-             "## Tests\n\n- `tests/test_tool.py::test_build` \u2014 it prints\n\n"
-             "## Anti-patterns to avoid\n\n")
-    for entry in ("- PIT-001: guarded at `tool.py:1`",
-                  "- **PIT-001** (high): handled by `pkg/tool.py:3-9`"):
-        assert pitfalls_mod.pitfall_coverage(light + entry + "\n", [_pit()]) == (
-            ["PIT-001"], [], []), entry
-    # Something that is not a site still does not answer it.
+    """Rule and sites is optional. A light design answers a pitfall with a site it cites
+    elsewhere, in its Changes or as a claim about code in the checkout; that counts."""
+    (tmp_path / "helper.py").write_text("def guard():\n    pass\n")
+    light = _light(summary="`guard()` at `helper.py:1`: `def guard():` checks the input.",
+                   changes="- `tool.py:1` \u2014 print the name")
+    for entry in ("- PIT-001: guarded at `tool.py:1`",               # named in ## Changes
+                  "- **PIT-001** (high): handled by `helper.py:1`"):  # a file in the checkout
+        assert pitfalls_mod.pitfall_coverage(light + entry + "\n", [_pit()],
+                                             source=str(tmp_path)) == (["PIT-001"], [], []), entry
+    # Something that is not a site does not answer it.
     for entry in ("- PIT-001: handled by `retry()`", "- PIT-001: guarded in tool.py",
                   "- PIT-001: handled by `self.cache`"):
-        assert pitfalls_mod.pitfall_coverage(light + entry + "\n", [_pit()]) == (
-            [], [], ["PIT-001"]), entry
+        assert pitfalls_mod.pitfall_coverage(light + entry + "\n", [_pit()],
+                                             source=str(tmp_path)) == ([], [], ["PIT-001"]), entry
     # Through the gate: addressed, and nothing listed for the person.
     ctx = nn.RunContext(tmp_path)
-    ctx.facts.update({"source": "", "has_pitfalls_step": True})
+    ctx.facts.update({"source": str(tmp_path), "has_pitfalls_step": True})
     ctx.write_text("design.md", light + "- PIT-001: guarded at `tool.py:1`\n")
     ctx.write_json("pitfalls.json", [_pit()])
     import refactory_dsh.design_ops as ops
     assert ops.gate_design_review(ctx) == "proceed"
     assert "PIT-001 (high): addressed" in ctx.facts["pitfall_coverage"]
     assert ctx.facts["design_review_advisory"] == ""
+
+
+@pytest.mark.parametrize("summary, entry", [
+    # The second review's case: a made-up site, cited only in the entry.
+    ("It prints.", "- PIT-001: addressed at `nowhere/made_up.py:999`"),
+    # Cited outside the entry too, but no such file is in the checkout or in Changes.
+    ("See `nowhere/made_up.py:999`.", "- PIT-001: addressed at `nowhere/made_up.py:999`"),
+    # A real file, but the site is cited only in the entry itself.
+    ("It prints.", "- PIT-001: guarded at `tool.py:1`"),
+    # A file named without a line is not a site, though Changes names it.
+    ("It prints.", "- PIT-001: guarded in `tool.py`"),
+], ids=["made-up-only-in-the-entry", "made-up-cited-elsewhere", "real-file-only-in-the-entry",
+        "a-file-without-a-line"])
+def test_a_pitfall_entry_cannot_make_its_own_citation_a_site(tmp_path, summary, entry):
+    (tmp_path / "tool.py").write_text("x = 1\n")
+    design = _light(summary=summary) + entry + "\n"
+    assert pitfalls_mod.pitfall_coverage(design, [_pit()], source=str(tmp_path)) == (
+        [], [], ["PIT-001"])
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "has_pitfalls_step": True})
+    ctx.write_text("design.md", design)
+    ctx.write_json("pitfalls.json", [_pit()])
+    import refactory_dsh.design_ops as ops
+    assert ops.gate_design_review(ctx) == "proceed"
+    assert ctx.facts["design_review_advisory"] == (
+        "- high-risk pitfall(s) not addressed in the design: PIT-001")
 
 
 def test_gate_design_review_passes_set_aside(tmp_path):

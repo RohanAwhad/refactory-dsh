@@ -31,20 +31,64 @@ def extract_section(text: str, heading: str) -> str:
 
 #: A cited site: a file and a line, ``path/to/file.py:12`` or ``file.py:12-20``.
 _SITE_CITATION = re.compile(r'[\w./-]*\w\.\w+:\d+(?:-\d+)?')
+#: A file name anywhere in a section: ``tool.py``, ``pkg/tool.py``.
+_FILE_NAME = re.compile(r'[\w./-]*\w\.\w+')
 
 
-def site_paths(text: str) -> list[str]:
+def without_section(text: str, heading: str) -> str:
+    """*text* without its ``## heading`` section (heading and body)."""
+    kept: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            inside = stripped.lower() == f"## {heading.lower()}"
+        if not inside:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _names_file(path: str, names: set[str]) -> bool:
+    """Whether *path* is one of *names*, as written or by a whole trailing segment."""
+    return any(path == name or path.endswith("/" + name) or name.endswith("/" + path)
+               for name in names)
+
+
+def site_paths(text: str, exclude: str = "", source: str = "") -> list[str]:
     """The design's sites: the backticked paths in its ``## Rule and sites`` section.
 
-    That section is optional. A design without it names its sites where it uses them, so
-    for such a design every backticked ``path:line`` citation in it is a site: a pitfall
-    or finding answered with the site that handles it (``tool.py:1``) counts.
+    That section is optional. A design without it names its sites where it uses them:
+    for such a design a site is a backticked ``path:line`` citation outside the section
+    being checked (*exclude*, the Anti-patterns or findings section) whose file is in
+    the checkout at *source* or is named in ``## Changes``. So a pitfall answered with
+    the site that handles it (``tool.py:1``) counts, and an entry cannot make its own
+    citation a site: a made-up ``nowhere/made_up.py:999`` names nothing.
     """
     if not any(line.strip().lower() == "## rule and sites" for line in text.splitlines()):
-        return [token for m in re.finditer(r'`([^`]+)`', text)
-                if _SITE_CITATION.fullmatch(token := m.group(1).strip())]
+        changes = set(_FILE_NAME.findall(extract_section(text, "Changes")))
+        tracked = None
+        if source:
+            from refactory_dsh.design_ops import tracked_files
+
+            tracked = tracked_files(source)
+        sites: list[str] = []
+        for m in re.finditer(r'`([^`]+)`', without_section(text, exclude) if exclude else text):
+            token = m.group(1).strip()
+            if not _SITE_CITATION.fullmatch(token):
+                continue
+            path = re.sub(r':\d+(-\d+)?$', '', token)
+            if _names_file(path, changes) or (source and _in_checkout(source, path, tracked)):
+                sites.append(token)
+        return sites
     section = extract_section(text, "Rule and sites")
     return [m.group(1).strip() for m in re.finditer(r'`([^`]+)`', section)]
+
+
+def _in_checkout(source: str, path: str, tracked: set[str] | None) -> bool:
+    """Whether a cited path names exactly one file in the checkout (the shared resolver)."""
+    from refactory_dsh.design_ops import resolve_cited
+
+    return resolve_cited(source, path, tracked) is not None
 
 
 def headings(text: str) -> list[str]:

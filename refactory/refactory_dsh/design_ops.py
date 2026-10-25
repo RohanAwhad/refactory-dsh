@@ -424,7 +424,7 @@ def gate_design_review(ctx: Any) -> str:
                     # gate_pitfalls lets a malformed entry through; only objects count.
                     pitfalls_data = [p for p in pitfalls_data if isinstance(p, dict)]
                     addressed, aside, pit_missing = pitfalls_mod.pitfall_coverage(
-                        design_text, pitfalls_data)
+                        design_text, pitfalls_data, source=source)
                     missing_high = [pid for pid in pit_missing
                                    if any(p.get("id") == pid and p.get("risk") == "high"
                                           for p in pitfalls_data)]

@@ -390,8 +390,8 @@ design go straight to the person's gate: **no reviewer** sits between `design_do
 that the cited path names a file (as written, or the one tracked file that ends with it,
 by the resolver `classify_scale` uses, and never a file outside the checkout), that the quoted line is within ±20 lines of the
 citation (a quote with an ellipsis matches where its parts appear in order there,
-within the cited lines plus two and never more than five, each part holding a word; a
-line that drifted gets the note "cited N, found at M"), and that named identifiers from
+within the cited lines plus two and never more than fifteen, the first part holding a
+word; a line that drifted gets the note "cited N, found at M"), and that named identifiers from
 the claim's subject are present (Python via `ast`, TypeScript via word-boundary search).
 What it cannot confirm is an **unverified claim**; it never sends the design back. Then
 `gate_design_review` checks the design itself.

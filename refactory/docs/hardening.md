@@ -2328,10 +2328,13 @@ design go straight to the person's gate, and that gate is the design check.
     and the note says "cited N, found at M"; the nearest match wins, and blank lines
     inside a quote that spans lines are skipped.
   - A quote with "…" or "..." matches where its parts appear in order within the lines
-    it cites plus two (`ELLIPSIS_SLACK`), never more than five (`ELLIPSIS_MAX_LINES`):
-    room for a signature wrapped over a line or two, not for `load(` paired with the
-    `) -> None:` of the method below it. Each part must hold a word: `(…)` would match
-    any parenthesised line.
+    it cites plus two (`ELLIPSIS_SLACK`), never more than fifteen
+    (`ELLIPSIS_MAX_LINES`). A claim citing one line gets three: room for a call
+    wrapped over a line or two, not for `load(` paired with the `) -> None:` of the
+    method below it. A seven-line signature cited by its range (`run.py:15-21`) gets
+    nine. The first part must hold a word, because `(…)` would match any parenthesised
+    line; the parts after it may be punctuation that closes what it opened
+    (`def helper(…):`, `f'{sys.executable} -m … ...'`).
   - Only the window is searched, with the few lines after it that a quote beginning on
     its last line could run into. For the card, the lines elsewhere in the file where an
     unverified quote (one without an ellipsis) does appear are found in one linear pass.
@@ -2356,8 +2359,10 @@ design go straight to the person's gate, and that gate is the design check.
   the pre-correction design only when it had `## Summary` or `## Changes` and the
   corrections lost it, so a design without a Summary keeps its corrections. A design
   without `## Anti-patterns to avoid` is not checked against the pitfalls, and the card
-  names the high-risk ones that leaves unchecked; one without `## Rule and sites` takes
-  any `path:line` it cites as a site, so a pitfall answered with its site counts.
+  names the high-risk ones that leaves unchecked. For one without `## Rule and sites`,
+  a site is a `path:line` it cites outside the section being checked whose file is in
+  the checkout or named in `## Changes`: a pitfall answered with such a site counts,
+  and an entry cannot make its own made-up citation a site.
 
 ### The card
 
@@ -2407,7 +2412,11 @@ design mode, because nothing reads them; validation V7 refuses an unused knob.
 - `test_design_claims.py::test_an_ellipsis_quote_needs_its_parts_inside_the_window`
 - `test_design_claims.py::test_an_ellipsis_quote_does_not_pair_unrelated_code`
 - `test_design_claims.py::test_an_ellipsis_quote_over_one_or_two_lines_still_verifies`
-- `test_design_claims.py::test_an_ellipsis_quote_spans_its_cited_lines_plus_two_and_never_more_than_five`
+- `test_design_claims.py::test_an_ellipsis_quote_spans_its_cited_lines_plus_two_and_never_more_than_fifteen`
+- `test_design_claims.py::test_an_ellipsis_quote_may_end_in_punctuation`
+- `test_design_claims.py::test_a_long_signature_cited_by_one_line_is_unverified`
+- `test_design_claims.py::test_the_ellipsis_claims_from_design_runs_against_their_real_lines`
+- `test_design_claims.py::test_quote_beyond_the_window_names_at_most_three_lines`
 - `test_design_claims.py::test_a_large_file_is_searched_only_near_the_citation`
 - `test_design_claims.py::test_a_path_leading_out_of_the_checkout_is_unverified`
 - `test_design_claims.py::test_a_quote_that_begins_inside_the_window_counts`
@@ -2419,6 +2428,7 @@ design mode, because nothing reads them; validation V7 refuses an unused knob.
 - `test_design_scale.py::test_a_light_design_names_the_high_risk_pitfalls_it_leaves_unchecked`
 - `test_design_scale.py::test_a_tracked_symlink_out_of_the_checkout_names_nothing`
 - `test_pitfalls.py::test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites`
+- `test_pitfalls.py::test_a_pitfall_entry_cannot_make_its_own_citation_a_site`
 - `test_design_scale.py::test_every_scale_gets_one_rewrite_for_a_missing_section`
 - `test_design_contract_extensions.py::test_prompt_contract_requires_only_summary_changes_and_tests`
 - `test_design_contract_extensions.py::test_an_optional_section_left_out_is_not_checked`

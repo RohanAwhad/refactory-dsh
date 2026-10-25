@@ -122,18 +122,21 @@ QUOTE_WINDOW = 20
 #: An ellipsis in a quote stands for the text it leaves out: "…" or "...".
 _ELLIPSIS = re.compile(r'\s*(?:…|\.\.\.)\s*')
 
-#: Each part of a quote with an ellipsis must name something: a word, not only
-#: punctuation. ``(…)`` would otherwise match any line with a parenthesis in it.
+#: The first part of a quote with an ellipsis must name something: a word, not only
+#: punctuation. It anchors the match; ``(…)`` would otherwise match any line with a
+#: parenthesis in it. The parts after it may be punctuation (``def helper(…):``,
+#: ``return Verdict("proceed", …)``): they only close what the first part opened.
 _WORD = re.compile(r'[^\W\d]\w*')
 
 #: A quote with an ellipsis leaves out text inside a statement, so its parts must all lie
-#: within the lines it cites plus ELLIPSIS_SLACK more: room for a signature or a call
-#: wrapped over a line or two (``def load(self,`` / ``path) -> None:``), not for the start
-#: of one statement paired with the end of another (``load(`` with the ``) -> None:`` of
-#: the method below it).
+#: within the lines it cites plus ELLIPSIS_SLACK more. A claim citing one line gets three:
+#: room for a call or signature wrapped over a line or two, not for the start of one
+#: statement paired with the end of another (``load(`` with the ``) -> None:`` of the
+#: method below it). A claim citing its whole range (``run.py:15-21`` for a seven-line
+#: signature) gets that range plus two.
 ELLIPSIS_SLACK = 2
 #: ...and never more lines than this, however many lines the claim cites.
-ELLIPSIS_MAX_LINES = 5
+ELLIPSIS_MAX_LINES = 15
 
 
 def _ellipsis_parts(quote: str) -> list[str] | None:
@@ -144,10 +147,11 @@ def _ellipsis_parts(quote: str) -> list[str] | None:
 
 
 def _wordless_part(parts: list[str]) -> str | None:
-    """The first part that names nothing ('' for a quote that is only an ellipsis)."""
+    """The first part when it names nothing ('' for a quote that is only an ellipsis);
+    None when it names something."""
     if not parts:
         return ""
-    return next((part for part in parts if not _WORD.search(part)), None)
+    return None if _WORD.search(parts[0]) else parts[0]
 
 
 def _ellipsis_span(start: int, end: int) -> int:
@@ -233,8 +237,8 @@ def _locate_quote(file_lines: list[str], start: int, end: int, quote: str,
 
     Only the window is searched. A match counts when it begins inside it, wherever a
     quote spanning lines ends. A quote with an ellipsis that does not match as written
-    matches where its parts appear in order within a few lines (`_ellipsis_span`),
-    provided each part names something (`_WORD`).
+    matches where its parts appear in order within the lines it cites plus a few
+    (`_ellipsis_span`), provided its first part names something (`_WORD`).
     """
     first, last = max(1, start - window), min(len(file_lines), end + window)
     if first > last:
@@ -275,9 +279,9 @@ def _check_quote(resolved: Path, start: int, end: int, quote: str,
     parts = _ellipsis_parts(collapsed_quote)
     wordless = _wordless_part(parts) if parts is not None else None
     if wordless is not None:
-        where = ("a part beside its ellipsis names nothing"
+        where = ("the part before its first ellipsis names nothing"
                  + (f" (`{wordless}`)" if wordless else "")
-                 + ", so it would match almost any line; quote a word of it")
+                 + ", so it would match almost any line; begin the quote with a word")
     elif parts is not None:
         where = (f"its parts do not all appear, in order, within "
                  f"{_ellipsis_span(start, end)} lines")
@@ -445,9 +449,9 @@ def check_design_claims(ctx: Any) -> dict[str, Any]:
 
     Each claim in subject-at-citation-quote form names a file, a line and the line's
     text. A quote within ±QUOTE_WINDOW lines of its citation counts (a note says where
-    it was found); a quote with an ellipsis counts when its parts, each naming
-    something, appear in order there within a few lines of one another; and a bare or
-    package-relative path counts when exactly one tracked file ends with it. What still
+    it was found); a quote with an ellipsis counts when its parts appear in order there,
+    within the lines it cites plus two, and its first part names something; and a bare
+    or package-relative path counts when exactly one tracked file ends with it. What still
     cannot be confirmed -- a quote not there, a path not in the checkout (or leading out
     of it), a named identifier the file does not define, a probe id probes.jsonl does
     not hold -- is an unverified claim: listed first on the approval gate's card as a
