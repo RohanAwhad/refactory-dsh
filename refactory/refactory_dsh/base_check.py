@@ -1497,6 +1497,47 @@ def site_is_comment_only(ctx: Any, site: str) -> bool:
     return bool(hunks) and _hunks_comment_only(Path(found.path), file_path, hunks)
 
 
+def site_outside_change(ctx: Any, site: str) -> str:
+    """Why a ``path:line`` site that no hunk of the run's diff adds to is outside the change.
+
+    ``"deleted"`` when the change deletes lines the site names, counted in the base: the
+    code it cites is gone. ``"unchanged"`` when the file is in HEAD with the site's lines and
+    the change leaves them as the base has them: what a correction that drops a planned
+    change leaves. ``""`` when it names no code (no such file or line) or the run has no
+    worktree. The design-mode correction audit reports either reason as a removed site
+    (`authoring_evidence.correction_audit_problems` with ``removed_sites``).
+    """
+    import subprocess as _sp
+
+    found = worktree.recorded(ctx.workdir)
+    parsed = _site_range(site)
+    if found is None or parsed is None:
+        return ""
+    file_path, line_start, line_end = parsed
+    if line_start < 1 or line_end < line_start:
+        return ""
+    root = Path(found.path)
+    try:
+        diff = _sp.run(
+            ["git", "-C", str(root), "diff", "-U0", found.base, "HEAD", "--", file_path],
+            capture_output=True, text=True, timeout=15, check=True,
+            env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"},
+        ).stdout
+    except Exception:
+        return ""
+    for header in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@", diff, re.M):
+        start = int(header[1])
+        count = int(header[2]) if header[2] is not None else 1
+        if count and line_start <= start + count - 1 and line_end >= start:
+            return "deleted"
+    try:
+        text = _sp.run(["git", "-C", str(root), "show", f"HEAD:{file_path}"],
+                       capture_output=True, text=True, timeout=10, check=True).stdout
+    except Exception:
+        return ""
+    return "unchanged" if line_end <= len(text.splitlines()) else ""
+
+
 def compute_site_reverts(
     ctx: Any, pairs: list[tuple[str, str, str]],
 ) -> dict[str, Any]:

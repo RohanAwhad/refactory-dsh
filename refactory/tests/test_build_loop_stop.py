@@ -185,12 +185,16 @@ def test_consecutive_refusals_end_the_run(tmp_path):
     emission = render({"tool.py": "print('built')\n"})
 
     # We need enough answers: research, pitfalls, perspectives, plan, design doc,
-    # design review, then multiple identical emissions for the refusal loop.
+    # design review, the first attempt and its reviews, an overwatch that sends it back,
+    # then identical emissions for the refusal loop.
+    from tests_support import overwatch_judgment
+
+    redo = overwatch_judgment("redo", must_fix=[{"what": "print more"}])
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-        emission, emission, emission, emission, emission,
-        *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3],
+        emission, *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, redo,
+        emission, emission, emission, emission,
     ]
     model = FakeModel(answers)
     mode = DesignMode()

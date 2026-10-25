@@ -812,6 +812,130 @@ head+tail for non-refactory commands.
 - `correction.spec.ts: "acknowledged rerun after exit-3 stop runs the stopped node again"`
 - `correction.spec.ts: "failureDetailOf with run warnings before marker shows reason first"`
 
+## Judges decide QA in design mode (b37b, measure4-dm149, b39b)
+
+### The evidence
+
+Design mode decided its QA by parsing reviewer prose for `BLOCKING` lines
+(`create_ops.blocking_findings`, read by `synthesize_qa`, `gate_qa` and `gate_overwatch`)
+and by a deterministic correction audit inside `gate_overwatch`. Both ended runs that had
+nothing left to fix:
+
+- **b37b** spent all three QA rounds, about three hours, on prose the parser read as
+  findings: a health check's heading `## 11. BLOCKING: <path>: format preserved in all
+  prompts`, and a QA report whose sentence wrapped onto a line that began with the
+  quoted marker. **measure4-dm149** lost two of its three rounds the same way, to a
+  QA report's tally of the parser's own cases, lines such as ``- `BLOCKING:` → 1 finding ✓``.
+- **b39b** failed at `gate_overwatch` after the overwatch stated PASS. The correction
+  audit refused it for two sites: one "not in the diff", where the gate correction had
+  dropped the guard planned there, so the change rightly left the code alone; and one
+  "not reached by any test".
+
+### The rule
+
+The reviews report; judges decide. A judge is a graph node: an agent that writes a JSON
+verdict, and a deterministic gate that reads that verdict with `json.loads` and never
+scans prose (`refactory_dsh.judges`). Both runtimes run the same gate, a Python node, so
+the decision is the same on the walker and the spine, and a scripted model drives it in
+tests.
+
+- **The check stays binding.** `gate_check` routes before either judge runs. A failing
+  check sends the build back to emit, and no judge can pass it.
+- **The QA judge.** `design_ops.synthesize_qa` puts this attempt's three reviews and,
+  when it reported, the verifier's into `reviews/qa-synthesized.md` whole, with the
+  check's result, the diff stat and the design's Changes section. Nothing reads them for
+  markers. `qa_judge` writes `qa-judge.json`:
+  `{"verdict": "proceed"|"redo", "must_fix": [{"source", "where", "what", "why"}],
+  "follow_ups": [...], "dismissed": [{"source", "finding", "why"}]}`.
+  It sends the change back only for a defect that breaks an ask in the brief or a gate
+  correction, a correctness or safety bug, or a regression. Everything else real is a
+  follow-up. A finding that does not hold against the code, or that only quotes a format,
+  is dismissed with its reason.
+- **`design_ops.gate_qa`.**
+  - `redo` goes back to emit with the must-fix items as the feedback, spending a review
+    attempt (`create_ops.repair`); at `review_attempts` that is a `BuildLoopStop`.
+  - `proceed` goes on to the correction audit.
+  - A judge file that is missing or not a verdict proceeds, with a note in
+    `reviews/qa-gate.txt` and the follow-ups, because the overwatch still judges.
+  - Two checks stay structural, as before: a review that left no report or whose
+    sign-off is not current sends the change back so the reviews run again, and a review
+    line starting `UNAVAILABLE:` stops the run. A judge says a dependency is unavailable
+    with a must-fix item whose `what` starts `UNAVAILABLE:`, and that stops the run too.
+- **The evidence map moves to the QA judge.** The correction audit measures the sites
+  the map (`intent-audit.json`) names for each correction, so the map has to exist before
+  the overwatch reads the audit. `wire_reviews(..., audit_node="qa_judge")` gives the QA
+  judge the map instructions the overwatch carried; create keeps them on its overwatch.
+- **The correction audit is evidence.** `design_ops.audit_corrections` runs between
+  `gate_qa` and the overwatch. It is the audit `gate_overwatch` ran
+  (`correction_audit_problems`), with `removed_sites`: a cited site the diff does not
+  reach is `removed` when the change deletes its code, or leaves it as the base has it,
+  which is what a correction that removes a site leaves. Only a site that names no code
+  still fails as "not in the diff". It writes `correction-audit.json` every round, even
+  an empty one, and routes nothing. The overwatch's prompt carries its summary
+  (`correction_audit`): per clause and site, what it measured as not met, the map's own
+  problems, and the checks to confirm by hand.
+- **The overwatch judges.** It reads the audit, the map, the brief, the corrections, the
+  diff and the check, and writes `overwatch-verdict.json`: `{"verdict": "pass"|"redo",
+  "must_fix": [...], "follow_ups": [...], "corrections": [{"id", "met", "evidence"}]}`.
+  `design_ops.gate_overwatch` sends a `redo` to emit, spending a review attempt, and a
+  `pass` to the report.
+  - A pass that leaves a correction unmet or unjudged, or still lists must-fix items,
+    puts each in the pull request's follow-ups, named.
+  - A verdict file that is missing or not a verdict proceeds with a note there too,
+    because sending the builder back cannot repair a judge's file.
+- **No free audit round.** The `audit` edge from `gate_overwatch` back to the overwatch,
+  which re-ran it when its own map was malformed, is gone from the design graph. The
+  map's problems are in the audit summary the overwatch reads.
+- **The report** (`design_ops.report_judged`) requires every review's sign-off to be
+  current. The map's shape and the audit's results were the overwatch's evidence, and
+  they do not refuse the report a second time.
+- **The pull request.** Both judges' follow-ups reach it through `record_follow_ups`
+  (`reviews/follow-ups.json`), as before. The audit's by-hand checks are listed under
+  "Correction-audit checks to confirm by hand", and its Reviews line counts the
+  overwatch's pass as the audit's (`delivery._body`).
+- **The verifier** stays in the review fork, design-blind, as one more input to the QA
+  judge, because it found a real gap on b39a's round 4. Its report is no longer parsed,
+  and `reviews/verification-unresolved.md` is not written in design mode. A verifier
+  that times out is simply absent from the judge's input.
+- **Reviewer prompts are unchanged.** The `BLOCKING` marker and the `[core]` tags decide
+  nothing in design mode. create, edit and the fast modes keep `create_ops.gate_qa` and
+  `create_ops.gate_overwatch` exactly as they were.
+
+### Tests that hold it
+
+All in `test_qa_judge.py`, through the real design graph with a scripted model unless
+named otherwise:
+
+- `test_prose_quoting_the_marker_does_not_send_the_change_back`: b37b's lines and a
+  verifier's marked line, with a proceeding judge, give one emission and no reloop. The
+  test also shows the old parser reads core findings from the same text.
+- `test_a_judge_redo_sends_its_must_fix_to_the_builder_once`: one reloop, whose emit
+  prompt carries the must-fix item.
+- `test_a_failing_check_goes_back_before_any_judge`
+- `test_b39b_removed_and_untested_sites_with_a_passing_overwatch_reach_the_report`: the
+  audit reports a removed and an untested site, the overwatch's prompt carries both, it
+  passes, and the run reports and delivers. The audit as `gate_overwatch` ran it refuses
+  the same evidence.
+- `test_an_overwatch_redo_counts_toward_the_review_limit_and_stops_at_it`
+- `test_an_unreadable_judge_file_proceeds_with_a_note` and
+  `test_an_unreadable_overwatch_verdict_proceeds_with_a_note_that_quotes_it`
+- `test_a_judge_that_needs_an_unavailable_tool_stops_the_run`,
+  `test_a_review_that_left_nothing_sends_the_change_back_whatever_the_judge_says` and
+  `test_a_pass_that_leaves_a_correction_unmet_lists_it_for_the_pull_request`
+- `test_a_judgment_is_json_and_a_redo_names_what_to_fix`,
+  `test_the_synthesis_carries_every_review_unread_and_the_verifier_only_when_it_reported`
+  and `test_the_audit_writes_its_file_every_round_even_with_nothing_to_measure`
+- `test_create_and_edit_keep_their_gates` and
+  `test_the_design_graph_has_judges_and_no_free_audit_round`. The lowering snapshots
+  hold the rest of create's and edit's graphs.
+- `test_gate_qa_on_the_spine_routes_on_the_judge_file`,
+  `test_gate_qa_on_the_spine_stops_at_the_review_limit`,
+  `test_gate_qa_on_the_spine_proceeds_without_a_judge_file` and
+  `test_the_qa_tail_runs_node_by_node_on_the_spine`: each node run as the spine runs it,
+  as its own process through `refactory_dsh.run`.
+- the spine's `graph-shapes.ts` (`designGraph`) and `spine.spec.ts` walk the lowered
+  design graph through `qa_judge`, `audit_corrections` and both gates.
+
 ## What this does not cover
 
 - Listing a generated package still imports it (§1).
@@ -1189,6 +1313,10 @@ This replaced an advisory builder round (#475) that the verifier took whenever t
 reviews passed and it did not: a full emit, check and review cycle spent on findings
 no other gate judged.
 
+In design mode none of this parsing happens: the verifier's report goes, whole, to the
+QA judge with the three reviews, which weighs it like any other review. See "Judges
+decide QA in design mode".
+
 ### Why design-blind
 
 If the verifier read design.md, it would share the same blind spots as
@@ -1200,7 +1328,7 @@ documents.
 
 Full mode (the check runs beside the reviews; see "The check beside the reviews" below):
 ```
-prepare_check →(proceed) fork_qa → [health_checker, code_reviewer, qa_director, verifier, check] → join_qa → gate_check →(proceed) synthesize_qa → gate_qa
+prepare_check →(proceed) fork_qa → [health_checker, code_reviewer, qa_director, verifier, check] → join_qa → gate_check →(proceed) synthesize_qa → qa_judge → gate_qa
 ```
 
 Fast mode (design_fast):
@@ -1396,8 +1524,10 @@ Two things that were on this list have moved off it, which is the point of keepi
 ## 25. Per-correction audit (#431)
 
 **How it works.** `correction_audit_problems()` in `authoring_evidence.py` runs
-at every post-build gate (`gate_overwatch` in full modes, `gate_qa` in fast
-modes). For each correction or constraint in the ledger it reads the overwatch's
+at every post-build gate (`gate_overwatch` in create and edit, `gate_qa` in fast
+modes). In design mode it runs as an op of its own before the overwatch, blocks
+nothing, and reports a site the change removed as `removed`; see "Judges decide QA in
+design mode". For each correction or constraint in the ledger it reads the overwatch's
 `intent-audit.json`, finds the clause-level `sites` arrays, and checks three
 things for every clause:
 
@@ -1610,6 +1740,9 @@ sits on a continuation line: a reviewer that writes an unmet ask and then a
 
 What a gate proceeds with is recorded by `record_follow_ups` and reaches the pull
 request through `delivery._body`.
+
+Design mode reads no tags: its QA judge and overwatch apply the same rule as judges and
+list the follow-ups themselves ("Judges decide QA in design mode").
 
 **The cap.** A full-mode run has `attempts` builder rounds (`check_attempts` in design;
 three by default), shared by check failures and review reloops. The verifier never

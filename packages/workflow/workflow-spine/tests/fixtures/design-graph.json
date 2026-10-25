@@ -8,6 +8,10 @@
       "max_iterations": 1,
       "_type": "AgentNode"
     },
+    "audit_corrections": {
+      "id": "audit_corrections",
+      "_type": "FnNode"
+    },
     "check": {
       "id": "check",
       "_type": "FnNode"
@@ -170,6 +174,12 @@
       "max_iterations": 1,
       "_type": "AgentNode"
     },
+    "qa_judge": {
+      "id": "qa_judge",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
     "record_findings": {
       "id": "record_findings",
       "_type": "FnNode"
@@ -223,6 +233,11 @@
     {
       "source": "apply_corrections",
       "target": "emit",
+      "condition": null
+    },
+    {
+      "source": "audit_corrections",
+      "target": "overwatch",
       "condition": null
     },
     {
@@ -302,11 +317,6 @@
     },
     {
       "source": "gate_overwatch",
-      "target": "overwatch",
-      "condition": "audit"
-    },
-    {
-      "source": "gate_overwatch",
       "target": "report",
       "condition": "proceed"
     },
@@ -322,13 +332,13 @@
     },
     {
       "source": "gate_qa",
-      "target": "emit",
-      "condition": "reloop"
+      "target": "audit_corrections",
+      "condition": "proceed"
     },
     {
       "source": "gate_qa",
-      "target": "overwatch",
-      "condition": "proceed"
+      "target": "emit",
+      "condition": "reloop"
     },
     {
       "source": "gate_research",
@@ -396,6 +406,11 @@
       "condition": "proceed"
     },
     {
+      "source": "qa_judge",
+      "target": "gate_qa",
+      "condition": null
+    },
+    {
       "source": "record_findings",
       "target": "gate_research",
       "condition": null
@@ -437,7 +452,7 @@
     },
     {
       "source": "synthesize_qa",
-      "target": "gate_qa",
+      "target": "qa_judge",
       "condition": null
     },
     {

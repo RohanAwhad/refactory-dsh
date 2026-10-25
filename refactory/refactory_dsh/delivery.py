@@ -1696,6 +1696,16 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         check_line = ""
 
     def _audit_passed() -> bool:
+        # A design run's overwatch judged the evidence map and the correction audit
+        # (`design_ops.gate_overwatch`), so its pass is the audit's.
+        from refactory_dsh import judges
+
+        if ctx.exists(judges.OVERWATCH_VERDICT):
+            try:
+                return judges.read(ctx, judges.OVERWATCH_VERDICT,
+                                   judges.OVERWATCH_VERDICTS).verdict == "pass"
+            except judges.Unreadable:
+                return False
         try:
             audit_data = _json.loads(ctx.read_text(evidence.AUDIT)) if ctx.exists(evidence.AUDIT) else None
         except (OSError, ValueError, KeyError, TypeError):

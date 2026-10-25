@@ -628,13 +628,18 @@ def stop_unrepairable(kind: str, detail: str) -> None:
                          "restore the named dependency/credentials or inspect worker/resource state before explicit recovery; code repair was not attempted")
 
 
-def wire_reviews(graph: Any, *, check_beside: bool = False) -> None:
+def wire_reviews(graph: Any, *, check_beside: bool = False, audit_node: str = "overwatch") -> None:
     """The full graphs retain distinct health, code, adversarial and audit roles.
 
     With ``check_beside`` the health, code and adversarial reviews run beside the check
     in the review fork: they neither read its evidence nor see its facts, which the
-    check writes while they run, and they get `BESIDE_CHECK_REVIEW_CONTEXT`. The audit
-    runs after the check either way and reads its receipt.
+    check writes while they run, and they get `BESIDE_CHECK_REVIEW_CONTEXT`. The
+    overwatch runs after the check either way and reads its receipt.
+
+    ``audit_node`` is the node that writes the evidence map (`AUDIT`): the overwatch,
+    except in design mode, where the QA judge writes it so that the correction audit can
+    measure it before the overwatch judges (`design_ops.audit_corrections`). It runs after
+    the check too, and reads its receipt.
     """
     from dataclasses import replace
 
@@ -642,23 +647,26 @@ def wire_reviews(graph: Any, *, check_beside: bool = False) -> None:
     graph.nodes["emit"] = replace(graph.nodes["emit"], resource_role="work")
     for name in ("fork_qa", "join_qa", "synthesize_qa", "gate_qa", "gate_overwatch", "report"):
         graph.nodes[name] = replace(graph.nodes[name], resource_role="final_validation")
-    for name in REVIEWERS[:-1]:
+    for name in dict.fromkeys((*REVIEWERS[:-1], audit_node)):
         node = graph.nodes[name]
-        audit = name == "overwatch"
-        beside = check_beside and not audit
+        audit = name == audit_node
+        reviewer = name in REVIEWERS
+        beside = check_beside and reviewer and name != "overwatch"
         graph.nodes[name] = replace(
             node, prompt_template=node.prompt_template
-            + (BESIDE_CHECK_REVIEW_CONTEXT if beside else FULL_REVIEW_CONTEXT)
+            + ("" if not reviewer else BESIDE_CHECK_REVIEW_CONTEXT if beside else FULL_REVIEW_CONTEXT)
             + (AUDIT_INSTRUCTIONS if audit else ""),
             reads=node.reads if beside else (*node.reads, EVIDENCE),
             writes=(*node.writes, AUDIT) if audit else node.writes,
             resource_role="final_validation",
         )
+    # Where the overwatch writes the map, its gate runs the correction audit; in design
+    # mode an op of its own does (`design_ops.audit_corrections`) and declares its files.
+    audit_files = ("site-revert-results.json", "correction-audit.json") if audit_node == "overwatch" else ()
     for name in ("gate_qa", "gate_overwatch"):
         node = graph.nodes[name]
         graph.nodes[name] = replace(node, reads=(*node.reads, EVIDENCE, *((AUDIT,) if name == "gate_overwatch" else ())), max_iterations=12,
-                                   writes=(*node.writes, "validation.txt",
-                                           "site-revert-results.json", "correction-audit.json"),
+                                   writes=(*node.writes, "validation.txt", *audit_files),
                                    produces=(*node.produces, "validation", "attempts_used", "review_attempts_used"),
                                    knobs=(*node.knobs, "review_attempts"))
     report = graph.nodes["report"]
@@ -862,12 +870,27 @@ def _prose_site_note(key: str, clause_number: int, site: str) -> str:
             "it changed, and no test is expected to reach it")
 
 
-def correction_audit_problems(ctx: Any) -> list[str]:
+def _removed_site_note(key: str, clause_number: int, site: str, how: str) -> str:
+    if how == "deleted":
+        return (f"{key} clause {clause_number}: site {site} is removed: the change deletes "
+                "the code there, so there is nothing to revert")
+    return (f"{key} clause {clause_number}: site {site} is removed from the change: the diff "
+            "leaves it as the base has it, as a correction that drops a planned change does; "
+            "if the correction asked for a change here, that change is missing")
+
+
+def correction_audit_problems(ctx: Any, *, removed_sites: bool = False) -> list[str]:
     """Compute per-correction audit: check sites, reverts and scope.
 
-    Called from ``gate_overwatch`` and ``gate_qa``.  Writes
-    ``correction-audit.json`` with the per-clause results.  Returns a list of
-    blocking messages.
+    Called from ``create_ops.gate_overwatch`` and, in design mode, from
+    ``design_ops.audit_corrections``.  Writes ``correction-audit.json`` with the
+    per-clause results.  Returns a list of blocking messages.
+
+    With ``removed_sites`` (design mode, where the audit is evidence for the overwatch
+    and blocks nothing by itself) a cited site the diff does not reach is reported as
+    ``removed`` when the change deletes the code there or leaves it as the base has it --
+    what a correction that removes a site leaves -- instead of failing as "not in the
+    diff". Only a site that names no code at all still fails.
     """
     if not ctx.exists(EVIDENCE):
         return []
@@ -1169,6 +1192,13 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                         clause_advisories.append(_prose_site_note(key, ci + 1, site))
                         site_results.append(sr)
                         continue
+                    removed = (base_check.site_outside_change(ctx, site)
+                               if removed_sites and not base_check.site_in_diff(ctx, site) else "")
+                    if removed:
+                        sr.update(status="removed", in_diff=False, removed=removed)
+                        clause_advisories.append(_removed_site_note(key, ci + 1, site, removed))
+                        site_results.append(sr)
+                        continue
                     sr["status"] = "fail"
                     if site not in exempted_sites:
                         clause_status = "fail"
@@ -1270,6 +1300,10 @@ def correction_audit_problems(ctx: Any) -> list[str]:
                     sr["status"] = "pass"
                 elif all(r in ("new_file", "import_only") for r in test_results):
                     sr["status"] = "needs_sibling"
+                elif any(r == "not_in_diff" for r in test_results) and (
+                        removed := base_check.site_outside_change(ctx, site) if removed_sites else ""):
+                    sr.update(status="removed", in_diff=False, removed=removed)
+                    clause_advisories.append(_removed_site_note(key, ci + 1, site, removed))
                 elif any(r == "not_in_diff" for r in test_results):
                     sr["status"] = "fail"
                     if site not in exempted_sites:

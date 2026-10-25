@@ -200,13 +200,16 @@ def test_audit_instructions_tell_probing_reviewers_to_stage_fixtures_in_the_run(
     artifact; without staging instructions a spot-check fixture written to /tmp is
     uncitable, and its evidence dies with the gate verdict.
     """
+    from refactory_dsh.create import CreateMode
     from refactory_dsh.design import DesignMode
 
-    overwatch = DesignMode().build().nodes["overwatch"]
-    prompt = overwatch.prompt_template
-    assert "Write intent-audit.json as" in prompt
-    assert "scratch/" in prompt
-    assert "never /tmp" in prompt
+    # The node that writes the evidence map: the overwatch in create, the QA judge in
+    # design (so the correction audit can measure the map before the overwatch judges).
+    for graph, writer in ((CreateMode().build(), "overwatch"), (DesignMode().build(), "qa_judge")):
+        prompt = graph.nodes[writer].prompt_template
+        assert "Write intent-audit.json as" in prompt
+        assert "scratch/" in prompt
+        assert "never /tmp" in prompt
 
 
 def test_waiver_requires_user_quote_and_runtime_output_cannot_be_replaced(tmp_path):
@@ -617,46 +620,34 @@ def test_failure_message_count_matches_attempts_used(tmp_path):
 # ── ask 4: audit reloop end-to-end ───────────────────────────────────────
 
 
-def test_audit_reloop_through_design_graph(tmp_path, monkeypatch):
-    """A design run whose first audit leaves a requirement uncovered goes back to
-    overwatch rather than emit, keeps attempts_used unchanged, shows overwatch the
-    problems, and proceeds after the second audit."""
+def test_evidence_map_problems_reach_the_design_overwatch_as_evidence(tmp_path, monkeypatch):
+    """Design mode has no free audit round: a map that leaves a requirement uncovered is
+    listed in the correction audit the overwatch reads, the overwatch runs once, nothing
+    is spent, and its pass decides. (create keeps the round: create_ops.gate_overwatch.)"""
     from refactory_dsh.design import DesignMode
     from test_edit_design import _design_answers
-    from tests_support import REVIEW_ANSWERS
 
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
 
-    overwatch_call = [0]
-    saw_problems_in_prompt = [False]
+    overwatch_prompts = []
 
     class AuditModel(FakeModel):
         def complete(self, prompt, *, system="", workdir=None):
             text = super().complete(prompt, system=system, workdir=workdir)
             if "You are the overwatch" in prompt:
-                overwatch_call[0] += 1
+                overwatch_prompts.append(prompt)
+            if "You are the QA judge" in prompt:
+                # The QA judge writes the map; this one leaves `design` uncovered.
                 run_dir = tmp_path / "run"
-                if overwatch_call[0] > 1 and "intent audit problems" in prompt:
-                    saw_problems_in_prompt[0] = True
-                ev_path = run_dir / evidence.EVIDENCE
-                if ev_path.exists():
-                    ev = json.loads(ev_path.read_text())
-                    rows = []
-                    for item in ev["requirements"]:
-                        if overwatch_call[0] == 1 and item["id"] == "design":
-                            continue  # omit on first call to trigger audit reloop
-                        rows.append({"id": item["id"], "requirement": item.get("text", ""),
-                                     "status": "pass",
-                                     "evidence": [{"path": "brief.json",
-                                                   "detail": "verified requirement"}]})
-                    run_dir.joinpath(evidence.AUDIT).write_text(
-                        json.dumps({"requirements": rows}))
+                ev = json.loads((run_dir / evidence.EVIDENCE).read_text())
+                rows = [{"id": item["id"], "requirement": item.get("text", ""),
+                         "status": "pass",
+                         "evidence": [{"path": "brief.json", "detail": "verified requirement"}]}
+                        for item in ev["requirements"] if item["id"] != "design"]
+                run_dir.joinpath(evidence.AUDIT).write_text(json.dumps({"requirements": rows}))
             return text
 
-    answers = _design_answers([render({"answer.py": "print(42)"})])
-    # Add a second overwatch answer for the audit reloop.
-    answers.append("VERDICT: PASS")
-    model = AuditModel(answers)
+    model = AuditModel(_design_answers([render({"answer.py": "print(42)"})]))
     result = DesignMode().run(
         tmp_path / "run", model=model,
         verdicts={"gate_strategy": "proceed"},
@@ -665,13 +656,9 @@ def test_audit_reloop_through_design_graph(tmp_path, monkeypatch):
               "check": "python answer.py"},
     )
     assert result.exit_ok, result.error
-    assert overwatch_call[0] == 2, "overwatch should have been called twice"
-    assert result.facts.get("attempts_used", 0) == 0, (
-        "audit-only reloop must not spend an attempt"
-    )
-    assert saw_problems_in_prompt[0], (
-        "overwatch must see the audit problems on its reloop"
-    )
+    assert len(overwatch_prompts) == 1, "the overwatch runs once"
+    assert "design: no requirement evidence in intent audit" in overwatch_prompts[0]
+    assert result.facts.get("attempts_used", 0) == 0
 
 
 # ── dm-33: process notes ─────────────────────────────────────────────────

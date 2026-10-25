@@ -1480,11 +1480,34 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
     """Say what was produced, so a run's output is discoverable rather than inferred."""
     from refactory_dsh.authoring_evidence import require_completion
 
+    return _report_artifact(ctx, require_completion)
+
+
+def report_judged(ctx: Any) -> dict[str, Any]:
+    """Design mode's report: the overwatch judged the evidence map and the correction audit.
+
+    So the run is complete when every review's sign-off is current for the artifact it
+    reports (`authoring_evidence.current_problems`). The map's own shape and the audit's
+    results were evidence for that judgment (`audit_corrections`), and they do not
+    refuse the report a second time, as `require_completion` would.
+    """
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh.invocations import REVIEWERS
+
+    def require(ctx: Any) -> None:
+        problems = evidence.current_problems(ctx, REVIEWERS[:-1])
+        if problems:
+            raise ValueError("authoring sign-off is incomplete or stale: " + "; ".join(problems))
+
+    return _report_artifact(ctx, require)
+
+
+def _report_artifact(ctx: Any, require: Any) -> dict[str, Any]:
     if worktree.recorded(ctx.workdir) is not None:
         # Where the worktree stands first, so a moved HEAD is named as such and not as a
         # stale sign-off.
         worktree.require_current(ctx.workdir)
-    require_completion(ctx)
+    require(ctx)
     ev = ctx.read_json("authoring-evidence.json", None)
     audit = ctx.read_json("intent-audit.json", None)
     # Collect planning model info from worker receipts (R5).
@@ -1552,3 +1575,313 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
         ]
     payload = repo_change.report(ctx, "design.json", report_payload)
     return {"designed": json.dumps(payload, default=str)}
+
+
+# ── design mode's QA tail: the reviews report, two judges decide ─────────────
+#
+# The review fork's reports are prose, and reading a decision out of prose by its
+# markers ended runs whose reviewers only quoted a finding's format (b37b, measure4-
+# dm149), and refused a change the overwatch had passed because a correction removed
+# the site the audit looked for (b39b). So in design mode the reviews go, whole, to a
+# QA judge, and the evidence goes to the overwatch, and each judge writes a JSON
+# verdict (`refactory_dsh.judges`) that its gate reads. The check is decided before
+# either judge runs (`gate_check`) and stays binding. create, edit and the fast modes
+# keep `create_ops.gate_qa` and `create_ops.gate_overwatch`.
+
+#: The reviewers that must report on every attempt, with how the QA judge names them.
+DESIGN_QA_REVIEWS = (
+    ("reviews/health-check.md", "health checker"),
+    ("reviews/code-review.md", "code reviewer"),
+    ("reviews/qa.md", "QA director"),
+)
+
+#: The design-blind verifier's report: an optional branch of the fork, so a verifier
+#: that times out has none, and the QA judge reads the round without it.
+VERIFICATION = "reviews/verification.md"
+
+QA_SYNTHESIS = "reviews/qa-synthesized.md"
+
+
+def _design_section(ctx: Any, heading: str) -> str:
+    """The body of design.md's ``## heading`` section, or ``""``."""
+    if not ctx.exists("design.md"):
+        return ""
+    lines: list[str] = []
+    inside = False
+    for line in ctx.read_text("design.md").splitlines():
+        if line.strip().lower() == f"## {heading.lower()}":
+            inside = True
+            continue
+        if inside and line.startswith("## "):
+            break
+        if inside:
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _diff_stat(ctx: Any) -> str:
+    found = worktree.recorded(ctx.workdir)
+    if found is None:
+        files = ctx.facts.get("files") or []
+        return "\n".join(str(name) for name in files) if isinstance(files, list) else str(files)
+    try:
+        return worktree.git(Path(found.path), "diff", "--stat", found.base, "HEAD").strip("\n")
+    except Exception as exc:  # the judge reads the diff itself then
+        return f"(the diff stat could not be computed: {exc})"
+
+
+def synthesize_qa(ctx: Any) -> dict[str, Any]:
+    """Op: put this attempt's reviews, its check and its scope in one document for the QA judge.
+
+    Each review goes in whole and unread: nothing here looks for findings, markers or
+    verdicts, so how a reviewer words its report decides nothing. The verifier's report
+    goes in when there is one. A review that left nothing is said to be missing, because
+    an absent review is not a passed one.
+    """
+    sections: list[str] = []
+    missing: list[str] = []
+    for name, who in DESIGN_QA_REVIEWS:
+        text = ctx.read_text(name).strip() if ctx.exists(name) else ""
+        if text:
+            sections.append(f"## {name} (the {who})\n\n{text}")
+        else:
+            missing.append(name)
+            sections.append(f"## {name} (the {who})\n\nNO REPORT: the {who} left nothing "
+                            "for this attempt. An absent review is not a passed one.")
+    verification = ctx.read_text(VERIFICATION).strip() if ctx.exists(VERIFICATION) else ""
+    if verification:
+        sections.append(f"## {VERIFICATION} (the design-blind verifier)\n\n{verification}")
+    record = ctx.read_json("check-record.json", {}) if ctx.exists("check-record.json") else {}
+    status = record.get("status") if isinstance(record, dict) else None
+    check = (f"## The check\n\n`{ctx.facts.get('check') or ''}` "
+             f"{'passed' if status == 'pass' else 'ran with status ' + repr(status)} on this "
+             "attempt; a failing check never reaches this step.\n\n"
+             + str(ctx.facts.get("validation") or "").strip())
+    changes = _design_section(ctx, "Changes")
+    body = (
+        "# QA synthesis\n\n"
+        f"{len(DESIGN_QA_REVIEWS) - len(missing)} of {len(DESIGN_QA_REVIEWS)} reviews reported"
+        + (", and the design-blind verifier" if verification else "") + ".\n\n"
+        + "\n\n".join(sections) + "\n\n"
+        + check.rstrip() + "\n\n"
+        + "## The diff stat\n\n```\n" + _diff_stat(ctx) + "\n```\n\n"
+        + "## The design's Changes\n\n" + (changes or "(design.md has no Changes section)") + "\n"
+    )
+    ctx.write_text(QA_SYNTHESIS, body)
+    return {"qa": body, "qa_missing": len(missing)}
+
+
+def _review_questions_advisory(ctx: Any) -> str:
+    """The repository questions the reviews left unanswered: listed on the pull request,
+    never a reason to send the change back (as in `create_ops.gate_qa`)."""
+    if str(ctx.facts.get("deliverable_kind", "")) != "repository_change" or not ctx.exists(
+            "changed-functions.json"):
+        return ""
+    from refactory_dsh.authoring_evidence import advisory_repo_questions, check_review_questions
+    from refactory_dsh.changed_functions import review_functions
+
+    try:
+        changed = review_functions(json.loads(ctx.read_text("changed-functions.json")))
+    except ValueError:
+        return ""
+    if not changed:
+        return ""
+    nodes = {"reviews/health-check.md": "health_checker", "reviews/code-review.md": "code_reviewer",
+             "reviews/qa.md": "qa_director"}
+    problems = [problem for name, _ in DESIGN_QA_REVIEWS if ctx.exists(name)
+                for problem in check_review_questions(ctx.read_text(name), changed, nodes[name])]
+    return advisory_repo_questions(problems) if problems else ""
+
+
+def _send_back(ctx: Any, gate_file: str, fact: str, reason: str) -> Any:
+    """Write why the change goes back, and spend a review attempt on it (`create_ops.repair`),
+    which raises BuildLoopStop at the review limit."""
+    from refactory_dsh.create_ops import repair
+
+    ctx.write_text(gate_file, reason + "\n")
+    ctx.set_fact(fact, reason)
+    return repair(ctx, [reason], kind="review")
+
+
+def gate_qa(ctx: Any) -> Any:
+    """Gate after the QA judge: route on ``qa-judge.json``, never on the reviews' prose.
+
+    ``redo`` sends the change back to emit with the judge's must-fix items as its feedback,
+    spending a review attempt; at the review limit that is a BuildLoopStop. ``proceed``
+    goes on to the correction audit and the overwatch, and the judge's follow-ups go to the
+    pull request. A judge file that is missing or unreadable proceeds with a note in the
+    gate's status and the follow-ups, because the overwatch still judges the change.
+
+    Before the judge is read, two things are structural rather than judged, as they were:
+    a review that left no report, or whose sign-off is not current for this attempt, sends
+    the change back so the reviews run again; and a review that says a tool it needs is
+    ``UNAVAILABLE:`` stops the run for a person.
+    """
+    import re
+
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh import judges
+    from refactory_dsh.create_ops import record_follow_ups
+
+    for name, _ in DESIGN_QA_REVIEWS:
+        if ctx.exists(name):
+            unavailable = re.search(r"(?im)^\s*UNAVAILABLE:.*$", ctx.read_text(name))
+            if unavailable:
+                evidence.stop_unrepairable("unavailable", unavailable[0])
+    stale = evidence.current_problems(ctx, ("health_checker", "code_reviewer", "qa_director"))
+    missing = [name for name, _ in DESIGN_QA_REVIEWS
+               if not (ctx.exists(name) and ctx.read_text(name).strip())]
+    if stale or missing:
+        reason = "reloop: " + "; ".join(
+            [*stale, *(["a review did not run: " + ", ".join(missing)] if missing else [])])
+        return _send_back(ctx, "reviews/qa-gate.txt", "qa_gate", reason)
+    try:
+        judgment = judges.read(ctx, judges.QA_JUDGE, judges.QA_VERDICTS)
+    except judges.Unreadable as exc:
+        judgment = None
+        said = judges.excerpt(ctx, judges.QA_JUDGE)
+        note = (f"the QA judge's verdict could not be read ({exc}); the change went on to "
+                "the overwatch without it" + (f". It wrote: {said}" if said else ""))
+    advisory = _review_questions_advisory(ctx)
+    if judgment is not None:
+        stop = judges.unavailable(judgment)
+        if stop:
+            evidence.stop_unrepairable("unavailable", stop)
+        if judgment.verdict == "redo":
+            return _send_back(ctx, "reviews/qa-gate.txt", "qa_gate",
+                              "reloop: " + judges.feedback(judgment, "QA judge"))
+        # A proceed that still lists must-fix items: the verdict decides, and the items
+        # go to the pull request rather than vanish.
+        follow = [*judgment.follow_ups,
+                  *(f"{judges.must_fix_line(item)} (the QA judge proceeded with this listed as must-fix)"
+                    for item in judgment.must_fix)]
+        summary = "the QA judge found nothing that must be fixed"
+        dismissed = [f"dismissed [{item['source']}] {item['finding']} — {item['why']}"
+                     for item in judgment.dismissed]
+    else:
+        follow, summary, dismissed = [note], note, []
+    record_follow_ups(ctx, "qa", follow)
+    # The advisory goes last: delivery reads the repository-question advisory to the end.
+    notes = "".join(f"{line}\n" for line in (
+        *(f"follow-up: {item}" for item in follow), *dismissed, advisory) if line)
+    ctx.write_text("reviews/qa-gate.txt", f"proceed: {summary}\n" + notes)
+    ctx.set_fact("qa_gate", f"({summary})" + (f"\n{advisory}" if advisory else ""))
+    ctx.write_text("validation.txt", "(reviews passed)\n")
+    ctx.set_fact("validation", "(reviews passed)")
+    return "proceed"
+
+
+def _correction_audit_summary(audit: Any, problems: list[str], map_problems: list[str],
+                              advisories: list[str]) -> str:
+    """The correction audit as the overwatch reads it in its prompt."""
+    items = [item for item in audit if isinstance(item, dict)] if isinstance(audit, list) else []
+    lines: list[str] = []
+    if not items:
+        lines.append("No correction or constraint from the person has sites to audit.")
+    for item in items:
+        lines.append(f"### {item.get('id', '?')}: {item.get('text_preview', '')}")
+        for number, clause in enumerate(item.get("clauses", []), 1):
+            if not isinstance(clause, dict):
+                continue
+            lines.append(f"- clause {number} ({clause.get('status', '?')}): {clause.get('clause', '')}")
+            for site in clause.get("sites", []):
+                if not isinstance(site, dict):
+                    continue
+                tests = ", ".join(f"{test.get('name')} → {test.get('revert_result', 'not run')}"
+                                  for test in site.get("tests", []) if isinstance(test, dict))
+                removed = f" ({site['removed']})" if site.get("removed") else ""
+                lines.append(f"  - {site.get('site', '?')}: {site.get('status', '?')}{removed}"
+                             + (f"; tests: {tests}" if tests else ""))
+    for title, entries in (("What the audit measured as not met", problems),
+                           ("Problems in the evidence map (intent-audit.json)", map_problems),
+                           ("Checks to confirm by hand", advisories)):
+        if entries:
+            lines += ["", f"### {title}", *(f"- {entry}" for entry in entries)]
+    return "\n".join(lines)
+
+
+def audit_corrections(ctx: Any) -> dict[str, Any]:
+    """Op before the overwatch: measure each correction the person gave, as evidence.
+
+    It is the audit `create_ops.gate_overwatch` runs (`authoring_evidence.
+    correction_audit_problems`), on the sites the QA judge's evidence map names for each
+    correction: whether each site is in the diff, and whether reverting it makes the named
+    tests fail. A site the change deletes, or leaves as the base has it -- what a
+    correction that removes a site leaves -- is reported as removed. Nothing here routes:
+    the overwatch reads ``correction-audit.json`` and this summary and decides each
+    correction itself. Problems in the evidence map's own shape, which used to send the
+    overwatch round again for free, are listed here for it too.
+    """
+    from refactory_dsh import authoring_evidence as evidence
+
+    # This round's audit, even when there is nothing to measure: the overwatch reads it.
+    ctx.write_json("correction-audit.json", [])
+    problems = evidence.correction_audit_problems(ctx, removed_sites=True)
+    if not ctx.exists("site-revert-results.json"):
+        ctx.write_json("site-revert-results.json", {})
+    summary = _correction_audit_summary(ctx.read_json("correction-audit.json", []), problems,
+                                        evidence.audit_problems(ctx),
+                                        evidence.correction_audit_advisories(ctx))
+    return {"correction_audit": summary}
+
+
+def gate_overwatch(ctx: Any) -> Any:
+    """Gate after the overwatch: route on ``overwatch-verdict.json``.
+
+    ``redo`` sends the change back to emit with the overwatch's must-fix items and unmet
+    corrections, spending a review attempt (a BuildLoopStop at the limit); ``pass`` goes
+    to the report. The correction audit never refuses by itself: it was the overwatch's
+    evidence. A pass that leaves a correction unmet or unjudged goes to the pull request's
+    follow-ups, named. A verdict file that is missing or unreadable proceeds with a note
+    there too: sending the builder back cannot repair a judge's file.
+    """
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh import judges
+    from refactory_dsh.create_ops import record_follow_ups
+
+    stale = evidence.current_problems(ctx, ("overwatch",))
+    if stale:
+        return _send_back(ctx, "reviews/overwatch-gate.txt", "overwatch_review",
+                          "reloop: evidence problems: " + "; ".join(stale))
+    by_hand = evidence.correction_audit_advisories(ctx)
+    advisory = evidence.advisory_correction_audit(by_hand) + "\n" if by_hand else ""
+    try:
+        judgment = judges.read(ctx, judges.OVERWATCH_VERDICT, judges.OVERWATCH_VERDICTS)
+    except judges.Unreadable as exc:
+        said = judges.excerpt(ctx, judges.OVERWATCH_VERDICT)
+        note = (f"the overwatch's verdict could not be read ({exc}); acceptance was not "
+                "judged, so check each ask and correction by hand"
+                + (f". It wrote: {said}" if said else ""))
+        record_follow_ups(ctx, "overwatch", [note])
+        ctx.write_text("reviews/overwatch-gate.txt", f"proceed: {note}\n" + advisory)
+        ctx.set_fact("overwatch_review", "(the overwatch's verdict could not be read)")
+        ctx.write_text("validation.txt", "(overwatch verdict unreadable)\n")
+        ctx.set_fact("validation", "(overwatch verdict unreadable)")
+        return "proceed"
+    stop = judges.unavailable(judgment)
+    if stop:
+        evidence.stop_unrepairable("unavailable", stop)
+    if judgment.verdict == "redo":
+        return _send_back(ctx, "reviews/overwatch-gate.txt", "overwatch_review",
+                          "reloop: " + judges.feedback(judgment, "overwatch"))
+    judged = {item["id"] for item in judgment.corrections}
+    required = [item["id"] for item in (ctx.read_json(evidence.EVIDENCE, {}) or {}).get("requirements", [])
+                if isinstance(item, dict) and item.get("kind") in ("correction", "constraint")]
+    follow = [
+        *judgment.follow_ups,
+        *(f"{judges.must_fix_line(item)} (the overwatch passed with this listed as must-fix)"
+          for item in judgment.must_fix),
+        *(f"correction {judges.correction_line(item)} (the overwatch passed the change with it)"
+          for item in judgment.unmet),
+        *(f"correction {key}: the overwatch did not judge it" for key in required if key not in judged),
+    ]
+    record_follow_ups(ctx, "overwatch", follow)
+    ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n"
+                   + "".join(f"follow-up: {item}\n" for item in follow)
+                   + "".join(f"correction {judges.correction_line(item)}\n"
+                             for item in judgment.corrections)
+                   + advisory)
+    ctx.set_fact("overwatch_review", "(overwatch passed)")
+    ctx.write_text("validation.txt", "(overwatch passed)\n")
+    ctx.set_fact("validation", "(overwatch passed)")
+    return "proceed"
