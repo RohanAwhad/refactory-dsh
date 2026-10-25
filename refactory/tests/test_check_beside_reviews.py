@@ -236,30 +236,41 @@ def test_a_check_that_stops_the_run_is_recorded_once_and_raised_after_the_review
 
 def test_prepare_check_sends_back_before_the_reviews_when_last_attempts_failures_remain(
         tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
     from refactory_dsh import failfast, repo_change
 
     ctx = _ctx(tmp_path)
     monkeypatch.setattr(repo_change, "prepare_attempt", lambda ctx, timeout: [])
-    stop = SimpleNamespace(early_stop=True, ran=True, targeted_command="pytest t.py::x")
+    # The self-check (b41a) reports what it ran and what failed, not only that it stopped.
+    stop = failfast.PrepassResult(
+        ran=True, early_stop=True, targeted_command="pytest t.py::x", check_mode="targeted",
+        result=None, digest_text="t.py::x failed", selection=["t.py::x"], ran_ids=["t.py::x"],
+        failing_ids=["t.py::x"], commands=["pytest t.py::x"])
     monkeypatch.setattr(failfast, "targeted_prepass", lambda *a, **k: stop)
-    monkeypatch.setattr(design_ops, "_early_stop",
-                        lambda ctx, prepass, prev, base: nn.Verdict("reloop", "still failing"))
+    early_stops = []
+    monkeypatch.setattr(design_ops, "_early_stop", lambda ctx, prepass, prev, base: (
+        early_stops.append(prepass.failing_ids) or nn.Verdict("reloop", "still failing")))
     # What the last attempt prepared and decided does not survive into this one.
     ctx.write_json(CHECK_PREP, {"attempt": "a0", "commit": "c1", "root": str(tmp_path)})
     ctx.write_json(CHECK_VERDICT, _decision("proceed", attempt="a0"))
-    assert design_ops.prepare_check(ctx) == "reloop"
+    ctx.set_fact("validation", "what went wrong last time")
+    sent_back = design_ops.prepare_check(ctx)
+    # A still-failing test goes back as a fix-up first, spending nothing.
+    assert sent_back == "reloop" and sent_back.reason.startswith("self-check fix-up 1 of 2")
+    assert early_stops == [] and not ctx.facts.get("attempts_used")
     assert not ctx.exists(CHECK_PREP)  # no review starts on this attempt
     assert not ctx.exists(CHECK_VERDICT)
-    go = SimpleNamespace(early_stop=False, ran=True, targeted_command="pytest t.py::x")
+    go = failfast.PrepassResult(
+        ran=True, early_stop=False, targeted_command="pytest t.py::x", check_mode="full",
+        result=None, digest_text="", selection=["t.py::x"], ran_ids=["t.py::x"],
+        commands=["pytest t.py::x"])
     monkeypatch.setattr(failfast, "targeted_prepass", lambda *a, **k: go)
-    ctx.set_fact("validation", "what went wrong last time")
     assert design_ops.prepare_check(ctx) == "proceed"
     prepared = ctx.read_json(CHECK_PREP)
     assert prepared["commit"] == "c1" and prepared["root"] == str(tmp_path)
     assert prepared["targeted_command"] == "pytest t.py::x" and prepared["attempt"]
+    # The reviewers judge the attempt against what sent it back, not against its fix-up.
     assert ctx.facts["review_feedback"] == "what went wrong last time"
+    assert ctx.facts["self_check_fixup_count"] == 0
 
 
 def test_a_failed_preparation_is_judged_by_the_whole_check_at_once(tmp_path, monkeypatch):

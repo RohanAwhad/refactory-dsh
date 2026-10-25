@@ -660,7 +660,8 @@ def _committed_file(found: Worktree, relative: Path, rev: str = "") -> bool:
     return len(entry) >= 2 and entry[1] == "blob"
 
 
-def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tuple[Path, ...] = ()) -> Worktree:
+def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tuple[Path, ...] = (),
+                   *, amending: bool = False) -> Worktree:
     """Make one attempt's files the run's worktree, as one commit on its branch.
 
     Each attempt builds on the last: ``files`` are written and ``deletes`` removed on top
@@ -668,6 +669,10 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     paths are staged, never ``-A``, and none of the target's hooks run: the run's check is
     its gate. An attempt that died after its commit but before recording it is dropped,
     and this one replaces it.
+
+    With ``amending``, the files are staged the same way and folded into the last attempt
+    through `amend`, the one path every amendment takes: a self-check fix-up finishes
+    the attempt it was sent back from (b41a).
     """
     found = recorded(run)
     if found is None:
@@ -685,7 +690,7 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     died = _json(pending)
     if died.get("parent") == found.head and path.is_dir():
         head = git(path, "rev-parse", "HEAD").strip()
-        if head != found.head and git(path, "rev-parse", "HEAD^").strip() == found.head:
+        if head != found.head and _died_after_commit(path, found.head, bool(died.get("amending"))):
             git(path, *NO_HOOKS, "reset", "-q", "--hard", found.head)
     _require_current(found)
     # When a merge is in progress (MERGE_HEAD present), skip _restore: the staged
@@ -711,7 +716,8 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
             if parent != Path(".") and (path / parent).exists() and not (path / parent).is_dir():
                 raise AttemptRefused(f"{relative} would be inside {parent}, which is a file of the last attempt; "
                                      "choose another path")
-    _write_json(pending, {"files": sorted(str(name) for name in (*files, *deletes)), "parent": found.head})
+    _write_json(pending, {"files": sorted(str(name) for name in (*files, *deletes)), "parent": found.head,
+                          "amending": amending})
     for relative in deletes:
         git(path, "rm", "-q", "-f", "--", str(relative))
     for relative, content in files.items():
@@ -735,9 +741,22 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
             raise AttemptRefused(
                 "the emission changed nothing: every file and edit in it is already in the last attempt"
             )
+        # A fix-up that takes the attempt back to what it built on would leave it changing
+        # nothing: refused, as an emission that changes nothing is, not amended away.
+        if amending and _staged_as_parent(path):
+            git(path, *NO_HOOKS, "reset", "-q", "--hard", "HEAD")
+            pending.unlink(missing_ok=True)
+            raise AttemptRefused(
+                "the emission undoes the whole attempt: with it, the attempt would change nothing "
+                "against the commit it builds on. Fix what failed without reverting the change; "
+                "if part of the change is wrong, change that part"
+            )
     try:
-        git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
-            "-m", message, env={**os.environ, **COMMITTER})
+        if amending:
+            amend(found, run, [str(name) for name in files], message)
+        else:
+            git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
+                "-m", message, env={**os.environ, **COMMITTER})
     except ValueError as exc:
         # When committing with unmerged paths, git refuses.  This can happen if
         # not every conflicted file was resolved by the emission.
@@ -767,6 +786,29 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     _write_json(Path(run) / RECORD, asdict(advanced))
     pending.unlink(missing_ok=True)
     return advanced
+
+
+def _staged_as_parent(path: Path) -> bool:
+    """Whether what is staged is the tree of HEAD's parent: amended in, it empties HEAD."""
+    try:
+        git(path, "diff", "--cached", "--quiet", "HEAD^", "--")
+    except ValueError:
+        return False  # it differs, or HEAD has no parent
+    return True
+
+
+def _died_after_commit(path: Path, head: str, amended: bool) -> bool:
+    """Whether HEAD is the commit an attempt that died made on ``head``, so it can be dropped.
+
+    A new attempt is a child of ``head``; an amendment replaces ``head``, so it is a
+    sibling: another commit on ``head``'s parent.
+    """
+    try:
+        if amended:
+            return git(path, "rev-parse", "HEAD^").strip() == git(path, "rev-parse", f"{head}^").strip()
+        return git(path, "rev-parse", "HEAD^").strip() == head
+    except ValueError:
+        return False
 
 
 def require_current(run: Path) -> Worktree:
@@ -1270,13 +1312,23 @@ def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktre
     the base the run was pinned to is never rewritten -- the amendment is a fresh
     commit rather than an amend.
 
-    One code path for every amendment -- a lockfile an install writes and a file a
-    generate command rewrites -- so the git add, the amend-or-commit, the new head
-    and the record write are in one place.
+    One code path for every amendment -- a lockfile an install writes, a file a
+    generate command rewrites, a self-check fix-up -- so the git add, the
+    amend-or-commit, the new head and the record write are in one place.
+
+    An amendment that leaves the attempt's tree its parent's is kept, as an attempt that
+    changes nothing: a generate command can regenerate the only files an attempt changed
+    back to what they were. git refuses such an amend without ``--allow-empty``, and the
+    run would end there; kept, the attempt goes to its check and its reviews, which judge
+    a change that does nothing. A fix-up's own emission that does this is refused before
+    it gets here (`commit_attempt`).
     """
     path = Path(found.path)
-    git(path, "add", "-f", "--", *paths)
-    how = ("--amend", "--no-edit") if found.head != found.base else ("-m", message)
+    if paths:
+        git(path, "add", "-f", "--", *paths)
+    how = ("-m", message)
+    if found.head != found.base:
+        how = ("--amend", "--no-edit", *(("--allow-empty",) if _staged_as_parent(path) else ()))
     git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", *how,
         env={**os.environ, **COMMITTER})
     found = replace(found, head=git(path, "rev-parse", "HEAD").strip())

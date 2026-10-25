@@ -157,7 +157,7 @@
     "prepare_check": {
       "id": "prepare_check",
       "evaluator_type": "fn",
-      "max_iterations": 8,
+      "max_iterations": 45,
       "_type": "GateNode"
     },
     "qa_director": {

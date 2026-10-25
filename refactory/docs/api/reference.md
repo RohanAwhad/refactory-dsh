@@ -656,9 +656,11 @@ design-v2: a brief in, a checked software artifact out.
 |---|---|---|
 | class | `DesignMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
+| function | `prepare_check_iterations` | `(knobs: 'dict[str, Any]') -> 'int'` |
 
 - **`DesignMode`** — Design, emit and check a software artifact.
 - **`main`** — ``python -m refactory_dsh.design --name <n> --brief <text> --check <cmd>``.
+- **`prepare_check_iterations`** — prepare_check's iteration limit: one more than the most reloops its knobs allow.
 
 
 <a id="refactory_dsh-repo_change"></a>

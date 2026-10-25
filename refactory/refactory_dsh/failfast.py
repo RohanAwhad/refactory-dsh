@@ -1,16 +1,35 @@
 """Fail-fast targeted pre-pass, stuck detection, and convergence history helpers.
 
 Shared by ``check_artifact`` (design mode) and ``focused_check`` (fast mode)
-so that the logic is not duplicated across two entry points.
+so that the logic is not duplicated across two entry points. Design mode's
+``prepare_check`` runs the same pre-pass as its self-check (b41a): given a
+selection, it runs those tests in chunks within a time limit.
 """
 
 from __future__ import annotations
 
+import math
 import re
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+#: How many chunks the self-check cuts its selection into. Each chunk is its own
+#: targeted command, so a limit that runs out stops between chunks and every
+#: finished chunk reports; more chunks cut closer to the limit, but each pays the
+#: runner's start-up again.
+SELF_CHECK_CHUNKS = 6
+
+#: The most test files a chunk holds, so a chunk the limit stops loses little.
+SELF_CHECK_CHUNK_FILES = 4
+
+#: pytest's summary line for a test module that does not import, ``ERROR tests/test_x.py``:
+#: `base_check.parse_test_failures` reads only error lines that give a reason.
+_COLLECTION_ERROR = re.compile(r"^ERROR\s+([\w/.\[\]-]+\.py)\s*(?:-\s.*)?$", re.MULTILINE)
+#: pytest stops before running anything once a module does not import.
+_INTERRUPTED = re.compile(r"Interrupted: \d+ errors? during collection")
 
 
 @dataclass
@@ -25,6 +44,18 @@ class PrepassResult:
     digest_text: str  # formatted digest, or ""
     runners: list[dict] = field(default_factory=list)  # parsed runner dicts
     raw_tail: str = ""  # raw_tail from the targeted digest
+    # ── the self-check's account (b41a); empty for the dm-128 pre-pass ──
+    selection: list[str] = field(default_factory=list)  # what it set out to run, in order
+    ran_ids: list[str] = field(default_factory=list)  # in chunks that finished
+    cut_ids: list[str] = field(default_factory=list)  # not started, or killed by the limit
+    failing_ids: list[str] = field(default_factory=list)  # failed, and not inherited
+    commands: list[str] = field(default_factory=list)  # one per chunk that ran
+    notes: list[str] = field(default_factory=list)  # why a chunk did not count
+    limit_s: float = 0.0
+    elapsed_s: float = 0.0
+    outputs: list[str] = field(default_factory=list)  # each failing chunk's output
+    left_out: list[str] = field(default_factory=list)  # failures not shown: inherited
+    timings: list[dict] = field(default_factory=list)  # each chunk run: its tests, seconds
 
 
 def _skip() -> PrepassResult:
@@ -34,6 +65,217 @@ def _skip() -> PrepassResult:
     )
 
 
+def self_check_limit(self_check_timeout_s: float, check_timeout_s: float) -> float:
+    """The self-check's time limit: its own knob, and never more than a third of the check's."""
+    return float(min(self_check_timeout_s, check_timeout_s // 3))
+
+
+def _runner_of(name: str) -> str:
+    from refactory_dsh.check_digest import _SCRIPT_TEST_FILE
+
+    if " > " in name or _SCRIPT_TEST_FILE.search(name.split("::")[0]):
+        return "vitest"
+    return "pytest" if "::" in name or name.endswith(".py") else "other"
+
+
+def _chunks(selection: list[str]) -> list[list[str]]:
+    """The selection in order, cut into about `SELF_CHECK_CHUNKS` chunks of one runner each,
+    none of more than `SELF_CHECK_CHUNK_FILES` tests.
+
+    The targeted command keeps the check's ``&&`` between steps, so a chunk that held
+    two runners' tests would not run the second runner's once the first failed.
+    """
+    size = min(SELF_CHECK_CHUNK_FILES, max(1, math.ceil(len(selection) / SELF_CHECK_CHUNKS)))
+    chunks: list[list[str]] = []
+    for name in selection:
+        if chunks and len(chunks[-1]) < size and _runner_of(chunks[-1][-1]) == _runner_of(name):
+            chunks[-1].append(name)
+        else:
+            chunks.append([name])
+    return chunks
+
+
+def _output(result: Any) -> str:
+    return "\n".join(filter(None, [
+        getattr(result, "stdout", None) or "",
+        getattr(result, "stderr", None) or "",
+    ])).strip()
+
+
+def self_check_failures(output: str) -> set[str]:
+    """The failures a run names: `base_check.parse_test_failures`'s, and each module that
+    did not import (its file stands for its failure)."""
+    from refactory_dsh.base_check import parse_test_failures, strip_ansi
+
+    return parse_test_failures(output) | set(_COLLECTION_ERROR.findall(strip_ansi(output)))
+
+
+def _chunk_report(result: Any, inherited: set[str]) -> tuple[set[str], str]:
+    """The chunk's failures that are not inherited, or why the chunk says nothing.
+
+    The same rule as the pre-pass's early stop: a preparation failure, a failure that
+    is not the code's (a timeout, a signal), and pytest's "nothing collected" exits are
+    not a verdict on the tests, and neither is a failure that names no test.
+    """
+    from refactory_dsh import authoring_evidence as evidence
+
+    if getattr(result, "ok", False):
+        return set(), ""
+    if getattr(result, "prep_failure", None) is not None:
+        return set(), "its environment could not be prepared"
+    if evidence.check_failure_kind(result) != "code_failure":
+        return set(), "it did not fail on the code (a timeout or a signal)"
+    rc = getattr(result, "returncode", None)
+    if rc in (4, 5):
+        return set(), f"pytest collected no test (exit {rc})"
+    found = self_check_failures(_output(result))
+    if not found:
+        return set(), f"it failed (exit {rc}) without naming a failing test"
+    return found - inherited, ""
+
+
+def _self_check(
+    selection: list[str],
+    prev_record: dict[str, Any],
+    check_command: str,
+    run_check_fn: Callable[[str, float], Any],
+    limit_s: float,
+    root: str | None,
+) -> PrepassResult:
+    """Run ``selection`` in chunks until the limit is spent; report what failed.
+
+    The cut is never made by killing the runner, because a killed runner reports
+    no failure: no new chunk starts once the limit is spent, and a finished chunk's
+    failures count even when a later chunk is killed. A chunk that reports nothing
+    (it names no failure, or its environment failed) ran nothing that counts, so its
+    tests are recorded as not run. A module that does not import is that file's
+    failure; pytest then stops before the chunk's other tests, so they run again
+    without it. Tests ``build_probe_command`` cannot target are left out and named.
+    """
+    from pathlib import Path
+
+    from refactory_dsh.check_digest import build_probe_command
+
+    inherited = set(prev_record.get("inherited", []))
+    root_path = Path(root) if root else None
+    started = time.monotonic()
+    ran: list[str] = []
+    cut: list[str] = []
+    failing: list[str] = []
+    commands: list[str] = []
+    notes: list[str] = []
+    failed_outputs: list[str] = []
+    timings: list[dict[str, Any]] = []
+    last = None
+    queue = _chunks(selection)
+    number = 0
+    while queue:
+        chunk = queue.pop(0)
+        number += 1
+        of = number + len(queue)
+        remaining = limit_s - (time.monotonic() - started)
+        if remaining < 1:
+            for later in (chunk, *queue):
+                cut.extend(later)
+            notes.append(f"the {limit_s:.0f} s limit was spent before chunk {number} "
+                          f"of {of}; it and the rest did not run")
+            break
+        ids = [name for name in chunk if "::" in name or " > " in name]
+        files = [name for name in chunk if name not in ids]
+        command, refusal = build_probe_command(check_command, ids, root=root_path, test_files=files)
+        if refusal:
+            cut.extend(chunk)
+            notes.append(f"chunk {number} could not be targeted: {refusal}")
+            continue
+        began = time.monotonic()
+        result = run_check_fn(command, remaining)
+        last = result
+        if getattr(result, "timed_out", False):
+            for later in (chunk, *queue):
+                cut.extend(later)
+            notes.append(f"chunk {number} of {of} was stopped at the "
+                         f"{limit_s:.0f} s limit, so it and the rest did not report")
+            break
+        commands.append(command)
+        found, why_not = _chunk_report(result, inherited)
+        timings.append({"tests": chunk, "s": round(time.monotonic() - began, 1),
+                        "counted": not why_not})
+        if why_not:
+            cut.extend(chunk)
+            notes.append(f"chunk {number} did not count: {why_not}")
+            continue
+        for test_id in sorted(found):
+            if test_id not in failing:
+                failing.append(test_id)
+        if found:
+            failed_outputs.append(_output(result))
+        if _INTERRUPTED.search(_output(result)):
+            named = self_check_failures(_output(result))
+            broken = [name for name in chunk if name in named]
+            rest = [name for name in chunk if name not in broken]
+            ran.extend(broken)
+            if broken and rest:
+                queue.insert(0, rest)
+                notes.append(f"chunk {number}: {', '.join(broken)} did not import, so pytest "
+                             "stopped before the chunk's other tests; they run again without it")
+            elif rest:
+                cut.extend(rest)
+                notes.append(f"chunk {number}: a module did not import, so pytest stopped "
+                             "before the chunk's tests")
+            continue
+        ran.extend(chunk)
+    digest_text, runners, raw_tail = failure_digest(failed_outputs, inherited)
+    return PrepassResult(
+        ran=bool(commands), early_stop=bool(failing),
+        targeted_command="\n".join(commands) or None,
+        check_mode="targeted" if failing else "full", result=last,
+        digest_text=digest_text, runners=runners, raw_tail=raw_tail,
+        selection=list(selection), ran_ids=ran, cut_ids=cut, failing_ids=failing,
+        commands=commands, notes=notes, limit_s=limit_s,
+        elapsed_s=round(time.monotonic() - started, 1),
+        outputs=failed_outputs, left_out=sorted(inherited), timings=timings,
+    )
+
+
+def without_failures(prepass: PrepassResult, test_ids: list[str]) -> PrepassResult:
+    """The self-check's result with ``test_ids`` gone from its failures and its digest."""
+    from dataclasses import replace
+
+    leave_out = {*prepass.left_out, *test_ids}
+    digest_text, runners, raw_tail = failure_digest(prepass.outputs, leave_out)
+    failing = [test_id for test_id in prepass.failing_ids if test_id not in leave_out]
+    return replace(prepass, failing_ids=failing, early_stop=bool(failing),
+                   check_mode="targeted" if failing else "full",
+                   digest_text=digest_text if failing else "", runners=runners if failing else [],
+                   raw_tail=raw_tail if failing else "", left_out=sorted(leave_out))
+
+
+def failure_digest(outputs: list[str], leave_out: set[str]) -> tuple[str, list[dict], str]:
+    """The digest of the failing chunks' outputs, without the failures in ``leave_out``.
+
+    Each output is digested on its own, as one runner's report, and the runners merged:
+    the builder is shown the failures it is sent back for, and no inherited one.
+    """
+    from refactory_dsh.check_digest import CheckDigest, RunnerDigest, digest_check_output, format_digest
+
+    if not outputs:
+        return "", [], ""
+    merged: dict[str, RunnerDigest] = {}
+    tail = ""
+    for output in outputs:
+        digest = digest_check_output(output)
+        tail = digest.raw_tail or tail
+        for runner in digest.runners:
+            kept = [entry for entry in runner.failures if entry.test_id not in leave_out]
+            if not kept:
+                continue
+            into = merged.setdefault(runner.name, RunnerDigest(name=runner.name, passed=False))
+            into.failures.extend(entry for entry in kept
+                                 if entry.test_id not in {f.test_id for f in into.failures})
+    combined = CheckDigest(runners=list(merged.values()), raw_tail=tail)
+    return format_digest(combined), combined.to_dict()["runners"], tail[-500:]
+
+
 def targeted_prepass(
     prev_record: dict[str, Any],
     check_command: str,
@@ -41,6 +283,8 @@ def targeted_prepass(
     check_timeout_s: float,
     *,
     root: str | None = None,
+    selection: list[str] | None = None,
+    self_check_timeout_s: float | None = None,
 ) -> PrepassResult:
     """Run previously-failing tests first and stop early while one still fails.
 
@@ -58,7 +302,23 @@ def targeted_prepass(
     root:
         Working directory root for ``build_probe_command``'s package.json
         lookup (correction item 4).
+    selection:
+        The self-check's tests, in the order they run (`test_selection`): whole test
+        files and test ids, the last check's failures among them. Given, the pre-pass
+        runs on every attempt, round 1 included, in chunks within
+        ``self_check_limit(self_check_timeout_s, check_timeout_s)``, and reports every
+        failure it found that is not inherited. Not given (``check_artifact`` and
+        ``focused_check``), it is the dm-128 pre-pass, unchanged.
+    self_check_timeout_s:
+        The self-check's own time limit (its knob), used with ``selection``.
     """
+    if selection is not None:
+        if not selection:
+            return _skip()
+        limit = self_check_limit(300 if self_check_timeout_s is None else self_check_timeout_s,
+                                 check_timeout_s)
+        return _self_check(selection, prev_record, check_command, run_check_fn, limit, root)
+
     # 1. Skip when previous record is not a failure.
     if prev_record.get("status") != "fail":
         return _skip()

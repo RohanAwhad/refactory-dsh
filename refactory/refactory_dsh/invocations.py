@@ -66,6 +66,9 @@ CHECK_PREP = "check-prep.json"
 #: What the check beside the reviews decided; `design_ops.gate_check` routes on it.
 CHECK_VERDICT = "check-verdict.json"
 
+#: Every self-check `design_ops.prepare_check` runs, one JSON object a line, appended.
+SELF_CHECK_RECORD = "self-check-record.jsonl"
+
 #: What a node that calls run_check produces.
 CHECK_PRODUCES = ("commit", "files", "inherited_failures", "changed_functions")
 

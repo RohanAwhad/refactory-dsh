@@ -101,6 +101,18 @@ Before a failed check spends a code attempt, it is compared with the same check 
 
 A generate or setup command that fails is compared against the unchanged base: the same command runs on the base commit in an isolated HOME; when the base succeeds, or the failure names files the attempt changed that the base's error does not, the failure is the change's fault and goes to the builder for repair with the exact error, labelled as generate, setup or install, spending an attempt like any failed check.  A failure the base has too (with no changed file uniquely named), or an infrastructure fault (a signal kill, a timeout, a missing executable), keeps today's handling.  A signal-killed preparation step (install, generate, setup) that survives `run_command`'s retry is classified as infrastructure, not `code_failure`, naming the command and the signal. The amendment takes every tracked change the generate command left.
 
+Before the review fork, `prepare_check` runs a self-check: the tests the change
+can break (the tests it touched, the last check's failures, the tests that import
+a module it changed, and the engine tests first when it changed a module most
+tests import), in chunks within `min(self_check_timeout_s, check_timeout_s // 3)`.
+A failure the base does not share goes back to the builder as a fix-up, spending
+no attempt and running no review, and the next emission is amended into the same
+attempt; past `self_check_fixups` (2) fix-ups an attempt, the early stop spends it.
+The repository's `docs:generate`, the generate step design runs on refactory-dsh,
+also regenerates the lowering snapshots (a few seconds, in the attempt and in the
+base, check-copy and probe worktrees that run generate too). See
+docs/hardening.md, "Self-check inside the attempt (b41a)".
+
 The `emit` worker can test its candidate through the builder probe before making
 its final emission.  The probe creates a throwaway standalone clone with the
 candidate applied, runs named tests in an isolated environment, and reports the
