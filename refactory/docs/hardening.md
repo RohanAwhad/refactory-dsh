@@ -1903,8 +1903,10 @@ pytest and vitest both take a file path where they take a test id.
 
 ### The cut
 
-The selection is cut into `SELF_CHECK_CHUNKS` (6) chunks, each its own targeted
-command. The limit is `min(self_check_timeout_s, check_timeout_s // 3)` (300 s
+The selection is cut, in order, into about `SELF_CHECK_CHUNKS` (6) chunks, each its
+own targeted command and each holding one runner's tests: the targeted command
+keeps the check's `&&` between steps, so a failing vitest step would otherwise
+stop the Python files beside it. The limit is `min(self_check_timeout_s, check_timeout_s // 3)` (300 s
 with the lab's 1,800 s check). No chunk starts once the limit is spent; a chunk
 still running at the limit is stopped and does not count, because a killed runner
 names no failure, but every finished chunk's failures do. The record says what
