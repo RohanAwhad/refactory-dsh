@@ -1485,7 +1485,8 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
         # stale sign-off.
         worktree.require_current(ctx.workdir)
 
-    draft_delivery = ctx.facts.get("draft_delivery")
+    # A fact that is not a mapping is no draft (`delivery.draft_fact` says so as a warning).
+    draft_delivery = delivery.draft_fact(ctx)
     if draft_delivery:
         require_current_evidence(ctx)
     else:

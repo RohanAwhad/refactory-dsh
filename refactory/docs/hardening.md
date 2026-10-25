@@ -2299,7 +2299,11 @@ A draft delivery opens a pull request with `gh pr create --draft` when the
   `"review"`, `"overwatch"`, `"correction_audit"`, `"delivery"`), and
   `rounds` (list of int, possibly empty).
 
-Nothing sets this fact until b40b (routes `BuildLoopStop` into it).
+Nothing sets this fact yet; a later change (b40b) routes `BuildLoopStop` into
+it. A node that sets `draft_delivery` must declare it in its `produces` (the
+spine refuses an undeclared fact) and write a mapping in the shape above; a
+fact that is not a mapping is read as no draft, with a run warning
+(`delivery.draft_fact`), so report and deliver behave as without it.
 
 ### Why
 
@@ -2319,16 +2323,33 @@ build-loop limit and ended with nothing delivered:
 ### What report and deliver do on a draft run
 
 - `report_artifact` calls `require_current_evidence` (the evidence-currency
-  checks factored out of `current_problems` via `_evidence_currency_problems`)
-  instead of `require_completion`.  It requires current evidence for the pushed
-  commit but not the review sign-off or a passing check.
-- `deliver_design` opens the PR with `--draft` and prepends a "## Unresolved
-  review findings" section listing the reason and each unresolved item.
+  checks factored out of `current_problems` via `_evidence_currency_problems`,
+  and its skip checks via `_skip_problems`) instead of `require_completion`.
+  It requires current evidence for the pushed commit but not the review
+  sign-off or a passing check.  A check skipped by anyone but a person is
+  refused, as on the complete path, and so is a run with no check evidence at
+  all, whether or not the `runtime_evidence` fact is set.  (Without the fact,
+  `require_completion` is unchanged, including its acceptance of a legacy run
+  with neither evidence nor that fact.)
+- `deliver_design` opens the PR with `--draft` and puts a "## Unresolved
+  review findings" section first in its description, listing the reason and
+  each unresolved item.  Every value in the section goes through `_public`
+  (credential values hidden) on one line, as every other field of the
+  description.  Delivering again replaces the section rather than adding a
+  second.
+- An open PR for the branch is converted with `gh pr ready --undo`, after the
+  push, so a refusal from there on keeps the push and the PR in the record.
+  GitHub has no draft PRs for private repositories on some plans: where `gh pr
+  create --draft` is refused, the PR opens ready for review with its title
+  prefixed `[draft] `; where `gh pr ready --undo` is refused, the section is
+  still written.  Either way the record's `draft_note` and the delivery result
+  say so.
 - On a base conflict or failing merged-result check, delivery drops the merge
   (back to the run's own commit), records it as the first unresolved item, and
   continues to push and open the draft.
-- Every other `NotDelivered` (closed/merged PR, push refused) keeps today's
-  behaviour.
+- Every other `NotDelivered` (closed PR, push refused, abandoned merge) keeps
+  today's behaviour, and is neither recorded nor reported as a draft: nothing
+  was delivered.  A merged PR is recorded merged, as today.
 - `evaluate_delivery_conflicts` returns `"proceed"` immediately (never
   reloops) on a draft run.
 - The run ends done, not failed.
@@ -2346,3 +2367,17 @@ build-loop limit and ended with nothing delivered:
 - `refactory/tests/test_delivery.py::test_draft_conflict_existing_open_pr`
 - `refactory/tests/test_delivery.py::test_draft_no_pr_mode`
 - `refactory/tests/test_delivery.py::test_spine_draft_delivery_across_processes`
+- `refactory/tests/test_delivery.py::test_draft_pr_body_hides_credentials_and_keeps_each_item_on_one_line`
+- `refactory/tests/test_delivery.py::test_draft_without_any_check_evidence_is_refused`
+- `refactory/tests/test_delivery.py::test_draft_with_stale_identity_is_refused`
+- `refactory/tests/test_delivery.py::test_a_draft_github_refuses_opens_ready_with_its_title_marked`
+- `refactory/tests/test_delivery.py::test_a_pull_request_github_will_not_make_a_draft_keeps_its_delivery`
+- `refactory/tests/test_delivery.py::test_a_draft_whose_description_gh_cannot_edit_still_records_its_push`
+- `refactory/tests/test_delivery.py::test_delivering_a_draft_again_replaces_its_unresolved_section`
+- `refactory/tests/test_delivery.py::test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft`
+- `refactory/tests/test_delivery.py::test_a_draft_whose_pull_request_merged_is_recorded_merged`
+- `refactory/tests/test_delivery.py::test_a_draft_whose_merge_was_abandoned_is_not_succeeded`
+- `refactory/tests/test_delivery.py::test_a_draft_whose_push_is_refused_keeps_the_work_local_as_without_the_fact`
+- `refactory/tests/test_delivery.py::test_a_draft_fact_that_is_not_a_mapping_is_no_draft`
+- `refactory/tests/test_authoring_evidence.py::test_ceo_skip_is_refused_on_the_draft_path`
+- `refactory/tests/test_authoring_evidence.py::test_person_skip_is_accepted_on_the_draft_path`

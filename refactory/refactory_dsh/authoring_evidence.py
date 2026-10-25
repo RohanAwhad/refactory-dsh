@@ -457,32 +457,41 @@ def _evidence_currency_problems(ctx: Any) -> list[str]:
     return problems
 
 
+def _skip_problems(ctx: Any) -> tuple[list[str], bool]:
+    """A skipped check: what refuses it, and whether it is a person's skip that is accepted.
+
+    Only a person's skip (graph-control) is accepted, and only with evidence recording that
+    same skip. Shared by ``current_problems`` and ``require_current_evidence``, so the
+    draft path refuses a CEO's skip exactly as the complete path does.
+    """
+    prov = _check_skip_provenance(ctx.workdir)
+    if prov is None:
+        return [], False
+    if prov['source'] != 'person':
+        return [f"required runtime validation was skipped by {prov['source']}; "
+                f"only a person's skip is accepted"], False
+    # Person-sourced skip: require evidence with status='skipped'.
+    if not ctx.exists(EVIDENCE):
+        return ["authoritative runtime evidence is missing"], False
+    ev = ctx.read_json(EVIDENCE, {})
+    validation = ev.get('validation', {})
+    if validation.get('status') == 'skipped':
+        source_match = validation.get('source') == prov['source']
+        at_match = validation.get('at') == prov['at']
+        node_match = validation.get('node') == prov['node']
+        if source_match and at_match and node_match:
+            # Person skip accepted. The caller suppresses "did not pass";
+            # identity, receipt, settings, output and worker checks still apply.
+            return [], True
+    return ["authoritative runtime evidence is missing"], False
+
+
 def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
     """Legacy reports remain readable; new evidence cannot authorize old sign-off."""
     # Check skip provenance before the early return.
-    person_skip_accepted = False
-    prov = _check_skip_provenance(ctx.workdir)
-    if prov is not None:
-        if prov['source'] != 'person':
-            return [f"required runtime validation was skipped by {prov['source']}; "
-                    f"only a person's skip is accepted"]
-        # Person-sourced skip: require evidence with status='skipped'.
-        if not ctx.exists(EVIDENCE):
-            return ["authoritative runtime evidence is missing"]
-        ev = ctx.read_json(EVIDENCE, {})
-        validation = ev.get('validation', {})
-        if validation.get('status') == 'skipped':
-            source_match = validation.get('source') == prov['source']
-            at_match = validation.get('at') == prov['at']
-            node_match = validation.get('node') == prov['node']
-            if source_match and at_match and node_match:
-                # Person skip accepted. Suppress "did not pass" below;
-                # keep identity, receipt, settings, output and worker checks.
-                person_skip_accepted = True
-            else:
-                return ["authoritative runtime evidence is missing"]
-        else:
-            return ["authoritative runtime evidence is missing"]
+    skipped, person_skip_accepted = _skip_problems(ctx)
+    if skipped:
+        return skipped
     # Currency checks (identity, settings, receipts, outputs) — factored into
     # ``_evidence_currency_problems`` so ``require_current_evidence`` shares them.
     problems = _evidence_currency_problems(ctx)
@@ -1419,11 +1428,20 @@ def require_current_evidence(ctx: Any) -> None:
     intent audit, or correction audit.
 
     Used by ``report_artifact`` on the draft path: a draft delivery requires
-    current evidence but not a passing check or review sign-off.
+    current evidence but not a passing check or review sign-off.  A check skipped by
+    anyone but a person is refused, as ``current_problems`` refuses it.  Unlike
+    ``current_problems``, a missing evidence file is refused whether or not the
+    ``runtime_evidence`` fact is set: a draft says what its check showed, so a run with
+    no check evidence at all has nothing to say.
 
-    Calls ``_evidence_currency_problems`` — the same function ``current_problems``
-    calls for its currency checks — so the two can never diverge.
+    Calls ``_skip_problems`` and ``_evidence_currency_problems`` — the same functions
+    ``current_problems`` calls — so the two can never diverge.
     """
+    skipped, _person_skip = _skip_problems(ctx)
+    if skipped:
+        raise ValueError("evidence is not current: " + "; ".join(skipped))
+    if not ctx.exists(EVIDENCE):
+        raise ValueError("evidence is not current: authoritative runtime evidence is missing")
     problems = _evidence_currency_problems(ctx)
     if problems:
         raise ValueError("evidence is not current: " + "; ".join(problems))

@@ -4,8 +4,10 @@ Only what delivery asks for (#350): who is logged in, a repository's details, cr
 one, and listing, opening and reading pull requests. Its state lives under
 ``FAKE_GH_ROOT``: ``<owner>/<name>.git`` is the repository git pushes to (the tests
 point `https://github.com/` there with `url.<base>.insteadOf`), ``<owner>/<name>.json``
-what GitHub says about it, and ``<owner>/<name>.pulls.json`` its pull requests. A
-``login`` file holds the account gh is logged in to; without one, gh is logged out.
+what GitHub says about it (``"drafts": false`` refuses draft pull requests, as GitHub
+does for private repositories on some plans), and ``<owner>/<name>.pulls.json`` its pull
+requests. A ``login`` file holds the account gh is logged in to; without one, gh is
+logged out.
 Every call's HOME is appended to ``homes.log``, so a test can see where it ran from.
 """
 
@@ -127,6 +129,9 @@ def main(args: list[str]) -> None:
             _fail(f"pull request create failed: GraphQL: Head sha can't be blank, No commits between main and {head}")
         pulls = _pulls(slug)
         draft = "--draft" in args
+        if draft and not _meta(slug).get("drafts", True):
+            _fail("pull request create failed: GraphQL: Draft pull requests are not supported in this "
+                  "repository. (createPullRequest)")
         pulls.append({"number": len(pulls) + 1, "head": head, "base": _option(args, "--base"), "state": "OPEN",
                       "title": _option(args, "--title"), "body": Path(_option(args, "--body-file")).read_text(),
                       "draft": draft})
@@ -137,6 +142,9 @@ def main(args: list[str]) -> None:
         if "--undo" in args:
             ref = args[2] if len(args) > 2 and not args[2].startswith("-") else args[-1]
             slug, pull = _find(ref, args)
+            if not _meta(slug).get("drafts", True):
+                _fail("GraphQL: Draft pull requests are not supported in this repository. "
+                      "(convertPullRequestToDraft)")
             pull["draft"] = True
             pulls = _pulls(slug)
             for i, p in enumerate(pulls):
