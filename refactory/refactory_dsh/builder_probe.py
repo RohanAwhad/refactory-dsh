@@ -133,11 +133,80 @@ def sweep_warm_clones(workdir: Path) -> None:
             continue
         if not (entry / "cache.key").is_file():
             continue
-        probe_id = entry.name.removeprefix("probe-")
-        shutil.rmtree(entry, ignore_errors=True)
-        # Remove slot record
-        slot_path = refactory_dir / "slot" / f"run-probe-{probe_id}.json"
-        slot_path.unlink(missing_ok=True)
+        _try_evict_clone(entry, refactory_dir)
+
+
+def _try_evict_clone(probe_dir: Path, refactory_dir: Path) -> bool:
+    """Try to evict a warm clone: acquire its lock without blocking, then rmtree.
+
+    Returns True if the clone was removed, False if it was skipped (in use).
+    """
+    lock_path = probe_dir / "probe.lock"
+    try:
+        fd = open(lock_path, "w")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        return False
+    try:
+        probe_id = probe_dir.name.removeprefix("probe-")
+        shutil.rmtree(probe_dir, ignore_errors=True)
+        (refactory_dir / "slot" / f"run-probe-{probe_id}.json").unlink(missing_ok=True)
+    finally:
+        try:
+            fd.close()
+        except OSError:
+            pass
+    return True
+
+
+def _do_cold_clone(probe_dir: Path, clone_dir: Path, found: Worktree, remaining: float) -> None:
+    """Create a cold clone of the target for probing."""
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "clone", "--no-local", "--depth", "1",
+         "--branch", found.branch, found.target, str(clone_dir)],
+        check=True, capture_output=True, timeout=min(60, remaining),
+    )
+    subprocess.run(
+        ["git", "-C", str(clone_dir), "remote", "remove", "origin"],
+        check=True, capture_output=True, timeout=10,
+    )
+    subprocess.run(
+        ["git", "-C", str(clone_dir), "config", "core.hooksPath", "/dev/null"],
+        check=True, capture_output=True, timeout=5,
+    )
+
+
+def _stage_emission(clone_dir: Path, clone_base: str, emission: str | None,
+                    workdir: Path, found: Worktree) -> str:
+    """Apply the emission to the clone, stage and commit.  Returns clone_head."""
+    clone_head = clone_base
+    if emission is not None:
+        emission_path = workdir / emission
+        if emission_path.is_file():
+            from refactory_dsh.repo_change import apply_emission
+            emission_content = emission_path.read_text()
+            files_dict, deletes, _rev, _repeated = apply_emission(
+                emission_content, found, workdir)
+            if files_dict or deletes:
+                _apply_emission_to_clone(clone_dir, files_dict, deletes)
+                all_paths = [str(p) for p in files_dict]
+                if all_paths:
+                    worktree.git(clone_dir, "add", "-f", "--", *all_paths)
+                for d in deletes:
+                    dp = clone_dir / d
+                    if dp.exists():
+                        worktree.git(clone_dir, "rm", "-q", "-f", "--",
+                                     str(d))
+                worktree.git(
+                    clone_dir, *NO_HOOKS, "-c", "commit.gpgsign=false",
+                    "commit", "-q", "--no-verify", "--allow-empty",
+                    "-m", "probe candidate",
+                    env={**os.environ, **COMMITTER},
+                )
+                clone_head = worktree.git(
+                    clone_dir, "rev-parse", "HEAD").strip()
+    return clone_head
 
 
 # ── sweep ─────────────────────────────────────────────────────────────────────
@@ -300,35 +369,16 @@ def prepared_clone(
                         dsh_home_dir = probe_dir / "dsh_home"
                         warm_hit = True
                     else:
-                        # Stale eviction
-                        stale_id = entry.name.removeprefix("probe-")
-                        shutil.rmtree(entry, ignore_errors=True)
-                        (refactory_dir / "slot" / f"run-probe-{stale_id}.json").unlink(
-                            missing_ok=True)
+                        # Stale eviction — lock-safe (fix 6)
+                        _try_evict_clone(entry, refactory_dir)
 
                 if not warm_hit:
                     # Cold clone under the creation lock
-                    probe_dir.mkdir(parents=True, exist_ok=True)
-                    clone_dir = probe_dir / "repo"
-                    home_dir = probe_dir / "home"
-                    dsh_home_dir = probe_dir / "dsh_home"
-                    subprocess.run(
-                        ["git", "clone", "--no-local", "--depth", "1",
-                         "--branch", found.branch, found.target, str(clone_dir)],
-                        check=True, capture_output=True, timeout=min(60, deadline),
-                    )
-                    subprocess.run(
-                        ["git", "-C", str(clone_dir), "remote", "remove", "origin"],
-                        check=True, capture_output=True, timeout=10,
-                    )
-                    subprocess.run(
-                        ["git", "-C", str(clone_dir), "config", "core.hooksPath",
-                         "/dev/null"],
-                        check=True, capture_output=True, timeout=5,
-                    )
+                    _do_cold_clone(probe_dir, clone_dir, found, deadline)
                     clone_base = worktree.git(clone_dir, "rev-parse", "HEAD").strip()
-                    (probe_dir / "cache.key").write_text(cache_key)
+                    # Write clone_base FIRST, cache.key LAST (fix 3A)
                     (probe_dir / "clone_base").write_text(clone_base)
+                    (probe_dir / "cache.key").write_text(cache_key)
                     # Slot record for the new warm clone
                     slot_dir = workdir / ".refactory" / "slot"
                     slot_dir.mkdir(parents=True, exist_ok=True)
@@ -339,66 +389,109 @@ def prepared_clone(
                         "run": str(workdir), "owner_pid": os.getpid(),
                     })
 
-                # Acquire per-clone lock (blocks if another probe is using it)
-                lock_fd = open(probe_dir / "probe.lock", "w")
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                target_probe_dir = probe_dir
             finally:
-                # Release the creation lock so other probes can scan
+                # Release the creation lock BEFORE per-clone lock (fix 6C)
                 fcntl.flock(creation_lock_fd, fcntl.LOCK_UN)
                 creation_lock_fd.close()
 
-            # Reset the clone for the warm-hit case
-            if warm_hit:
-                clone_base = (probe_dir / "clone_base").read_text().strip()
-                worktree.git(clone_dir, "reset", "--hard", clone_base)
-                worktree.git(clone_dir, "clean", "-fdx",
-                             "--exclude=.venv", "--exclude=node_modules")
-            else:
+            # Acquire per-clone lock outside the creation lock
+            lock_fd = open(target_probe_dir / "probe.lock", "w")
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+            # TOCTOU guard: clone may have been evicted between lock release
+            # and per-clone lock acquisition (fix 6C)
+            if not (target_probe_dir / "cache.key").is_file():
+                # Clone was evicted — create a fresh cold clone
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    lock_fd.close()
+                except OSError:
+                    pass
+                lock_fd = None
+                probe_id = uuid.uuid4().hex[:12]
+                probe_dir = workdir / ".refactory" / f"probe-{probe_id}"
+                clone_dir = probe_dir / "repo"
+                home_dir = probe_dir / "home"
+                dsh_home_dir = probe_dir / "dsh_home"
+                _do_cold_clone(probe_dir, clone_dir, found,
+                               deadline - (time.monotonic() - start))
                 clone_base = worktree.git(clone_dir, "rev-parse", "HEAD").strip()
+                (probe_dir / "clone_base").write_text(clone_base)
+                (probe_dir / "cache.key").write_text(cache_key)
+                slot_dir = workdir / ".refactory" / "slot"
+                slot_dir.mkdir(parents=True, exist_ok=True)
+                _write_json(slot_dir / f"run-probe-{probe_id}.json", {
+                    "target": found.target, "path": str(clone_dir),
+                    "branch": f"{BRANCH_PREFIX}probe-{probe_id}",
+                    "base": clone_base, "head": clone_base,
+                    "run": str(workdir), "owner_pid": os.getpid(),
+                })
+                lock_fd = open(probe_dir / "probe.lock", "w")
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                warm_hit = False
+
+            # Warm-hit operations wrapped in try/except for cold fallback (fix 3B)
+            try:
+                if warm_hit:
+                    clone_base = (probe_dir / "clone_base").read_text().strip()
+                    worktree.git(clone_dir, "reset", "--hard", clone_base)
+                    worktree.git(clone_dir, "clean", "-fdx",
+                                 "--exclude=.venv", "--exclude=node_modules")
+                    # Fix 1: delete install records so ensure_environment re-runs
+                    for stale_record in dsh_home_dir.glob(
+                            "worktrees/*/run-probe-*.json"):
+                        try:
+                            stale_record.unlink()
+                        except OSError:
+                            pass
+                else:
+                    clone_base = worktree.git(
+                        clone_dir, "rev-parse", "HEAD").strip()
+
+                clone_head = _stage_emission(
+                    clone_dir, clone_base, emission, workdir, found)
+            except Exception:
+                # Evict the broken clone and fall back to a cold clone (fix 3B)
+                if lock_fd is not None:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        lock_fd.close()
+                    except OSError:
+                        pass
+                    lock_fd = None
+                _try_evict_clone(probe_dir, refactory_dir)
+                probe_id = uuid.uuid4().hex[:12]
+                probe_dir = workdir / ".refactory" / f"probe-{probe_id}"
+                clone_dir = probe_dir / "repo"
+                home_dir = probe_dir / "home"
+                dsh_home_dir = probe_dir / "dsh_home"
+                _do_cold_clone(probe_dir, clone_dir, found,
+                               deadline - (time.monotonic() - start))
+                clone_base = worktree.git(
+                    clone_dir, "rev-parse", "HEAD").strip()
+                (probe_dir / "clone_base").write_text(clone_base)
+                (probe_dir / "cache.key").write_text(cache_key)
+                slot_dir = workdir / ".refactory" / "slot"
+                slot_dir.mkdir(parents=True, exist_ok=True)
+                _write_json(slot_dir / f"run-probe-{probe_id}.json", {
+                    "target": found.target, "path": str(clone_dir),
+                    "branch": f"{BRANCH_PREFIX}probe-{probe_id}",
+                    "base": clone_base, "head": clone_base,
+                    "run": str(workdir), "owner_pid": os.getpid(),
+                })
+                lock_fd = open(probe_dir / "probe.lock", "w")
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                warm_hit = False
+                clone_head = _stage_emission(
+                    clone_dir, clone_base, emission, workdir, found)
 
         else:
             # ── cold path (warm=False) ───────────────────────────────
-            target = found.target
-            subprocess.run(
-                ["git", "clone", "--no-local", "--depth", "1",
-                 "--branch", found.branch, target, str(clone_dir)],
-                check=True, capture_output=True, timeout=min(60, deadline),
-            )
-            subprocess.run(
-                ["git", "-C", str(clone_dir), "remote", "remove", "origin"],
-                check=True, capture_output=True, timeout=10,
-            )
-            subprocess.run(
-                ["git", "-C", str(clone_dir), "config", "core.hooksPath", "/dev/null"],
-                check=True, capture_output=True, timeout=5,
-            )
+            _do_cold_clone(probe_dir, clone_dir, found, deadline)
             clone_base = worktree.git(clone_dir, "rev-parse", "HEAD").strip()
-
-        # Apply emission if provided
-        clone_head = clone_base
-        if emission is not None:
-            emission_path = workdir / emission
-            if emission_path.is_file():
-                from refactory_dsh.repo_change import apply_emission
-                emission_content = emission_path.read_text()
-                files_dict, deletes, _rev, _repeated = apply_emission(emission_content, found, workdir)
-                if files_dict or deletes:
-                    _apply_emission_to_clone(clone_dir, files_dict, deletes)
-                    # Stage and commit
-                    all_paths = [str(p) for p in files_dict]
-                    if all_paths:
-                        worktree.git(clone_dir, "add", "-f", "--", *all_paths)
-                    for d in deletes:
-                        dp = clone_dir / d
-                        if dp.exists():
-                            worktree.git(clone_dir, "rm", "-q", "-f", "--", str(d))
-                    worktree.git(
-                        clone_dir, *NO_HOOKS, "-c", "commit.gpgsign=false",
-                        "commit", "-q", "--no-verify", "--allow-empty",
-                        "-m", "probe candidate",
-                        env={**os.environ, **COMMITTER},
-                    )
-                    clone_head = worktree.git(clone_dir, "rev-parse", "HEAD").strip()
+            clone_head = _stage_emission(
+                clone_dir, clone_base, emission, workdir, found)
 
         # Create synthetic worktree record
         probe_branch = f"{BRANCH_PREFIX}probe-{probe_id}"

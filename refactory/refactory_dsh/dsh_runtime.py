@@ -269,6 +269,15 @@ def evaluate_on_dsh(
     name = f"{type(mode).__module__.split('.')[-2]}-{mode.name}"
     run = run_on_dsh(state, workdir, name=name, timeout_s=timeout_s, on_output=on_output,
                      **({"model": model} if model is not None else {}))
+    # Fix 4: sweep warm probe clones at run end (walker path)
+    try:
+        from refactory_dsh.builder_probe import sweep_warm_clones
+        sweep_warm_clones(Path(run.workdir))
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "could not remove warm clone under %s: %s", run.workdir, exc,
+        )
     if run.returncode != 0 or not run.facts:
         detail = run.stderr.strip().splitlines()[-1] if run.stderr.strip() else "no output"
         return RunResult(

@@ -440,6 +440,15 @@ def run(
         promote_unretried_failure(workdir)
     except Exception:
         pass  # promotion is best-effort; do not mask the run's exit code
+    # Fix 4: sweep warm probe clones at run end (all terminal states)
+    try:
+        from refactory_dsh.builder_probe import sweep_warm_clones
+        sweep_warm_clones(workdir)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "could not remove warm clone under %s: %s", workdir, exc,
+        )
     # In headless mode, when the run stopped at a user gate, print the exact
     # commands a person uses to answer it and resume. Printed once, only here.
     if headless and code != 0:

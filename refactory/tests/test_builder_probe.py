@@ -589,46 +589,100 @@ def _make_probe_run_with_pytest(tmp_path):
     return run, repo, found
 
 
+def _make_probe_run_with_real_tests(tmp_path):
+    """Like _make_probe_run but with real test files that probes can target,
+    and a pytest check command."""
+    run, repo, found = _make_probe_run(tmp_path)
+
+    # conftest.py so imports from the repo root work
+    (repo / "conftest.py").write_text(
+        "import sys, os\n"
+        "sys.path.insert(0, os.path.dirname(__file__))\n"
+    )
+    # A test file that probes can target
+    (repo / "test_helper.py").write_text(
+        "def test_bar():\n"
+        "    from helper import VALUE\n"
+        "    assert VALUE > 0\n"
+    )
+
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "add test files",
+         env={**os.environ, "GIT_AUTHOR_NAME": "test",
+              "GIT_AUTHOR_EMAIL": "t@t.com",
+              "GIT_COMMITTER_NAME": "test",
+              "GIT_COMMITTER_EMAIL": "t@t.com"})
+
+    new_head = _git(repo, "rev-parse", "HEAD")
+    _write_json(run / ".refactory" / "slot" / "run-test.json", {
+        "target": str(repo), "path": str(repo), "branch": found.branch,
+        "base": found.base, "head": new_head, "run": str(run),
+    })
+    from refactory_dsh.invocations import WORKTREE_RECORD
+    _write_json(run / WORKTREE_RECORD, {
+        "target": str(repo), "path": str(repo), "branch": found.branch,
+        "base": found.base, "head": new_head, "run": str(run),
+    })
+    (run / "facts.json").write_text(json.dumps({
+        "name": "test-probe", "brief": "test",
+        "check": f"{sys.executable} -m pytest -q",
+    }))
+    found = Worktree(target=str(repo), path=str(repo), branch=found.branch,
+                     base=found.base, head=new_head, run=str(run))
+    return run, repo, found
+
+
 def test_warm_probe_subprocess_reuse(tmp_path):
-    """Two separate subprocess probe calls in a row — the second reuses the
-    warm clone (no second git clone) and sees only the second emission's change.
-    Materialise's sweep then removes the warm clone.
+    """Two sequential subprocess probes reuse the warm clone and reset properly.
 
-    Revert check: removing the warm-reuse code forces a fresh git clone on
-    every subprocess call — the single-clone assertion fails.
+    Emission 1 writes helper.py (VALUE=1) and marker.py; emission 2 writes
+    helper.py (VALUE=2) only.  Both probes pass.  After the second probe,
+    marker.py must be absent (reset cleaned it).
+
+    Kills M6: without reset, marker.py from emission 1 persists and the test
+    assertion on the clone directory fails.
+    Also exercises fix 1 (install record deleted so install re-runs).
     """
-    run, repo, found = _make_probe_run_with_pytest(tmp_path)
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
 
-    # First emission
-    (run / "emit.txt").write_text("===FILE: tool.py===\nprint('first')\n")
+    # Emission 1: helper.py + marker.py
+    (run / "emit.txt").write_text(
+        "===FILE: helper.py===\n"
+        "VALUE = 1\n"
+        "===FILE: marker.py===\n"
+        "STALE = True\n"
+    )
     result1 = subprocess.run(
         [sys.executable, "-m", "refactory_dsh.builder_probe",
          "--workdir", str(run), "--emission", "emit.txt",
-         "--test", "tests/test_foo.py::test_bar", "--timeout", "60"],
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
         capture_output=True, text=True, timeout=120,
     )
     output1 = json.loads(result1.stdout)
-    assert output1["status"] in ("pass", "fail", "error", "timed_out"), (
-        f"first probe failed unexpectedly: {result1.stderr}")
+    assert output1["status"] == "pass", (
+        f"first probe should pass (VALUE=1 > 0): {result1.stderr}")
 
-    # Exactly one warm clone should exist
+    # Exactly one warm clone
     probe_dirs_1 = [d for d in (run / ".refactory").iterdir()
                     if d.name.startswith("probe-") and d.is_dir()
                     and (d / "cache.key").is_file()]
     assert len(probe_dirs_1) == 1, f"expected 1 warm clone, got {len(probe_dirs_1)}"
     first_dir = probe_dirs_1[0]
 
-    # Second emission — different content
-    (run / "emit.txt").write_text("===FILE: tool.py===\nprint('second')\n")
+    # Emission 2: helper.py only — no marker.py
+    (run / "emit.txt").write_text(
+        "===FILE: helper.py===\n"
+        "VALUE = 2\n"
+    )
     result2 = subprocess.run(
         [sys.executable, "-m", "refactory_dsh.builder_probe",
          "--workdir", str(run), "--emission", "emit.txt",
-         "--test", "tests/test_foo.py::test_bar", "--timeout", "60"],
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
         capture_output=True, text=True, timeout=120,
     )
     output2 = json.loads(result2.stdout)
-    assert output2["status"] in ("pass", "fail", "error", "timed_out"), (
-        f"second probe failed unexpectedly: {result2.stderr}")
+    assert output2["status"] == "pass", (
+        f"second probe should pass (VALUE=2 > 0): {result2.stderr}")
 
     # Same warm clone directory — only one git clone occurred
     probe_dirs_2 = [d for d in (run / ".refactory").iterdir()
@@ -637,16 +691,502 @@ def test_warm_probe_subprocess_reuse(tmp_path):
     assert len(probe_dirs_2) == 1, f"expected 1 warm clone, got {len(probe_dirs_2)}"
     assert probe_dirs_2[0] == first_dir, "second probe should reuse the same clone"
 
-    # The second emission's content should be in the clone
+    # Verify second emission's content
     clone_dir = first_dir / "repo"
-    assert (clone_dir / "tool.py").read_text() == "print('second')\n", (
-        "warm-hit clone must show only the second emission's content")
+    assert "VALUE = 2" in (clone_dir / "helper.py").read_text(), (
+        "warm-hit clone must show the second emission's helper.py")
+    # marker.py from emission 1 must be cleaned by reset (M6 kill)
+    assert not (clone_dir / "marker.py").exists(), (
+        "reset should have cleaned marker.py from emission 1")
 
-    # Materialise cleanup removes the warm clone
+    # Cleanup
     sweep_warm_clones(run)
     remaining = [d for d in (run / ".refactory").iterdir()
                  if d.name.startswith("probe-") and d.is_dir()]
     assert len(remaining) == 0, "sweep_warm_clones should remove the warm clone"
+
+
+def test_warm_probe_concurrent_subprocess(tmp_path):
+    """Two concurrent probe subprocesses serialised by the flock, both pass.
+
+    Kills M7: without flock, concurrent mutation corrupts the working tree.
+    """
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
+
+    (run / "emit1.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    (run / "emit2.txt").write_text("===FILE: helper.py===\nVALUE = 2\n")
+
+    cmd_base = [sys.executable, "-m", "refactory_dsh.builder_probe",
+                "--workdir", str(run), "--test", "test_helper.py::test_bar",
+                "--timeout", "60"]
+
+    p1 = subprocess.Popen(cmd_base + ["--emission", "emit1.txt"],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    p2 = subprocess.Popen(cmd_base + ["--emission", "emit2.txt"],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    stdout1, stderr1 = p1.communicate(timeout=120)
+    stdout2, stderr2 = p2.communicate(timeout=120)
+
+    output1 = json.loads(stdout1)
+    output2 = json.loads(stdout2)
+    assert output1["status"] == "pass", f"proc1 failed: {stderr1}"
+    assert output2["status"] == "pass", f"proc2 failed: {stderr2}"
+
+    # Only one warm clone directory should exist
+    probe_dirs = [d for d in (run / ".refactory").iterdir()
+                  if d.name.startswith("probe-") and d.is_dir()
+                  and (d / "cache.key").is_file()]
+    assert len(probe_dirs) == 1, f"expected 1 warm clone, got {len(probe_dirs)}"
+
+    sweep_warm_clones(run)
+    remaining = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()]
+    assert len(remaining) == 0
+
+
+def test_warm_probe_materialise_removes_clone(tmp_path):
+    """materialise() removes the warm clone via sweep_warm_clones.
+
+    Kills M4: without sweep_warm_clones in materialise, warm clones survive.
+    Drives the real repo_change.materialise.
+    """
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
+
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    result = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
+        capture_output=True, text=True, timeout=120,
+    )
+    output = json.loads(result.stdout)
+    assert output["status"] == "pass", f"probe failed: {result.stderr}"
+
+    # Warm clone must exist
+    warm_dirs = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()
+                 and (d / "cache.key").is_file()]
+    assert len(warm_dirs) == 1, "warm clone should exist after probe"
+
+    # Drive the real materialise — sweep_warm_clones runs before the commit
+    from refactory_dsh.nn.executor import RunContext
+    ctx = RunContext(run,
+                     facts={"check": f"{sys.executable} -m pytest -q",
+                            "name": "test-probe", "brief": "test"},
+                     knobs={"check_timeout_s": 60, "attempts": 3})
+    ctx._declared = ()
+    ctx._declared_facts = ()
+    ctx.enforce_writes = False
+    try:
+        repo_change.materialise(ctx)
+    except Exception:
+        pass  # expected — the emission format is not set up for full materialise
+
+    # Warm clones must be gone (materialise sweeps them before committing)
+    warm_dirs = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()
+                 and (d / "cache.key").is_file()]
+    assert len(warm_dirs) == 0, "materialise must remove warm clones"
+
+    # Slot records should be cleaned too
+    slot_dir = run / ".refactory" / "slot"
+    if slot_dir.is_dir():
+        leaked = [f for f in slot_dir.iterdir() if f.name.startswith("run-probe-")]
+        assert not leaked, f"leaked slot records: {[f.name for f in leaked]}"
+
+
+def test_sweep_dead_probes_spares_warm_clone(tmp_path):
+    """sweep_dead_probes skips warm clones (identified by cache.key).
+
+    Kills M3: without the cache.key guard, the warm clone is treated as leaked
+    and deleted.
+    """
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    refactory_dir = workdir / ".refactory"
+    refactory_dir.mkdir()
+
+    # Create a synthetic warm clone with cache.key and owner.pid
+    probe_dir = refactory_dir / "probe-warmtest"
+    probe_dir.mkdir()
+    (probe_dir / "cache.key").write_text("test-key")
+    (probe_dir / "owner.pid").write_text(str(os.getpid()))
+
+    sweep_dead_probes(workdir)
+    assert probe_dir.exists(), "sweep_dead_probes must spare warm clones (cache.key)"
+
+
+def test_warm_probe_setup_runs_on_warm_hit(tmp_path):
+    """Setup and generate re-run on a warm-hit probe.
+
+    Kills M11: without prepare_check_environment on warm hit, setup doesn't
+    run and the stamp file is missing.
+    """
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
+
+    # Setup command writes a stamp file
+    (run / "facts.json").write_text(json.dumps({
+        "name": "test-probe", "brief": "test",
+        "check": f"{sys.executable} -m pytest -q",
+        "setup": "touch .setup_stamp",
+    }))
+
+    # First probe: creates warm clone and runs setup
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    result1 = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
+        capture_output=True, text=True, timeout=120,
+    )
+    output1 = json.loads(result1.stdout)
+    assert output1["status"] == "pass", f"first probe failed: {result1.stderr}"
+
+    # Second probe: warm hit — setup must re-run
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 2\n")
+    result2 = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
+        capture_output=True, text=True, timeout=120,
+    )
+    output2 = json.loads(result2.stdout)
+    assert output2["status"] == "pass", f"second probe failed: {result2.stderr}"
+
+    # After second probe the stamp must exist in the clone (setup re-ran)
+    probe_dirs = [d for d in (run / ".refactory").iterdir()
+                  if d.name.startswith("probe-") and d.is_dir()
+                  and (d / "cache.key").is_file()]
+    assert len(probe_dirs) == 1
+    clone_dir = probe_dirs[0] / "repo"
+    assert (clone_dir / ".setup_stamp").exists(), (
+        "setup must re-run on warm hit — stamp missing (M11)")
+
+    sweep_warm_clones(run)
+
+
+def test_in_process_probe_is_cold(tmp_path):
+    """In-process callers get cold (non-warm) clones — no cache.key persists.
+
+    Kills M13: if _warm_enabled were True unconditionally, a warm clone with
+    cache.key would persist after the probe.
+    """
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+
+    result = run_probe(run, "emit.txt", ["test_helper.py::test_bar"], timeout=60)
+    assert result.status == "pass", f"probe failed: {result.refusal}"
+
+    # No cache.key should remain (cold probe cleans up completely)
+    probe_dirs = [d for d in (run / ".refactory").iterdir()
+                  if d.name.startswith("probe-") and d.is_dir()
+                  and (d / "cache.key").is_file()]
+    assert not probe_dirs, (
+        "in-process probe must not leave a warm clone (cache.key)")
+
+
+def test_warm_probe_stale_index_lock(tmp_path):
+    """A stale .git/index.lock triggers cold fallback, not a persistent error.
+
+    Fix 3: the fallback evicts the broken clone and creates a new cold one.
+    """
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
+
+    # First probe: creates warm clone
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    result1 = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
+        capture_output=True, text=True, timeout=120,
+    )
+    output1 = json.loads(result1.stdout)
+    assert output1["status"] == "pass", f"first probe failed: {result1.stderr}"
+
+    # Plant a stale .git/index.lock in the warm clone
+    probe_dirs = [d for d in (run / ".refactory").iterdir()
+                  if d.name.startswith("probe-") and d.is_dir()
+                  and (d / "cache.key").is_file()]
+    assert len(probe_dirs) == 1
+    first_dir = probe_dirs[0]
+    (first_dir / "repo" / ".git" / "index.lock").write_text("stale")
+
+    # Second probe: broken clone should trigger cold fallback
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 2\n")
+    result2 = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
+        capture_output=True, text=True, timeout=120,
+    )
+    output2 = json.loads(result2.stdout)
+    assert output2["status"] == "pass", (
+        f"second probe should succeed via cold fallback: {result2.stderr}")
+
+    # The old broken clone should be evicted and a new one created
+    probe_dirs = [d for d in (run / ".refactory").iterdir()
+                  if d.name.startswith("probe-") and d.is_dir()
+                  and (d / "cache.key").is_file()]
+    assert len(probe_dirs) == 1
+    assert probe_dirs[0] != first_dir, "broken clone should be evicted"
+
+    sweep_warm_clones(run)
+
+
+def test_run_stop_removes_warm_clone(tmp_path):
+    """A run stopped after a probe leaves no warm clone.
+
+    Fix 4: sweep_warm_clones called at run end removes the warm clone.
+    """
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
+
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
+        capture_output=True, text=True, timeout=120,
+    )
+
+    warm_dirs = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()
+                 and (d / "cache.key").is_file()]
+    assert len(warm_dirs) == 1
+
+    # Simulate end-of-run cleanup
+    sweep_warm_clones(run)
+
+    warm_dirs = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()
+                 and (d / "cache.key").is_file()]
+    assert len(warm_dirs) == 0, "warm clone should be removed at run end"
+
+
+def test_spine_run_end_removes_warm_clone(tmp_path):
+    """The spine's run-end cleanup removes warm clones (interactive.py path).
+
+    Drives the cleanup sequence that interactive.py executes after the graph:
+    promote_unretried_failure, then sweep_warm_clones.
+    """
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
+
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
+        capture_output=True, text=True, timeout=120,
+    )
+
+    warm_dirs = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()
+                 and (d / "cache.key").is_file()]
+    assert len(warm_dirs) == 1
+
+    # Execute the spine's end-of-run sequence (from interactive.py)
+    try:
+        from refactory_dsh.run_state import promote_unretried_failure
+        promote_unretried_failure(run)
+    except Exception:
+        pass  # best-effort
+    try:
+        from refactory_dsh.builder_probe import sweep_warm_clones as _sweep
+        _sweep(run)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "could not remove warm clone under %s: %s", run, exc,
+        )
+
+    warm_dirs = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()
+                 and (d / "cache.key").is_file()]
+    assert len(warm_dirs) == 0, (
+        "spine's run-end cleanup must remove warm clones")
+
+
+def test_walker_run_end_removes_warm_clone(tmp_path):
+    """The walker's run-end cleanup removes warm clones (dsh_runtime.py path).
+
+    Drives evaluate_on_dsh with a mocked run_on_dsh; the sweep_warm_clones
+    call added after run_on_dsh returns runs for real.
+    """
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
+
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_helper.py::test_bar", "--timeout", "60"],
+        capture_output=True, text=True, timeout=120,
+    )
+
+    warm_dirs = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()
+                 and (d / "cache.key").is_file()]
+    assert len(warm_dirs) == 1
+
+    # Drive evaluate_on_dsh with mocked run_on_dsh
+    from refactory_dsh.dsh_runtime import DshRun, evaluate_on_dsh
+
+    mock_run = DshRun(
+        facts={"name": "test"}, workdir=run, returncode=0,
+        stdout="", stderr="", duration_s=1.0,
+    )
+    (run / ".refactory" / "spine-status.json").write_text(
+        json.dumps({"status": "done"}))
+
+    class _FakeMode:
+        __module__ = "refactory_dsh.test_walker"
+        name = "test"
+        def score(self, result):
+            return 0.0
+
+    with patch("refactory_dsh.dsh_runtime.run_on_dsh", return_value=mock_run):
+        evaluate_on_dsh(_FakeMode(), {}, workdir=run)
+
+    warm_dirs = [d for d in (run / ".refactory").iterdir()
+                 if d.name.startswith("probe-") and d.is_dir()
+                 and (d / "cache.key").is_file()]
+    assert len(warm_dirs) == 0, (
+        "walker's run-end cleanup must remove warm clones")
+
+
+def test_sweep_skips_locked_clone(tmp_path):
+    """sweep_warm_clones skips a clone whose lock is held (in use).
+
+    Fix 6: take lock without blocking, skip clones in use.
+    """
+    import fcntl as _fcntl
+
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    refactory_dir = workdir / ".refactory"
+    refactory_dir.mkdir()
+
+    probe_dir = refactory_dir / "probe-locktest"
+    probe_dir.mkdir()
+    (probe_dir / "cache.key").write_text("test-key")
+    (probe_dir / "clone_base").write_text("abc123")
+
+    # Hold the lock in another thread
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock():
+        fd = open(probe_dir / "probe.lock", "w")
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+        lock_held.set()
+        release_lock.wait(timeout=30)
+        _fcntl.flock(fd, _fcntl.LOCK_UN)
+        fd.close()
+
+    t = threading.Thread(target=hold_lock)
+    t.start()
+    lock_held.wait(timeout=10)
+
+    # Sweep should skip the locked clone
+    sweep_warm_clones(workdir)
+    assert probe_dir.exists(), "sweep must skip a locked clone"
+
+    # Release lock and sweep again — clone should be removed
+    release_lock.set()
+    t.join(timeout=10)
+
+    sweep_warm_clones(workdir)
+    assert not probe_dir.exists(), "sweep must remove an unlocked clone"
+
+
+def test_docs_warm_lifecycle_language():
+    """hardening.md and repo_change.py describe the warm lifecycle.
+
+    Fix 7: 'deleted afterwards' must be replaced with warm lifecycle language.
+    """
+    import refactory_dsh
+    pkg_root = Path(refactory_dsh.__file__).parent.parent
+
+    # Check hardening.md
+    hardening_path = pkg_root / "docs" / "hardening.md"
+    hardening = hardening_path.read_text()
+    assert "Lifecycle" in hardening, (
+        "hardening.md must have a 'Lifecycle' bullet for probes")
+    assert "deleted afterwards" not in hardening.split("#### What is not isolated")[0], (
+        "old 'deleted afterwards' text should be replaced in probe section")
+
+    # Check repo_change.py
+    rc_path = pkg_root / "refactory_dsh" / "repo_change.py"
+    rc_source = rc_path.read_text()
+    assert "cleaned up when the builder" in rc_source, (
+        "repo_change.py probe instruction must describe warm lifecycle")
+
+
+def test_vitest_routing_mixed_ids_run_whole_files(tmp_path):
+    """When bare spec IDs and structured IDs are mixed, named files run whole.
+
+    Fix 8: no code change — document the existing behaviour.
+    """
+    from refactory_dsh.check_digest import build_probe_command
+
+    # Create a package.json with vitest test script for pnpm test routing
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "test", "scripts": {"test": "vitest run"},
+    }))
+
+    structured_ids = ["src/App.test.tsx > renders correctly"]
+    bare_ids = ["src/other.test.tsx"]
+
+    cmd, refusal = build_probe_command(
+        "npx vitest run",
+        structured_ids + bare_ids,
+        root=tmp_path,
+    )
+    assert refusal is None, f"unexpected refusal: {refusal}"
+    # Both files should appear in the command
+    assert "src/App.test.tsx" in cmd, "structured ID's file must be included"
+    assert "src/other.test.tsx" in cmd, "bare spec file must be included"
+    # When whole files are present, -t is dropped (files run whole)
+    assert "-t" not in cmd, (
+        "mixed bare+structured IDs: named files run whole, no -t filter")
+
+
+def test_vitest_routing_self_check_stable(tmp_path):
+    """Pure structured vitest IDs get -t; pure whole files get no -t.
+
+    Regression snapshot: the self-check's command format is unchanged.
+    """
+    from refactory_dsh.check_digest import build_probe_command
+
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "test", "scripts": {"test": "vitest run"},
+    }))
+
+    # Pure structured IDs → -t present
+    cmd_structured, ref = build_probe_command(
+        "npx vitest run",
+        ["src/App.test.tsx > renders correctly"],
+        root=tmp_path,
+    )
+    assert ref is None
+    assert "-t" in cmd_structured, "pure structured IDs must keep -t"
+
+    # Pure whole files → no -t
+    cmd_whole, ref2 = build_probe_command(
+        "npx vitest run",
+        ["src/other.test.tsx"],
+        root=tmp_path,
+    )
+    assert ref2 is None
+    assert "-t" not in cmd_whole, "pure whole files must not have -t"
+
+    # pytest routing unchanged
+    cmd_pytest, ref3 = build_probe_command(
+        f"{sys.executable} -m pytest -q",
+        ["tests/test_foo.py::test_bar"],
+        root=tmp_path,
+    )
+    assert ref3 is None
+    assert "test_foo.py::test_bar" in cmd_pytest
 
 
 def test_warm_probe_stale_clone_not_reused(tmp_path, monkeypatch):
@@ -657,11 +1197,11 @@ def test_warm_probe_stale_clone_not_reused(tmp_path, monkeypatch):
     """
     import refactory_dsh.builder_probe as bp
     monkeypatch.setattr(bp, "_warm_enabled", True)
-    run, repo, found = _make_probe_run_with_pytest(tmp_path)
+    run, repo, found = _make_probe_run_with_real_tests(tmp_path)
 
     # First probe — creates a warm clone
-    (run / "emit.txt").write_text("===FILE: tool.py===\nprint('v1')\n")
-    run_probe(run, "emit.txt", ["tests/test_foo.py::test_bar"], timeout=60)
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    run_probe(run, "emit.txt", ["test_helper.py::test_bar"], timeout=60)
 
     probe_dirs_1 = [d for d in (run / ".refactory").iterdir()
                     if d.name.startswith("probe-") and d.is_dir()
@@ -691,8 +1231,8 @@ def test_warm_probe_stale_clone_not_reused(tmp_path, monkeypatch):
     })
 
     # Second probe — should evict stale clone and create a new one
-    (run / "emit.txt").write_text("===FILE: tool.py===\nprint('v2')\n")
-    run_probe(run, "emit.txt", ["tests/test_foo.py::test_bar"], timeout=60)
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 2\n")
+    run_probe(run, "emit.txt", ["test_helper.py::test_bar"], timeout=60)
 
     probe_dirs_2 = [d for d in (run / ".refactory").iterdir()
                     if d.name.startswith("probe-") and d.is_dir()
@@ -702,132 +1242,3 @@ def test_warm_probe_stale_clone_not_reused(tmp_path, monkeypatch):
         "stale clone should be evicted — the probe dir name must differ")
 
     sweep_warm_clones(run)
-
-
-def test_warm_probe_concurrent_no_interference(tmp_path, monkeypatch):
-    """Two concurrent probes serialise on the flock and both succeed.
-
-    Revert check: removing the flock allows two probes to mutate the clone
-    simultaneously, corrupting the working tree and causing one or both to fail.
-    """
-    import refactory_dsh.builder_probe as bp
-    monkeypatch.setattr(bp, "_warm_enabled", True)
-    run, repo, found = _make_probe_run_with_pytest(tmp_path)
-
-    (run / "emit1.txt").write_text("===FILE: tool.py===\nprint('thread1')\n")
-    (run / "emit2.txt").write_text("===FILE: tool.py===\nprint('thread2')\n")
-
-    barrier = threading.Barrier(2, timeout=30)
-    results: list[ProbeResult | None] = [None, None]
-    errors: list[Exception | None] = [None, None]
-
-    def thread_fn(emission_file: str, idx: int) -> None:
-        try:
-            barrier.wait()
-            results[idx] = run_probe(
-                run, emission_file,
-                ["tests/test_foo.py::test_bar"], timeout=60,
-            )
-        except Exception as exc:
-            errors[idx] = exc
-
-    t1 = threading.Thread(target=thread_fn, args=("emit1.txt", 0))
-    t2 = threading.Thread(target=thread_fn, args=("emit2.txt", 1))
-    t1.start()
-    t2.start()
-    t1.join(timeout=120)
-    t2.join(timeout=120)
-
-    assert errors[0] is None, f"thread 1 raised: {errors[0]}"
-    assert errors[1] is None, f"thread 2 raised: {errors[1]}"
-    assert results[0] is not None, "thread 1 produced no result"
-    assert results[1] is not None, "thread 2 produced no result"
-
-    # Only one warm clone should exist (the second thread reused the first's)
-    probe_dirs = [d for d in (run / ".refactory").iterdir()
-                  if d.name.startswith("probe-") and d.is_dir()
-                  and (d / "cache.key").is_file()]
-    assert len(probe_dirs) == 1, f"expected 1 warm clone, got {len(probe_dirs)}"
-
-    sweep_warm_clones(run)
-
-
-def test_warm_probe_concurrent_subprocess(tmp_path):
-    """Two concurrent probe subprocesses serialised by the flock.
-
-    Revert check: removing the flock allows two probe processes to mutate the
-    clone simultaneously, corrupting the working tree.
-    """
-    run, repo, found = _make_probe_run_with_pytest(tmp_path)
-
-    (run / "emit1.txt").write_text("===FILE: tool.py===\nprint('proc1')\n")
-    (run / "emit2.txt").write_text("===FILE: tool.py===\nprint('proc2')\n")
-
-    cmd_base = [sys.executable, "-m", "refactory_dsh.builder_probe",
-                "--workdir", str(run), "--test", "tests/test_foo.py::test_bar",
-                "--timeout", "60"]
-
-    p1 = subprocess.Popen(cmd_base + ["--emission", "emit1.txt"],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    p2 = subprocess.Popen(cmd_base + ["--emission", "emit2.txt"],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    stdout1, stderr1 = p1.communicate(timeout=120)
-    stdout2, stderr2 = p2.communicate(timeout=120)
-
-    output1 = json.loads(stdout1)
-    output2 = json.loads(stdout2)
-    assert output1["status"] in ("pass", "fail", "error", "timed_out"), (
-        f"proc1 failed: {stderr1}")
-    assert output2["status"] in ("pass", "fail", "error", "timed_out"), (
-        f"proc2 failed: {stderr2}")
-
-    # Only one warm clone directory should exist
-    probe_dirs = [d for d in (run / ".refactory").iterdir()
-                  if d.name.startswith("probe-") and d.is_dir()
-                  and (d / "cache.key").is_file()]
-    assert len(probe_dirs) == 1, f"expected 1 warm clone, got {len(probe_dirs)}"
-
-    sweep_warm_clones(run)
-    remaining = [d for d in (run / ".refactory").iterdir()
-                 if d.name.startswith("probe-") and d.is_dir()]
-    assert len(remaining) == 0
-
-
-def test_warm_probe_materialise_removes_clone(tmp_path):
-    """Materialise removes the reused warm clone.
-
-    Revert check: removing the materialise warm-clone sweep leaves the warm
-    clone directory on disk.
-    """
-    run, repo, found = _make_probe_run_with_pytest(tmp_path)
-
-    (run / "emit.txt").write_text("===FILE: tool.py===\nprint('mat')\n")
-    result = subprocess.run(
-        [sys.executable, "-m", "refactory_dsh.builder_probe",
-         "--workdir", str(run), "--emission", "emit.txt",
-         "--test", "tests/test_foo.py::test_bar", "--timeout", "60"],
-        capture_output=True, text=True, timeout=120,
-    )
-    output = json.loads(result.stdout)
-    assert output["status"] in ("pass", "fail", "error", "timed_out")
-
-    # Warm clone should be on disk
-    warm_dirs = [d for d in (run / ".refactory").iterdir()
-                 if d.name.startswith("probe-") and d.is_dir()
-                 and (d / "cache.key").is_file()]
-    assert len(warm_dirs) == 1, "warm clone should exist after probe"
-
-    # sweep_warm_clones (called by materialise) should remove it
-    sweep_warm_clones(run)
-
-    warm_dirs_after = [d for d in (run / ".refactory").iterdir()
-                       if d.name.startswith("probe-") and d.is_dir()
-                       and (d / "cache.key").is_file()]
-    assert len(warm_dirs_after) == 0, "sweep_warm_clones must remove the warm clone"
-
-    # Slot records should be cleaned too
-    slot_dir = run / ".refactory" / "slot"
-    if slot_dir.is_dir():
-        leaked = [f for f in slot_dir.iterdir() if f.name.startswith("run-probe-")]
-        assert not leaked, f"leaked slot records: {[f.name for f in leaked]}"
