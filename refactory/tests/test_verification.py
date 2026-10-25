@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from refactory_dsh import nn
 from refactory_dsh.design import DesignMode
 from refactory_dsh.fast import DesignFastMode
 from refactory_dsh.verification import VERIFICATION_METHODS, VERIFIER_PROMPT
@@ -219,13 +220,14 @@ def test_verification_pass_proceeds_to_reviews_full_mode(tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
 
-def test_verifier_only_findings_go_to_overwatch_and_the_pr_not_a_round(tmp_path, monkeypatch):
-    """Verifier FAIL with QA PASS: no builder round. Overwatch reads the finding, and
-    the pull request lists it."""
+def test_verifier_findings_go_to_the_qa_judge_unparsed_and_the_pr_not_a_round(tmp_path, monkeypatch):
+    """Design mode: the verifier's report goes, whole, to the QA judge with the reviews,
+    and is not parsed. A judge that lists its finding as a follow-up costs no builder
+    round, and the pull request lists it."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
-                               FakeModel, render)
+                               FakeModel, overwatch_judgment, qa_judgment, render)
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
@@ -233,7 +235,8 @@ def test_verifier_only_findings_go_to_overwatch_and_the_pr_not_a_round(tmp_path,
         render({"tool.py": "print('built')\n"}),
         "health: passed", "code: passed", "qa: passed",
         VERIFICATION_FAIL,
-        "VERDICT: PASS",
+        qa_judgment("proceed", follow_ups=["tool.py:1: negative values accepted (verifier)"]),
+        overwatch_judgment("pass"),
     ]
     model = FakeModel(answers)
     mode = DesignMode()
@@ -251,33 +254,33 @@ def test_verifier_only_findings_go_to_overwatch_and_the_pr_not_a_round(tmp_path,
     # A new artifact: the verifier was given every method.
     verifier = next(p for p in model.prompts if "design.md is in the run directory" in p)
     assert "M12 Shared state" in verifier
-    unresolved = (tmp_path / "run" / "reviews" / "verification-unresolved.md").read_text()
-    assert "negative values accepted" in unresolved
-    overwatch = next(p for p in model.prompts if "You are the overwatch" in p)
-    assert "reviews/verification-unresolved.md" in overwatch
-    assert "is your own BLOCKING finding tagged `[core]`" in overwatch
+    synthesis = (tmp_path / "run" / "reviews" / "qa-synthesized.md").read_text()
+    assert "## reviews/verification.md (the design-blind verifier)" in synthesis
+    assert VERIFICATION_FAIL in synthesis
+    assert not (tmp_path / "run" / "reviews" / "verification-unresolved.md").exists()
     assert "negative values accepted" in (tmp_path / "run" / "pull-request.md").read_text()
 
 
 def test_overwatch_sends_back_a_verifier_finding_that_breaks_an_ask(tmp_path, monkeypatch):
-    """The verifier's finding costs a round only when Overwatch finds it breaks an ask."""
+    """The verifier's finding costs a round only when a judge finds it breaks an ask."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
-                               FakeModel, render)
+                               FakeModel, overwatch_judgment, render)
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
-    OVERWATCH_FAIL = ("BLOCKING: tool.py: negative values accepted, which the brief forbids "
-                      "[core: brief]\n\nVERDICT: FAIL")
+    OVERWATCH_REDO = overwatch_judgment("redo", must_fix=[{
+        "source": "verifier", "where": "tool.py:1",
+        "what": "negative values accepted, which the brief forbids", "why": "the brief"}])
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER,
         render({"tool.py": "print('built')\n"}),
         "health: passed", "code: passed", "qa: passed", VERIFICATION_FAIL,
-        OVERWATCH_FAIL,
+        OVERWATCH_REDO,
         render({"tool.py": "print('built v2')\n"}),
         "health: passed", "code: passed", "qa: passed",
         "No blocking findings.\n\nVERDICT: PASS",
-        "VERDICT: PASS",
+        overwatch_judgment("pass"),
     ]
     model = FakeModel(answers)
     result = DesignMode().run(
@@ -289,30 +292,32 @@ def test_overwatch_sends_back_a_verifier_finding_that_breaks_an_ask(tmp_path, mo
     builders = [p for p in model.prompts if "What went wrong last time" in p]
     assert len(builders) == 2
     assert "which the brief forbids" in builders[1]
-    # The second round's verifier found nothing, so nothing stale is reported.
-    assert (tmp_path / "run" / "reviews" / "verification-unresolved.md").read_text() == ""
+    assert not (tmp_path / "run" / "reviews" / "verification-unresolved.md").exists()
 
 
 def test_joint_fix_round(tmp_path, monkeypatch):
-    """QA BLOCKING + verifier FAIL → single reloop with both findings."""
+    """A QA finding and a verifier finding the QA judge both must-fix: one reloop with both."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
-                               FakeModel, render)
+                               FakeModel, overwatch_judgment, qa_judgment, render)
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL"
     QA_FAIL = "BLOCKING: tool.py:5: missing feature\n\nVERDICT: FAIL"
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER,
-        # Round 1: QA and verifier both fail
+        # Round 1: QA and verifier both report, and the judge must-fixes both
         render({"tool.py": "print('built')\n"}),
         "health: passed", "code: passed", QA_FAIL,
         VERIFICATION_FAIL,
+        qa_judgment("redo", must_fix=[
+            {"source": "qa_director", "where": "tool.py:5", "what": "missing feature", "why": "ask 1"},
+            {"source": "verifier", "where": "tool.py:1", "what": "noise", "why": "ask 2"}]),
         # Reloop → emit (combined feedback)
         render({"tool.py": "print('fixed')\n"}),
         "health: passed", "code: passed", "qa: passed",
         "No blocking findings.\n\nVERDICT: PASS",
-        "VERDICT: PASS",
+        overwatch_judgment("pass"),
     ]
     model = FakeModel(answers)
     result = DesignMode().run(
@@ -321,12 +326,11 @@ def test_joint_fix_round(tmp_path, monkeypatch):
         task={"name": "joint_fix", "brief": "a tool", "check": "python tool.py"},
     )
     assert result.exit_ok, result.error
-    # The emit prompt in round 2 must carry both QA and verifier findings
+    # The emit prompt in round 2 must carry both findings
     emit_prompts = [p for p in model.prompts if "What went wrong last time" in p]
-    assert len(emit_prompts) >= 2
+    assert len(emit_prompts) == 2
     second_emit = emit_prompts[1]
     assert "missing feature" in second_emit and "noise" in second_emit
-    assert "respond in emit.txt under ## Verifier findings" in second_emit
 
 
 def test_verifier_branch_failure(tmp_path, monkeypatch):
@@ -355,9 +359,10 @@ def test_verifier_branch_failure(tmp_path, monkeypatch):
         task={"name": "empty_verifier", "brief": "a tool", "check": "python tool.py"},
     )
     assert result.exit_ok, result.error
-    # Synthesis should mention the verifier as missing (empty output)
+    # Design mode: a verifier that left nothing is simply absent from the QA judge's input.
     synthesis = (tmp_path / "run" / "reviews" / "qa-synthesized.md").read_text()
-    assert "missing" in synthesis.lower() or "Verification:" in synthesis
+    assert "verifier" not in synthesis
+    assert synthesis.startswith("# QA synthesis\n\n3 of 3 reviews reported.\n")
 
 
 class _CrashingModel:
@@ -420,39 +425,31 @@ def test_crashed_branch_fast_mode(tmp_path, monkeypatch, crash, survives):
         assert "focused_qa" in (result.error or "")
 
 
-def test_finding_sources_json(tmp_path, monkeypatch):
-    """Round 1: QA and verifier findings, sent back together. Round 2: QA fixed, the
-    builder rebuts the verifier's finding, and the run proceeds. Asserts each entry's
-    fate and first_round/last_round."""
-    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER,
-                               PITFALLS_ANSWER, RESEARCH_ANSWER,
-                               FakeModel, render)
+def test_finding_sources_json(tmp_path):
+    """create_ops.gate_qa, which a run lowered before design mode's judges still calls
+    with a verifier beside its reviews: round 1, QA and verifier findings go back
+    together; round 2, QA is fixed, the builder rebuts the verifier's finding, and the gate
+    proceeds. Each entry's fate and first_round/last_round are recorded."""
+    from refactory_dsh import create_ops
+
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
     QA_FAIL = "BLOCKING: tool.py:5: missing error handling\n\nVERDICT: FAIL"
-    answers = [
-        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER,
-        # Round 1: QA and verifier both fail
-        render({"tool.py": "print('v1')\n"}),
-        "health: passed", "code: passed", QA_FAIL,
-        VERIFICATION_FAIL,
-        # Round 2: QA fixed; the builder rebuts the verifier's finding, which stands
-        "## Verifier findings\nnegative values accepted → rebutted: false positive\n\n" +
-        render({"tool.py": "print('v2')\n"}),
-        "health: passed", "code: passed", "qa: passed",
-        VERIFICATION_FAIL,
-        "VERDICT: PASS",
-    ]
-    model = FakeModel(answers)
-    mode = DesignMode()
-    result = mode.run(
-        tmp_path / "run", model=model,
-        verdicts={"gate_strategy": "proceed"},
-        task={"name": "sources", "brief": "a tool", "check": "python tool.py"},
-    )
-    assert result.exit_ok, result.error
-    path = tmp_path / "run" / "reviews" / "finding-sources.json"
+    ctx = nn.RunContext(tmp_path)
+
+    def attempt(qa, emit=""):
+        ctx.write_text("reviews/health-check.md", "health: passed\n")
+        ctx.write_text("reviews/code-review.md", "code: passed\n")
+        ctx.write_text("reviews/qa.md", qa)
+        ctx.write_text("reviews/verification.md", VERIFICATION_FAIL)
+        if emit:
+            ctx.write_text("emit.txt", emit)
+        create_ops.synthesize_qa(ctx)
+        return create_ops.gate_qa(ctx)
+
+    assert attempt(QA_FAIL) == "reloop"
+    assert attempt("qa: passed", "## Verifier findings\n"
+                   "negative values accepted → rebutted: false positive\n") == "proceed"
+    path = tmp_path / "reviews" / "finding-sources.json"
     assert path.exists(), "finding-sources.json must be written"
     data = json.loads(path.read_text())
     assert isinstance(data, list)
@@ -465,14 +462,12 @@ def test_finding_sources_json(tmp_path, monkeypatch):
         assert entry["class"] == "core"
         assert "first_round" in entry
         assert "last_round" in entry
-    # QA finding: fixed (present in round 1, absent in rounds 2-3)
     qa_entries = [e for e in data if e["source"] == "qa_director"
                   and "missing error handling" in e["finding"]]
     assert len(qa_entries) >= 1, "QA finding must appear in finding-sources.json"
     assert qa_entries[0]["fate"] == "fixed", (
         f"QA finding fate should be 'fixed', got {qa_entries[0]['fate']!r}")
     assert qa_entries[0]["first_round"] == 1
-    # Verifier finding: rebutted (present in all rounds, builder rebutted it)
     verifier_entries = [e for e in data if e["source"] == "verifier"
                         and "negative values accepted" in e["finding"]]
     assert len(verifier_entries) >= 1, "verifier finding must appear"

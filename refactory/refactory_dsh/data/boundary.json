@@ -87,6 +87,7 @@
     "refactory_dsh.fast_ops",
     "refactory_dsh.findings_coverage",
     "refactory_dsh.interactive",
+    "refactory_dsh.judges",
     "refactory_dsh.pitfalls",
     "refactory_dsh.projects",
     "refactory_dsh.readable",

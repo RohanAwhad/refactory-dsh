@@ -1290,7 +1290,8 @@ def _design_draft(workdir, github, tmp_path, *, mode=None, emit=None, target=Non
     fact = draft_fact if draft_fact is not None else DRAFT_FACT
 
     import refactory_dsh.design_ops as design_ops_mod
-    real_report = design_ops_mod.report_artifact
+    # The report the design graph calls: its judges decided, so it is report_judged.
+    real_report = design_ops_mod.report_judged
     real_deliver = delivery.deliver_design
 
     def inject_draft_report(ctx):
@@ -1306,9 +1307,9 @@ def _design_draft(workdir, github, tmp_path, *, mode=None, emit=None, target=Non
         return real_deliver(ctx)
 
     # Use a simple setattr/restore pattern when monkeypatch is not available.
-    saved_report = design_ops_mod.report_artifact
+    saved_report = design_ops_mod.report_judged
     saved_deliver = delivery.deliver_design
-    design_ops_mod.report_artifact = inject_draft_report
+    design_ops_mod.report_judged = inject_draft_report
     delivery.deliver_design = inject_draft_deliver
     try:
         task_kw: dict[str, str] = {}
@@ -1323,7 +1324,7 @@ def _design_draft(workdir, github, tmp_path, *, mode=None, emit=None, target=Non
                   "check": check, **task_kw},
         )
     finally:
-        design_ops_mod.report_artifact = saved_report
+        design_ops_mod.report_judged = saved_report
         delivery.deliver_design = saved_deliver
     return result
 

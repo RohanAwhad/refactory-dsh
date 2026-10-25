@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from refactory_dsh import delivery, design_contract, pitfalls, repo_change
-from refactory_dsh.create_ops import API, MARKER_RULE, OVERWATCH_VERDICT_RULE, RESEARCH_SCHEMA, SEVERITY_RULE
+from refactory_dsh import delivery, design_contract, judges, pitfalls, repo_change
+from refactory_dsh.create_ops import API, MARKER_RULE, RESEARCH_SCHEMA, SEVERITY_RULE
 from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT, SELF_CHECK_RECORD
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
@@ -35,6 +35,129 @@ _ACCEPTANCE_BASELINE = (
     "behavior without explicit user agreement to that change. Report conflicts "
     "instead of silently narrowing scope. Reviews must mark observed noncompliance "
     "as BLOCKING even when the limitation is documented.\n\n"
+)
+
+#: The acceptance baseline as a judge reads it: a judge writes no markers, so
+#: noncompliance is a defect to judge rather than a line to mark.
+_JUDGE_BASELINE = _ACCEPTANCE_BASELINE.replace(
+    "Reviews must mark observed noncompliance as BLOCKING even when the limitation is "
+    "documented.",
+    "Observed noncompliance is a defect even when the limitation is documented.",
+)
+assert _JUDGE_BASELINE != _ACCEPTANCE_BASELINE
+
+#: What holds a change back, for both judges: remote-factory design-v2's rule. The
+#: reviews report; a judge decides on substance, so a review's wording or markers decide
+#: nothing, and its gate applies the same rule to what the judge names (`judges.blocks`).
+_JUDGE_RULE = (
+    "Only these hold the change back: a defect that breaks an ask in the brief or a "
+    "correction the person gave, a failed health check (the artifact does not run as a "
+    "user runs it), or a critical or high defect (a correctness or safety bug, or a "
+    "regression: existing behaviour the change breaks, with the test or path:line that "
+    "shows it). Give each must_fix item its `severity` (`critical`, `high`, `medium` or "
+    "`low`) and what it `breaks` (`ask`, `correction`, `health` or `none`). Answer `redo` "
+    "only when at least one item is critical or high, or breaks an ask, a correction or the "
+    "health check: the gate sends the change back for nothing else, and lists medium and "
+    "low items that break none of those as follow-ups. Everything else that is real (extra "
+    "tests, docs, edge cases beyond the asks, refactors, style) is a follow-up: the pull "
+    "request lists it and it does not hold the change back.\n\n"
+)
+
+_JUDGE_UNAVAILABLE = (
+    "If a tool or credential needed to judge an ask is unavailable, answer `redo` with "
+    "one must_fix item whose `what` starts with `" + judges.UNAVAILABLE + "` and names "
+    "the dependency and the exact action that unblocks it: the run then stops for a "
+    "person instead of sending the builder a defect it cannot fix."
+)
+
+_MUST_FIX_SHAPE = (
+    '{"source": "<the review it came from>", "where": "<path:line>", "what": "<the defect>", '
+    '"why": "<the ask, correction or behaviour it breaks>", '
+    '"severity": "critical" | "high" | "medium" | "low", '
+    '"breaks": "ask" | "correction" | "health" | "none"}'
+)
+
+#: Design mode's QA judge: reads the merged reviews and decides proceed or redo.
+QA_JUDGE_PROMPT = (
+    "Artifact name: {{name}}\nBrief: {{brief}}\n"
+    "Artifact directory (absolute): {{artifact}}\n{{change}}\n"
+    "The check: {{check}}\n\n"
+    "## Corrections the person gave when approving the design\n{{gate_corrections}}\n\n"
+    "## What sent this attempt back\n{{review_feedback}}\n\n"
+    "## What to read\n"
+    "`reviews/qa-synthesized.md` in the run directory holds, in full, this attempt's "
+    "health check, code review and QA director's attack, and the design-blind verifier's "
+    "report when it gave one, then the check's result, the diff stat and the design's "
+    "Changes section. `design.md` holds the approved design, whole, and `brief.json` the "
+    "brief. Read the code at the artifact path wherever a finding needs it.\n\n"
+    + _JUDGE_BASELINE
+    + "You are the QA judge. The reviewers report; you decide whether this change goes "
+    "on to the overwatch or back to the builder. Judge each finding on its substance and "
+    "against the code, never by its wording or its markers: a line that quotes a "
+    "finding's format, an example or a review rule is not a finding, and neither is a "
+    "reviewer's tally of its own findings. The check has already passed on this attempt "
+    "and stays binding; do not run it again.\n\n"
+    + _JUDGE_RULE
+    + "A finding that is wrong (it does not hold against the code) is dismissed, with the "
+    "reason. Two reviewers reporting the same defect is one must_fix item.\n\n"
+    "Write `" + judges.QA_JUDGE + "` in the run directory holding one JSON object and "
+    "nothing else that is JSON:\n"
+    '{"verdict": "proceed" | "redo", "must_fix": [' + _MUST_FIX_SHAPE + '], '
+    '"follow_ups": ["<a real finding that does not hold the change back>"], '
+    '"dismissed": [{"source": "<the review>", "finding": "<what it said>", '
+    '"why": "<why it does not hold, or is not a finding>"}]}\n'
+    "`redo` names at least one must_fix item that holds the change back; `proceed` names "
+    "none. " + _JUDGE_UNAVAILABLE + "\n\n"
+    "The evidence map below is the overwatch's starting point once you proceed: when your "
+    "verdict is `redo`, the builder goes again and the map is made next round, so an "
+    "empty one (`{\"requirements\": []}`) will do.\n"
+    "{{qa_judge_reread}}"
+)
+
+#: Design mode's overwatch: verifies acceptance with the correction audit as evidence.
+OVERWATCH_PROMPT = (
+    "Artifact directory (absolute): {{artifact}}\n"
+    "Read and run the delivered files at this exact path; do not infer it "
+    "from your working directory. {{change}}\n\n"
+    "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
+    "## Corrections the person gave when approving the design\n{{gate_corrections}}\n\n"
+    "## The correction audit\n{{correction_audit}}\n\n"
+    "## What to read\n"
+    "In the run directory: `design.md` (the approved design), `reviews/qa-synthesized.md` "
+    "(the merged reviews, the check's result and the diff stat), `changes.diff`, and, when "
+    "they are there, `correction-audit.json` (the audit above, per clause and site), "
+    "`intent-audit.json` (the QA judge's map of every requirement to its evidence) and "
+    "`qa-judge.json` (the QA judge's verdict and follow-ups).\n\n"
+    + _JUDGE_BASELINE
+    + "You are the overwatch. Verify acceptance rather than repeating the reviews: take "
+    "each ask in the brief and each correction above and say what proves it (a test "
+    "that fails without the change, or a command and its output) or that nothing does. "
+    "Run your own spot checks on what the reviews and the map claim. Do not promote a "
+    "syntax check, file-presence check, self-report or label-string check into semantic "
+    "evidence. If required validation is unavailable, keep that requirement unverified "
+    "and say what would unblock it.\n\n"
+    "The correction audit is evidence, not a verdict. For each correction it took the "
+    "sites the map names, checked each is in the diff, and reverted it to see whether the "
+    "named tests fail. A site whose code the change deletes is removed. A site the change "
+    "leaves as the base has it is unchanged, and the audit counts it as not met for you to "
+    "decide: a correction that dropped a planned change is met by it, and a correction "
+    "the change never applied is not. A site no named test catches, or that is not where "
+    "the map says, is a question for you, not a defect by itself: decide from the code and "
+    "the tests whether the correction is met. Decide every correction yourself, with "
+    "evidence. A correction you find not met (`\"met\": false`) sends the change back "
+    "whatever your verdict.\n\n"
+    + _JUDGE_RULE
+    + "Write `" + judges.OVERWATCH_VERDICT + "` in the run directory holding one JSON "
+    "object and nothing else that is JSON:\n"
+    '{"verdict": "pass" | "redo", "must_fix": [' + _MUST_FIX_SHAPE.replace(
+        "<the review it came from>", "overwatch") + '], '
+    '"follow_ups": ["<a real finding that does not hold the change back>"], '
+    '"corrections": [{"id": "<its requirement id in authoring-evidence.json, such as '
+    'ledger-5>", "met": true | false, "evidence": "<test id or path:line>"}]}\n'
+    "List every correction and constraint the person gave in `corrections`. `redo` names "
+    "at least one must_fix item that holds the change back, or a correction that is not "
+    "met. " + _JUDGE_UNAVAILABLE + "\n"
+    "{{overwatch_reread}}"
 )
 
 
@@ -105,6 +228,12 @@ class DesignMode(Mode):
             "refusal_attempts": Knob(
                 3, "int", lo=1, hi=10, frozen=True,
                 description="consecutive refused emissions before the run stops",
+            ),
+            "judge_rereads": Knob(
+                1, "int", lo=0, hi=3, frozen=True,
+                description="how many times a round a judge whose verdict could not be read "
+                            "is asked again, with no builder round, before its gate goes on "
+                            "without it",
             ),
             "self_check_fixups": Knob(
                 2, "int", lo=0, hi=5,
@@ -631,84 +760,78 @@ class DesignMode(Mode):
         graph.add(Node("join_qa", "join",
                        sources=("check", "health_checker", "code_reviewer", "qa_director"),
                        notes="wait for the check and all three reviews"))
+        # ── the reviews report, and two judges decide (refactory_dsh.judges) ──
         graph.add(Node(
-            "synthesize_qa", "op", call="refactory_dsh.create_ops:synthesize_qa",
+            "synthesize_qa", "op", call=f"{OPS}:synthesize_qa",
             reads=("reviews/health-check.md", "reviews/code-review.md", "reviews/qa.md",
-                   "reviews/verification.md"),
+                   "reviews/verification.md", "check-record.json", "design.md"),
             writes=("reviews/qa-synthesized.md",),
-            produces=("qa", "qa_blocking", "qa_missing"),
-            notes="merge the three reviews; an absent review is not a passed one",
+            # It starts each round's judging: the last round's verdicts are set aside and
+            # the judges' rereads start again.
+            produces=("qa", "qa_missing", "qa_judge_rereads", "qa_judge_reread",
+                      "overwatch_rereads", "overwatch_reread", "correction_audit"),
+            notes="put this attempt's reviews, its check and its scope in one document, "
+                  "unread; an absent review is not a passed one",
         ))
         graph.add(Node(
-            "gate_qa", "gate", evaluator="refactory_dsh.create_ops:gate_qa",
-            reads=("reviews/qa-synthesized.md", "reviews/health-check.md",
-                   "reviews/code-review.md", "reviews/qa.md",
-                   "reviews/verification.md", "emit.txt",
-                   "changed-functions.json"),
-            writes=("reviews/qa-gate.txt", "reviews/verification-unresolved.md",
-                    "reviews/finding-sources.json", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("qa_gate",),
+            "qa_judge", "agent",
+            prompt_template=QA_JUDGE_PROMPT,
+            # Not reviews/verification.md: the verifier is optional, and a declared input
+            # must exist on the spine. The synthesis carries its report when it gave one.
+            reads=("brief.json", "design.md", "reviews/qa-synthesized.md"),
+            writes=(judges.QA_JUDGE,),
+            resource_role="final_validation",
+            notes="decide from the reviews whether the change goes on or back to the builder",
+        ))
+        graph.add(Node(
+            "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
+            reads=(judges.QA_JUDGE, "reviews/health-check.md", "reviews/code-review.md",
+                   "reviews/qa.md", "changed-functions.json"),
+            writes=("reviews/qa-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
+            produces=("qa_gate", "qa_judge_rereads", "qa_judge_reread"),
+            knobs=("judge_rereads",),
             max_iterations=5,
-            notes="proceed when every review ran and none found a core defect; "
-                  "non-core findings become follow-ups; verifier findings are advisory",
+            notes="route on the QA judge's verdict: a redo for what holds the change back goes "
+                  "to the builder; an unreadable verdict is read again once; follow-ups go to "
+                  "the pull request",
+        ))
+        # The correction audit measures the QA judge's evidence map before the overwatch
+        # reads it; it routes nothing.
+        graph.add(Node(
+            "audit_corrections", "op", call=f"{OPS}:audit_corrections",
+            reads=("authoring-evidence.json", "intent-audit.json", "design.md"),
+            writes=("correction-audit.json", "site-revert-results.json"),
+            produces=("correction_audit",),
+            resource_role="final_validation",
+            notes="measure each correction's sites in the diff and their tests, as evidence "
+                  "for the overwatch",
         ))
         graph.add(Node(
             "overwatch", "agent",
-            prompt_template=(
-                "Artifact directory (absolute): {{artifact}}\n"
-                "Read and run the delivered files at this exact path; do not infer it "
-                "from your working directory. {{change}}\n\n"
-                "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
-                "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
-                "## The merged reviews\nRead the file `reviews/qa-synthesized.md` in the run directory. It contains the merged reviews from the health checker, code reviewer, and QA director.\n\n"
-                "## What the last audit was refused for\n{{overwatch_review}}\n\n"
-                + _ACCEPTANCE_BASELINE
-                + "You are the overwatch. Audit the reviews rather than repeating them: "
-                "take each ask in the brief and say what evidence proves it — a command "
-                "and its output — or that nothing does. Run your own spot checks on what "
-                "the reviews claim passed. Do not promote a syntax check, file-presence "
-                "check, self-report, or label-string check into semantic or visual "
-                "evidence. Required behavior without adequate evidence remains blocking, "
-                "including required visual usability without rendered inspection. "
-                "For required exchange-format output, require actual consumer/reader "
-                "acceptance; distinguish an ordinary successful import from recovery "
-                "that repairs the file or discards entities. Recovery-only acceptance "
-                "does not meet ordinary interchange requirements unless the brief "
-                "explicitly permits that repair. If required validation is unavailable, "
-                "preserve the artifact and existing evidence, identify the missing "
-                "external dependency and exact unblock action for the CEO or person, "
-                "and keep that requirement unverified. Do not prescribe re-authoring "
-                "or repeating an unchanged probe to resolve an unavailable tool. "
-                "Any blocking finding is written as BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
-                + SEVERITY_RULE + " " + MARKER_RULE + " " + OVERWATCH_VERDICT_RULE + " "
-                "Read reviews/verification-unresolved.md if it exists: the design-blind "
-                "verifier's findings, each with the builder's rebuttal where there is one. "
-                "Check each against the code. One that breaks an ask in the brief or existing "
-                "behaviour, and is not rebutted with a cited file:line, is your own BLOCKING "
-                "finding tagged `[core]`; the rest go to the pull request.\n\n"
-                "Write `reviews/overwatch.md` ending with a "
-                "line that is exactly `VERDICT: PASS` or `VERDICT: FAIL`, and name every "
-                "ask with no evidence behind it."
-            ),
-            # verification-unresolved.md is read when present (the prompt says so) and
-            # not declared: a declared input must exist on the spine, and it does not
-            # in a run whose verifier found nothing.
-            reads=("brief.json", "design.md", "reviews/qa-synthesized.md", "test-guardedness.json"),
-            writes=("reviews/overwatch.md",),
+            prompt_template=OVERWATCH_PROMPT,
+            # Not qa-judge.json, intent-audit.json or correction-audit.json: a declared input
+            # must exist on the spine, and a QA judge or a correction audit a person skipped
+            # leaves none this round (synthesize_qa sets the last round's aside). The prompt
+            # reads them when they are there.
+            reads=("brief.json", "design.md", "reviews/qa-synthesized.md",
+                   "changes.diff", "test-guardedness.json"),
+            writes=(judges.OVERWATCH_VERDICT,),
             produces=("overwatch",),
-            notes="audit the evidence behind the reviews",
+            notes="verify acceptance, with the correction audit as evidence, and judge",
         ))
         graph.add(Node(
-            "gate_overwatch", "gate", evaluator="refactory_dsh.create_ops:gate_overwatch",
-            reads=("reviews/overwatch.md",),
+            "gate_overwatch", "gate", evaluator=f"{OPS}:gate_overwatch",
+            reads=(judges.OVERWATCH_VERDICT, "correction-audit.json"),
             writes=("reviews/overwatch-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("overwatch_review",),
+            produces=("overwatch_review", "overwatch_rereads", "overwatch_reread"),
+            knobs=("judge_rereads",),
             max_iterations=4,
-            notes="proceed on a stated PASS verdict with no core finding; "
-                  "non-core findings become follow-ups",
+            notes="route on the overwatch's verdict: an unmet correction or a redo for what "
+                  "holds the change back goes to the builder, a pass to the report; an "
+                  "unreadable verdict is read again once; follow-ups go to the pull request",
         ))
         graph.add(Node(
-            "report", "op", call=f"{OPS}:report_artifact",
+            "report", "op", call=f"{OPS}:report_judged",
             writes=("design.json",),
             produces=("designed",),
             notes="summarise what was designed",
@@ -804,19 +927,27 @@ class DesignMode(Mode):
         graph.connect("join_qa", "gate_check")
         graph.connect("gate_check", "emit", condition="reloop")
         graph.connect("gate_check", "synthesize_qa", condition="proceed")
-        graph.connect("synthesize_qa", "gate_qa")
+        graph.connect("synthesize_qa", "qa_judge")
+        graph.connect("qa_judge", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")
-        graph.connect("gate_qa", "overwatch", condition="proceed")
+        # A judge-only reread: the QA judge's verdict could not be read, so it is asked
+        # again, with no builder round (`design_ops._read_judge`; `judge_rereads` caps it).
+        graph.connect("gate_qa", "qa_judge", condition="reread")
+        graph.connect("gate_qa", "audit_corrections", condition="proceed")
+        graph.connect("audit_corrections", "overwatch")
         graph.connect("overwatch", "gate_overwatch")
+        # No `audit` edge back to the overwatch: the evidence map's shape is evidence the
+        # overwatch reads (`design_ops.audit_corrections`), not a free round of its own.
+        # The `reread` edge is the judge-only reread of a verdict that could not be read.
         graph.connect("gate_overwatch", "emit", condition="reloop")
-        graph.connect("gate_overwatch", "overwatch", condition="audit")
+        graph.connect("gate_overwatch", "overwatch", condition="reread")
         graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("report", "deliver")
         graph.connect("deliver", "delivery_gate")
         graph.connect("delivery_gate", "emit", condition="reloop")
         graph.connect("delivery_gate", "done", condition="proceed")
         from refactory_dsh.authoring_evidence import wire_reviews
-        wire_reviews(graph, check_beside=True)
+        wire_reviews(graph, check_beside=True, audit_node="qa_judge", judge_nodes=("overwatch",))
         return graph
 
     def invariants(self) -> tuple[Any, ...]:

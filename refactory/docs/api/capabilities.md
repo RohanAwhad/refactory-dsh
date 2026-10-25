@@ -7615,7 +7615,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
 
 ```json
 {
@@ -7625,6 +7625,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "apply_corrections",
       "target": "emit"
+    },
+    {
+      "condition": null,
+      "source": "audit_corrections",
+      "target": "overwatch"
     },
     {
       "condition": null,
@@ -7692,7 +7697,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "emit"
     },
     {
-      "condition": "audit",
+      "condition": "reread",
       "source": "gate_overwatch",
       "target": "overwatch"
     },
@@ -7712,14 +7717,19 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "route_strategy"
     },
     {
+      "condition": "proceed",
+      "source": "gate_qa",
+      "target": "audit_corrections"
+    },
+    {
       "condition": "reloop",
       "source": "gate_qa",
       "target": "emit"
     },
     {
-      "condition": "proceed",
+      "condition": "reread",
       "source": "gate_qa",
-      "target": "overwatch"
+      "target": "qa_judge"
     },
     {
       "condition": "proceed",
@@ -7788,6 +7798,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "condition": null,
+      "source": "qa_judge",
+      "target": "gate_qa"
+    },
+    {
+      "condition": null,
       "source": "record_findings",
       "target": "gate_research"
     },
@@ -7819,7 +7834,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": null,
       "source": "synthesize_qa",
-      "target": "gate_qa"
+      "target": "qa_judge"
     },
     {
       "condition": null,
@@ -7887,6 +7902,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "revise design.md with gate-strategy corrections before the builder runs",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.design_ops:audit_corrections",
+      "id": "audit_corrections",
+      "kind": "op",
+      "knobs": [],
+      "notes": "measure each correction's sites in the diff and their tests, as evidence for the overwatch",
       "role": "ceo"
     },
     {
@@ -8003,14 +8026,15 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.create_ops:gate_overwatch",
+      "call": "refactory_dsh.design_ops:gate_overwatch",
       "gate_kind": "fn",
       "id": "gate_overwatch",
       "kind": "gate",
       "knobs": [
+        "judge_rereads",
         "review_attempts"
       ],
-      "notes": "proceed on a stated PASS verdict with no core finding; non-core findings become follow-ups",
+      "notes": "route on the overwatch's verdict: an unmet correction or a redo for what holds the change back goes to the builder, a pass to the report; an unreadable verdict is read again once; follow-ups go to the pull request",
       "role": "ceo"
     },
     {
@@ -8023,14 +8047,15 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.create_ops:gate_qa",
+      "call": "refactory_dsh.design_ops:gate_qa",
       "gate_kind": "fn",
       "id": "gate_qa",
       "kind": "gate",
       "knobs": [
+        "judge_rereads",
         "review_attempts"
       ],
-      "notes": "proceed when every review ran and none found a core defect; non-core findings become follow-ups; verifier findings are advisory",
+      "notes": "route on the QA judge's verdict: a redo for what holds the change back goes to the builder; an unreadable verdict is read again once; follow-ups go to the pull request",
       "role": "ceo"
     },
     {
@@ -8082,7 +8107,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "overwatch",
       "kind": "agent",
       "knobs": [],
-      "notes": "audit the evidence behind the reviews",
+      "notes": "verify acceptance, with the correction audit as evidence, and judge",
       "role": "ceo"
     },
     {
@@ -8149,6 +8174,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
+      "call": "",
+      "id": "qa_judge",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "decide from the reviews whether the change goes on or back to the builder",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.create_ops:record_findings",
       "id": "record_findings",
       "kind": "op",
@@ -8157,7 +8190,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.design_ops:report_artifact",
+      "call": "refactory_dsh.design_ops:report_judged",
       "id": "report",
       "kind": "op",
       "knobs": [],
@@ -8190,11 +8223,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.create_ops:synthesize_qa",
+      "call": "refactory_dsh.design_ops:synthesize_qa",
       "id": "synthesize_qa",
       "kind": "op",
       "knobs": [],
-      "notes": "merge the three reviews; an absent review is not a passed one",
+      "notes": "put this attempt's reviews, its check and its scope in one document, unread; an absent review is not a passed one",
       "role": "ceo"
     },
     {
@@ -8321,6 +8354,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         null
       ],
       "value": false,
+      "values": []
+    },
+    "judge_rereads": {
+      "default": 1,
+      "description": "how many times a round a judge whose verdict could not be read is asked again, with no builder round, before its gate goes on without it",
+      "frozen": true,
+      "kind": "int",
+      "range": [
+        0,
+        3
+      ],
+      "value": 1,
       "values": []
     },
     "name": {
@@ -8521,8 +8566,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see), and Overwatch audits afterwards; final current validation and intent evidence are required. Only a core defect (an unmet ask, criterion or correction, or a regression) sends the build back; other review findings are listed on the pull request as follow-ups. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "53dbe393b08f1199542dd15ec46d63a0260833629c0034ada75d2e192518857c"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
+    "reviewed_schema": "5ff2fa0638f896acdc0cdacff8c654c0ff452c3d86a79e8b34b5a92857e6c631"
   }
 }
 ```

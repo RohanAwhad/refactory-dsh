@@ -1808,6 +1808,16 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         check_line = ""
 
     def _audit_passed() -> bool:
+        # A design run's overwatch judged the evidence map and the correction audit
+        # (`design_ops.gate_overwatch`), so its pass is the audit's.
+        from refactory_dsh import judges
+
+        if ctx.exists(judges.OVERWATCH_VERDICT):
+            try:
+                return judges.read(ctx, judges.OVERWATCH_VERDICT,
+                                   judges.OVERWATCH_VERDICTS).verdict == "pass"
+            except judges.Unreadable:
+                return False
         try:
             audit_data = _json.loads(ctx.read_text(evidence.AUDIT)) if ctx.exists(evidence.AUDIT) else None
         except (OSError, ValueError, KeyError, TypeError):
@@ -1883,14 +1893,32 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             missing = gate_text.split(ADVISORY_REPO_QUESTIONS, 1)[1].strip()
             verification += ("\n- **Repository questions left unanswered (advisory):**\n"
                              + missing + "\n")
-    # Correction-audit checks a reviewer confirms by hand: those the audit could not
-    # measure, and documentation sites no test is expected to reach.
-    from refactory_dsh.authoring_evidence import correction_audit_advisories
+    # A design run's overwatch judged each correction with the audit as its evidence, so the
+    # pull request says what the overwatch judged, not what the audit measured.
+    from refactory_dsh import judges
 
-    by_hand = correction_audit_advisories(ctx)
-    if by_hand:
-        verification += ("\n- **Correction-audit checks to confirm by hand (advisory):**\n"
-                         + "\n".join(f"  - {note}" for note in by_hand) + "\n")
+    try:
+        judged = (judges.read(ctx, judges.OVERWATCH_VERDICT, judges.OVERWATCH_VERDICTS).corrections
+                  if ctx.exists(judges.OVERWATCH_VERDICT) else None)
+    except judges.Unreadable:
+        judged = None
+    if judged is not None:
+        if judged:
+            verification += ("\n- **Corrections, as the overwatch judged them:**\n"
+                             # One line each, as the follow-ups are: the overwatch's
+                             # evidence is its own text, and a line break in it must not
+                             # start a heading or a list of the pull request's own.
+                             + "\n".join(f"  - {_public(' '.join(judges.correction_line(item).split()))}"
+                                         for item in judged) + "\n")
+    else:
+        # Correction-audit checks a reviewer confirms by hand: those the audit could not
+        # measure, and documentation sites no test is expected to reach.
+        from refactory_dsh.authoring_evidence import correction_audit_advisories
+
+        by_hand = correction_audit_advisories(ctx)
+        if by_hand:
+            verification += ("\n- **Correction-audit checks to confirm by hand (advisory):**\n"
+                             + "\n".join(f"  - {note}" for note in by_hand) + "\n")
     verification += _process_notes_section(ctx)
     sections.append(verification)
     if left:

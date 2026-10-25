@@ -199,6 +199,12 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     )
   })
 
+  /** A node's out edges in the fixture, as [target, condition] pairs, sorted. */
+  function spineEdges(g: WorkflowGraph, source: string): Array<[string, string]> {
+    return g.edges.filter(e => e.source === source)
+      .map(e => [e.target, e.condition ?? ''] as [string, string]).sort()
+  }
+
   /** Walk to `until`, answering the scale gates with `scale` and every other gate proceed. */
   function advance(s: Spine, until: string, scale: 'proceed' | 'scoped'): string[] {
     const visited: string[] = []
@@ -251,7 +257,66 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     s.verdict('gate_check', 'proceed')
     expect(ids(s)).toContain('synthesize_qa')
     s.complete('synthesize_qa')
+    // The QA judge reads the merged reviews and writes the verdict gate_qa routes on.
+    expect(ids(s)).toEqual(['qa_judge'])
+    s.complete('qa_judge')
     expect(ids(s)).toContain('gate_qa')
+  })
+
+  it('the judges decide: the correction audit runs between gate_qa and the overwatch, and gate_overwatch has no audit round', () => {
+    const s = new Spine(graph)
+    advance(s, 'fork_qa', 'proceed')
+    s.complete('fork_qa')
+    for (const n of ['check', 'health_checker', 'code_reviewer', 'qa_director', 'verifier']) s.complete(n)
+    s.complete('join_qa')
+    s.verdict('gate_check', 'proceed')
+    s.complete('synthesize_qa')
+    s.complete('qa_judge')
+    s.verdict('gate_qa', 'proceed')
+    expect(ids(s)).toEqual(['audit_corrections'])
+    s.complete('audit_corrections')
+    expect(ids(s)).toEqual(['overwatch'])
+    s.complete('overwatch')
+    expect(ids(s)).toEqual(['gate_overwatch'])
+    expect(spineEdges(graph, 'gate_overwatch')).toEqual(
+      [['emit', 'reloop'], ['overwatch', 'reread'], ['report', 'proceed']])
+    s.verdict('gate_overwatch', 'reloop', 'the overwatch sent it back')
+    expect(ids(s)).toEqual(['emit'])
+  })
+
+  it('a judge whose verdict could not be read is asked again, and only the judge runs', () => {
+    const s = new Spine(graph)
+    advance(s, 'fork_qa', 'proceed')
+    s.complete('fork_qa')
+    for (const n of ['check', 'health_checker', 'code_reviewer', 'qa_director', 'verifier']) s.complete(n)
+    s.complete('join_qa')
+    s.verdict('gate_check', 'proceed')
+    s.complete('synthesize_qa')
+    s.complete('qa_judge')
+    s.verdict('gate_qa', 'reread', 'qa-judge.json holds no JSON object')
+    expect(ids(s)).toEqual(['qa_judge'])
+    s.complete('qa_judge')
+    s.verdict('gate_qa', 'proceed')
+    s.complete('audit_corrections')
+    s.complete('overwatch')
+    s.verdict('gate_overwatch', 'reread', 'overwatch-verdict.json holds no JSON object')
+    expect(ids(s)).toEqual(['overwatch'])
+    s.complete('overwatch')
+    s.verdict('gate_overwatch', 'proceed')
+    expect(ids(s)).toEqual(['report'])
+  })
+
+  it('a QA judge redo sends the build back to emit', () => {
+    const s = new Spine(graph)
+    advance(s, 'fork_qa', 'proceed')
+    s.complete('fork_qa')
+    for (const n of ['check', 'health_checker', 'code_reviewer', 'qa_director', 'verifier']) s.complete(n)
+    s.complete('join_qa')
+    s.verdict('gate_check', 'proceed')
+    s.complete('synthesize_qa')
+    s.complete('qa_judge')
+    s.verdict('gate_qa', 'reloop', 'the QA judge sent it back')
+    expect(ids(s)).toEqual(['emit'])
   })
 
   it('a failed check, routed after the join, sends the build back to emit', () => {

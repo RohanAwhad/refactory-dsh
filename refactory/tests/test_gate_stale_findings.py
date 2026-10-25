@@ -507,7 +507,9 @@ def test_reviewer_prompts_ask_for_structured_blocking_format():
     design_graph = DesignMode().build()
     # Design mode has no design reviewer: nothing reviews the design before the person.
     assert "design_review" not in design_graph.nodes
-    for node_id in ("health_checker", "code_reviewer", "qa_director", "overwatch"):
+    # Its overwatch is a judge that writes a JSON verdict (refactory_dsh.judges), so only
+    # its reviewers carry the format.
+    for node_id in ("health_checker", "code_reviewer", "qa_director"):
         prompt = design_graph.nodes[node_id].prompt_template
         # MARKER_RULE quotes the form too, so look for the site's own sentence.
         assert "BLOCKING: <path>:" in prompt.replace(MARKER_RULE, ""), (

@@ -450,6 +450,70 @@ def _is_emission(answer: str) -> bool:
     return any(marker in answer for marker in ("===FILE:", "===EDIT:", "===DELETE:"))
 
 
+#: Design mode's two judges (`refactory_dsh.judges`), keyed by a line of each prompt.
+QA_JUDGE_MARK = "You are the QA judge."
+OVERWATCH_JUDGE_MARK = "Write `overwatch-verdict.json`"
+
+#: What a judge answers when the script has no verdict for it: the QA judge proceeds and
+#: the overwatch passes, with nothing listed.
+QA_PROCEED = json.dumps({"verdict": "proceed", "must_fix": [], "follow_ups": [], "dismissed": []})
+OVERWATCH_PASS = json.dumps({"verdict": "pass", "must_fix": [], "follow_ups": [], "corrections": []})
+
+
+def qa_judgment(verdict: str = "proceed", must_fix: list | None = None,
+                follow_ups: list | None = None, dismissed: list | None = None) -> str:
+    """A scripted QA judge's answer: the JSON it writes to qa-judge.json."""
+    return json.dumps({"verdict": verdict, "must_fix": must_fix or [],
+                       "follow_ups": follow_ups or [], "dismissed": dismissed or []})
+
+
+def overwatch_judgment(verdict: str = "pass", must_fix: list | None = None,
+                       follow_ups: list | None = None, corrections: list | None = None) -> str:
+    """A scripted design overwatch's answer: the JSON it writes to overwatch-verdict.json."""
+    return json.dumps({"verdict": verdict, "must_fix": must_fix or [],
+                       "follow_ups": follow_ups or [], "corrections": corrections or []})
+
+
+class Scripted(str):
+    """An answer the next node to ask gets as written, a judge included: how a test
+    scripts a judge's unreadable file."""
+
+
+def _judgment_of(answer: str) -> dict:
+    try:
+        data = json.loads(answer)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _judge_answer(prompt: str, answers: list[str]) -> str | None:
+    """A judge's answer when the script has none for it, or None to take the script's next.
+
+    The QA judge takes the next answer when it is a QA verdict (`qa_judgment`) and
+    otherwise proceeds. The overwatch takes the next answer when it is an overwatch
+    verdict (`overwatch_judgment`), and passes in place of a create-style overwatch answer
+    that ends in `VERDICT: PASS`, which it consumes, so a script written before the judges
+    still reads as the run it describes. Any other answer, and a `Scripted` one, is taken
+    as written: an unreadable verdict is what the gate then sees.
+    """
+    following = answers[0] if answers else ""
+    if isinstance(following, Scripted):
+        return None
+    judgment = _judgment_of(following)
+    if QA_JUDGE_MARK in prompt:
+        is_qa = judgment.get("verdict") in ("proceed", "redo") and "corrections" not in judgment
+        return None if is_qa else QA_PROCEED
+    if OVERWATCH_JUDGE_MARK in prompt:
+        if judgment.get("verdict") in ("pass", "redo") and "dismissed" not in judgment:
+            return None
+        lines = [line.strip() for line in following.splitlines() if line.strip()]
+        if lines and lines[-1] == "VERDICT: PASS":
+            answers.pop(0)
+            return OVERWATCH_PASS
+    return None
+
+
 class FakeModel:
     """Answers with the given texts, in order.
 
@@ -457,6 +521,10 @@ class FakeModel:
     reviewed too, though `gate_check` sends it back without reading the reviews. A script
     written for the check before the reviews has its next emission queued at that point:
     a reviewer asking then gets a passing review instead, and the script is not consumed.
+
+    Design mode's QA judge and overwatch answer in JSON. A script with no verdict for a
+    judge gets the default one (`_judge_answer`): scripts written before the judges, and
+    tests about something else, need not script them.
     """
 
     def __init__(self, answers: list[str]) -> None:
@@ -472,7 +540,8 @@ class FakeModel:
                   if BESIDE_CHECK in prompt else None)
         if beside is not None and self.answers and _is_emission(self.answers[0]):
             return beside
-        answer = self.answers.pop(0) if self.answers else ""
+        judged = _judge_answer(prompt, self.answers)
+        answer = judged if judged is not None else (self.answers.pop(0) if self.answers else "")
         # Scripted pitfalls fixtures: agent_delivery's capture_final writes the
         # model's text answer to writes[0] (pitfalls.json), but pitfalls.md
         # (writes[1]) must also exist for delivery to succeed.  Write it as a
@@ -525,7 +594,9 @@ class FakeModel:
                                      "detail": "scripted fixture inspected the executed result"}]}
                 if item.get("kind") in ("correction", "constraint"):
                     text = item.get("text", "")
-                    sites = getattr(self, '_correction_sites', {}).get(item["id"], [])
+                    # Keyed by requirement id, or by the correction's own text.
+                    by = getattr(self, '_correction_sites', {})
+                    sites = by.get(item["id"]) or by.get(text, [])
                     clause = {"clause": text,
                               "evidence": [{"path": "authoring-evidence.json",
                                             "detail": "full constraint verified"}],

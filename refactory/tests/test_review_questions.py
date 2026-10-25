@@ -321,7 +321,8 @@ def test_design_mode_reviewer_miss_is_advisory_without_a_rerun(tmp_path, monkeyp
     assert "Code-change review instructions" in code_reviews[0]
     assert int(run.facts.get("attempts_used", 0)) == 0
     gate = (tmp_path / "run/reviews/qa-gate.txt").read_text()
-    assert gate.startswith("proceed: no blocking finding")
+    # Design mode: the QA judge proceeded (its default in the scripted model).
+    assert gate.startswith("proceed: the QA judge found nothing that must be fixed")
     assert "advisory: repository questions" in gate and "tool.py::build" in gate
 
 
@@ -536,7 +537,8 @@ def test_design_mode_gate_qa_repo_question_advisory_reaches_pr_text(tmp_path, mo
     code_reviews = [p for p in model.prompts if "You are the code reviewer." in p]
     assert len(code_reviews) == 1
     gate = (tmp_path / "run/reviews/qa-gate.txt").read_text()
-    assert gate.startswith("proceed: no blocking finding")
+    # Design mode: the QA judge proceeded (its default in the scripted model).
+    assert gate.startswith("proceed: the QA judge found nothing that must be fixed")
     assert "advisory: repository questions" in gate and "tool.py::build" in gate
     pull_request = (tmp_path / "run/pull-request.md").read_text()
     assert "Repository questions left unanswered (advisory)" in pull_request

@@ -20,7 +20,7 @@ from refactory_dsh import create_ops, lowering, registry
 from refactory_dsh.create_ops import MARKER_RULE, OVERWATCH_VERDICT_RULE, SEVERITY_RULE, is_non_core, split_core
 from tests_support import (DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
                            RESEARCH_ANSWER, VERIFICATION_ANSWER, FakeModel, git_repo,
-                           render)
+                           overwatch_judgment, qa_judgment, render)
 
 BUILT = render({"tool.py": "def build():\n    print('built')\n"})
 # A later round must change something: an emission identical to the last is refused.
@@ -79,13 +79,23 @@ def test_split_keeps_order():
     assert non_core == ["a [non-core]", "d [non-core]"]
 
 
-# ── full design: gate_qa ──────────────────────────────────────────────────
+# ── full design: the judges list the follow-ups ───────────────────────────
+#
+# Design mode reads no tags: its QA judge and overwatch decide what holds the change
+# back and list the rest as follow-ups (refactory_dsh.judges, test_qa_judge.py). These
+# runs check that what each judge lists reaches the pull request as it did when a parser
+# read the tags.
+
+FOLLOW_UP = "tool.py: add a test for an empty input file"
+MUST_FIX = {"source": "code_reviewer", "where": "tool.py:2",
+            "what": "build() prints nothing when run as a script", "why": "the brief's ask"}
+
 
 def test_a_non_core_only_round_delivers_with_follow_ups(tmp_path):
     run, model = _design_run(tmp_path, [
         *_planning(), BUILT,
         *_round(code=f"code review: the code matches the design.\n\n{NON_CORE}"),
-        "VERDICT: PASS"])
+        qa_judgment("proceed", follow_ups=[FOLLOW_UP]), overwatch_judgment("pass")])
 
     assert run.exit_ok, run.error
     assert len([p for p in model.prompts if BUILDER in p]) == 1
@@ -93,66 +103,66 @@ def test_a_non_core_only_round_delivers_with_follow_ups(tmp_path):
     follow_ups = (tmp_path / "run/reviews/follow-ups.md").read_text()
     assert "add a test for an empty input file" in follow_ups
     assert (tmp_path / "run/reviews/qa-gate.txt").read_text().startswith(
-        "proceed: no core finding")
+        "proceed: the QA judge found nothing that must be fixed")
     pull_request = (tmp_path / "run/pull-request.md").read_text()
     assert "## Follow-ups (non-core findings)" in pull_request
     assert "add a test for an empty input file" in pull_request
     assert "found no core defect; 1 non-core finding(s) are listed" in pull_request
-    sources = json.loads((tmp_path / "run/reviews/finding-sources.json").read_text())
-    entry = next(e for e in sources if "empty input file" in e["finding"])
-    assert entry["class"] == "non-core" and entry["fate"] == "follow-up"
 
 
-def test_an_untagged_blocking_finding_is_core(tmp_path):
+def test_a_blocking_tag_in_a_design_review_decides_nothing(tmp_path):
+    """An untagged finding, core to the parser, with a judge that proceeds: no round."""
     untagged = "BLOCKING: tool.py: build() prints nothing when run as a script"
     run, model = _design_run(tmp_path, [
         *_planning(), BUILT,
         *_round(code=f"code review: a defect.\n\n{untagged}"),
-        REBUILT, *_round(), "VERDICT: PASS"])
+        qa_judgment("proceed"), overwatch_judgment("pass")])
 
     assert run.exit_ok, run.error
-    builders = [p for p in model.prompts if BUILDER in p]
-    assert len(builders) == 2
-    assert "prints nothing when run as a script" in builders[1]
-    assert not (tmp_path / "run/reviews/follow-ups.json").exists() or json.loads(
-        (tmp_path / "run/reviews/follow-ups.json").read_text()).get("qa") == []
+    assert len([p for p in model.prompts if BUILDER in p]) == 1
+    assert split_core(create_ops.blocking_findings(untagged))[0], "the parser called it core"
 
 
 def test_non_core_findings_ride_along_with_a_core_defect(tmp_path):
     run, model = _design_run(tmp_path, [
         *_planning(), BUILT,
         *_round(code=f"code review: two findings.\n\n{CORE}\n\n{NON_CORE}"),
-        REBUILT, *_round(), "VERDICT: PASS"])
+        qa_judgment("redo", must_fix=[MUST_FIX], follow_ups=[FOLLOW_UP]),
+        REBUILT, *_round(), overwatch_judgment("pass")])
 
     assert run.exit_ok, run.error
     builders = [p for p in model.prompts if BUILDER in p]
     assert len(builders) == 2
     assert "prints nothing when run as a script" in builders[1]
-    assert "Non-core findings (fix them if it is cheap" in builders[1]
+    assert "Follow-ups (fix them only if it is cheap" in builders[1]
     assert "add a test for an empty input file" in builders[1]
-    # The second round's reviews found nothing, so nothing is left to follow up.
+    # The second round's judge listed nothing, so nothing is left to follow up.
     assert "## Follow-ups" not in (tmp_path / "run/pull-request.md").read_text()
 
 
-def test_a_finding_one_reviewer_calls_core_blocks_even_if_another_calls_it_non_core(tmp_path):
+def test_a_judge_redo_holds_the_change_back_whatever_the_tags_say(tmp_path):
+    """Two reviewers tag one finding differently; the judge's verdict decides."""
     run, model = _design_run(tmp_path, [
         *_planning(), BUILT,
         *_round(health="health: one gap.\n\nBLOCKING: tool.py: no test for unicode input [non-core]",
                 qa="qa: one gap.\n\nBLOCKING: tool.py: no test for unicode input [core: brief]"),
-        REBUILT, *_round(), "VERDICT: PASS"])
+        qa_judgment("redo", must_fix=[{"source": "qa_director", "where": "tool.py",
+                                       "what": "unicode input crashes", "why": "the brief"}]),
+        REBUILT, *_round(), overwatch_judgment("pass")])
 
     assert run.exit_ok, run.error
     assert len([p for p in model.prompts if BUILDER in p]) == 2
 
 
 def test_a_follow_up_a_later_round_fixed_is_not_listed(tmp_path):
-    """QA proceeds with a non-core finding, overwatch sends back a core defect, and the
-    next round's reviews find nothing: the pull request lists no follow-up."""
-    overwatch_fail = f"An ask is unmet.\n\n{CORE}\n\nVERDICT: FAIL"
+    """QA proceeds with a follow-up, overwatch sends back a core defect, and the next
+    round's judges list nothing: the pull request lists no follow-up."""
+    overwatch_redo = overwatch_judgment("redo", must_fix=[MUST_FIX])
     run, model = _design_run(tmp_path, [
         *_planning(), BUILT,
-        *_round(code=f"code review: one gap.\n\n{NON_CORE}"), overwatch_fail,
-        REBUILT, *_round(), "VERDICT: PASS"])
+        *_round(code=f"code review: one gap.\n\n{NON_CORE}"),
+        qa_judgment("proceed", follow_ups=[FOLLOW_UP]), overwatch_redo,
+        REBUILT, *_round(), overwatch_judgment("pass")])
 
     assert run.exit_ok, run.error
     assert len([p for p in model.prompts if BUILDER in p]) == 2
@@ -169,7 +179,7 @@ def test_follow_ups_stay_out_of_the_repository_questions_advisory(tmp_path):
     run, model = _design_run(tmp_path, [
         *_planning(), BUILT,
         *_round(code=bad_code_review),      # one review pass; no re-run for the questions
-        "VERDICT: PASS"])
+        qa_judgment("proceed", follow_ups=[FOLLOW_UP]), overwatch_judgment("pass")])
 
     assert run.exit_ok, run.error
     pull_request = (tmp_path / "run/pull-request.md").read_text()
@@ -183,15 +193,13 @@ def test_follow_ups_stay_out_of_the_repository_questions_advisory(tmp_path):
 # ── full design: gate_overwatch ───────────────────────────────────────────
 
 def test_an_overwatch_pass_naming_non_core_findings_delivers_with_them(tmp_path):
-    overwatch = ("Every ask has evidence.\n\n"
-                 "BLOCKING: README.md: document the tool's output [non-core]\n\n"
-                 "VERDICT: PASS")
+    overwatch = overwatch_judgment("pass", follow_ups=["README.md: document the tool's output"])
     run, model = _design_run(tmp_path, [*_planning(), BUILT, *_round(), overwatch])
 
     assert run.exit_ok, run.error
     assert len([p for p in model.prompts if BUILDER in p]) == 1
     recorded = json.loads((tmp_path / "run/reviews/follow-ups.json").read_text())
-    assert recorded["overwatch"] == ["README.md: document the tool's output [non-core]"]
+    assert recorded["overwatch"] == ["README.md: document the tool's output"]
     assert "document the tool's output" in (tmp_path / "run/pull-request.md").read_text()
 
 
@@ -322,8 +330,9 @@ def test_create_non_core_only_review_proceeds_with_follow_ups(tmp_path, _clean_c
 # ── every reviewer is told, on both runtimes ──────────────────────────────
 
 @pytest.mark.parametrize("mode_path, reviewers", [
+    # Design mode's overwatch is a judge (refactory_dsh.judges): it tags nothing.
     ("refactory_dsh.design:DesignMode",
-     ("health_checker", "code_reviewer", "qa_director", "overwatch")),
+     ("health_checker", "code_reviewer", "qa_director")),
     ("refactory_dsh.create:CreateMode",
      ("health_checker", "code_reviewer", "qa_director", "overwatch")),
     ("refactory_dsh.edit:EditMode",
@@ -349,9 +358,10 @@ def test_every_post_build_reviewer_is_told_to_tag_its_findings(tmp_path, mode_pa
 
 
 @pytest.mark.parametrize("mode_path, reviewers", [
-    # Design mode has no design reviewer: its design goes straight to the person's gate.
+    # Design mode has no design reviewer, and its overwatch is a judge that writes JSON:
+    # neither carries the marker rule.
     ("refactory_dsh.design:DesignMode",
-     ("health_checker", "code_reviewer", "qa_director", "overwatch")),
+     ("health_checker", "code_reviewer", "qa_director")),
     ("refactory_dsh.create:CreateMode",
      ("health_checker", "code_reviewer", "qa_director", "overwatch")),
     ("refactory_dsh.edit:EditMode",

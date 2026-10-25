@@ -39,13 +39,13 @@ NAME = "worktree_tool"
 # ── graph edges for audit reloop and refused emission ──────────────────────
 
 
-def test_gate_overwatch_audit_edge_exists_in_design_graph():
-    """gate_overwatch has an 'audit' edge back to overwatch in the design graph."""
+def test_gate_overwatch_has_no_audit_edge_in_design_graph():
+    """Design mode's gate_overwatch routes on the overwatch's verdict only: the evidence
+    map's problems are the overwatch's evidence (design_ops.audit_corrections), not a
+    free round back to it."""
     graph = DesignMode().build()
     edges = graph.out_edges("gate_overwatch")
-    audit_edges = [e for e in edges if e.condition == "audit"]
-    assert len(audit_edges) == 1
-    assert audit_edges[0].target == "overwatch"
+    assert [e for e in edges if e.condition == "audit"] == []
 
 
 def test_gate_overwatch_audit_edge_exists_in_create_graph():
