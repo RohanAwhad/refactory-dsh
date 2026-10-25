@@ -229,14 +229,19 @@ def test_the_worst_case_ends_in_the_build_loop_stop_not_the_iteration_limit(tmp_
 
 
 ENV_FAILURE = "tests/test_env.py::test_env"
+ALWAYS_FAILS = "import tool\n\n\ndef test_env():\n    assert False, 'no network'\n"
+LEFT_DESIGN = ("# A tool\n\n## Summary\n\nBump the tool.\n\n## Rule and sites\n\n"
+               "- `tool.py:1` — **[left: the version stays an int]**\n\n## Docs\n\n- none\n\n"
+               "## Changes\n\n- tool.py\n")
 
 
 def test_round_one_sends_back_the_changes_failure_and_not_the_bases(tmp_path, monkeypatch):
     """On round 1 the failing tests run on the base worktree base_check prepares: the one
     the change broke goes back, the one the base fails too does not."""
     repo = _target(tmp_path / "repo", {
-        **PINNED, "tests/test_env.py": "import tool\n\n\ndef test_env():\n    assert False, 'no network'\n"})
+        **PINNED, "tests/test_env.py": ALWAYS_FAILS})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500001")
+    (run / "design.md").write_text(LEFT_DESIGN)
     _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err
@@ -245,8 +250,12 @@ def test_round_one_sends_back_the_changes_failure_and_not_the_bases(tmp_path, mo
     assert record["failing_ids"] == [PIN] and record["inherited_filtered"] == [ENV_FAILURE]
     assert record["base"] == "compared with a run of 2 test(s) on the base"
     validation = _facts(run)["validation"]
+    assert validation.startswith("self-check fix-up 1 of 2")
     assert f"- {PIN}" in validation and f"- {ENV_FAILURE}" not in validation
     assert "not this change's: " + ENV_FAILURE in validation
+    # The design's constraints go back with it (R5), so a pinning test is not "fixed"
+    # by reverting what the design changed.
+    assert "[left: the version stays an int] — do not change this" in validation
     # When the base fails it too, the attempt goes on to the reviews.
     _emit(run, render({"tests/test_pin.py": "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 2\n"}),
           monkeypatch)
@@ -255,6 +264,44 @@ def test_round_one_sends_back_the_changes_failure_and_not_the_bases(tmp_path, mo
     assert _records(run)[-1]["outcome"] == "inherited"
     # What the base said was kept: the second comparison ran nothing on the base.
     assert _records(run)[-1]["base"] == "compared with earlier runs of these tests on the base"
+
+
+def test_the_checks_own_base_result_answers_first(tmp_path, monkeypatch):
+    """When the check has compared with the base already, its cached result answers, and
+    the base is not prepared again."""
+    from refactory_dsh import base_check
+
+    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500011")
+    _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
+    found = worktree.recorded(run)
+    (run / base_check.CACHE_FILE).write_text(json.dumps({
+        "cache_key": base_check.cache_key(found.base, "", "", CHECK), "ok": False,
+        "failures": [ENV_FAILURE], "output": "", "exit_code": 1, "environment_failure": None,
+        "base_complete": True, "base_clean": True}))
+
+    def prepared(ctx):
+        raise AssertionError("the base was prepared again")
+
+    monkeypatch.setattr(base_check, "_ensure_base_worktree", prepared)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    [record] = _records(run)
+    assert record["failing_ids"] == [PIN] and record["inherited_filtered"] == [ENV_FAILURE]
+    assert record["base"] == "compared with the check's base result"
+
+
+def test_a_failure_the_last_check_inherited_is_not_sent_back():
+    from refactory_dsh.sandbox import SandboxResult
+
+    output = f"FAILED {ENV_FAILURE} - AssertionError: no network\n1 failed in 0.10s"
+    failed = SandboxResult(ok=False, returncode=1, stdout=output, stderr="", timed_out=False,
+                           elapsed_s=0.1)
+    prepass = failfast.targeted_prepass(
+        {"status": "fail", "inherited": [ENV_FAILURE]}, CHECK, lambda command, timeout: failed,
+        180, selection=["tests/test_env.py"], self_check_timeout_s=300)
+    assert prepass.ran and prepass.ran_ids == ["tests/test_env.py"]
+    assert not prepass.early_stop and prepass.failing_ids == []
 
 
 def test_a_base_that_runs_out_of_time_lets_nothing_be_inherited(tmp_path, monkeypatch):
@@ -572,12 +619,27 @@ def _tests(names: str) -> list[str]:
     return [f"refactory/tests/{name}.py" for name in names.split()]
 
 
+#: The test suite's imports as b39's base had them (dad4af31), frozen: what each of the
+#: check's test files imported. A hub is a share of the suite, so the live tree, which
+#: grows, would move the fixture.
+B39_IMPORTS = Path(__file__).parent / "fixtures" / "b39-base-imports.json"
+
+
 def test_the_selection_catches_b39s_round_one_failures_with_the_engine_tests_first():
     """On b39a's and b39b's attempt-1 changes the selection holds a failing test for every
     round-1 failure, and the engine tests (the boundary, lowering smoke and mode
     validation) run first, found by import fan-in, not by name."""
-    b39a = test_selection.select(B39A_TOUCHED, REPO_ROOT, {}, check_command=REPOSITORY_CHECK)
-    b39b = test_selection.select(B39B_TOUCHED, REPO_ROOT, {}, check_command=REPOSITORY_CHECK)
+    imports = {test: set(modules) for test, modules in json.loads(B39_IMPORTS.read_text()).items()}
+    assert len(imports) == 131
+
+    def select(touched: list[str]) -> test_selection.Selection:
+        return test_selection.select(touched, REPO_ROOT, {}, check_command=REPOSITORY_CHECK,
+                                     imports=imports)
+
+    b39a, b39b = select(B39A_TOUCHED), select(B39B_TOUCHED)
+    assert test_selection.hubs(imports) == {"refactory/refactory_dsh/nn/__init__.py",
+                                            "refactory/refactory_dsh/registry.py",
+                                            "refactory/refactory_dsh/design.py"}
     assert set(_tests("test_lowering_smoke test_edit_design test_pitfalls test_check_beside_reviews")) \
         <= set(b39a.tests)
     # Eight of b39b's nine; the package-lifecycle tests import no module it changed, and
@@ -586,11 +648,15 @@ def test_the_selection_catches_b39s_round_one_failures_with_the_engine_tests_fir
                       "test_fast_modes test_registry test_lowering_smoke test_design_worktree")) \
         <= set(b39b.tests)
     for selection in (b39a, b39b):
-        assert "refactory/refactory_dsh/design.py" in selection.hubs_changed
+        assert selection.hubs_changed == ["refactory/refactory_dsh/design.py"]
         engine = selection.engine
         assert selection.tests[:len(engine)] == engine
-        assert set(_tests("test_boundary test_lowering_smoke test_edit_design")) <= set(engine)
-        assert len(engine) <= 15  # a few, not every importer of the design graph
+        # The structural tests (they import nothing of the repository), then the tests
+        # on every hub: a few, not the 33 that import the design graph.
+        assert engine == _tests("test_boundary test_boundary_refs test_docs_english_only "
+                                "test_stale_install_finish test_work_complete test_lowering_smoke "
+                                "test_walker_gate_core test_node_timeout test_verification "
+                                "test_lowering test_edit_design test_design_worktree")
         # The tests the change touched come right after them.
         touched = [test for test in selection.touched_tests if test not in engine]
         assert selection.tests[len(engine):len(engine) + len(touched)] == touched

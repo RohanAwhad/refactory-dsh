@@ -1760,8 +1760,14 @@ def test_inherited_failure_does_not_excuse_a_check_that_stopped_at_it(tmp_path):
                f"{payload['base']}..{payload['branch']}") == "2"
 
 
+def _self_checks(run: Path) -> list[dict]:
+    return [json.loads(line) for line in (run / "self-check-record.jsonl").read_text().splitlines()]
+
+
 def test_new_failure_introduced_by_attempt_is_refused(tmp_path):
-    """An attempt that adds a new failure is refused (attempt is spent)."""
+    """An attempt that adds a new failure goes back to the builder, and the base's own
+    failure does not. Since b41a the self-check sends it back before the reviews, as a
+    fix-up amended into the attempt, so the branch keeps one commit."""
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_base_broken.py", "def test_base_broken():\n    assert False\n")
     failing = render({"tool.py": "print('built')\n",
@@ -1778,11 +1784,16 @@ def test_new_failure_introduced_by_attempt_is_refused(tmp_path):
     payload = _report(tmp_path / "run")
     project = Path(payload["target"])
     assert git(project, "rev-list", "--count",
-               f"{payload['base']}..{payload['branch']}") == "2"
+               f"{payload['base']}..{payload['branch']}") == "1"
+    sent_back = _self_checks(tmp_path / "run")[0]
+    assert sent_back["outcome"] == "fixup"
+    assert sent_back["failing_ids"] == ["test_new.py::test_new_broken"]
+    assert sent_back["inherited_filtered"] == ["test_base_broken.py::test_base_broken"]
 
 
 def test_brief_mentioned_failure_not_excused(tmp_path):
-    """A run whose brief is to fix the failing test is not excused."""
+    """A run whose brief is to fix the failing test is not excused: the base fails it too,
+    but the self-check sends it back (b41a)."""
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_fix_me.py", "def test_fix_me():\n    assert False\n")
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
@@ -1798,7 +1809,10 @@ def test_brief_mentioned_failure_not_excused(tmp_path):
     payload = _report(tmp_path / "run")
     project = Path(payload["target"])
     assert git(project, "rev-list", "--count",
-               f"{payload['base']}..{payload['branch']}") == "2"
+               f"{payload['base']}..{payload['branch']}") == "1"
+    sent_back = _self_checks(tmp_path / "run")[0]
+    assert sent_back["failing_ids"] == ["test_fix_me.py::test_fix_me"]
+    assert sent_back["outcome"] == "fixup" and sent_back["inherited_filtered"] == []
 
 
 def test_failure_in_a_test_file_the_attempt_changes_is_not_excused():
@@ -1899,7 +1913,8 @@ def test_base_check_cannot_run_stops_unavailable(tmp_path):
 
 
 def test_design_named_failure_not_excused(tmp_path):
-    """A test named in design.md is not excused even if the brief describes it obliquely."""
+    """A test named in design.md is not excused even if the brief describes it obliquely:
+    the self-check sends it back (b41a)."""
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_oblique.py", "def test_oblique():\n    assert False\n")
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
@@ -1932,7 +1947,10 @@ def test_design_named_failure_not_excused(tmp_path):
     payload = _report(tmp_path / "run")
     project = Path(payload["target"])
     assert git(project, "rev-list", "--count",
-               f"{payload['base']}..{payload['branch']}") == "2"
+               f"{payload['base']}..{payload['branch']}") == "1"
+    sent_back = _self_checks(tmp_path / "run")[0]
+    assert sent_back["failing_ids"] == ["test_oblique.py::test_oblique"]
+    assert sent_back["outcome"] == "fixup" and sent_back["inherited_filtered"] == []
 
 
 def test_guardedness_record_shows_new_test_failing_on_base(tmp_path):

@@ -225,18 +225,20 @@ def _failures(prev_record: dict[str, Any], root: Path) -> list[str]:
 
 
 def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = None, *,
-           check_command: str = "", files: list[str] | None = None) -> Selection:
+           check_command: str = "", files: list[str] | None = None,
+           imports: dict[str, set[str]] | None = None) -> Selection:
     """The self-check's selection for an emission that changed ``touched`` in ``root``.
 
     ``touched`` are paths from the repository root (`base_check._all_changed_files`);
     ``files`` the repository's files, listed from git when not given. Only Python tests
     the check's pytest steps collect are selected (`pytest_scope`), and the hubs are
-    counted among them.
+    counted among them. ``imports`` stands for `import_map` when given: the imports of
+    a tree as it was, for a selection replayed on it.
     """
     from refactory_dsh.changed_functions import is_generated
 
     root = Path(root)
-    files = repository_files(root) if files is None else files
+    files = ([] if imports is not None else repository_files(root)) if files is None else files
     scope = pytest_scope(check_command, root) if check_command else None
     last_failures = _failures(prev_record or {}, root)
     touched_tests: list[str] = []
@@ -252,7 +254,8 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
     selection = Selection(touched_tests=sorted(touched_tests), last_failures=last_failures)
     if not sources and not touched_tests and not last_failures:
         return selection
-    imports = import_map(root, files, tuple(sources), scope)
+    if imports is None:
+        imports = import_map(root, files, tuple(sources), scope)
     hub_set = hubs(imports)
     structural = sorted(test for test, modules in imports.items() if not modules)
     changed = set(sources)

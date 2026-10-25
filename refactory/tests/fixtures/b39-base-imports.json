@@ -1,0 +1,1075 @@
+{
+"refactory/tests/test_additive_launcher.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/owned_process.py",
+"refactory/refactory_dsh/paths.py"
+],
+"refactory/tests/test_adoption.py": [
+"refactory/refactory_dsh/adopt.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_packages/__init__.py"
+],
+"refactory/tests/test_agent_delivery.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/refactory_dsh/target_guard.py",
+"refactory/refactory_dsh/worker_node.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_authoring_evidence.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/edit.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/ir.py",
+"refactory/refactory_dsh/items.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/tests/test_edit_design.py",
+"refactory/tests/test_fast_modes.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_base_restore.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/check_digest.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_contract.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/failfast.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/target_guard.py",
+"refactory/refactory_dsh/unbuilt_check.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_boundary.py": [],
+"refactory/tests/test_boundary_hooks.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/brief_guard.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/delivery.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/invocations.py",
+"refactory/refactory_dsh/nn/knob.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/target_guard.py",
+"refactory/refactory_dsh/worktree.py"
+],
+"refactory/tests/test_boundary_refs.py": [],
+"refactory/tests/test_budgets.py": [
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/sandbox.py"
+],
+"refactory/tests/test_build_stamp.py": [
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/pin.py"
+],
+"refactory/tests/test_builder_probe.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/builder_probe.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/invocations.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/target_guard.py",
+"refactory/refactory_dsh/worker_node.py",
+"refactory/refactory_dsh/worktree.py"
+],
+"refactory/tests/test_changed_functions.py": [
+"refactory/refactory_dsh/changed_functions.py"
+],
+"refactory/tests/test_check_beside_reviews.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/failfast.py",
+"refactory/refactory_dsh/invocations.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_check_digest.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/check_digest.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_check_sandbox.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/refactory_dsh/worktree.py"
+],
+"refactory/tests/test_circle_packing.py": [
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_packages/circle_packing/__init__.py",
+"refactory/refactory_packages/circle_packing/ops.py"
+],
+"refactory/tests/test_cli.py": [
+"refactory/refactory_dsh/brief_guard.py",
+"refactory/refactory_dsh/cli.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/nn/graph.py",
+"refactory/refactory_dsh/nn/knob.py",
+"refactory/refactory_dsh/nn/validate.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/readable.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_console_projects.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/projects.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_control.py": [
+"refactory/refactory_dsh/adopt.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/control.py",
+"refactory/refactory_dsh/loop.py"
+],
+"refactory/tests/test_correction_audit.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/delivery.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_create.py": [
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/tests/model_credential.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_create_api.py": [
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/resolve.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_packages/__init__.py"
+],
+"refactory/tests/test_cwd_escape.py": [
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_declarations.py": [
+"refactory/refactory_dsh/evaluators.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/memory.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/run.py"
+],
+"refactory/tests/test_default_package.py": [
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_delivery.py": [
+"refactory/refactory_dsh/cli.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/delivery.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_contract.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/projects.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/refactory_dsh/workers.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_design_claims.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_claims.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/readable.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_design_contract_extensions.py": [
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_contract.py",
+"refactory/refactory_dsh/design_ops.py"
+],
+"refactory/tests/test_design_graph_fixture.py": [
+"refactory/refactory_dsh/tools/export_design_graph.py"
+],
+"refactory/tests/test_design_ops.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/steering.py"
+],
+"refactory/tests/test_design_probe.py": [
+"refactory/refactory_dsh/builder_probe.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_claims.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/graph.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/refactory_dsh/worktree.py"
+],
+"refactory/tests/test_design_scale.py": [
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/tests/test_design_contract_extensions.py"
+],
+"refactory/tests/test_design_short_path.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/tests/test_design_contract_extensions.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_design_worktree.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/cli.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/resolve.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/projects.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/target_guard.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_discovery.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/discovery.py",
+"refactory/refactory_dsh/tools/gen_discovery.py"
+],
+"refactory/tests/test_docs_api.py": [
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/tools/gen_api_reference.py"
+],
+"refactory/tests/test_docs_english_only.py": [],
+"refactory/tests/test_docs_tutorial.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/evaluators.py",
+"refactory/refactory_dsh/nn/edits.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/strategies.py",
+"refactory/refactory_dsh/tools/gen_tutorial.py"
+],
+"refactory/tests/test_dsh_command.py": [
+"refactory/refactory_dsh/paths.py"
+],
+"refactory/tests/test_dsh_profile.py": [
+"refactory/refactory_dsh/cli.py",
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/dsh_runtime.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_dsh_profile_migration.py": [
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/paths.py"
+],
+"refactory/tests/test_durability.py": [
+"refactory/refactory_dsh/history.py",
+"refactory/refactory_dsh/loop.py"
+],
+"refactory/tests/test_edit_design.py": [
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/edit.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/optim/base.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/tests/model_credential.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_equivalence.py": [
+"refactory/refactory_dsh/evaluators.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/run.py"
+],
+"refactory/tests/test_evaluators.py": [
+"refactory/refactory_dsh/evaluators.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_events.py": [
+"refactory/refactory_dsh/events.py"
+],
+"refactory/tests/test_example.py": [
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_executor.py": [
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/nn/mode.py",
+"refactory/refactory_dsh/task.py"
+],
+"refactory/tests/test_failfast.py": [
+"refactory/refactory_dsh/check_digest.py",
+"refactory/refactory_dsh/failfast.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_fast_cli.py": [
+"refactory/refactory_dsh/cli.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_fast_modes.py": [
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_fast_worker_admission.py": [
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/worker_node.py",
+"refactory/refactory_dsh/workers.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_feedback_refill.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/feedback_refill.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/worker_node.py"
+],
+"refactory/tests/test_findings_coverage.py": [
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/findings_coverage.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/run.py",
+"refactory/tests/test_pitfalls.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_fix_pack.py": [
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_follow_ups.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_gate_stale_findings.py": [
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/nn/executor.py"
+],
+"refactory/tests/test_graph_control.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/graph_control.py",
+"refactory/refactory_dsh/owned_process.py",
+"refactory/refactory_dsh/recovery.py",
+"refactory/refactory_dsh/run_state.py",
+"refactory/refactory_dsh/supervisor.py"
+],
+"refactory/tests/test_guardedness_gate.py": [
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_gui_loop.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/recovery.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_harness_check.py": [
+"refactory/refactory_dsh/harness_check.py"
+],
+"refactory/tests/test_history.py": [
+"refactory/refactory_dsh/history.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/optim/__init__.py"
+],
+"refactory/tests/test_integrity.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/optim/base.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_interactive.py": [
+"refactory/refactory_dsh/cli.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/delivery.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/dsh_runtime.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/refactory_dsh/workers.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_ir_parity.py": [
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/tests/reference_ir.py"
+],
+"refactory/tests/test_items.py": [
+"refactory/refactory_dsh/items.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/task.py"
+],
+"refactory/tests/test_java_build_pack.py": [
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/task.py",
+"refactory/refactory_packages/java_build_pack/__init__.py",
+"refactory/refactory_packages/java_build_pack/mode.py",
+"refactory/refactory_packages/java_build_pack/tasks.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_live_activity.py": [
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/graph_control.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/live.py",
+"refactory/refactory_dsh/readable.py",
+"refactory/refactory_dsh/recovery.py"
+],
+"refactory/tests/test_loop.py": [
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/control.py",
+"refactory/refactory_dsh/evaluators.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/edits.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_loop_as_mode.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/run.py"
+],
+"refactory/tests/test_loop_holdout.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/edits.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/task.py"
+],
+"refactory/tests/test_lowering.py": [
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/resolve.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/refactory_packages/fix_pack/mode.py",
+"refactory/tests/reference_ir.py"
+],
+"refactory/tests/test_lowering_smoke.py": [
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/edit.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_math_pack.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/toolchain.py",
+"refactory/refactory_packages/lean_pack/ops.py",
+"refactory/refactory_packages/lean_pack/problems.py"
+],
+"refactory/tests/test_model_routing.py": [
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/workers.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_model_timeout.py": [
+"refactory/refactory_dsh/cli.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/ir.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/workers.py"
+],
+"refactory/tests/test_nested_budget_scope.py": [
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/tests/test_loop.py",
+"refactory/tests/test_loop_as_mode.py"
+],
+"refactory/tests/test_nn.py": [
+"refactory/refactory_dsh/nn/__init__.py"
+],
+"refactory/tests/test_no_inlined_artifacts.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/edit.py",
+"refactory/refactory_dsh/fast.py"
+],
+"refactory/tests/test_node_timeout.py": [
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/verification.py",
+"refactory/refactory_dsh/workers.py"
+],
+"refactory/tests/test_observe.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/observe.py"
+],
+"refactory/tests/test_optim.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_optimizer_policies.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/optim/base.py",
+"refactory/refactory_dsh/optim/policies.py",
+"refactory/refactory_dsh/optim/random_optimizer.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_outerloop.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/outerloop.py"
+],
+"refactory/tests/test_package_lifecycle.py": [
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_patch_scope.py": [
+"refactory/refactory_dsh/patch_scope.py"
+],
+"refactory/tests/test_pin.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/pin.py",
+"refactory/refactory_dsh/recovery.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/worker_node.py",
+"refactory/refactory_dsh/workers.py",
+"refactory/tests/repo_guard.py"
+],
+"refactory/tests/test_pitfalls.py": [
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/pitfalls.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_prep_triage.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/failfast.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_prep_triage_install.py": [
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/test_prep_triage.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_profiles.py": [
+"refactory/refactory_dsh/adopt.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/mode.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/outerloop.py",
+"refactory/refactory_dsh/profiles.py",
+"refactory/tests/test_loop.py",
+"refactory/tests/test_loop_holdout.py"
+],
+"refactory/tests/test_project_propagation.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_project_root.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/tools/gen_tutorial.py"
+],
+"refactory/tests/test_projects.py": [
+"refactory/refactory_dsh/cli.py",
+"refactory/refactory_dsh/projects.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_recipes.py": [
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/tools/gen_tutorial.py",
+"refactory/refactory_dsh/tools/recipes.py"
+],
+"refactory/tests/test_recovery.py": [
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/recovery.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/run_ownership.py"
+],
+"refactory/tests/test_registry.py": [
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_replay_harness.py": [
+"refactory/refactory_dsh/replay_harness.py"
+],
+"refactory/tests/test_resource_lifecycle.py": [
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/ir.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/workers.py"
+],
+"refactory/tests/test_review_pack.py": [
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/refactory_packages/review_pack/ops.py"
+],
+"refactory/tests/test_review_questions.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/changed_functions.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/verification.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_robustness.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/base_check.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/delivery.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_contract.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/fast_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_route_verdict.py": [
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/nn/graph.py"
+],
+"refactory/tests/test_runner.py": [
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/run.py"
+],
+"refactory/tests/test_sandbox.py": [
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_ship_ready.py": [
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/toolchain.py"
+],
+"refactory/tests/test_signals.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/optim/base.py",
+"refactory/refactory_dsh/registry.py"
+],
+"refactory/tests/test_staging_isolation.py": [
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_packages/__init__.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_stale_install_finish.py": [],
+"refactory/tests/test_steer_probe.py": [
+"refactory/refactory_dsh/steer_probe.py"
+],
+"refactory/tests/test_steering.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/dsh_runtime.py",
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/nn/graph.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/steering.py",
+"refactory/tests/reference_ir.py"
+],
+"refactory/tests/test_str_knobs.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/optim/__init__.py"
+],
+"refactory/tests/test_strategies.py": [
+"refactory/refactory_dsh/loop.py",
+"refactory/refactory_dsh/optim/__init__.py",
+"refactory/refactory_dsh/outerloop.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/strategies.py"
+],
+"refactory/tests/test_supervisor.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/dsh_profile.py",
+"refactory/refactory_dsh/graph_control.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/owned_process.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/readable.py",
+"refactory/refactory_dsh/recovery.py",
+"refactory/refactory_dsh/run_ownership.py",
+"refactory/refactory_dsh/run_state.py",
+"refactory/refactory_dsh/supervisor.py"
+],
+"refactory/tests/test_supervisor_owner_argv.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/recovery.py",
+"refactory/refactory_dsh/run_state.py",
+"refactory/refactory_dsh/supervisor.py"
+],
+"refactory/tests/test_target_guard.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/target_guard.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_target_guard_restore.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/target_guard.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/test_design_worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_toolchain_gate.py": [
+"refactory/tests/conftest.py"
+],
+"refactory/tests/test_unbuilt_check.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/unbuilt_check.py"
+],
+"refactory/tests/test_uncommitted_changes.py": [
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_verification.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/create_ops.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/design_ops.py",
+"refactory/refactory_dsh/fast.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/verification.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_walker_gate.py": [
+"refactory/refactory_dsh/invocations.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/nn/graph.py",
+"refactory/refactory_dsh/run_ownership.py",
+"refactory/refactory_dsh/run_preparation.py",
+"refactory/refactory_dsh/steering.py"
+],
+"refactory/tests/test_walker_gate_core.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/edit.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/registry.py",
+"refactory/refactory_dsh/repo_change.py",
+"refactory/refactory_dsh/run_preparation.py",
+"refactory/tests/tests_support.py"
+],
+"refactory/tests/test_walker_recovery.py": [
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/create.py",
+"refactory/refactory_dsh/design.py",
+"refactory/refactory_dsh/edit.py",
+"refactory/refactory_dsh/evaluators.py",
+"refactory/refactory_dsh/invocations.py",
+"refactory/refactory_dsh/lowering.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/__init__.py",
+"refactory/refactory_dsh/nn/executor.py"
+],
+"refactory/tests/test_work_complete.py": [],
+"refactory/tests/test_worker_config.py": [
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/nn/executor.py",
+"refactory/refactory_dsh/profiles.py",
+"refactory/refactory_dsh/worker_config.py",
+"refactory/refactory_packages/counting_pack/mode.py"
+],
+"refactory/tests/test_worker_node.py": [
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/worker_node.py"
+],
+"refactory/tests/test_worker_permission_contexts.py": [
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/console.py",
+"refactory/refactory_dsh/interactive.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/workers.py"
+],
+"refactory/tests/test_worker_permissions.py": [
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/workers.py"
+],
+"refactory/tests/test_workers.py": [
+"refactory/refactory_dsh/agent_delivery.py",
+"refactory/refactory_dsh/budgets.py",
+"refactory/refactory_dsh/ir.py",
+"refactory/refactory_dsh/model.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/run.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/worker_node.py",
+"refactory/refactory_dsh/workers.py"
+],
+"refactory/tests/test_worktree.py": [
+"refactory/refactory_dsh/authoring_evidence.py",
+"refactory/refactory_dsh/memory.py",
+"refactory/refactory_dsh/paths.py",
+"refactory/refactory_dsh/sandbox.py",
+"refactory/refactory_dsh/worktree.py",
+"refactory/tests/tests_support.py"
+]
+}
