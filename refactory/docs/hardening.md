@@ -1931,9 +1931,11 @@ is one; otherwise only those tests run in the base worktree base_check prepares,
 after the run's generate and setup there, with the base's own HOME. What a base
 run learns about a test is kept (`.refactory/base-targeted.json`), with whether the
 base was prepared for that base commit, setup and generate, so a fix-up runs only
-new tests there and does not prepare the base again. A base that cannot be
-prepared, runs out of time or names no result is unavailable, and then nothing is
-inherited.
+new tests there and does not prepare the base again. A failure id the parser cut
+(a parametrized test whose parameter holds a space, `test_x[a b]` read as
+`test_x[a`) cannot be passed back to pytest, so its whole file runs instead, on the
+base and on a fix-up's rerun. A base that cannot be prepared, runs out of time or
+names no result is unavailable, and then nothing is inherited.
 
 ### The fix-up, and its bound
 

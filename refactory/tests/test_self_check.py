@@ -744,6 +744,23 @@ def test_a_base_run_that_names_no_failure_is_unavailable(tmp_path, monkeypatch):
     assert json.loads((run / base_check.TARGETED_CACHE_FILE).read_text())["tests"] == {}
 
 
+def test_a_parametrized_failure_the_parser_cuts_is_still_compared_with_the_base(tmp_path, monkeypatch):
+    """A parameter with a space is cut from the failure's id (``test_param[a``), which pytest
+    cannot find; passed back as it is, it stops the whole base run and nothing is
+    inherited. Its file runs on the base instead, and its failure there is inherited."""
+    param = ("import pytest\nimport tool\n\n\n@pytest.mark.parametrize('value', ['a b'])\n"
+             "def test_param(value):\n    assert False\n")
+    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_param.py": param})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500024")
+    _emit(run, BREAKS, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    [record] = _records(run)
+    assert record["failing_ids"] == [PIN]
+    assert record["inherited_filtered"] == ["tests/test_param.py::test_param[a"]
+    assert record["base"] == "compared with a run of 2 test(s) on the base"
+
+
 def test_a_base_whose_generate_fails_is_unavailable(tmp_path, monkeypatch):
     repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500017")

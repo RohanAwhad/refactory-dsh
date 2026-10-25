@@ -216,14 +216,25 @@ def _failures(prev_record: dict[str, Any], root: Path) -> list[str]:
             test_id = str(failure.get("test_id") or "")
             if not test_id or test_id in inherited or test_id in ids:
                 continue
-            file = test_id.split("::")[0] if "::" in test_id else test_id.split(" > ")[0].strip()
-            if (root / file).is_file():
-                ids.append(test_id)
+            if (root / _file_of(test_id)).is_file() and runnable(test_id) not in ids:
+                ids.append(runnable(test_id))
     return ids
 
 
 def _file_of(test_id: str) -> str:
     return test_id.split("::")[0] if "::" in test_id else test_id.split(" > ")[0].strip()
+
+
+def runnable(test_id: str) -> str:
+    """The test id, or its file when the id cannot be passed back to pytest.
+
+    `base_check.parse_test_failures` cuts a parametrized id at the first character it
+    does not read, such as a space in a parameter (``test_x[a b]`` becomes ``test_x[a``);
+    pytest finds no such test and stops the whole command. Its file runs instead.
+    """
+    if "::" in test_id and test_id.count("[") > test_id.count("]"):
+        return _file_of(test_id)
+    return test_id
 
 
 def costs_from_record(entries: list[dict[str, Any]], root: Path) -> dict[str, float]:
@@ -293,7 +304,8 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
         else:
             sources.append(name)
     selection = Selection(touched_tests=sorted(touched_tests), last_failures=last_failures,
-                          first=[test_id for test_id in first if (root / _file_of(test_id)).is_file()])
+                          first=list(dict.fromkeys(runnable(test_id) for test_id in first
+                                                   if (root / _file_of(test_id)).is_file())))
     if not sources and not touched_tests and not last_failures:
         selection.tests = list(dict.fromkeys(selection.first))
         return selection
@@ -325,6 +337,8 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
     for test_id in last_failures:
         if _file_of(test_id) not in whole and test_id not in ordered:
             ordered.append(test_id)
+            if test_id == _file_of(test_id):
+                whole.add(test_id)
     for name in rest:
         if name not in whole:
             whole.add(name)

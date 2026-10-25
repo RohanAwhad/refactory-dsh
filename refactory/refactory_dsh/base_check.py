@@ -835,9 +835,12 @@ def targeted_base_failures(ctx: Any, command: str, test_ids: list[str], *,
             if problems:
                 return unavailable("the base's generate or setup failed: " + "\n".join(problems)[:1000])
             _write_targeted(known_path, key, learned, prepared=True)
+        from refactory_dsh.test_selection import runnable
+
         env = worktree.check_environment(base_path, home)
-        files = [test_id for test_id in missing if "::" not in test_id and " > " not in test_id]
-        ids = [test_id for test_id in missing if test_id not in files]
+        targets = list(dict.fromkeys(runnable(test_id) for test_id in missing))
+        files = [name for name in targets if "::" not in name and " > " not in name]
+        ids = [name for name in targets if name not in files]
         targeted, refusal = build_probe_command(command, ids, root=base_path, test_files=files)
         if refusal:
             return unavailable(f"the tests cannot be targeted on the base: {refusal}")
