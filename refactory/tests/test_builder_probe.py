@@ -966,8 +966,10 @@ def test_run_stop_removes_warm_clone(tmp_path):
 def test_spine_run_end_removes_warm_clone(tmp_path):
     """The spine's run-end cleanup removes warm clones (interactive.py path).
 
-    Drives the cleanup sequence that interactive.py executes after the graph:
-    promote_unretried_failure, then sweep_warm_clones.
+    Drives interactive.run() with mocked heavy parts (build check, profile,
+    ownership, prepare, command, graph execution).  The sweep_warm_clones
+    call in interactive.py runs for real against the warm clone created by
+    a prior subprocess probe.
     """
     run, repo, found = _make_probe_run_with_real_tests(tmp_path)
 
@@ -984,19 +986,38 @@ def test_spine_run_end_removes_warm_clone(tmp_path):
                  and (d / "cache.key").is_file()]
     assert len(warm_dirs) == 1
 
-    # Execute the spine's end-of-run sequence (from interactive.py)
-    try:
-        from refactory_dsh.run_state import promote_unretried_failure
-        promote_unretried_failure(run)
-    except Exception:
-        pass  # best-effort
-    try:
-        from refactory_dsh.builder_probe import sweep_warm_clones as _sweep
-        _sweep(run)
-    except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning(
-            "could not remove warm clone under %s: %s", run, exc,
+    # Drive through interactive.run() with mocked heavy parts so the
+    # sweep_warm_clones call at interactive.py:444-446 runs for real.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _fake_ownership(workdir):
+        yield 999
+
+    fake_result = MagicMock()
+    fake_result.returncode = 0
+
+    with (
+        patch("refactory_dsh.interactive.require_build"),
+        patch("refactory_dsh.steer_probe.find_steer_module",
+              return_value="stub"),
+        patch("refactory_dsh.dsh_profile.require"),
+        patch("refactory_dsh.interactive.ownership", _fake_ownership),
+        patch("refactory_dsh.interactive.prepare",
+              return_value=("test-mode", run / ".refactory")),
+        patch("refactory_dsh.interactive.command",
+              return_value=["echo", "ok"]),
+        patch("refactory_dsh.interactive.run_summary", return_value=""),
+        patch("refactory_dsh.interactive.run_warnings", return_value=""),
+        patch("refactory_dsh.workers.run_graph_command",
+              return_value=fake_result),
+    ):
+        from refactory_dsh.interactive import run as interactive_run
+        interactive_run(
+            "test/mode", workdir=run,
+            model_context={
+                "provider": "", "model": "", "worker_backend": "dsh",
+            },
         )
 
     warm_dirs = [d for d in (run / ".refactory").iterdir()

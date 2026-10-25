@@ -415,7 +415,7 @@ def prepared_clone(
                 home_dir = probe_dir / "home"
                 dsh_home_dir = probe_dir / "dsh_home"
                 _do_cold_clone(probe_dir, clone_dir, found,
-                               deadline - (time.monotonic() - start))
+                               max(0, deadline - (time.monotonic() - start)))
                 clone_base = worktree.git(clone_dir, "rev-parse", "HEAD").strip()
                 (probe_dir / "clone_base").write_text(clone_base)
                 (probe_dir / "cache.key").write_text(cache_key)
@@ -460,6 +460,9 @@ def prepared_clone(
                     except OSError:
                         pass
                     lock_fd = None
+                # If eviction fails (clone locked by another process), a
+                # second clone with the same cache.key is created; the orphan
+                # is cleaned by the next sweep.
                 _try_evict_clone(probe_dir, refactory_dir)
                 probe_id = uuid.uuid4().hex[:12]
                 probe_dir = workdir / ".refactory" / f"probe-{probe_id}"
@@ -467,7 +470,7 @@ def prepared_clone(
                 home_dir = probe_dir / "home"
                 dsh_home_dir = probe_dir / "dsh_home"
                 _do_cold_clone(probe_dir, clone_dir, found,
-                               deadline - (time.monotonic() - start))
+                               max(0, deadline - (time.monotonic() - start)))
                 clone_base = worktree.git(
                     clone_dir, "rev-parse", "HEAD").strip()
                 (probe_dir / "clone_base").write_text(clone_base)
