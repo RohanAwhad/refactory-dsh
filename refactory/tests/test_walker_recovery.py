@@ -2,6 +2,11 @@
 
 Each test exercises the real walker executor (``nn.executor.execute``) and must
 fail without its corresponding fix.
+
+The time-limit tests are the real ones for their mechanism: a real child process,
+really killed. Their limit comes from the run's elapsed-time budget, which clamps a
+check op's limit (``Executor._effective_timeout``), so each sets ``max_elapsed_s`` to
+about a second rather than waiting out ten.
 """
 from __future__ import annotations
 
@@ -17,6 +22,10 @@ import pytest
 
 from refactory_dsh import nn
 from refactory_dsh.nn.executor import OpTimeoutError
+
+#: The run budget for the time-limit tests, in seconds. The walker clamps a check
+#: op's limit to the budget left (and never below 1 s), so this is the limit itself.
+SHORT_LIMIT_S = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +106,7 @@ def test_op_exceeding_timeout_stops_run_with_message(tmp_path):
         graph, tmp_path,
         knobs={"check_timeout_s": 2},
         enable_recovery=True,
-        resource_limits={"max_elapsed_s": 10},
+        resource_limits={"max_elapsed_s": SHORT_LIMIT_S},
     )
 
     assert result.exit_ok is False
@@ -136,7 +145,7 @@ def test_hung_fn_gate_times_out(tmp_path):
         graph, tmp_path,
         knobs={"check_timeout_s": 2},
         enable_recovery=True,
-        resource_limits={"max_elapsed_s": 10},
+        resource_limits={"max_elapsed_s": SHORT_LIMIT_S},
     )
 
     assert result.exit_ok is False
@@ -167,7 +176,7 @@ def test_fork_branch_op_under_timeout_limit(tmp_path):
         graph, tmp_path,
         knobs={"check_timeout_s": 2},
         enable_recovery=True,
-        resource_limits={"max_elapsed_s": 15},
+        resource_limits={"max_elapsed_s": SHORT_LIMIT_S},
     )
 
     assert result.exit_ok is False
@@ -194,7 +203,7 @@ def test_resume_after_timeout_outcome_is_failed(tmp_path):
         graph, tmp_path,
         knobs={"check_timeout_s": 2},
         enable_recovery=True,
-        resource_limits={"max_elapsed_s": 10},
+        resource_limits={"max_elapsed_s": SHORT_LIMIT_S},
     )
 
     progress = json.loads((tmp_path / PROGRESS).read_text())
@@ -355,7 +364,9 @@ def test_outer_loop_evaluation_hung_op_stops_next_trial_starts_clean(tmp_path):
     evaluator = WalkerEvaluator(project=tmp_path)
 
     from refactory_dsh.budgets import RunBudget, ResourceLimits
-    budget = RunBudget.create(tmp_path / "budget", ResourceLimits(max_elapsed_s=15))
+    # The transient op runs first, in-process, so the budget leaves it room before
+    # the hung op's limit starts.
+    budget = RunBudget.create(tmp_path / "budget", ResourceLimits(max_elapsed_s=2 * SHORT_LIMIT_S))
     budget.resume()
     evaluator.budget = budget
 
@@ -388,8 +399,9 @@ def test_a_checks_own_tools_die_at_the_limit(tmp_path):
         produces=(*CHECK_PRODUCES,),
         knobs=("check_timeout_s",),
     ))
+    # The op has to start its sleep before the limit, so it gets twice the short one.
     result = nn.execute(graph, tmp_path, knobs={"check_timeout_s": 2},
-                        enable_recovery=True, resource_limits={"max_elapsed_s": 8})
+                        enable_recovery=True, resource_limits={"max_elapsed_s": 2 * SHORT_LIMIT_S})
 
     assert result.exit_ok is False
     assert "timed out" in (result.error or "").lower()

@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -274,6 +276,30 @@ def test_resolve_module():
 # ---------------------------------------------------------------------------
 # Test 3: runtime import scan — no core module loads product at import time
 # ---------------------------------------------------------------------------
+def _probe(mod: str, product_modules: set[str]) -> subprocess.CompletedProcess[str]:
+    """Import ``mod`` in a fresh interpreter and print the product modules that loaded."""
+    script = (
+        f"import sys\n"
+        f"import {mod}\n"
+        f"product = {product_modules!r}\n"
+        f"leaked = [m for m in sys.modules if m in product]\n"
+        f"print(','.join(leaked) if leaked else '')\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, timeout=60,
+        cwd=str(_ROOT),
+        env={**os.environ, "PYTHONPATH": str(_ROOT)},
+    )
+
+
+def _probe_all(mods: list[str], product_modules: set[str]) -> dict[str, subprocess.CompletedProcess[str]]:
+    """Every module's probe. Each needs a fresh interpreter, but none depends on
+    another, so they run side by side rather than one after the other."""
+    with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+        return dict(zip(mods, pool.map(lambda mod: _probe(mod, product_modules), mods)))
+
+
 def test_no_core_imports_product_runtime():
     boundary = _load_boundary()
     core_modules = boundary["core"]
@@ -295,20 +321,12 @@ def test_no_core_imports_product_runtime():
     violations: list[str] = []
     probe_failures: list[str] = []
 
+    core_packs = [f"refactory_packages.{pack_name}"
+                  for pack_name, side in boundary["refactory_packages"].items() if side == "core"]
+    probes = _probe_all([*core_modules, *core_packs], product_modules)
+
     for mod in core_modules:
-        script = (
-            f"import sys\n"
-            f"import {mod}\n"
-            f"product = {product_modules!r}\n"
-            f"leaked = [m for m in sys.modules if m in product]\n"
-            f"print(','.join(leaked) if leaked else '')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True, text=True, timeout=60,
-            cwd=str(_ROOT),
-            env={**__import__("os").environ, "PYTHONPATH": str(_ROOT)},
-        )
+        result = probes[mod]
         if result.returncode != 0:
             probe_failures.append(f"{mod} probe failed (rc={result.returncode}): {result.stderr[:200]}")
             continue
@@ -321,19 +339,7 @@ def test_no_core_imports_product_runtime():
         if unexpected and expected:
             # Re-run checking which product modules each allowed module brings
             for allowed_mod in list(expected):
-                script2 = (
-                    f"import sys\n"
-                    f"import {allowed_mod}\n"
-                    f"product = {product_modules!r}\n"
-                    f"leaked = [m for m in sys.modules if m in product]\n"
-                    f"print(','.join(leaked) if leaked else '')\n"
-                )
-                r2 = subprocess.run(
-                    [sys.executable, "-c", script2],
-                    capture_output=True, text=True, timeout=60,
-                    cwd=str(_ROOT),
-                    env={**__import__("os").environ, "PYTHONPATH": str(_ROOT)},
-                )
+                r2 = _probe(allowed_mod, product_modules)
                 if r2.returncode != 0:
                     probe_failures.append(
                         f"{allowed_mod} (transitive of {mod}) probe failed "
@@ -349,24 +355,8 @@ def test_no_core_imports_product_runtime():
             violations.append(f"{mod} loaded {m} at import time")
 
     # Also scan core packs
-    pack_class = boundary["refactory_packages"]
-    for pack_name, side in pack_class.items():
-        if side != "core":
-            continue
-        mod = f"refactory_packages.{pack_name}"
-        script = (
-            f"import sys\n"
-            f"import {mod}\n"
-            f"product = {product_modules!r}\n"
-            f"leaked = [m for m in sys.modules if m in product]\n"
-            f"print(','.join(leaked) if leaked else '')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True, text=True, timeout=60,
-            cwd=str(_ROOT),
-            env={**__import__("os").environ, "PYTHONPATH": str(_ROOT)},
-        )
+    for mod in core_packs:
+        result = probes[mod]
         if result.returncode != 0:
             probe_failures.append(f"{mod} (core pack) probe failed (rc={result.returncode}): {result.stderr[:200]}")
             continue
