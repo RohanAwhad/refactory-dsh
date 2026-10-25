@@ -91,18 +91,17 @@ for Run/authoring; `resolved-profile.json` records it for optimization. Worker
 receipts under `.refactory/workers` record the requested and actual route. A
 preview is configuration evidence; the actual receipt establishes dispatch.
 
-### Example: routing design_doc and design_review to a stronger model
+### Example: routing design_doc to a stronger model
 
 ```json
 {
   "node_routes": {
-    "design_doc": {"model": "claude-opus-4-20250514"},
-    "design_review": {"model": "claude-opus-4-20250514"}
+    "design_doc": {"model": "claude-opus-4-20250514"}
   }
 }
 ```
 
-This routes both the designer and its reviewer to a stronger model. The worker
+This routes the design writer to a stronger model. The worker
 receipt records `requested_route` and `actual_route`; the run report and PR
 body's Verification section show which model planned each step.
 

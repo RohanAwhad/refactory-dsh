@@ -1,4 +1,4 @@
-"""R5 tests: model routing for design_doc and design_review, and model recording."""
+"""R5 tests: model routing for design_doc, and model recording."""
 
 from __future__ import annotations
 
@@ -19,18 +19,19 @@ def test_resolve_route_with_node_routes_for_design_doc():
     assert result["model"] == "test-strong-model"
 
 
-def test_resolve_route_with_node_routes_for_design_review():
+def test_resolve_route_with_node_routes_for_design_doc():
     base = {"worker_backend": "dsh", "model": "default-model",
             "provider": "", "effort": "", "permission_mode": "default"}
-    result = resolve_route(base, node="design_review",
-                           node_routes={"design_review": {"model": "test-strong-model"}})
+    result = resolve_route(base, node="design_doc",
+                           node_routes={"design_doc": {"model": "test-strong-model"}})
     assert result["model"] == "test-strong-model"
 
 
-def test_design_doc_and_review_nodes_have_routable_role():
+def test_design_doc_node_has_routable_role():
     graph = DesignMode().build()
     assert graph.nodes["design_doc"].role == "ceo"
-    assert graph.nodes["design_review"].role == "ceo"
+    # No design reviewer: design_doc is the one planning node.
+    assert "design_review" not in graph.nodes
 
 
 def test_report_artifact_reads_planning_models_from_worker_receipts(tmp_path):
@@ -50,13 +51,6 @@ def test_report_artifact_reads_planning_models_from_worker_receipts(tmp_path):
     }
     (workers_dir / "worker-fake1.json").write_text(json.dumps(receipt1))
 
-    receipt2 = {
-        "schema_version": 1,
-        "node_id": "design_review",
-        "actual_route": {"model": "claude-opus-4-20250514"},
-        "state": "completed",
-    }
-    (workers_dir / "worker-fake2.json").write_text(json.dumps(receipt2))
 
     # A receipt for a non-planning node should be ignored
     receipt3 = {
@@ -80,16 +74,13 @@ def test_report_artifact_reads_planning_models_from_worker_receipts(tmp_path):
         try:
             rec = json.loads(wf.read_text())
             nid = rec.get("node_id", "")
-            if nid in ("design_doc", "design_review"):
+            if nid == "design_doc":
                 route = rec.get("actual_route") or rec.get("requested_route") or {}
                 planning_models[nid] = route.get("model") or None
         except (json.JSONDecodeError, OSError):
             pass
 
-    assert planning_models == {
-        "design_doc": "claude-opus-4-20250514",
-        "design_review": "claude-opus-4-20250514",
-    }
+    assert planning_models == {"design_doc": "claude-opus-4-20250514"}
     assert "emit" not in planning_models
 
 
@@ -100,7 +91,7 @@ def test_run_records_planning_models(tmp_path, monkeypatch):
     so design.json would never contain planning_models.
     """
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                VERIFICATION_ANSWER,
                                REVIEW_ANSWERS, FakeModel, render)
@@ -114,7 +105,7 @@ def test_run_records_planning_models(tmp_path, monkeypatch):
 
         def complete(self, prompt, *, system="", workdir=None):
             answer = self._parent.complete(prompt, system=system, workdir=workdir)
-            if workdir is not None and self._node_id in ("design_doc", "design_review"):
+            if workdir is not None and self._node_id == "design_doc":
                 from pathlib import Path as P
                 workers_dir = P(workdir) / ".refactory" / "workers"
                 workers_dir.mkdir(parents=True, exist_ok=True)
@@ -143,16 +134,13 @@ def test_run_records_planning_models(tmp_path, monkeypatch):
 
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('built')\n"}),
         *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
         REVIEW_ANSWERS[3],
     ]
-    routes = {
-        "design_doc": {"model": "test-strong-model"},
-        "design_review": {"model": "test-strong-model"},
-    }
+    routes = {"design_doc": {"model": "test-strong-model"}}
     result = DesignMode().run(
         tmp_path / "run", model=RoutedModel(answers, node_routes=routes),
         verdicts={"gate_strategy": "proceed"},
@@ -163,14 +151,13 @@ def test_run_records_planning_models(tmp_path, monkeypatch):
     assert "planning_models" in report, (
         "report must include planning_models from worker receipts"
     )
-    assert report["planning_models"]["design_doc"] == "test-strong-model"
-    assert report["planning_models"]["design_review"] == "test-strong-model"
+    assert report["planning_models"] == {"design_doc": "test-strong-model"}
 
 
 def test_delivery_body_includes_planning_models(tmp_path, monkeypatch):
     """A run with planning_models shows them in the PR body's Verification section."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                VERIFICATION_ANSWER,
                                REVIEW_ANSWERS, FakeModel, render)
@@ -183,7 +170,7 @@ def test_delivery_body_includes_planning_models(tmp_path, monkeypatch):
 
         def complete(self, prompt, *, system="", workdir=None):
             answer = self._parent.complete(prompt, system=system, workdir=workdir)
-            if workdir is not None and self._node_id in ("design_doc", "design_review"):
+            if workdir is not None and self._node_id == "design_doc":
                 from pathlib import Path as P
                 workers_dir = P(workdir) / ".refactory" / "workers"
                 workers_dir.mkdir(parents=True, exist_ok=True)
@@ -211,16 +198,13 @@ def test_delivery_body_includes_planning_models(tmp_path, monkeypatch):
 
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('built')\n"}),
         *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
         REVIEW_ANSWERS[3],
     ]
-    routes = {
-        "design_doc": {"model": "test-strong-model"},
-        "design_review": {"model": "test-strong-model"},
-    }
+    routes = {"design_doc": {"model": "test-strong-model"}}
     model = RoutedModel(answers, node_routes=routes)
     result = DesignMode().run(
         tmp_path / "run", model=model,
@@ -231,5 +215,4 @@ def test_delivery_body_includes_planning_models(tmp_path, monkeypatch):
     # The design.json report should have planning_models
     report = json.loads((tmp_path / "run" / "design.json").read_text())
     assert "planning_models" in report
-    assert report["planning_models"]["design_doc"] == "test-strong-model"
-    assert report["planning_models"]["design_review"] == "test-strong-model"
+    assert report["planning_models"] == {"design_doc": "test-strong-model"}

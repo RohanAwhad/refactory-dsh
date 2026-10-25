@@ -321,15 +321,16 @@ export const designGraph: ShapeEntry = {
   graph: designFixture,
   directors: {}, dataPasses: {},
   gatesWithReloop: ['gate_research', 'gate_pitfalls', 'gate_design_review', 'gate_strategy', 'prepare_check', 'gate_check', 'gate_qa', 'gate_overwatch'],
-  // A full design: perspectives and the design-review agent run.
-  fixedVerdicts: { route_strategy: 'proceed', route_design_review: 'proceed' }, large: true,
+  // A full design: the perspectives step runs. No reviewer sits between the design and
+  // the person's gate at either scale.
+  fixedVerdicts: { route_strategy: 'proceed' }, large: true,
 }
 
-/** The same graph for a scoped change, which skips both of those steps. */
+/** The same graph for a scoped change, which skips the perspectives step. */
 export const designGraphScoped: ShapeEntry = {
   ...designGraph,
   name: 'designGraphScoped',
-  fixedVerdicts: { route_strategy: 'scoped', route_design_review: 'scoped' },
+  fixedVerdicts: { route_strategy: 'scoped' },
 }
 
 // ─── Shape 13: crossContainerReloop (constructor-refused) ────────

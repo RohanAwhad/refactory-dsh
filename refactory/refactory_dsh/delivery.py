@@ -2031,25 +2031,31 @@ def _process_notes_section(ctx: Any) -> str:
 
 
 def _validate_design_after_corrections(workdir: Path) -> None:
-    """Post-validation: if design.md lost its contract after corrections, restore the backup.
+    """Post-validation: if corrections lost a section delivery reads, restore the backup.
 
     ``pick_gate_corrections`` writes ``design.md.pre_corrections`` before routing
-    to ``apply_corrections``.  If the agent rewrote design.md in a way that loses
-    the required sections (``## Summary``, ``## Rule and sites``, etc.), this
-    restores the pre-correction version and warns.  When there is no backup
-    (no corrections were applied), this is a no-op.
+    to ``apply_corrections``.  If the pre-correction design had ``## Summary`` or
+    ``## Changes`` (``design_contract.CONTRACT_SECTIONS``) and the corrected one lost
+    it, or left it empty, the rewrite broke what the pull request is written from: this
+    restores the pre-correction version and warns.  A section the design never had is
+    not lost, so a light design without ``## Summary`` keeps its corrections.  When
+    there is no backup (no corrections were applied), this is a no-op.
     """
     from refactory_dsh import design_contract
     design_path = workdir / "design.md"
     backup_path = workdir / "design.md.pre_corrections"
     if not design_path.exists() or not backup_path.exists():
         return
-    text = design_path.read_text()
-    parsed = design_contract.parse(text)
-    if not parsed.has_contract:
-        backup_text = backup_path.read_text()
+    backup_text = backup_path.read_text()
+    sections = design_contract.CONTRACT_SECTIONS
+    had = [s for s in sections if s not in design_contract.missing_sections(backup_text, sections)]
+    gone = design_contract.missing_sections(design_path.read_text(), sections)
+    lost = [section for section in had if section in gone]
+    if lost:
         design_path.write_text(backup_text)
-        target_guard.warn("design.md was unparseable after corrections; restored the pre-correction version")
+        target_guard.warn(
+            "design.md lost " + ", ".join(f"## {section}" for section in lost)
+            + " in corrections; restored the pre-correction version")
 
 
 def draft_fact(ctx: Any) -> dict[str, Any] | None:

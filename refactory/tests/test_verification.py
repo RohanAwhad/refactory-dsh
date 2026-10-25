@@ -197,13 +197,13 @@ def test_reviewer_independence():
 def test_verification_pass_proceeds_to_reviews_full_mode(tmp_path, monkeypatch):
     """A PASS verdict proceeds to the reviews without reloop."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                FakeModel, render)
     VERIFICATION_PASS = "No blocking findings.\n\nVERDICT: PASS"
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('built')\n"}),
         # fork_qa: health_checker, code_reviewer, qa_director, verifier
         "health: passed", "code review: passed", "qa: passed",
@@ -223,13 +223,13 @@ def test_verifier_only_findings_go_to_overwatch_and_the_pr_not_a_round(tmp_path,
     """Verifier FAIL with QA PASS: no builder round. Overwatch reads the finding, and
     the pull request lists it."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                FakeModel, render)
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('built')\n"}),
         "health: passed", "code: passed", "qa: passed",
         VERIFICATION_FAIL,
@@ -262,7 +262,7 @@ def test_verifier_only_findings_go_to_overwatch_and_the_pr_not_a_round(tmp_path,
 def test_overwatch_sends_back_a_verifier_finding_that_breaks_an_ask(tmp_path, monkeypatch):
     """The verifier's finding costs a round only when Overwatch finds it breaks an ask."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                FakeModel, render)
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
@@ -270,7 +270,7 @@ def test_overwatch_sends_back_a_verifier_finding_that_breaks_an_ask(tmp_path, mo
                       "[core: brief]\n\nVERDICT: FAIL")
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('built')\n"}),
         "health: passed", "code: passed", "qa: passed", VERIFICATION_FAIL,
         OVERWATCH_FAIL,
@@ -296,14 +296,14 @@ def test_overwatch_sends_back_a_verifier_finding_that_breaks_an_ask(tmp_path, mo
 def test_joint_fix_round(tmp_path, monkeypatch):
     """QA BLOCKING + verifier FAIL → single reloop with both findings."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                FakeModel, render)
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL"
     QA_FAIL = "BLOCKING: tool.py:5: missing feature\n\nVERDICT: FAIL"
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         # Round 1: QA and verifier both fail
         render({"tool.py": "print('built')\n"}),
         "health: passed", "code: passed", QA_FAIL,
@@ -332,7 +332,7 @@ def test_joint_fix_round(tmp_path, monkeypatch):
 def test_verifier_branch_failure(tmp_path, monkeypatch):
     """A verifier that returns empty is treated as missing in the synthesis."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                FakeModel, render)
     # The verifier returns empty output — no VERDICT line, no findings.
@@ -340,7 +340,7 @@ def test_verifier_branch_failure(tmp_path, monkeypatch):
     VERIFICATION_EMPTY = ""
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('ok')\n"}),
         # fork_qa: 3 reviews pass, verifier returns empty
         "health: passed", "code: passed", "qa: passed",
@@ -383,13 +383,13 @@ def test_crashed_branch_full_mode(tmp_path, monkeypatch, crash, survives):
     """A verifier that raises is missing, and the run completes; a reviewer that
     raises still fails the run."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, render)
     reviews = REVIEW_ANSWERS[:3] + (["No blocking findings.\n\nVERDICT: PASS"] if not survives else [])
     if not survives:
         reviews = reviews[1:]
     model = _CrashingModel([RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-                            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                            DESIGN_DOC_ANSWER,
                             render({"tool.py": "print('ok')\n"}), *reviews, "VERDICT: PASS"], crash)
     result = DesignMode().run(tmp_path / "run", model=model, verdicts={"gate_strategy": "proceed"},
                               task={"name": "crash", "brief": "a tool", "check": "python tool.py"})
@@ -425,14 +425,14 @@ def test_finding_sources_json(tmp_path, monkeypatch):
     builder rebuts the verifier's finding, and the run proceeds. Asserts each entry's
     fate and first_round/last_round."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                FakeModel, render)
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
     QA_FAIL = "BLOCKING: tool.py:5: missing error handling\n\nVERDICT: FAIL"
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         # Round 1: QA and verifier both fail
         render({"tool.py": "print('v1')\n"}),
         "health: passed", "code: passed", QA_FAIL,
@@ -628,11 +628,11 @@ def test_rebuttal_fate_fast_mode(tmp_path, monkeypatch):
 def test_a_repository_change_gives_the_verifier_only_the_unshared_methods(tmp_path, monkeypatch):
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     import sys
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
                                RESEARCH_ANSWER, VERIFICATION_ANSWER, FakeModel, git_repo,
                                render)
     model = FakeModel([RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-                       DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                       DESIGN_DOC_ANSWER,
                        render({"tool.py": "def build():\n    print('built')\n"}),
                        "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER,
                        "VERDICT: PASS"])
