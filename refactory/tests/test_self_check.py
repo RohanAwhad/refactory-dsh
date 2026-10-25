@@ -830,13 +830,21 @@ def test_fixup_first_ids_do_not_duplicate_with_engine_or_touched_tier(tmp_path):
 
 def test_N10_timings_from_earlier_self_checks_flow_to_selection_ordering(tmp_path, monkeypatch):
     """The second self-check's selection orders files by their measured time, not by size.
-    Kills mutant N10 (costs=test_selection.costs_from_record -> costs={})."""
-    fast = "import m1\n\n\ndef test_fast():\n    pass\n"
-    slow = "import m2\n" + "# padding\n" * 5 + "\n\ndef test_slow():\n    import time; time.sleep(0.5)\n"
+    Kills mutant N10 (costs=test_selection.costs_from_record -> costs={}).
+
+    test_fast.py is LARGE (many padding lines) but runs instantly.
+    test_slow.py is SMALL (few lines) but sleeps 0.5 s.
+    By size:   [test_slow, test_fast]  (small file cheaper).
+    By timing: [test_fast, test_slow]  (fast file cheaper).
+    With the mutant (costs={}) the size ordering wins; without it, timing wins."""
+    # big_fast: large file (lots of padding) that runs instantly
+    big_fast = "import m1\n" + "# pad\n" * 200 + "\ndef test_fast():\n    pass\n"
+    # small_slow: tiny file that takes 0.5 s
+    small_slow = "import m2\n\ndef test_slow():\n    import time; time.sleep(0.5)\n"
     repo = _target(tmp_path / "repo", {
         "m1.py": "X = 1\n", "m2.py": "X = 1\n",
-        "tests/test_fast.py": fast,
-        "tests/test_slow.py": slow,
+        "tests/test_fast.py": big_fast,
+        "tests/test_slow.py": small_slow,
     })
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500054")
     # First emission: both tests run and are timed.
@@ -848,11 +856,14 @@ def test_N10_timings_from_earlier_self_checks_flow_to_selection_ordering(tmp_pat
     _emit(run, render({"m1.py": "X = 3\n", "m2.py": "X = 3\n"}), monkeypatch)
     _prepare(run, monkeypatch)
     second_record = _records(run)[-1]
-    # With recorded costs, the selection should be influenced by actual timing.
-    # The fast test should come before the slow test.
+    # With recorded costs, the fast file (large by size, but fast by time) must
+    # come before the slow file (small by size, but slow by time).
+    # With the mutant (costs={}), size ordering puts test_slow first — wrong order.
     importers = [t for t in second_record["selection"]
                  if t in ("tests/test_fast.py", "tests/test_slow.py")]
-    assert importers  # both should be selected
+    assert len(importers) == 2, f"expected both files in selection, got {importers}"
+    assert importers == ["tests/test_fast.py", "tests/test_slow.py"], \
+        f"expected timing-based order [fast, slow], got {importers}"
 
 
 def test_N12_base_prepared_flag_after_base_worktree_removed_triggers_repreparation(
@@ -884,33 +895,39 @@ def test_N12_base_prepared_flag_after_base_worktree_removed_triggers_repreparati
 
 
 def test_N17_collection_error_file_ids_in_base_guardedness_classification(tmp_path):
-    """_parse_collection_errors detects the file ids pytest names when a module cannot
-    be collected.  compute_test_guardedness uses them to classify the file as
-    cannot_run_on_base.  Kills mutant N17: replacing _parse_collection_errors with
-    lambda _: (set(), False) changes the classification to "pass"."""
-    from refactory_dsh.base_check import _parse_collection_errors
-
-    # Realistic pytest output when a test file's import fails during collection.
-    output = (
-        "============================= ERRORS ==============================\n"
-        "_________ ERROR collecting tests/test_new.py __________\n"
-        "ImportError while importing test module '/repo/tests/test_new.py'.\n"
-        "Hint: make sure your test modules/packages have valid Python names.\n"
-        "Traceback:\n"
-        "/usr/lib/python3.12/importlib/__init__.py:90: in import_module\n"
-        "    return _bootstrap._gcd_import(name[level:], package, level)\n"
-        "tests/test_new.py:1: in <module>\n"
-        "    import new_module\n"
-        "E   ModuleNotFoundError: No module named 'new_module'\n"
-        "=========================== short test summary info ============================\n"
-        "ERROR tests/test_new.py - ModuleNotFoundError: No module named 'new_module'\n"
-        "!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!\n"
-        "1 error in 0.05s\n"
-    )
-    files, has_unlocatable = _parse_collection_errors(output)
-    assert "tests/test_new.py" in files, f"expected tests/test_new.py in {files}"
-    # Without _parse_collection_errors, the file would not be found → "pass" instead
-    # of "cannot_run_on_base".
+    """A new test file that imports a module only the attempt introduces is classified
+    as cannot_run_on_base by compute_test_guardedness via _parse_collection_errors.
+    Driven through the walker's design graph (prepare_check → check_artifact →
+    compute_test_guardedness → _parse_collection_errors).
+    Kills mutant N17: replacing _parse_collection_errors with lambda _: (set(), False)
+    changes the classification from cannot_run_on_base to fail."""
+    repo = _target(tmp_path / "repo", {
+        "tool.py": "VERSION = 1\n",
+        "tests/test_pin.py": "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 1\n",
+    })
+    # Emit code that introduces a new module and a test that imports it.
+    # The test passes on the attempt (module exists) but cannot be collected
+    # on the base (module does not exist → ModuleNotFoundError).
+    model = FakeModel(_answers(render({
+        "new_module.py": "FEATURE = True\n",
+        "tests/test_new_module.py": (
+            "import new_module\n\n"
+            "def test_feature():\n"
+            "    assert new_module.FEATURE\n"
+        ),
+    })))
+    run = tmp_path / "run"
+    result = _design(run, model, repo)
+    assert result.exit_ok, result.error
+    guardedness = json.loads((run / "test-guardedness.json").read_text())
+    # The new test file should be classified as cannot_run_on_base because
+    # new_module does not exist on the base → collection error on import.
+    found_results = [r for r in guardedness.get("results", [])
+                     if r["file"] == "tests/test_new_module.py"]
+    assert found_results, (
+        f"tests/test_new_module.py not in guardedness results: {guardedness}")
+    assert found_results[0].get("file_level") == "cannot_run_on_base", (
+        f"expected cannot_run_on_base, got {found_results[0]}")
 
 
 def test_timed_costs_order_the_rest(tmp_path):

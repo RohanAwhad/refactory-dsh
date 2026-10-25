@@ -1303,6 +1303,8 @@ def prepare_check(ctx: Any) -> Any:
                 lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False,
                                                             prepared=True),
                 check_timeout, root=found.path, selection=[], self_check_timeout_s=300)
+            empty_prepass.digest_text = (
+                f"generate put back everything this attempt changed (empty diff); {why}")
             return _early_stop(ctx, empty_prepass, prev_record, saved_base_unavailable)
     return _self_check(ctx, command, check_timeout, prev_record, saved_base_unavailable, attempt)
 

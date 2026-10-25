@@ -214,16 +214,16 @@ def _self_check(
             if "exit 4" in why_not:
                 dropped = _not_found_ids(_output(result))
                 if dropped:
-                    remaining = [name for name in chunk if name not in dropped]
-                    if remaining:
-                        ids2 = [name for name in remaining if "::" in name or " > " in name]
-                        files2 = [name for name in remaining if name not in ids2]
+                    rest_of_chunk = [name for name in chunk if name not in dropped]
+                    if rest_of_chunk:
+                        ids2 = [name for name in rest_of_chunk if "::" in name or " > " in name]
+                        files2 = [name for name in rest_of_chunk if name not in ids2]
                         cmd2, ref2 = build_probe_command(check_command, ids2,
                                                          root=root_path, test_files=files2)
                         if not ref2:
                             result2 = run_check_fn(cmd2, limit_s - (time.monotonic() - started))
                             found2, why2 = _chunk_report(result2, inherited)
-                            timings.append({"tests": remaining,
+                            timings.append({"tests": rest_of_chunk,
                                             "s": round(time.monotonic() - began, 1),
                                             "counted": not why2})
                             commands.append(cmd2)
@@ -235,7 +235,7 @@ def _self_check(
                                         failing.append(test_id)
                                 if found2:
                                     failed_outputs.append(_output(result2))
-                                ran.extend(remaining)
+                                ran.extend(rest_of_chunk)
                                 continue
                             # Rerun also failed: fall through to cut.
                     notes.append(f"chunk {number}: dropped not-found ids "
