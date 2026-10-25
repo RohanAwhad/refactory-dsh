@@ -153,7 +153,7 @@ def test_a_sandboxed_run_does_not_see_the_real_credentials(tmp_path):
 # ── execution under limits ─────────────────────────────────────────────────
 def test_a_run_that_exceeds_its_time_limit_is_killed(tmp_path):
     result = sandbox.run_sandboxed(
-        "import time; time.sleep(30)", workdir=tmp_path / "run", timeout_s=2
+        "import time; time.sleep(30)", workdir=tmp_path / "run", timeout_s=1
     )
     assert not result.ok and result.timed_out
     assert "time limit" in result.problem()

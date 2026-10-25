@@ -7,6 +7,7 @@ And a run that died lost everything, because the loop was one process.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -29,10 +30,26 @@ def _loop(root: Path, **overrides: object) -> Loop:
     return Loop(MODE, _config(root, **overrides), project=Path("."))
 
 
+@pytest.fixture(scope="module")
+def _uninterrupted(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict]:
+    root = tmp_path_factory.mktemp("durability") / "run"
+    return root, _loop(root).run()
+
+
+@pytest.fixture
+def uninterrupted(_uninterrupted: tuple[Path, dict]) -> tuple[Path, dict]:
+    """A finished run that was never interrupted: its directory, and a copy of its report.
+
+    The run is deterministic (seed 5), so the tests that only read a finished run, and
+    every resume test's uninterrupted run to compare against, share this one.
+    """
+    root, report = _uninterrupted
+    return root, copy.deepcopy(report)
+
+
 # ── versioning ─────────────────────────────────────────────────────────────
-def test_a_run_records_its_layout_version(tmp_path):
-    root = tmp_path / "run"
-    _loop(root).run()
+def test_a_run_records_its_layout_version(uninterrupted):
+    root, _report = uninterrupted
     payload = json.loads((root / history.RUN_FILE).read_text())
     assert payload["version"] == history.RUN_VERSION
     assert payload["mode"] == MODE
@@ -78,25 +95,24 @@ def _identical(a: dict, b: dict) -> bool:
     )
 
 
-def test_a_fresh_run_leaves_a_journal(tmp_path):
-    root = tmp_path / "run"
-    _loop(root).run()
+def test_a_fresh_run_leaves_a_journal(uninterrupted):
+    root, _report = uninterrupted
     events = [json.loads(line)["event"] for line in (root / "journal.jsonl").read_text().splitlines()]
     assert "start" in events and "candidate" in events and "score" in events
     assert "epoch_open" in events and "epoch_end" in events
 
 
-def test_resuming_between_epochs_matches_an_uninterrupted_run(tmp_path):
+def test_resuming_between_epochs_matches_an_uninterrupted_run(tmp_path, uninterrupted):
     root = tmp_path / "run"
     interrupted = _loop(root)
     interrupted.init()
     interrupted.epoch_step()
     resumed = _loop(root, resume=True).run()
-    fresh = _loop(tmp_path / "fresh").run()
+    _fresh_root, fresh = uninterrupted
     assert _identical(resumed, fresh)
 
 
-def test_resuming_from_the_middle_of_an_epoch_matches_an_uninterrupted_run(tmp_path):
+def test_resuming_from_the_middle_of_an_epoch_matches_an_uninterrupted_run(tmp_path, uninterrupted):
     """A crash is not tidy: the epoch was opened and half its work was done."""
     root = tmp_path / "run"
     interrupted = _loop(root)
@@ -108,15 +124,15 @@ def test_resuming_from_the_middle_of_an_epoch_matches_an_uninterrupted_run(tmp_p
     interrupted.forward()
     interrupted.loss_step()
     resumed = _loop(root, resume=True).run()
-    fresh = _loop(tmp_path / "fresh").run()
+    _fresh_root, fresh = uninterrupted
     assert _identical(resumed, fresh)
 
 
-def test_a_run_killed_before_any_epoch_still_matches(tmp_path):
+def test_a_run_killed_before_any_epoch_still_matches(tmp_path, uninterrupted):
     root = tmp_path / "run"
     _loop(root).init()
     resumed = _loop(root, resume=True).run()
-    fresh = _loop(tmp_path / "fresh").run()
+    _fresh_root, fresh = uninterrupted
     assert _identical(resumed, fresh)
 
 
@@ -144,7 +160,7 @@ def test_resume_is_refused_when_there_is_nothing_to_resume_from(tmp_path):
         _loop(tmp_path / "empty", resume=True).init()
 
 
-def test_a_torn_last_line_is_ignored(tmp_path):
+def test_a_torn_last_line_is_ignored(tmp_path, uninterrupted):
     """What a crash mid-write looks like, and why the log is append-only."""
     root = tmp_path / "run"
     interrupted = _loop(root)
@@ -154,7 +170,7 @@ def test_a_torn_last_line_is_ignored(tmp_path):
     with journal.open("a") as handle:
         handle.write('{"event": "candidate", "id": "half-writ')
     resumed = _loop(root, resume=True).run()
-    fresh = _loop(tmp_path / "fresh").run()
+    _fresh_root, fresh = uninterrupted
     assert _identical(resumed, fresh)
 
 

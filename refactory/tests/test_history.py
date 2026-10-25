@@ -139,13 +139,18 @@ def test_the_prompt_carries_the_history_and_the_priors(tmp_path):
 
 
 def test_no_batch_slot_is_silently_lost(tmp_path):
-    """Every candidate the optimizer returns is evaluated or refused, never dropped."""
+    """Every candidate the optimizer returns is evaluated or refused, never dropped.
+
+    The steps are driven by hand, so no epoch is opened and only the evaluation
+    bound ends the loop. By 32 evaluations the random optimizer has proposed a state
+    the search already holds, which is what the optimizer's own refusal is for.
+    """
     import json as _json
 
     loop = Loop(
         MODE,
         LoopConfig(epochs=2, batch_size=4, optimizer="random", seed=5,
-                   runs_root=tmp_path / "run"),
+                   runs_root=tmp_path / "run", max_evaluations=32),
         project=Path("."),
     )
     loop.init()

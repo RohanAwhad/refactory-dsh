@@ -10,10 +10,13 @@ pushes and the registry are real.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -1186,21 +1189,32 @@ def test_verify_git_link_refuses_mislinked_worktree(tmp_path):
     assert repo_head_after == repo_head_before
 
 
-@pytest.fixture
-def github(tmp_path, monkeypatch) -> Path:
-    """GitHub, as far as delivery can tell: gh logged in as `octo`, repositories on disk."""
-    root = tmp_path / "github"
+def _make_github(base: Path) -> Path:
+    """GitHub under ``base``: gh (logged in as `octo`) in ``base/bin``, repositories in ``base/github``."""
+    root = base / "github"
     root.mkdir()
     (root / "login").write_text(LOGIN + "\n")
-    bin_dir = tmp_path / "bin"
-    stub(bin_dir, "gh", f'exec "{sys.executable}" "{FAKE_GH}" "$@"')
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    stub(base / "bin", "gh", f'exec "{sys.executable}" "{FAKE_GH}" "$@"')
+    return root
+
+
+def _use_github(monkeypatch: pytest.MonkeyPatch, base: Path) -> Path:
+    """Point gh and git at the GitHub ``_make_github`` made under ``base``."""
+    root = base / "github"
+    monkeypatch.setenv("PATH", f"{base / 'bin'}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_GH_ROOT", str(root))
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.file://{root}/.insteadOf")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/")
     monkeypatch.setattr(delivery, "VERIFY_WAIT_S", 0)
     return root
+
+
+@pytest.fixture
+def github(tmp_path, monkeypatch) -> Path:
+    """GitHub, as far as delivery can tell: gh logged in as `octo`, repositories on disk."""
+    _make_github(tmp_path)
+    return _use_github(monkeypatch, tmp_path)
 
 
 def _published(github: Path, slug: str, source: Path) -> Path:
@@ -1353,6 +1367,108 @@ def _registry_note(run: Path) -> dict:
                 if note.get("branch") == found.branch)
 
 
+# ── shared design runs ─────────────────────────────────────────────────────
+#
+# Many tests start from one of two design runs and then do something to what it left:
+# a new project whose first pull request is open (`new_run`), or an existing repository
+# with a pull request a run opened (`opened_pull`, for refinements). Those runs are the
+# same every time, so each is walked once, for real, through the whole design graph,
+# and every test gets its own copy of everything it left: the run directory, the
+# worktree, the project and its registry, gh's log and GitHub. The copy is restored at
+# the path the run was made at -- one stage directory for the module -- because the
+# worktrees, records and remotes name absolute paths.
+#
+# A copy is not the run in one respect: a reviewer's sign-off is bound to the inode and
+# ctime of what it saw (`agent_delivery._fingerprint`), and copied files have new ones.
+# So a test that needs current sign-offs -- `report` without a draft fact, which calls
+# `require_completion` -- walks its own run.
+
+
+@dataclass
+class Staged:
+    """A restored design run, and what its test needs to read it."""
+
+    root: Path  # what `tmp_path` is to a test that walks its own run: `bin/calls.log` is here
+    github: Path
+    run: Path | None = None  # `new_run`: the run's directory
+    result: nn.RunResult | None = None  # `new_run`: what the run returned
+    repo: Path | None = None  # `opened_pull`: the person's checkout
+    url: str = ""  # `opened_pull`: the pull request the first run opened
+    pull: dict | None = None  # `opened_pull`: that pull request as GitHub showed it
+
+
+def _use_home(monkeypatch: pytest.MonkeyPatch, base: Path) -> None:
+    """Refactory's home and projects folder under ``base``, as `_isolate_refactory_home` sets them."""
+    home = base / "refactory-home"
+    monkeypatch.setenv("REFACTORY_HOME", str(home / "home"))
+    monkeypatch.setenv("REFACTORY_PROJECTS_DIR", str(home / "projects"))
+    monkeypatch.setenv("GH_CONFIG_DIR", str(home / "gh"))
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _build_new(stage: Path, github: Path) -> Staged:
+    result = _design(stage / "run")
+    assert result.exit_ok, result.error
+    return Staged(stage, github, stage / "run", result)
+
+
+def _build_opened(stage: Path, github: Path) -> Staged:
+    repo, url, pull = _opened(github, stage)
+    return Staged(stage, github, repo=repo, url=url, pull=pull)
+
+
+@pytest.fixture(scope="module")
+def _stage(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("delivery-stage")
+
+
+def _golden(stage: Path, factory: pytest.TempPathFactory, kind: str, build) -> tuple[Path, Staged]:
+    """Walk one shared run at ``stage`` and keep a pristine copy of everything it left."""
+    shutil.rmtree(stage)
+    stage.mkdir()
+    github = _make_github(stage)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _use_github(monkeypatch, stage)
+        _use_home(monkeypatch, stage)
+        made = build(stage, github)
+    pristine = factory.mktemp(f"delivery-{kind}") / "tree"
+    shutil.copytree(stage, pristine, symlinks=True)
+    return pristine, made
+
+
+def _restore(stage: Path, golden: tuple[Path, Staged], monkeypatch: pytest.MonkeyPatch) -> Staged:
+    """This test's own copy of a shared run, at the stage, with gh and the home pointed at it."""
+    pristine, made = golden
+    shutil.rmtree(stage)
+    shutil.copytree(pristine, stage, symlinks=True)
+    _use_github(monkeypatch, stage)
+    _use_home(monkeypatch, stage)
+    return copy.deepcopy(made)
+
+
+@pytest.fixture(scope="module")
+def _new_golden(_stage: Path, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Staged]:
+    return _golden(_stage, tmp_path_factory, "new", _build_new)
+
+
+@pytest.fixture(scope="module")
+def _opened_golden(_stage: Path, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Staged]:
+    return _golden(_stage, tmp_path_factory, "opened", _build_opened)
+
+
+@pytest.fixture
+def new_run(_stage: Path, _new_golden: tuple[Path, Staged], monkeypatch: pytest.MonkeyPatch) -> Staged:
+    """A new project's design run, finished: its private repository made, its first pull request open."""
+    return _restore(_stage, _new_golden, monkeypatch)
+
+
+@pytest.fixture
+def opened_pull(_stage: Path, _opened_golden: tuple[Path, Staged], monkeypatch: pytest.MonkeyPatch) -> Staged:
+    """`acme/app` on GitHub, the person's checkout of it, and a pull request a design run opened there."""
+    return _restore(_stage, _opened_golden, monkeypatch)
+
+
 def test_draft_passing_check_opens_draft_pr(github, tmp_path):
     """A draft run with a passing check opens a draft PR with the unresolved section."""
     run = tmp_path / "run"
@@ -1397,7 +1513,7 @@ def test_draft_passing_check_opens_draft_pr(github, tmp_path):
     assert _registry_note(run)["pull_request"] == result.facts["pull_request"]
 
 
-def test_draft_failing_check_opens_draft_pr(github, tmp_path):
+def test_draft_failing_check_opens_draft_pr(new_run):
     """A draft run with a failing check: report does NOT raise, the draft PR opens.
 
     The evidence shows status='fail' but require_current_evidence accepts it
@@ -1407,10 +1523,8 @@ def test_draft_failing_check_opens_draft_pr(github, tmp_path):
     from refactory_dsh.nn.executor import RunContext
     from refactory_dsh.authoring_evidence import SETTINGS
 
-    run = tmp_path / "run"
-    # First do a normal run to set up worktree and evidence.
-    result = _design(run)
-    assert result.exit_ok, result.error
+    # A normal run has set up the worktree and evidence.
+    run, result = new_run.run, new_run.result
 
     # Tamper the evidence to show a failing check.
     ev_path = run / "authoring-evidence.json"
@@ -1601,12 +1715,10 @@ def test_draft_failing_merged_check(github, tmp_path, monkeypatch):
     assert items[0].startswith("- Merged-result check failed"), items
 
 
-def test_draft_existing_pr_converted_to_draft(github, tmp_path, monkeypatch):
+def test_draft_existing_pr_converted_to_draft(new_run):
     """A draft run with an existing open PR: gh pr ready --undo + body prepend."""
-    run = tmp_path / "run_existing"
-    # First do a normal run to create an open PR.
-    result = _design(run)
-    assert result.exit_ok, result.error
+    # A normal run has opened the PR.
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     [pull_before] = _pulls(github, slug)
     old_body = pull_before["body"]
@@ -1616,7 +1728,7 @@ def test_draft_existing_pr_converted_to_draft(github, tmp_path, monkeypatch):
     facts["draft_delivery"] = DRAFT_FACT
     outcome = delivery.deliver_design(nn.RunContext(run, facts=facts, enforce_writes=False))
 
-    calls = _calls(tmp_path)
+    calls = _calls(new_run.root)
     assert "pr ready --undo" in calls, f"expected pr ready --undo in: {calls}"
     assert "pr edit" in calls, f"expected pr edit in: {calls}"
 
@@ -1629,12 +1741,10 @@ def test_draft_existing_pr_converted_to_draft(github, tmp_path, monkeypatch):
     assert updated_pull.get("draft") is True
 
 
-def test_draft_closed_pr_opens_no_second_pr(github, tmp_path, monkeypatch):
+def test_draft_closed_pr_opens_no_second_pr(new_run):
     """A draft run with a closed PR: delivery does NOT open a second PR."""
-    run = tmp_path / "run_closed"
-    # First do a normal run to create an open PR.
-    result = _design(run)
-    assert result.exit_ok, result.error
+    # A normal run has opened the PR.
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     [pull_before] = _pulls(github, slug)
 
@@ -1745,7 +1855,7 @@ def test_draft_no_pr_mode(github, tmp_path):
     assert "--draft" in gh_cmd, f"expected --draft in finish commands: {finish}"
 
 
-def test_spine_draft_delivery_across_processes(github, tmp_path, monkeypatch):
+def test_spine_draft_delivery_across_processes(new_run, monkeypatch):
     """The spine carries draft_delivery across processes via facts.json.
 
     Uses ``node_runner.run_node`` (separate processes, as the spine runs them),
@@ -1755,10 +1865,8 @@ def test_spine_draft_delivery_across_processes(github, tmp_path, monkeypatch):
     from refactory_dsh import lowering, design_ops
     from refactory_dsh.run import run_node
 
-    run = tmp_path / "run_spine"
-    # First do a normal run to set up the worktree, evidence and delivery plan.
-    result = _design(run)
-    assert result.exit_ok, result.error
+    # A normal run has set up the worktree, evidence and delivery plan.
+    run, result = new_run.run, new_run.result
 
     # Write the draft_delivery fact into facts.json on disk — the spine's channel.
     facts = json.loads((run / "facts.json").read_text()) if (run / "facts.json").exists() else {}
@@ -1787,7 +1895,7 @@ def test_spine_draft_delivery_across_processes(github, tmp_path, monkeypatch):
     assert saved["delivery_result"].startswith("draft:"), saved["delivery_result"]
 
     # The fake gh saw --draft (for the existing PR, it's pr ready --undo).
-    calls = _calls(tmp_path)
+    calls = _calls(new_run.root)
     assert "pr ready --undo" in calls or "--draft" in calls
 
 
@@ -1838,16 +1946,14 @@ def test_draft_pr_body_hides_credentials_and_keeps_each_item_on_one_line(github,
     assert "sk-ant-in-the-reason" not in result.facts["delivery_result"]
 
 
-def test_draft_without_any_check_evidence_is_refused(github, tmp_path):
+def test_draft_without_any_check_evidence_is_refused(new_run):
     """A draft says what its check showed, so report refuses a draft run with no check
     evidence at all, whether or not the runtime_evidence fact is set. (Without the
     fact, require_completion is unchanged.)"""
     from refactory_dsh.design_ops import report_artifact
     from refactory_dsh.authoring_evidence import SETTINGS
 
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+    run, result = new_run.run, new_run.result
     ev_path = run / "authoring-evidence.json"
     knobs = {key: json.loads(ev_path.read_text()).get("settings", {}).get(key) for key in SETTINGS}
     ev_path.unlink()
@@ -1860,15 +1966,13 @@ def test_draft_without_any_check_evidence_is_refused(github, tmp_path):
         report_artifact(nn.RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
 
 
-def test_draft_with_stale_identity_is_refused(github, tmp_path):
+def test_draft_with_stale_identity_is_refused(new_run):
     """A draft needs evidence for what it delivers: a design changed after validation
     is refused on the draft path as on the complete one."""
     from refactory_dsh.design_ops import report_artifact
     from refactory_dsh.authoring_evidence import SETTINGS
 
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+    run, result = new_run.run, new_run.result
     ev = json.loads((run / "authoring-evidence.json").read_text())
     knobs = {key: ev.get("settings", {}).get(key) for key in SETTINGS}
     (run / "design.md").write_text((run / "design.md").read_text() + "\nchanged after validation\n")
@@ -1900,13 +2004,11 @@ def test_a_draft_github_refuses_opens_ready_with_its_title_marked(github, tmp_pa
     assert "GitHub refused a draft pull request" in result.facts["delivery_result"]
 
 
-def test_a_pull_request_github_will_not_make_a_draft_keeps_its_delivery(github, tmp_path):
+def test_a_pull_request_github_will_not_make_a_draft_keeps_its_delivery(new_run):
     """`gh pr ready --undo` refused on the open pull request: the unresolved section is
     still put first, and the record names the pushed commit and the pull request and
     says it could not be converted."""
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     meta = json.loads((github / f"{slug}.json").read_text())
     (github / f"{slug}.json").write_text(json.dumps({**meta, "drafts": False}))
@@ -1924,12 +2026,10 @@ def test_a_pull_request_github_will_not_make_a_draft_keeps_its_delivery(github, 
     assert pull["body"].startswith(delivery.DRAFT_HEADING) and pull["draft"] is False
 
 
-def test_a_draft_whose_description_gh_cannot_edit_still_records_its_push(github, tmp_path, monkeypatch):
+def test_a_draft_whose_description_gh_cannot_edit_still_records_its_push(new_run, monkeypatch):
     """Converting the open pull request runs after the push, so a refusal there leaves
     the pushed branch and the pull request in the record."""
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+    run, result = new_run.run, new_run.result
     real = delivery._gh
 
     def gh(*args, **kwargs):
@@ -1947,12 +2047,10 @@ def test_a_draft_whose_description_gh_cannot_edit_still_records_its_push(github,
         "kept local", url, f"{LOGIN}/{NAME}:{found.branch}")
 
 
-def test_delivering_a_draft_again_replaces_its_unresolved_section(github, tmp_path):
+def test_delivering_a_draft_again_replaces_its_unresolved_section(new_run):
     """A second draft delivery on the same pull request replaces the section the first
     one wrote, rather than stacking a second above it."""
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     [first] = _pulls(github, slug)
     later = {"reason": "overall attempts limit reached",
@@ -1967,10 +2065,10 @@ def test_delivering_a_draft_again_replaces_its_unresolved_section(github, tmp_pa
     assert pull["body"].endswith(first["body"])
 
 
-def test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft(github, tmp_path):
+def test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft(opened_pull, tmp_path):
     """On a refinement the refined pull request becomes the draft, its own description
     kept below one unresolved section, however often it is delivered."""
-    repo, url, pull = _opened(github, tmp_path)
+    repo, url, pull, github = opened_pull.repo, opened_pull.url, opened_pull.pull, opened_pull.github
     run = tmp_path / "refine"
     result = _design(run, refine=url)
     assert result.exit_ok, result.error
@@ -1983,11 +2081,9 @@ def test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft(github, 
     assert again["delivery_result"].startswith(f"draft: {url}")
 
 
-def test_a_draft_whose_pull_request_merged_is_recorded_merged(github, tmp_path):
+def test_a_draft_whose_pull_request_merged_is_recorded_merged(new_run):
     """Merged is merged: not recorded or reported as a draft, and not converted."""
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     pulls = _pulls(github, slug)
     pulls[0]["state"] = "MERGED"
@@ -1998,7 +2094,7 @@ def test_a_draft_whose_pull_request_merged_is_recorded_merged(github, tmp_path):
     assert rec["status"] == "merged" and "draft" not in rec and "draft_reason" not in rec
     assert again["delivery_result"].startswith(f"merged: {result.facts['pull_request']}"), again
     assert _registry_note(run)["delivery"] == "merged"
-    assert "pr ready" not in _calls(tmp_path)
+    assert "pr ready" not in _calls(new_run.root)
 
 
 def test_a_draft_whose_merge_was_abandoned_is_not_succeeded(github, tmp_path):
@@ -2090,10 +2186,8 @@ def test_a_draft_fact_that_is_not_a_mapping_is_no_draft(github, tmp_path, capsys
 
 
 # ── the paths a person takes ───────────────────────────────────────────────
-def test_a_new_project_gets_a_private_repository_whose_first_pull_request_holds_all_the_code(github, tmp_path):
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+def test_a_new_project_gets_a_private_repository_whose_first_pull_request_holds_all_the_code(new_run):
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     project = (projects_dir() / NAME).resolve()
     assert json.loads((github / f"{slug}.json").read_text())["visibility"] == "private"
@@ -2249,17 +2343,15 @@ def test_a_run_without_a_worktree_has_nothing_to_deliver(github, tmp_path, capsy
 
 
 # ── a redo, a resume, and what GitHub then shows ───────────────────────────
-def test_delivering_again_opens_no_second_pull_request_and_leaves_its_text_alone(github, tmp_path):
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+def test_delivering_again_opens_no_second_pull_request_and_leaves_its_text_alone(new_run):
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     [before] = _pulls(github, slug)
     again = delivery.deliver_design(nn.RunContext(run, facts=result.facts, enforce_writes=False))
     assert again["pull_request"] == result.facts["pull_request"]
     assert _pulls(github, slug) == [before]
     assert _record(run)["status"] == "already open"
-    assert _calls(tmp_path).count("pr create") == 1 and "pr edit" not in _calls(tmp_path)
+    assert _calls(new_run.root).count("pr create") == 1 and "pr edit" not in _calls(new_run.root)
 
 
 def test_a_delivery_that_failed_after_its_push_opens_one_pull_request_when_resumed(github, tmp_path, monkeypatch):
@@ -2327,8 +2419,8 @@ def _opened(github: Path, tmp_path: Path) -> tuple[Path, str, dict]:
     return repo, first.facts["pull_request"], _pulls(github, "acme/app")[0]
 
 
-def test_refine_starts_from_the_pull_requests_head_and_pushes_onto_its_branch(github, tmp_path):
-    repo, url, pull = _opened(github, tmp_path)
+def test_refine_starts_from_the_pull_requests_head_and_pushes_onto_its_branch(opened_pull, tmp_path):
+    repo, url, pull, github = opened_pull.repo, opened_pull.url, opened_pull.pull, opened_pull.github
     head = _remote_head(github, "acme/app", pull["head"])
     run = tmp_path / "refine"
     result = _design(run, {"tool.py": "print('one')\n", "more.py": "print('two')\n"}, refine=url)
@@ -2345,8 +2437,8 @@ def test_refine_starts_from_the_pull_requests_head_and_pushes_onto_its_branch(gi
     assert f"This run refines the pull request {url}" in ledger
 
 
-def test_refine_pushes_nothing_once_the_pull_requests_branch_has_moved(github, tmp_path, capsys, monkeypatch):
-    repo, url, pull = _opened(github, tmp_path)
+def test_refine_pushes_nothing_once_the_pull_requests_branch_has_moved(opened_pull, tmp_path, capsys, monkeypatch):
+    repo, url, pull, github = opened_pull.repo, opened_pull.url, opened_pull.pull, opened_pull.github
     real = delivery.deliver_design
 
     def someone_pushed(ctx):
@@ -2368,8 +2460,8 @@ def test_refine_pushes_nothing_once_the_pull_requests_branch_has_moved(github, t
     assert "moved to" in capsys.readouterr().err and _record(run)["status"] == "kept local"
 
 
-def test_refine_with_review_comments_puts_them_in_the_steering(github, tmp_path):
-    repo, url, pull = _opened(github, tmp_path)
+def test_refine_with_review_comments_puts_them_in_the_steering(opened_pull, tmp_path):
+    repo, url, pull, github = opened_pull.repo, opened_pull.url, opened_pull.pull, opened_pull.github
     pulls = _pulls(github, "acme/app")
     pulls[0]["reviews"] = [{"author": {"login": "rev"}, "state": "CHANGES_REQUESTED", "body": "Rename --json."}]
     pulls[0]["comments"] = [{"author": {"login": "pm"}, "body": "Please keep the old flag working."}]
@@ -2384,8 +2476,8 @@ def test_refine_with_review_comments_puts_them_in_the_steering(github, tmp_path)
         assert said in ledger
 
 
-def test_refine_refuses_a_closed_pull_request_and_a_base(github, tmp_path):
-    repo, url, _pull = _opened(github, tmp_path)
+def test_refine_refuses_a_closed_pull_request_and_a_base(opened_pull, tmp_path):
+    url, github = opened_pull.url, opened_pull.github
     refused = _design(tmp_path / "with-base", refine=url, base="main")
     assert refused.exit_ok is False and "takes no base" in (refused.error or "")
     pulls = _pulls(github, "acme/app")
@@ -2412,10 +2504,8 @@ def test_a_push_is_never_forced_and_never_to_the_default_branch(github, tmp_path
     assert git(bare, "rev-parse", "side") == git(repo, "rev-parse", "HEAD@{1}")
 
 
-def test_delivery_asks_github_with_the_persons_home_not_the_checks(github, tmp_path):
-    result = _design(tmp_path / "run")
-    assert result.exit_ok, result.error
-    homes = set((github / "homes.log").read_text().split())
+def test_delivery_asks_github_with_the_persons_home_not_the_checks(new_run):
+    homes = set((new_run.github / "homes.log").read_text().split())
     assert homes == {os.environ["HOME"]}
 
 
@@ -2522,9 +2612,8 @@ def test_the_console_design_verb_forwards_how_the_run_is_delivered(monkeypatch):
     assert seen[-1][seen[-1].index("--refine") + 1] == "acme/app#3"
 
 
-def test_refactory_projects_lists_the_pull_request_a_run_opened(github, tmp_path, capsys):
-    result = _design(tmp_path / "run")
-    assert result.exit_ok, result.error
+def test_refactory_projects_lists_the_pull_request_a_run_opened(new_run, capsys):
+    result = new_run.result
     capsys.readouterr()
     assert projects.main([]) == 0
     listed = capsys.readouterr().out
@@ -2579,8 +2668,8 @@ def test_a_repository_gh_cannot_push_to_gets_no_pull_request(github, tmp_path):
     assert planned["action"] == "none" and "cannot push to acme/app" in planned["why"]
 
 
-def test_a_refinement_delivered_once_is_not_refused_as_moved_when_asked_again(github, tmp_path, capsys):
-    repo, url, pull = _opened(github, tmp_path)
+def test_a_refinement_delivered_once_is_not_refused_as_moved_when_asked_again(opened_pull, tmp_path, capsys):
+    url = opened_pull.url
     run = tmp_path / "refine"
     result = _design(run, refine=url)
     assert result.exit_ok, result.error
@@ -2590,8 +2679,8 @@ def test_a_refinement_delivered_once_is_not_refused_as_moved_when_asked_again(gi
     assert "run warning" not in capsys.readouterr().err
 
 
-def test_refine_refuses_a_pull_request_from_another_repositorys_branch(github, tmp_path):
-    repo, url, _pull = _opened(github, tmp_path)
+def test_refine_refuses_a_pull_request_from_another_repositorys_branch(opened_pull, tmp_path):
+    url, github = opened_pull.url, opened_pull.github
     pulls = _pulls(github, "acme/app")
     pulls[0]["cross"] = True
     (github / "acme/app.pulls.json").write_text(json.dumps(pulls))
@@ -2694,10 +2783,8 @@ def test_a_pull_request_never_carries_a_credential_the_check_spelled_out(github,
     assert "abc123" not in pull["body"] and "API_TOKEN=*** python tool.py" in pull["body"]
 
 
-def test_a_redo_after_its_pull_request_merged_records_it_merged(github, tmp_path, capsys):
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+def test_a_redo_after_its_pull_request_merged_records_it_merged(new_run, capsys):
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     pulls = _pulls(github, slug)
     pulls[0]["state"] = "MERGED"
@@ -2708,10 +2795,8 @@ def test_a_redo_after_its_pull_request_merged_records_it_merged(github, tmp_path
     assert "run warning" not in capsys.readouterr().err
 
 
-def test_a_redo_after_its_pull_request_closed_keeps_it_in_the_record(github, tmp_path, capsys):
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+def test_a_redo_after_its_pull_request_closed_keeps_it_in_the_record(new_run, capsys):
+    run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
     pulls = _pulls(github, slug)
     pulls[0]["state"] = "CLOSED"
@@ -2794,17 +2879,15 @@ def test_a_gh_that_cannot_even_start_keeps_the_work_local(tmp_path, monkeypatch,
     assert "could not run" in _record(run)["why"] and "no pull request was opened" in capsys.readouterr().err
 
 
-def test_a_branch_that_moved_since_its_reviews_is_never_delivered(github, tmp_path):
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+def test_a_branch_that_moved_since_its_reviews_is_never_delivered(new_run):
+    run, result = new_run.run, new_run.result
     unreviewed = {**result.facts, "commit": "0" * 40}
     with pytest.raises(ValueError, match="not at the attempt its reviews passed"):
         delivery.deliver_design(nn.RunContext(run, facts=unreviewed, enforce_writes=False))
 
 
-def test_a_refinement_never_pushes_onto_a_default_branch(github, tmp_path):
-    repo, url, pull = _opened(github, tmp_path)
+def test_a_refinement_never_pushes_onto_a_default_branch(opened_pull):
+    repo, url, github = opened_pull.repo, opened_pull.url, opened_pull.github
     pulls = _pulls(github, "acme/app")
     pulls[0]["head"] = "main"
     (github / "acme/app.pulls.json").write_text(json.dumps(pulls))
@@ -2822,8 +2905,8 @@ def test_a_new_repository_goes_where_repo_owner_and_repo_visibility_say(github, 
     assert result.facts["pull_request"] == f"https://github.com/acme-org/{NAME}/pull/1"
 
 
-def test_a_refinement_that_github_shows_at_another_head_is_reported_not_claimed(github, tmp_path):
-    repo, url, _pull = _opened(github, tmp_path)
+def test_a_refinement_that_github_shows_at_another_head_is_reported_not_claimed(opened_pull, tmp_path):
+    url, github = opened_pull.url, opened_pull.github
     (github / "stale-view").write_text("0" * 40 + "\n")
     run = tmp_path / "refine"
     result = _design(run, refine=url)
@@ -2831,11 +2914,9 @@ def test_a_refinement_that_github_shows_at_another_head_is_reported_not_claimed(
     assert _record(run)["status"] == "unverified"
 
 
-def test_a_pull_request_already_open_is_checked_again_when_asked_again(github, tmp_path):
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
-    (github / "stale-view").write_text("0" * 40 + "\n")
+def test_a_pull_request_already_open_is_checked_again_when_asked_again(new_run):
+    run, result = new_run.run, new_run.result
+    (new_run.github / "stale-view").write_text("0" * 40 + "\n")
     with pytest.raises(delivery.Unverified):
         delivery.deliver_design(nn.RunContext(run, facts=result.facts, enforce_writes=False))
 
@@ -2872,11 +2953,9 @@ def test_the_console_announces_a_run_approved_up_front_before_it_is_handed_on(gi
 
 
 # ── the second review: the approval card, the base's branch, and what is where ─
-def test_the_approval_card_itself_names_the_repository_a_run_would_create(github, tmp_path):
+def test_the_approval_card_itself_names_the_repository_a_run_would_create(new_run):
     """The card shows only the gate's question, so the question carries the plan (#362 review)."""
-    run = tmp_path / "run"
-    result = _design(run)
-    assert result.exit_ok, result.error
+    run, result = new_run.run, new_run.result
     said = f"creates the private GitHub repository {LOGIN}/{NAME}"
     assert "{{delivery}}" in DesignMode().build().nodes["gate_strategy"].notes
     # The walker's journal shows the gate as it was put, never the raw placeholder.
@@ -3053,9 +3132,8 @@ def test_a_run_planned_while_gh_was_logged_out_says_the_next_run_delivers(github
     assert "`gh auth login` signs in, for the next run" in (run / delivery.PLAN).read_text()
 
 
-def test_the_pull_request_says_the_commits_are_the_runs_attempts(github, tmp_path):
-    assert _design(tmp_path / "run").exit_ok
-    [pull] = _pulls(github, f"{LOGIN}/{NAME}")
+def test_the_pull_request_says_the_commits_are_the_runs_attempts(new_run):
+    [pull] = _pulls(new_run.github, f"{LOGIN}/{NAME}")
     assert "the run's attempts" in pull["body"]
     assert "squash merge is recommended" not in pull["body"]
 

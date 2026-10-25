@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -178,8 +179,12 @@ def test_the_command_reference_matches_the_command_line():
     assert missing == [], f"the command reference documents no command for: {missing}"
 
     declared: dict[str, set[str]] = {}
+    # One console-script process per verb, as a person runs it; none depends on
+    # another, so they run side by side.
+    with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+        helps = dict(zip(verb_list, pool.map(lambda verb: _run(verb, "--help"), verb_list)))
     for verb in verb_list:
-        helped = _run(verb, "--help")
+        helped = helps[verb]
         assert helped.returncode == 0, f"the reference documents `refactory {verb}`, which has no help: {helped.stderr}"
         declared[verb] = set(_OPTION.findall(helped.stdout))
     named = set(re.findall(r"--[a-z][a-z0-9-]*", reference))
