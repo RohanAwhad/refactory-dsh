@@ -126,7 +126,7 @@ from refactory_dsh import coverage_helpers
 
 
 def pitfall_coverage(
-    design_text: str, pitfalls: list[dict[str, Any]],
+    design_text: str, pitfalls: list[dict[str, Any]], source: str = "",
 ) -> tuple[list[str], list[str], list[str]]:
     """Check pitfall id coverage in the Anti-patterns section of design.md.
 
@@ -138,9 +138,12 @@ def pitfall_coverage(
       *reason* is non-empty.
     - *missing*: pitfall ids not found in the Anti-patterns section, or found
       without a valid reference and without a set-aside marker.
+
+    *source* is the checkout a design without ``## Rule and sites`` has its cited sites
+    checked against (`coverage_helpers.site_paths`).
     """
     anti = coverage_helpers.extract_section(design_text, "Anti-patterns to avoid")
-    sites = coverage_helpers.site_paths(design_text)
+    sites = coverage_helpers.site_paths(design_text, source=source)
     hdgs = coverage_helpers.headings(design_text)
 
     addressed: list[str] = []

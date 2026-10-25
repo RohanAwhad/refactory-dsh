@@ -1,9 +1,9 @@
 """Tests for the design probe (dm-133).
 
-design_doc and design_review gain the builder's sandboxed probe via
-``run_design_probe`` and ``--command``.  Probes record evidence to
-``probes.jsonl``; the claims checker verifies cited ids; ``design_review``
-is told to probe call sites.
+design_doc gains the builder's sandboxed probe via ``run_design_probe`` and
+``--command``.  Probes record evidence to ``probes.jsonl``; the claims checker
+verifies cited ids. Design mode has no design reviewer, so no node is told to
+review call sites with it.
 
 Each test fails without its corresponding fix.
 """
@@ -98,8 +98,8 @@ def _snapshot_git_state(repo_path: Path) -> dict[str, Any]:
 # ── design_probe_steps tests ─────────────────────────────────────────────────
 
 def test_design_probe_steps_all_modes():
-    """design_probe_steps selects exactly design_doc and design_review for
-    DesignMode on both build() and to_workflow(), and nothing for other modes.
+    """design_probe_steps selects exactly design_doc for DesignMode on both build()
+    and to_workflow(), and nothing for other modes.
     """
     from refactory_dsh.design import DesignMode
     from refactory_dsh.fast import DesignFastMode
@@ -109,25 +109,25 @@ def test_design_probe_steps_all_modes():
     dm = DesignMode()
     graph = dm.build()
     result_build = steering.design_probe_steps(graph)
-    assert result_build == {"design_doc": "writer", "design_review": "reviewer"}, (
-        f"build(): expected design_doc/design_review, got {result_build}"
+    assert result_build == {"design_doc": "writer"}, (
+        f"build(): expected design_doc, got {result_build}"
     )
 
     # DesignMode — IR (to_workflow())
     workflow = lowering.to_workflow(dm.state_dict(), name="design")
     result_ir = steering.design_probe_steps(workflow)
-    assert result_ir == {"design_doc": "writer", "design_review": "reviewer"}, (
-        f"to_workflow(): expected design_doc/design_review, got {result_ir}"
+    assert result_ir == {"design_doc": "writer"}, (
+        f"to_workflow(): expected design_doc, got {result_ir}"
     )
 
-    # DesignFastMode — no design_doc or design_review
+    # DesignFastMode — no design_doc
     dfm = DesignFastMode()
     assert steering.design_probe_steps(dfm.build()) == {}
     assert steering.design_probe_steps(
         lowering.to_workflow(dfm.state_dict(), name="design_fast")
     ) == {}
 
-    # CreateMode — no match (review is an fn gate, not an agent reviewer)
+    # CreateMode — no match: nothing checks its strategy between the writer and its gate
     cm = CreateMode()
     assert steering.design_probe_steps(cm.build()) == {}
     assert steering.design_probe_steps(
@@ -158,16 +158,14 @@ def test_for_run_injects_probe_line(tmp_path):
     dd_template = workflow.nodes["design_doc"].prompt_template
     assert "{{design_probe_instruction}}" in dd_template
 
-    # design_review should have both probe instruction and review
-    dr_template = workflow.nodes["design_review"].prompt_template
-    assert "{{design_probe_instruction}}" in dr_template
-    assert "{{design_probe_review}}" in dr_template
+    # Only the writer gets it.
+    assert sum("{{design_probe_instruction}}" in (getattr(node, "prompt_template", "") or "")
+               for node in workflow.nodes.values()) == 1
 
 
 def test_dsh_dispatch_carries_probe(tmp_path):
     """The DSH dispatch path (lower_workflow(for_run(to_workflow()))) carries
-    the probe command and the call-site review line in design_doc and
-    design_review prompts.
+    the probe command in design_doc's prompt.
     """
     from refactory_dsh.design import DesignMode
 
@@ -186,10 +184,6 @@ def test_dsh_dispatch_carries_probe(tmp_path):
     dd = workflow.nodes["design_doc"]
     assert "{{design_probe_instruction}}" in dd.prompt_template
 
-    # Check that design_review has both placeholders
-    dr = workflow.nodes["design_review"]
-    assert "{{design_probe_instruction}}" in dr.prompt_template
-    assert "{{design_probe_review}}" in dr.prompt_template
 
 
 # ── probe side effects tests ─────────────────────────────────────────────────
@@ -230,8 +224,8 @@ def test_design_probe_side_effects(tmp_path):
 
 # ── probe evidence tests ─────────────────────────────────────────────────────
 
-def test_probe_evidence_fake_id_reloops(tmp_path):
-    """A design citing a fabricated probe id gets relooped by check_design_claims."""
+def test_probe_evidence_fake_id_is_unverified(tmp_path):
+    """A design citing a fabricated probe id is an unverified claim (never a round)."""
     from refactory_dsh.design_claims import check_design_claims
 
     source = tmp_path / "source"
@@ -245,7 +239,6 @@ def test_probe_evidence_fake_id_reloops(tmp_path):
     ctx = nn.RunContext(workdir)
     ctx.facts.update({
         "source": str(source),
-        "claims_check_attempts_used": 0,
     })
     # Write a design with a claim that has a fabricated probe id
     ctx.write_text("design.md", (
@@ -256,10 +249,10 @@ def test_probe_evidence_fake_id_reloops(tmp_path):
         "`real_fn()` at `sample.py:1`: `def real_fn():` (probe aabbccddeeff: pass)\n"
     ))
 
-    verdict = check_design_claims(ctx)
-    assert verdict == "reloop"
-    assert "aabbccddeeff" in verdict.reason
-    assert "not in probes.jsonl" in verdict.reason
+    unverified = check_design_claims(ctx)["claims_check"]["unverified"]
+    assert len(unverified) == 1
+    assert "aabbccddeeff" in unverified[0]
+    assert "not in probes.jsonl" in unverified[0]
 
 
 def test_probe_evidence_real_id_proceeds(tmp_path):
@@ -290,7 +283,6 @@ def test_probe_evidence_real_id_proceeds(tmp_path):
     ctx = nn.RunContext(run)
     ctx.facts.update({
         "source": str(source),
-        "claims_check_attempts_used": 0,
     })
     ctx.write_text("design.md", (
         "# Design\n\n"
@@ -300,8 +292,8 @@ def test_probe_evidence_real_id_proceeds(tmp_path):
         f"`helper_fn()` at `helper.py:1`: `def helper_fn():` (probe {probe_id}: pass)\n"
     ))
 
-    verdict = check_design_claims(ctx)
-    assert verdict == "proceed", f"expected proceed, got {verdict}"
+    verdict = check_design_claims(ctx)["claims_check"]
+    assert verdict["unverified"] == [], f"expected nothing unverified, got {verdict}"
 
 
 def test_citation_placeholder_proceeds(tmp_path):
@@ -319,7 +311,6 @@ def test_citation_placeholder_proceeds(tmp_path):
     ctx = nn.RunContext(workdir)
     ctx.facts.update({
         "source": str(source),
-        "claims_check_attempts_used": 0,
     })
     # The placeholder text uses <id> which is not 12 hex chars
     ctx.write_text("design.md", (
@@ -330,8 +321,8 @@ def test_citation_placeholder_proceeds(tmp_path):
         "`real_fn()` at `sample.py:1`: `def real_fn():`\n"
     ))
 
-    verdict = check_design_claims(ctx)
-    assert verdict == "proceed", f"placeholder should not cause a mismatch, got {verdict}"
+    verdict = check_design_claims(ctx)["claims_check"]
+    assert verdict["unverified"] == [], f"placeholder should not cause a mismatch, got {verdict}"
 
 
 def test_citation_fenced_example_proceeds(tmp_path):
@@ -349,7 +340,6 @@ def test_citation_fenced_example_proceeds(tmp_path):
     ctx = nn.RunContext(workdir)
     ctx.facts.update({
         "source": str(source),
-        "claims_check_attempts_used": 0,
     })
     # A fenced block with a probe citation inside
     ctx.write_text("design.md", (
@@ -363,8 +353,8 @@ def test_citation_fenced_example_proceeds(tmp_path):
         "`real_fn()` at `sample.py:1`: `def real_fn():`\n"
     ))
 
-    verdict = check_design_claims(ctx)
-    assert verdict == "proceed", f"fenced example should not cause a mismatch, got {verdict}"
+    verdict = check_design_claims(ctx)["claims_check"]
+    assert verdict["unverified"] == [], f"fenced example should not cause a mismatch, got {verdict}"
 
 
 # ── validate mode tests ──────────────────────────────────────────────────────
@@ -404,72 +394,16 @@ def test_no_worktree_no_probe(tmp_path):
     # The key thing: the injection happens, but the FACT itself is empty
     # when worktree=False, so the rendered prompt has no probe text.
     dd = workflow.nodes["design_doc"]
-    dr = workflow.nodes["design_review"]
 
-    # The placeholders are present (for_run injects them)
+    # The placeholder is present (for_run injects it)
     assert "{{design_probe_instruction}}" in dd.prompt_template
-    assert "{{design_probe_review}}" in dr.prompt_template
 
     # Verify the facts themselves are empty when no worktree
     # Simulate rendering with empty facts
     rendered_dd = dd.prompt_template.replace("{{design_probe_instruction}}", "")
-    rendered_dr = dr.prompt_template.replace("{{design_probe_instruction}}", "").replace("{{design_probe_review}}", "")
 
     assert "--command" not in rendered_dd
     assert "design probe" not in rendered_dd.lower().replace("{{", "").replace("}}", "")
-    assert "--command" not in rendered_dr
-
-
-# ── unreached call site tests ─────────────────────────────────────────────────
-
-def test_unreached_call_site_reloop(tmp_path):
-    """The design_probe_review fact is injected into design_review by for_run,
-    telling the reviewer to probe call sites.  When the reviewer follows this
-    instruction and reports BLOCKING for an unreached call site, gate_design_review
-    reloops.
-
-    Fails on main: for_run on main only calls annotate() and does not inject
-    {{design_probe_review}}, so the reviewer has no call-site probing instruction
-    and would not know to report unreached call sites as BLOCKING.
-    """
-    from refactory_dsh.design import DesignMode
-    from refactory_dsh.create_ops import blocking_findings
-
-    # ── Guard: for_run must inject {{design_probe_review}} into design_review ──
-    # This is the mechanism that tells the reviewer to probe call sites.
-    # On main, for_run only calls annotate() and does NOT inject the probe
-    # review fact, so this assertion fails on main.
-    workdir = tmp_path / "run"
-    workdir.mkdir()
-    (workdir / ".refactory").mkdir()
-
-    dm = DesignMode()
-    workflow = lowering.to_workflow(dm.state_dict(), name="design")
-    workflow = steering.for_run(workflow, workdir)
-
-    dr_template = workflow.nodes["design_review"].prompt_template
-    assert "{{design_probe_review}}" in dr_template, (
-        "for_run must inject {{design_probe_review}} into design_review's "
-        "prompt so the reviewer is told to probe call sites"
-    )
-
-    # ── Consequence: BLOCKING findings from the reviewer cause reloop ──
-    # When the reviewer follows the design_probe_review instruction and
-    # discovers an unreached call site, it reports BLOCKING.  The existing
-    # gate_design_review mechanism picks up BLOCKING lines via
-    # blocking_findings() and reloops.
-    review_text = (
-        "## Review\n\n"
-        "The design wires into `builder_probe.py:363` but the probe shows "
-        "this call site is never reached.\n\n"
-        "BLOCKING: builder_probe.py:363: call site unreached — "
-        "probe `python -c 'import ...'` showed no invocation\n\n"
-        "VERDICT: FAIL\n"
-    )
-
-    findings = blocking_findings(review_text)
-    assert len(findings) >= 1
-    assert any("call site unreached" in f for f in findings)
 
 
 # ── CLI tests ────────────────────────────────────────────────────────────────
@@ -506,4 +440,5 @@ def test_produces_includes_design_probe_facts():
     from refactory_dsh import repo_change
     p = repo_change.produces()
     assert "design_probe_instruction" in p
-    assert "design_probe_review" in p
+    # Only the design reviewer used the call-site review line; there is none now.
+    assert "design_probe_review" not in p

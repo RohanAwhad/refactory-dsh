@@ -35,8 +35,8 @@ REPO_CHANGE_REVIEW_INSTRUCTIONS = (
     "Apply these verification methods to each changed function:\n"
     + M2_METHOD + "\n" + M3_METHOD + "\n" + M11_METHOD + "\n" + M12_METHOD + "\n\n"
     "## Repository questions\n"
-    "For each function listed below (or, for a design review, each "
-    "[changed] site), answer these three questions in a ```json fenced block with "
+    "For each function listed below, answer these three questions in a ```json "
+    "fenced block with "
     'this shape: [{"function":"<the entry exactly as listed under Changed functions, '
     'e.g. pkg/mod.py::Class.method>", "duplicates":"where else the '
     'repository does the same thing, with path:line evidence", "callers":"who calls '
@@ -452,49 +452,76 @@ def record_skip(workdir: Path, node: str, provenance: dict[str, str]) -> dict[st
     return record(context, outcome)
 
 
-def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
-    """Legacy reports remain readable; new evidence cannot authorize old sign-off."""
-    # Check skip provenance before the early return.
-    person_skip_accepted = False
-    prov = _check_skip_provenance(ctx.workdir)
-    if prov is not None:
-        if prov['source'] != 'person':
-            return [f"required runtime validation was skipped by {prov['source']}; "
-                    f"only a person's skip is accepted"]
-        # Person-sourced skip: require evidence with status='skipped'.
-        if not ctx.exists(EVIDENCE):
-            return ["authoritative runtime evidence is missing"]
-        ev = ctx.read_json(EVIDENCE, {})
-        validation = ev.get('validation', {})
-        if validation.get('status') == 'skipped':
-            source_match = validation.get('source') == prov['source']
-            at_match = validation.get('at') == prov['at']
-            node_match = validation.get('node') == prov['node']
-            if source_match and at_match and node_match:
-                # Person skip accepted. Suppress "did not pass" below;
-                # keep identity, receipt, settings, output and worker checks.
-                person_skip_accepted = True
-            else:
-                return ["authoritative runtime evidence is missing"]
-        else:
-            return ["authoritative runtime evidence is missing"]
+def _evidence_currency_problems(ctx: Any) -> list[str]:
+    """The evidence-currency checks shared by ``current_problems`` and ``require_current_evidence``.
+
+    Checks: evidence exists, identity matches the current artifact and intent,
+    settings match the current knobs, receipt hashes are intact, and runtime
+    outputs match.  Does NOT check ``validation.status``, worker sign-offs,
+    intent audit, or correction audit.
+    """
     if not ctx.exists(EVIDENCE):
         return ["authoritative runtime evidence is missing"] if ctx.facts.get("runtime_evidence") else []
     evidence = ctx.read_json(EVIDENCE, {})
     now = delivery_identity(ctx.workdir)
-    problems = []
+    problems: list[str] = []
     if now is None or now["identity"] != digest(evidence.get("identity")):
         problems.append("artifact, accepted inputs or user intent changed after validation; rerun validation and reviews")
-    if not person_skip_accepted and evidence.get("validation", {}).get("status") != "pass":
-        problems.append("required runtime validation did not pass")
     if evidence.get("settings") != {key: ctx.knob(key, None) for key in SETTINGS}:
         problems.append("validation inputs or comparison policy changed after execution")
-    for name, expected in evidence.get("receipts", {}).items():
-        path = ctx.workdir / name
+    for name_, expected in evidence.get("receipts", {}).items():
+        path = ctx.workdir / name_
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            problems.append(f"authoritative receipt {name} changed after validation")
+            problems.append(f"authoritative receipt {name_} changed after validation")
     if "outputs" in evidence and evidence["outputs"] != runtime_outputs(ctx):
         problems.append("canonical runtime output files changed after validation")
+    return problems
+
+
+def _skip_problems(ctx: Any) -> tuple[list[str], bool]:
+    """A skipped check: what refuses it, and whether it is a person's skip that is accepted.
+
+    Only a person's skip (graph-control) is accepted, and only with evidence recording that
+    same skip. Shared by ``current_problems`` and ``require_current_evidence``, so the
+    draft path refuses a CEO's skip exactly as the complete path does.
+    """
+    prov = _check_skip_provenance(ctx.workdir)
+    if prov is None:
+        return [], False
+    if prov['source'] != 'person':
+        return [f"required runtime validation was skipped by {prov['source']}; "
+                f"only a person's skip is accepted"], False
+    # Person-sourced skip: require evidence with status='skipped'.
+    if not ctx.exists(EVIDENCE):
+        return ["authoritative runtime evidence is missing"], False
+    ev = ctx.read_json(EVIDENCE, {})
+    validation = ev.get('validation', {})
+    if validation.get('status') == 'skipped':
+        source_match = validation.get('source') == prov['source']
+        at_match = validation.get('at') == prov['at']
+        node_match = validation.get('node') == prov['node']
+        if source_match and at_match and node_match:
+            # Person skip accepted. The caller suppresses "did not pass";
+            # identity, receipt, settings, output and worker checks still apply.
+            return [], True
+    return ["authoritative runtime evidence is missing"], False
+
+
+def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
+    """Legacy reports remain readable; new evidence cannot authorize old sign-off."""
+    # Check skip provenance before the early return.
+    skipped, person_skip_accepted = _skip_problems(ctx)
+    if skipped:
+        return skipped
+    # Currency checks (identity, settings, receipts, outputs) — factored into
+    # ``_evidence_currency_problems`` so ``require_current_evidence`` shares them.
+    problems = _evidence_currency_problems(ctx)
+    if not ctx.exists(EVIDENCE):
+        return problems  # _evidence_currency_problems already handled the missing-evidence case
+    evidence = ctx.read_json(EVIDENCE, {})
+    now = delivery_identity(ctx.workdir)
+    if not person_skip_accepted and evidence.get("validation", {}).get("status") != "pass":
+        problems.append("required runtime validation did not pass")
     if workers:
         from refactory_dsh.agent_delivery import receipts_in
 
@@ -788,7 +815,6 @@ def validate_repo_questions(
 
 def check_review_questions(
     review_text: str, changed_functions: list[str], reviewer_name: str,
-    *, require_brief_trace: bool = False, target: str = "",
 ) -> list[str]:
     """Validate the review text for repository questions (markdown reviewers).
 
@@ -830,40 +856,6 @@ def check_review_questions(
         return problems
 
     problems.extend(validate_repo_questions(record, changed_functions, reviewer_name))
-
-    # Brief-example trace check
-    if require_brief_trace:
-        bt_match = re.search(
-            r'(?:^|\n)##\s+Brief example trace\s*\n(.*?)(?:\n##\s+|\Z)',
-            review_text, re.DOTALL,
-        )
-        if bt_match is None:
-            problems.append(
-                f"[repo-questions] {reviewer_name}: the design review has no "
-                "'## Brief example trace' section with path:line evidence and runtime names"
-            )
-        else:
-            trace_text = bt_match.group(1)
-            citations = _PATH_LINE_RE.findall(trace_text)
-            if len(citations) < 2:
-                problems.append(
-                    f"[repo-questions] {reviewer_name}: the design review has no "
-                    "'## Brief example trace' section with path:line evidence and runtime names"
-                )
-            else:
-                # Check for runtime names
-                if target and "refactory" in target.lower():
-                    runtime_names = ("walker", "dsh", "ceo", "gui", "fast")
-                else:
-                    runtime_names = ("cli", "api", "server", "worker", "test",
-                                     "walker", "dsh", "ceo", "gui", "fast")
-                trace_lower = trace_text.lower()
-                has_runtime = any(name in trace_lower for name in runtime_names)
-                if not has_runtime:
-                    problems.append(
-                        f"[repo-questions] {reviewer_name}: the design review has no "
-                        "'## Brief example trace' section with path:line evidence and runtime names"
-                    )
 
     return problems
 
@@ -1467,6 +1459,34 @@ def correction_audit_advisories(ctx: Any) -> list[str]:
         for clause in item.get("clauses", []) if isinstance(clause, dict)
         for note in clause.get("advisory", [])
     ]
+
+
+def require_current_evidence(ctx: Any) -> None:
+    """The evidence-currency checks from ``current_problems``, without sign-off or audit.
+
+    Ensures evidence exists, identity matches the current artifact and intent,
+    settings match the current knobs, receipt hashes are intact, and runtime
+    outputs match.  Does NOT check ``validation.status``, worker sign-offs,
+    intent audit, or correction audit.
+
+    Used by ``report_artifact`` on the draft path: a draft delivery requires
+    current evidence but not a passing check or review sign-off.  A check skipped by
+    anyone but a person is refused, as ``current_problems`` refuses it.  Unlike
+    ``current_problems``, a missing evidence file is refused whether or not the
+    ``runtime_evidence`` fact is set: a draft says what its check showed, so a run with
+    no check evidence at all has nothing to say.
+
+    Calls ``_skip_problems`` and ``_evidence_currency_problems`` — the same functions
+    ``current_problems`` calls — so the two can never diverge.
+    """
+    skipped, _person_skip = _skip_problems(ctx)
+    if skipped:
+        raise ValueError("evidence is not current: " + "; ".join(skipped))
+    if not ctx.exists(EVIDENCE):
+        raise ValueError("evidence is not current: authoritative runtime evidence is missing")
+    problems = _evidence_currency_problems(ctx)
+    if problems:
+        raise ValueError("evidence is not current: " + "; ".join(problems))
 
 
 def require_completion(ctx: Any) -> None:

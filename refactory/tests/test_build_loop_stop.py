@@ -173,7 +173,7 @@ def test_consecutive_refusals_end_the_run(tmp_path):
     """A scripted walker run whose emissions keep changing nothing ends after refusal_attempts."""
     from refactory_dsh.design import DesignMode
     from tests_support import FakeModel, render, RESEARCH_ANSWER, PITFALLS_ANSWER
-    from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER
+    from tests_support import DESIGN_DOC_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER
     from tests_support import git_repo
 
     repo = git_repo(tmp_path / "repo")
@@ -192,7 +192,7 @@ def test_consecutive_refusals_end_the_run(tmp_path):
     redo = overwatch_judgment("redo", must_fix=[{"what": "print more"}])
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         emission, *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, redo,
         emission, emission, emission, emission,
     ]
@@ -216,7 +216,7 @@ def test_interleaved_refusals_and_successes_converge(tmp_path):
     """Refusals interleaved with applied emissions converge: the counter resets."""
     from refactory_dsh.design import DesignMode
     from tests_support import FakeModel, render, RESEARCH_ANSWER, PITFALLS_ANSWER
-    from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER
+    from tests_support import DESIGN_DOC_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER
     from tests_support import git_repo
 
     repo = git_repo(tmp_path / "repo")
@@ -229,7 +229,7 @@ def test_interleaved_refusals_and_successes_converge(tmp_path):
 
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         emit1, emit2, emit3,
         *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3],
     ]
@@ -393,14 +393,14 @@ def _run_node_main(run, target, node_id, node_type, monkeypatch):
 def test_a_design_check_limit_ends_the_walker_run_with_the_stop(tmp_path):
     """Design mode runs its check beside the reviews; at the check limit the run
     still ends with a BuildLoopStop, not a plain ValueError."""
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
                                RESEARCH_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER, FakeModel,
                                git_repo, render)
 
     repo = git_repo(tmp_path / "repo")
     emits = [render({"tool.py": f"print({i})\n"}) for i in range(8)]
     answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-               DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+               DESIGN_DOC_ANSWER, *emits,
                *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
     result = _design_mode(check_attempts=2, check_attempt_cap=0).run(
         tmp_path / "run", model=FakeModel(answers), verdicts={"gate_strategy": "proceed"},

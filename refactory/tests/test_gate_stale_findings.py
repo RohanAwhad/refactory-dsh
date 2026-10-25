@@ -505,20 +505,19 @@ def test_reviewer_prompts_ask_for_structured_blocking_format():
         )
 
     design_graph = DesignMode().build()
-    # Design mode's overwatch is a judge that writes a JSON verdict (refactory_dsh.judges),
-    # so only its reviewers carry the format.
-    for node_id in ("health_checker", "code_reviewer", "qa_director", "design_review"):
+    # Design mode has no design reviewer: nothing reviews the design before the person.
+    assert "design_review" not in design_graph.nodes
+    # Its overwatch is a judge that writes a JSON verdict (refactory_dsh.judges), so only
+    # its reviewers carry the format.
+    for node_id in ("health_checker", "code_reviewer", "qa_director"):
         prompt = design_graph.nodes[node_id].prompt_template
         # MARKER_RULE quotes the form too, so look for the site's own sentence.
         assert "BLOCKING: <path>:" in prompt.replace(MARKER_RULE, ""), (
             f"DesignMode {node_id} prompt missing structured BLOCKING format"
         )
-        # design_review is a pre-build reviewer; the distinction sentence applies
-        # to post-build reviewers, but design_review still uses the structured form.
-        if node_id != "design_review":
-            assert "file the builder must change" in prompt, (
-                f"DesignMode {node_id} prompt missing 'file the builder must change' distinction"
-            )
+        assert "file the builder must change" in prompt, (
+            f"DesignMode {node_id} prompt missing 'file the builder must change' distinction"
+        )
 
 
 def test_structured_design_md_finding_through_gate_qa_becomes_note(tmp_path):

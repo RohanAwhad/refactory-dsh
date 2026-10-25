@@ -28,7 +28,7 @@ from refactory_dsh.fast import DesignFastMode
 from refactory_dsh.nn import Verdict
 from refactory_dsh.paths import REPO_ROOT
 from refactory_dsh.projects import projects_dir
-from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+from tests_support import (DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
                            RESEARCH_ANSWER, VERIFICATION_ANSWER,
                            REVIEW_ANSWERS, FakeModel,
                            StaleEmitModel, git, git_repo, render, stub)
@@ -85,7 +85,7 @@ def _answers(*emits: str) -> list[str]:
     not run.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            DESIGN_DOC_ANSWER, *emits,
             *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 
@@ -1411,7 +1411,8 @@ def test_a_run_without_a_worktree_never_inherits_one_an_earlier_run_left_in_its_
 
 
 def test_a_design_missing_a_contract_part_reloops_before_the_gate(tmp_path):
-    """A contract-format design with an empty section reloops from gate_design_review."""
+    """A contract-format design with an empty ## Changes reloops from gate_design_review
+    (an empty optional section, such as Rule and sites, does not)."""
     import refactory_dsh.design_ops as ops
 
     design_text = (
@@ -1421,7 +1422,6 @@ def test_a_design_missing_a_contract_part_reloops_before_the_gate(tmp_path):
         "## Docs\n\n"
         "- docs/models.md \u2014 add section\n\n"
         "## Changes\n\n"
-        "- authoring_evidence.py\n"
     )
     ctx = nn.RunContext(tmp_path)
     ctx.facts.update({"source": str(tmp_path), "name": "b17_clauses",
@@ -1433,7 +1433,7 @@ def test_a_design_missing_a_contract_part_reloops_before_the_gate(tmp_path):
     ctx.write_json("brief.json", {"name": "b17_clauses", "brief": "split constraints"})
     verdict = ops.gate_design_review(ctx)
     assert verdict == "reloop"
-    assert "Rule and sites" in verdict.reason
+    assert "## Changes" in verdict.reason and "Rule and sites" not in verdict.reason
 
 
 def test_a_rule_site_without_a_marker_is_advisory_at_the_gate(tmp_path):

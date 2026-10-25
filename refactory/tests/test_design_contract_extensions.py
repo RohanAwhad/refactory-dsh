@@ -1,4 +1,9 @@
-"""R4 tests: Failure trace and Ask mapping sections in the design-document contract."""
+"""The design-document contract: a light template, and the optional sections it names.
+
+design_doc must write ## Summary, ## Changes and ## Tests. Failure trace, Ask mapping
+(R4) and the rest are optional; gate_design_review does not check one a design leaves
+out.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh.design import DesignMode
-from refactory_dsh.design_contract import prompt_contract, FAILURE_TRACE, ASK_MAPPING
+from refactory_dsh.design_contract import prompt_contract
 
 
 def test_prompt_contract_includes_failure_trace():
@@ -35,19 +40,21 @@ def test_prompt_contract_section_order():
     assert ft_pos < am_pos < rs_pos
 
 
-def test_design_review_prompt_mentions_failure_trace():
-    graph = DesignMode().build()
-    prompt = graph.nodes["design_review"].prompt_template
-    assert "Failure trace" in prompt
-    assert "Ask mapping" in prompt
+def test_prompt_contract_requires_only_summary_changes_and_tests():
+    text = prompt_contract()
+    required, optional = text.split("Add any of these optional sections")
+    for section in ("## Summary", "## Changes", "## Tests"):
+        assert section in required, section
+    for section in ("## Failure trace", "## Ask mapping", "## Rule and sites",
+                    "## Test guardedness exemptions", "## Site revert exemptions",
+                    "## Anti-patterns to avoid", "## Docs", "## Runtime coverage"):
+        assert section in optional and section not in required, section
 
 
-def test_design_review_prompt_blocks_missing_ask_in_brief():
-    """The design_review prompt must mention blocking an ask in the brief
-    that has no row in the mapping table."""
-    graph = DesignMode().build()
-    prompt = graph.nodes["design_review"].prompt_template
-    assert "ask in the brief" in prompt.lower()
+def test_the_design_doc_prompt_carries_the_light_template():
+    prompt = DesignMode().build().nodes["design_doc"].prompt_template
+    assert prompt_contract() in prompt
+    assert "fails the contract" not in prompt
 
 
 class FakeCtx:
@@ -56,7 +63,7 @@ class FakeCtx:
         self._files = dict(files or {})
         self.facts = dict(facts or {})
         self.workdir = Path(".")
-        self._knobs = {"design_review_attempts": 2}
+        self._knobs = {"design_review_attempts": 1}
         self.knobs = self._knobs
 
     def exists(self, name):
@@ -100,63 +107,27 @@ def _make_design(*, failure_trace=True, ask_mapping=True, empty_trace=False):
         "## Rule and sites\n\n- `tool.py:1` — **[changed]**\n",
         "## Docs\n\n- docs/models.md\n",
         "## Changes\n\n- tool.py\n",
+        "## Tests\n\n- `test_tool.py::test_build` — it builds\n",
     ])
     return "\n".join(parts)
 
 
-def test_missing_failure_trace_is_advisory():
-    """A missing Failure trace section is listed for the person, never a design round."""
+@pytest.mark.parametrize("design", [
+    _make_design(failure_trace=False, ask_mapping=True),
+    _make_design(failure_trace=True, ask_mapping=False),
+    _make_design(failure_trace=True, ask_mapping=True, empty_trace=True),
+], ids=["no-failure-trace", "no-ask-mapping", "empty-failure-trace"])
+def test_an_optional_section_left_out_is_not_checked(design):
+    """Failure trace and Ask mapping are optional: a design without one goes to the
+    person with nothing listed about it."""
     from refactory_dsh.design_ops import gate_design_review
-    design = _make_design(failure_trace=False, ask_mapping=True)
-    review = "No issues found.\n\nVERDICT: PASS"
     ctx = FakeCtx(
-        files={
-            "reviews/design-review.md": review,
-            "design.md": design,
-            "brief.json": json.dumps({"brief": "a tool"}),
-        },
+        files={"design.md": design, "brief.json": json.dumps({"brief": "a tool"})},
         facts={"name": "test_r4", "has_pitfalls_step": False},
     )
-    result = gate_design_review(ctx)
-    assert result == "proceed"
-    assert "Failure trace" in ctx.facts["design_review_advisory"]
-    assert ctx.facts["design_review_status"] == "Design review: PASS, 1 advisory"
-
-
-def test_gate_rejects_missing_ask_mapping():
-    """gate_design_review should flag a missing Ask mapping section."""
-    from refactory_dsh.design_ops import gate_design_review
-    design = _make_design(failure_trace=True, ask_mapping=False)
-    review = "No issues found.\n\nVERDICT: PASS"
-    ctx = FakeCtx(
-        files={
-            "reviews/design-review.md": review,
-            "design.md": design,
-            "brief.json": json.dumps({"brief": "a tool"}),
-        },
-        facts={"name": "test_r4", "has_pitfalls_step": False},
-    )
-    result = gate_design_review(ctx)
-    feedback = ctx.facts.get("design_review_feedback", "")
-    assert "Ask mapping" in feedback or "ask mapping" in feedback
-
-
-def test_empty_failure_trace_is_advisory():
-    """An empty Failure trace section does not count as present; it is advisory."""
-    from refactory_dsh.design_ops import gate_design_review
-    design = _make_design(failure_trace=True, ask_mapping=True, empty_trace=True)
-    review = "No issues found.\n\nVERDICT: PASS"
-    ctx = FakeCtx(
-        files={
-            "reviews/design-review.md": review,
-            "design.md": design,
-            "brief.json": json.dumps({"brief": "a tool"}),
-        },
-        facts={"name": "test_r4", "has_pitfalls_step": False},
-    )
-    result = gate_design_review(ctx)
-    assert result == "proceed"
-    assert "Failure trace" in ctx.facts["design_review_advisory"]
+    assert gate_design_review(ctx) == "proceed"
+    assert ctx.facts["design_review_advisory"] == ""
+    assert ctx.facts["design_review_status"] == "Design review: PASS"
 
 
 def test_gate_accepts_both_sections_present():

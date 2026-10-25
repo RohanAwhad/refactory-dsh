@@ -509,17 +509,17 @@ def annotate(workflow: Any, ledger: Ledger) -> Any:
 
 
 def design_probe_steps(workflow: Any) -> dict[str, str]:
-    """Find the design-writing and design-review nodes from graph declarations.
+    """Find the design-writing node from graph declarations.
 
-    Pattern: an agent writer whose outputs include a file F, connected via a
-    gate with a 'reloop' conditioned edge back to the writer, and an agent
-    reviewer that reads F and precedes a gate that also has a 'reloop' edge
-    to the writer.  A downstream user gate must also read F.
+    Pattern: an agent writer whose outputs include a file F, a gate with a
+    'reloop' conditioned edge back to the writer, another node that reads F and
+    leads into that gate (the check that verifies the writer's claims, including
+    the probe ids it cites), and a downstream user gate that also reads F.
 
     Works on both the pre-lowered workflow (``build()``) and the IR
     (``to_workflow()``), using ``_is_gate_node`` / ``_is_user_gate``.
 
-    Returns a dict mapping node_id -> role ('writer' or 'reviewer').
+    Returns a dict mapping node_id -> 'writer'.
     """
     nodes = workflow.nodes  # dict[str, Node]
     edges = workflow.edges  # list of edge objects
@@ -544,55 +544,34 @@ def design_probe_steps(workflow: Any) -> dict[str, str]:
 
     result: dict[str, str] = {}
 
-    # For each agent node (potential writer): check if it writes a file F,
-    # and there exists a gate with a reloop edge back to it.
     for nid, node in nodes.items():
         if not _is_agent_node(node):
             continue
         writes = set(getattr(node, 'writes', ()) or ())
         if not writes:
             continue
+        user_reads: set[str] = set()
+        for ug_node in nodes.values():
+            if _is_user_gate(ug_node):
+                user_reads |= set(getattr(ug_node, 'reads', ()) or ())
+        shown = writes & user_reads
+        if not shown:
+            continue
 
-        # Find gates that have a reloop edge back to this writer
         for gate_id, gate_node in nodes.items():
-            if not _is_gate_node(gate_node):
+            if not _is_gate_node(gate_node) or gate_id == nid:
                 continue
-            gate_outs = outgoing.get(gate_id, [])
-            reloops_to_writer = any(
-                dst == nid and cond == 'reloop'
-                for dst, cond in gate_outs
+            if not any(dst == nid and cond == 'reloop' for dst, cond in outgoing.get(gate_id, [])):
+                continue
+            # A check between the writer and its gate reads what the writer wrote.
+            checked = any(
+                check_id not in (nid, gate_id)
+                and shown & set(getattr(check_node, 'reads', ()) or ())
+                and any(dst == gate_id for dst, _ in outgoing.get(check_id, []))
+                for check_id, check_node in nodes.items()
             )
-            if not reloops_to_writer:
-                continue
-
-            # Find agent reviewers that precede this gate and read F
-            for rev_id, rev_node in nodes.items():
-                if rev_id == nid or not _is_agent_node(rev_node):
-                    continue
-                rev_reads = set(getattr(rev_node, 'reads', ()) or ())
-                shared_files = writes & rev_reads
-                if not shared_files:
-                    continue
-                # The reviewer must connect to this gate
-                rev_to_gate = any(
-                    dst == gate_id for dst, _ in outgoing.get(rev_id, [])
-                )
-                if not rev_to_gate:
-                    continue
-
-                # Check that a downstream user gate also reads F
-                has_user_gate = False
-                for ug_id, ug_node in nodes.items():
-                    if not _is_user_gate(ug_node):
-                        continue
-                    ug_reads = set(getattr(ug_node, 'reads', ()) or ())
-                    if shared_files & ug_reads:
-                        has_user_gate = True
-                        break
-
-                if has_user_gate:
-                    result[nid] = 'writer'
-                    result[rev_id] = 'reviewer'
+            if checked:
+                result[nid] = 'writer'
 
     return result
 
@@ -605,15 +584,12 @@ def for_run(workflow: Any, workdir: Path) -> Any:
     difference between the runtimes that nothing would report.
     """
     workflow = annotate(workflow, Ledger(workdir))
-    # Inject design probe fact references into structurally identified nodes.
-    probe_nodes = design_probe_steps(workflow)
-    for nid, role in probe_nodes.items():
+    # Inject the design probe fact reference into the structurally identified writer.
+    for nid in design_probe_steps(workflow):
         node = workflow.nodes[nid]
         existing = getattr(node, "prompt_template", "") or ""
         if "{{design_probe_instruction}}" not in existing:
             node.prompt_template = existing + "\n\n{{design_probe_instruction}}"
-        if role == "reviewer" and "{{design_probe_review}}" not in existing:
-            node.prompt_template = node.prompt_template + "\n\n{{design_probe_review}}"
     return workflow
 
 

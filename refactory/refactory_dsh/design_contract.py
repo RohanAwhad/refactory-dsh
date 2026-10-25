@@ -29,8 +29,33 @@ ASK_MAPPING = "Ask mapping"
 RULE_AND_SITES = "Rule and sites"
 DOCS = "Docs"
 CHANGES = "Changes"
+TESTS = "Tests"
 GUARDEDNESS_EXEMPTIONS = "Test guardedness exemptions"
-CONTRACT_SECTIONS = (SUMMARY, RULE_AND_SITES, DOCS, CHANGES)
+SITE_REVERT_EXEMPTIONS = "Site revert exemptions"
+ANTI_PATTERNS = "Anti-patterns to avoid"
+#: Added by apply_corrections when the person corrected the design at the approval gate.
+CORRECTIONS = "Corrections at approval"
+#: What design_doc must write (the light template). Every other section is optional,
+#: and each consumer of one treats its absence as a design without it.
+REQUIRED_SECTIONS = (SUMMARY, CHANGES, TESTS)
+#: The sections a design needs to be read as a contract design (`parse`), so its
+#: summary, its changes and any rule sites it lists are taken from their sections.
+CONTRACT_SECTIONS = (SUMMARY, CHANGES)
+#: The section the build cannot proceed without: the files to change. A design missing
+#: it is the only one sent back for a rewrite; every other gap is listed for the person
+#: at the approval gate.
+BUILD_SECTIONS = (CHANGES,)
+
+
+def missing_sections(text: str, sections: tuple[str, ...] = BUILD_SECTIONS) -> list[str]:
+    """The *sections* whose ``## heading`` is absent, or present with nothing under it.
+
+    The heading must match exactly (case aside): ``### Changes`` or ``## Changes made``
+    is not the ``## Changes`` section.
+    """
+    lines = text.splitlines()
+    return [section for section in sections
+            if not any(line for line in _section_lines(lines, section))]
 
 
 def has_non_empty_section(text: str, section: str) -> bool:
@@ -160,7 +185,8 @@ def parse(text: str, run_name: str = "") -> DesignContract:
     lines = text.splitlines()
     lower_lines = [line.strip().lower() for line in lines]
 
-    # Detect contract: all four section headings present.
+    # Detect contract: the contract's section headings present (Summary and Changes;
+    # Rule and sites and Docs are optional and read when present).
     has_contract = all(
         f"## {sec.lower()}" in lower_lines
         for sec in CONTRACT_SECTIONS
@@ -269,20 +295,6 @@ def parse(text: str, run_name: str = "") -> DesignContract:
             title=title, summary=summary, rule_sites=[], docs=[],
             changes=[], has_contract=False,
         )
-
-
-def missing_parts(parsed: DesignContract) -> list[str]:
-    """Section names from CONTRACT_SECTIONS whose content is empty."""
-    missing: list[str] = []
-    if not parsed.summary or not parsed.summary.strip():
-        missing.append(SUMMARY)
-    if not parsed.rule_sites:
-        missing.append(RULE_AND_SITES)
-    if not parsed.docs:
-        missing.append(DOCS)
-    if not parsed.changes:
-        missing.append(CHANGES)
-    return missing
 
 
 def left_without_reason(parsed: DesignContract) -> list[str]:
@@ -451,45 +463,44 @@ def find_near_miss_markers(site_text: str) -> list[str]:
 
 
 def prompt_contract() -> str:
-    """The text the design_doc prompt appends."""
+    """The text the design_doc prompt appends: the light template.
+
+    Three sections are required; the rest are optional, and every consumer of an
+    optional section treats its absence as a design without it.
+    """
     return (
-        "Your design.md must contain these sections, in this order:\n\n"
+        "Your design.md must contain, in this order:\n\n"
         "1. An H1 heading (`#`) that says what the change does. Never use "
         "the run name or artifact name as the title.\n\n"
-        "2. `## Summary` — a prose summary of the problem and the change, "
-        "in two to four sentences.\n\n"
-        "3. `## Failure trace` — for each failure the brief reports, "
-        "a file:line chain from the symptom to the root cause, and the "
-        "link (call, import, config) the fix breaks or replaces. When the "
-        "brief asks for a new feature with no existing failures, write "
-        "`N/A — this is a new feature.` The section heading is always "
-        "required.\n\n"
-        "4. `## Ask mapping` — a markdown table with columns "
-        "`| Ask (quoted from brief) | Design section | Test |`, one row "
-        "per ask in the brief. Quote the brief's words verbatim in the "
-        "Ask column.\n\n"
-        "5. `## Rule and sites` — the rule this change makes or corrects, "
-        "then every place in the code that applies or restates that rule, "
-        "found by searching the source. List each as a bullet with its "
-        "file path and line range cited, and mark it [changed] (this "
-        "change modifies it) or [left: <reason>] (this change leaves it "
-        "unchanged, with the reason). A site left unchanged without a "
-        "reason is a defect.\n\n"
-        "6. `## Docs` — the docs that describe the changed behaviour, found "
-        "by searching `docs/` and any other documentation directories. "
-        "List each as a bullet with its path, and say what update the "
-        "design plans for it.\n\n"
-        "7. `## Changes` — the list of files this change adds or modifies, "
-        "as bullets.\n\n"
-        "8. `## Test guardedness exemptions` (optional) — when the design "
-        "expects new tests that pass on the base (for example, tests that "
-        "pin existing behaviour), list each test file path and the reason "
-        "it cannot fail without the change. A new test that passes on the "
-        "base and is not listed here will be rejected.\n\n"
-        "9. `## Site revert exemptions` (optional) — when a changed site "
-        "cannot be caught by a mechanical revert-and-test (for example, a "
-        "change that affects only logging or a side-channel that no test "
-        "observes), list the site path:line and the reason. A changed site "
-        "whose revert is not caught and that is not listed here will block "
-        "the correction audit.\n"
+        "2. `## Summary` — the problem and the change, in two to four sentences.\n\n"
+        "3. `## Changes` — one bullet per file the change adds or modifies: "
+        "`path` — what changes. This is the one section the build cannot "
+        "proceed without.\n\n"
+        "4. `## Tests` — one bullet per test: its repo-relative id (for example "
+        "`tests/test_foo.py::test_bar`) and what it proves.\n\n"
+        "When the person corrects the design at the approval gate, the step that "
+        "applies the corrections adds `## Corrections at approval`; do not write it "
+        "yourself.\n\n"
+        "Add any of these optional sections only where it helps the build; leave out "
+        "the ones that would say nothing:\n"
+        "- `## Failure trace` — for a failure the brief reports, a file:line chain "
+        "from the symptom to the root cause.\n"
+        "- `## Ask mapping` — a table `| Ask (quoted from brief) | Design section | "
+        "Test |`, one row per ask, quoting the brief verbatim.\n"
+        "- `## Rule and sites` — the rule the change makes or corrects, then each place "
+        "in the code that applies or restates it, as a bullet citing file and line, "
+        "marked [changed] or [left: <reason>].\n"
+        "- `## Test guardedness exemptions` — when a new test passes on the base (for "
+        "example one that pins existing behaviour), its file path and why it cannot "
+        "fail without the change. A new test that passes on the base and is not listed "
+        "here is rejected.\n"
+        "- `## Site revert exemptions` — a changed site that a mechanical "
+        "revert-and-test cannot catch (logging, a side channel no test observes), as "
+        "`path:line` and the reason.\n"
+        "- `## Anti-patterns to avoid` — for a high-risk pitfall, the site or "
+        "§ section that handles it, or `[set-aside: <reason>]`.\n"
+        "- `## Docs` — the docs that describe the changed behaviour, and the update "
+        "each needs.\n"
+        "- `## Runtime coverage` — which runtimes run the changed code, and how each "
+        "is covered.\n"
     )

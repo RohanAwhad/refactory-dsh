@@ -18,9 +18,7 @@
     },
     "check_design_claims": {
       "id": "check_design_claims",
-      "evaluator_type": "fn",
-      "max_iterations": 4,
-      "_type": "GateNode"
+      "_type": "FnNode"
     },
     "classify_scale": {
       "id": "classify_scale",
@@ -44,12 +42,6 @@
     },
     "design_doc": {
       "id": "design_doc",
-      "role": "ceo",
-      "max_iterations": 1,
-      "_type": "AgentNode"
-    },
-    "design_review": {
-      "id": "design_review",
       "role": "ceo",
       "max_iterations": 1,
       "_type": "AgentNode"
@@ -194,12 +186,6 @@
       "max_iterations": 1,
       "_type": "AgentNode"
     },
-    "route_design_review": {
-      "id": "route_design_review",
-      "evaluator_type": "fn",
-      "max_iterations": 8,
-      "_type": "GateNode"
-    },
     "route_strategy": {
       "id": "route_strategy",
       "evaluator_type": "fn",
@@ -242,13 +228,8 @@
     },
     {
       "source": "check_design_claims",
-      "target": "design_doc",
-      "condition": "reloop"
-    },
-    {
-      "source": "check_design_claims",
-      "target": "route_design_review",
-      "condition": "proceed"
+      "target": "gate_design_review",
+      "condition": null
     },
     {
       "source": "classify_scale",
@@ -273,11 +254,6 @@
     {
       "source": "design_doc",
       "target": "check_design_claims",
-      "condition": null
-    },
-    {
-      "source": "design_review",
-      "target": "gate_design_review",
       "condition": null
     },
     {
@@ -434,16 +410,6 @@
       "source": "research_director",
       "target": "record_findings",
       "condition": null
-    },
-    {
-      "source": "route_design_review",
-      "target": "design_review",
-      "condition": "proceed"
-    },
-    {
-      "source": "route_design_review",
-      "target": "gate_design_review",
-      "condition": "scoped"
     },
     {
       "source": "route_strategy",

@@ -219,15 +219,18 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     return visited
   }
 
-  it('a scoped change skips the perspectives step and the design-review agent', () => {
+  it('a scoped change skips the perspectives step, and no reviewer runs at either scale', () => {
     const scoped = advance(new Spine(graph), 'emit', 'scoped')
     expect(scoped).toContain('synthesize_strategy')
     expect(scoped).toContain('gate_design_review')
     expect(scoped).not.toContain('strategy_director')
-    expect(scoped).not.toContain('design_review')
     const full = advance(new Spine(graph), 'emit', 'proceed')
     expect(full).toContain('strategy_director')
-    expect(full).toContain('design_review')
+    for (const visited of [scoped, full]) {
+      const design = visited.indexOf('design_doc')
+      expect(visited.slice(design, visited.indexOf('gate_strategy'))).toEqual(
+        ['design_doc', 'check_design_claims', 'gate_design_review'])
+    }
   })
 
   it('the check runs beside the reviews: five branches drain before join_qa, then gate_check routes', () => {

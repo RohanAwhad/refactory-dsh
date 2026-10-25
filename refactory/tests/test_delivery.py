@@ -21,7 +21,7 @@ import pytest
 from refactory_dsh import cli, console, delivery, nn, projects, worktree
 from refactory_dsh.design import DesignMode
 from refactory_dsh.projects import projects_dir
-from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, VERIFICATION_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
+from tests_support import DESIGN_DOC_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, VERIFICATION_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
 
 NAME = "delivered_tool"
 FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
@@ -1239,7 +1239,7 @@ def _answers(*emits: str) -> list[str]:
     and apply_corrections does not run — no model answer consumed.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            DESIGN_DOC_ANSWER, *emits,
             *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 
@@ -1264,6 +1264,829 @@ def _design(workdir: Path, emit: dict[str, str] | None = None, *, mode: DesignMo
 
 def _record(workdir: Path) -> dict:
     return json.loads((workdir / delivery.RECORD).read_text())
+
+
+# ── draft delivery tests ──────────────────────────────────────────────────
+
+DRAFT_FACT = {
+    "reason": "review reloop limit reached after 3 review cycle(s)",
+    "unresolved": [
+        {"text": "The logging format is inconsistent", "source": "review", "rounds": [1, 2, 3]},
+        {"text": "Missing error handling in parser", "source": "overwatch", "rounds": [2]},
+    ],
+}
+
+
+def _design_draft(workdir, github, tmp_path, *, mode=None, emit=None, target=None,
+                  check="python tool.py", generate="", draft_fact=None,
+                  advance_main=None, monkeypatch=None, seen=None):
+    """Run a full design with the draft_delivery fact injected via monkeypatch.
+
+    When *target* is None the run creates a new project (same as ``_design``).
+    When *target* is a repo path, the run uses that existing repo.
+    *seen*, when given, gets ``head``: the run's reviewed commit as delivery found it,
+    before delivery's own bookkeeping can move the worktree record.
+    """
+    fact = draft_fact if draft_fact is not None else DRAFT_FACT
+
+    import refactory_dsh.design_ops as design_ops_mod
+    # The report the design graph calls: its judges decided, so it is report_judged.
+    real_report = design_ops_mod.report_judged
+    real_deliver = delivery.deliver_design
+
+    def inject_draft_report(ctx):
+        ctx.facts["draft_delivery"] = fact
+        return real_report(ctx)
+
+    def inject_draft_deliver(ctx):
+        ctx.facts["draft_delivery"] = fact
+        if seen is not None:
+            seen["head"] = worktree.recorded(ctx.workdir).head
+        if advance_main is not None:
+            advance_main()
+        return real_deliver(ctx)
+
+    # Use a simple setattr/restore pattern when monkeypatch is not available.
+    saved_report = design_ops_mod.report_judged
+    saved_deliver = delivery.deliver_design
+    design_ops_mod.report_judged = inject_draft_report
+    delivery.deliver_design = inject_draft_deliver
+    try:
+        task_kw: dict[str, str] = {}
+        if target is not None:
+            task_kw["target"] = str(target)
+        if generate:
+            task_kw["generate"] = generate
+        model = FakeModel(_answers(render(emit or {"tool.py": "print('built')\n"})))
+        result = (mode or DesignMode()).run(
+            workdir, model=model, verdicts={"gate_strategy": "proceed"},
+            task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+                  "check": check, **task_kw},
+        )
+    finally:
+        design_ops_mod.report_judged = saved_report
+        delivery.deliver_design = saved_deliver
+    return result
+
+
+def _parents(github: Path, slug: str, commit: str) -> list[str]:
+    """The parents of ``commit`` in the repository on GitHub."""
+    return git(github / f"{slug}.git", "rev-list", "--parents", "-n1", commit).split()[1:]
+
+
+def _shown(github: Path, slug: str, commit: str, name: str) -> str:
+    """The file ``name`` as ``commit`` on GitHub holds it."""
+    return git(github / f"{slug}.git", "show", f"{commit}:{name}")
+
+
+def _draft_items(body: str) -> list[str]:
+    """The item lines of the draft section at the top of a pull request's description."""
+    assert body.startswith(delivery.DRAFT_HEADING), body[:200]
+    section = body.split("\n## ", 1)[0]
+    return [line for line in section.splitlines() if line.startswith("- ")]
+
+
+def _registry_note(run: Path) -> dict:
+    """What `refactory projects` keeps about the run's branch."""
+    found = worktree.recorded(run)
+    return next(note for entry in projects.load()["projects"] for note in entry.get("runs", [])
+                if note.get("branch") == found.branch)
+
+
+def test_draft_passing_check_opens_draft_pr(github, tmp_path):
+    """A draft run with a passing check opens a draft PR with the unresolved section."""
+    run = tmp_path / "run"
+    result = _design_draft(run, github, tmp_path)
+    assert result.exit_ok, result.error
+
+    # The fake gh saw `pr create` with `--draft`.
+    calls = _calls(tmp_path)
+    assert "--draft" in calls, f"expected --draft in calls: {calls}"
+
+    # The PR body starts with the unresolved section.
+    slug = f"{LOGIN}/{NAME}"
+    [pull] = _pulls(github, slug)
+    assert pull["body"].startswith("## Unresolved review findings"), pull["body"][:200]
+    assert "review reloop limit reached" in pull["body"]
+    assert "The logging format is inconsistent" in pull["body"]
+    assert "source: review" in pull["body"]
+    assert "rounds: 1, 2, 3" in pull["body"]
+    assert "Missing error handling in parser" in pull["body"]
+    assert "source: overwatch" in pull["body"]
+    assert pull.get("draft") is True
+
+    # delivery_result starts with "draft:".
+    assert result.facts["delivery_result"].startswith("draft:"), result.facts["delivery_result"]
+    assert "2 unresolved item(s)" in result.facts["delivery_result"]
+
+    # Delivery record has draft fields.
+    rec = _record(run)
+    assert rec["draft"] is True
+    assert rec["check_passed"] is True
+    assert rec["draft_reason"] == "review reloop limit reached after 3 review cycle(s)"
+    assert "draft_note" not in rec
+
+    # The run's report carries the draft fields (report_artifact).
+    report = json.loads((run / "design.json").read_text())
+    assert report["draft"] is True and report["check_passed"] is True
+    assert report["draft_reason"] == DRAFT_FACT["reason"]
+    assert report["draft_unresolved"] == DRAFT_FACT["unresolved"]
+
+    # `refactory projects` lists the run's delivery as a draft.
+    assert _registry_note(run)["delivery"] == "draft"
+    assert _registry_note(run)["pull_request"] == result.facts["pull_request"]
+
+
+def test_draft_failing_check_opens_draft_pr(github, tmp_path):
+    """A draft run with a failing check: report does NOT raise, the draft PR opens.
+
+    The evidence shows status='fail' but require_current_evidence accepts it
+    because it does not check validation.status.
+    """
+    from refactory_dsh.design_ops import report_artifact
+    from refactory_dsh.nn.executor import RunContext
+    from refactory_dsh.authoring_evidence import SETTINGS
+
+    run = tmp_path / "run"
+    # First do a normal run to set up worktree and evidence.
+    result = _design(run)
+    assert result.exit_ok, result.error
+
+    # Tamper the evidence to show a failing check.
+    ev_path = run / "authoring-evidence.json"
+    ev = json.loads(ev_path.read_text())
+    ev["validation"]["status"] = "fail"
+    ev_path.write_text(json.dumps(ev))
+
+    # Call report_artifact with draft_delivery.
+    # Use the same knobs from the evidence so currency checks pass.
+    knobs = {key: ev.get("settings", {}).get(key) for key in SETTINGS}
+    facts = dict(result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    ctx = RunContext(run, knobs=knobs, facts=facts, enforce_writes=False)
+    report_result = report_artifact(ctx)
+    assert "designed" in report_result
+
+    # Call deliver_design with draft_delivery.
+    facts.update(report_result)
+    outcome = delivery.deliver_design(RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
+    assert outcome["delivery_result"].startswith("draft:"), outcome["delivery_result"]
+
+    rec = _record(run)
+    assert rec["draft"] is True
+    assert rec["check_passed"] is False
+
+
+def test_draft_no_evidence_refused(github, tmp_path):
+    """A draft run with no/stale evidence: report refuses."""
+    # We need to test that require_current_evidence raises when there's no evidence.
+    # Build a RunContext directly.
+    from refactory_dsh.authoring_evidence import require_current_evidence
+    from refactory_dsh.nn.executor import RunContext
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    # Write facts with runtime_evidence set (so evidence is expected).
+    facts = {"draft_delivery": DRAFT_FACT, "runtime_evidence": True}
+    ctx = RunContext(run, facts=facts)
+    with pytest.raises(ValueError, match="evidence is missing"):
+        require_current_evidence(ctx)
+
+
+def test_no_draft_fact_requires_signoff(github, tmp_path):
+    """Without draft_delivery, a run whose sign-off is missing is refused by report.
+    With the fact, the same run delivers a draft (evidence is current, only sign-off missing)."""
+    from refactory_dsh.design_ops import report_artifact
+    from refactory_dsh.nn.executor import RunContext
+    from refactory_dsh.authoring_evidence import SETTINGS
+
+    run = tmp_path / "run_signoff"
+    # Run a full design first to set up the worktree and evidence.
+    result_normal = _design(run)
+    assert result_normal.exit_ok, result_normal.error
+
+    # Tamper the evidence to make the validation status "fail".
+    # This makes require_completion fail ("required runtime validation did not pass")
+    # but require_current_evidence pass (it does not check validation.status).
+    ev_path = run / "authoring-evidence.json"
+    ev = json.loads(ev_path.read_text())
+    ev["validation"]["status"] = "fail"
+    ev_path.write_text(json.dumps(ev))
+
+    # Build knobs from the evidence so currency checks pass.
+    knobs = {key: ev.get("settings", {}).get(key) for key in SETTINGS}
+
+    # Without the fact: report refuses with sign-off error.
+    facts = dict(result_normal.facts)
+    facts.pop("draft_delivery", None)
+    ctx = RunContext(run, knobs=knobs, facts=facts, enforce_writes=False)
+    with pytest.raises(ValueError, match="sign-off is incomplete or stale"):
+        report_artifact(ctx)
+
+    # With the fact: the same run delivers a draft (require_current_evidence passes).
+    facts["draft_delivery"] = DRAFT_FACT
+    ctx2 = RunContext(run, knobs=knobs, facts=facts, enforce_writes=False)
+    report_result = report_artifact(ctx2)
+    assert "designed" in report_result
+
+    # Complete the draft delivery.
+    facts.update(report_result)
+    outcome = delivery.deliver_design(RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
+    assert outcome["delivery_result"].startswith("draft:"), outcome["delivery_result"]
+
+
+def test_draft_conflict_with_base(github, tmp_path, monkeypatch):
+    """A draft run with a merge conflict: draft PR opened, run's own commit pushed,
+    conflict named in the unresolved section."""
+    repo = git_repo(tmp_path / "repo_conflict")
+    (repo / "authored.py").write_text("line1\nline2\nline3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base with authored")
+    slug = "acme/draft-conflict"
+    _published(github, slug, repo)
+
+    def advance_main():
+        other = tmp_path / "other_conflict"
+        if not other.exists():
+            git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+            (other / "authored.py").write_text("line1\nchanged_by_base\nline3\n")
+            git(other, "add", ".")
+            git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                "commit", "-q", "-m", "base changes authored.py")
+            git(other, "push", "-q", "origin", "main")
+
+    run = tmp_path / "run_conflict"
+    seen: dict = {}
+    result = _design_draft(run, github, tmp_path, target=repo,
+                           emit={"tool.py": "print('built')\n",
+                                 "authored.py": "line1\nchanged_by_run\nline3\n"},
+                           advance_main=advance_main, seen=seen)
+    assert result.exit_ok, result.error
+
+    calls = _calls(tmp_path)
+    assert "--draft" in calls
+
+    # The pushed head is the run's own commit (not a merge): the commit delivery
+    # found before it started, with one parent and the run's version of the file.
+    # (The worktree record is no witness: delivery moves it to a merge it made.)
+    found = worktree.recorded(run)
+    remote = _remote_head(github, slug, found.branch)
+    assert remote == seen["head"], f"expected run's own commit {seen['head']}, got {remote}"
+    assert len(_parents(github, slug, remote)) == 1
+    assert _shown(github, slug, remote, "authored.py") == "line1\nchanged_by_run\nline3"
+
+    # The PR body's unresolved section names the conflict first.
+    [pull] = _pulls(github, slug)
+    items = _draft_items(pull["body"])
+    assert items[0].startswith("- Merge conflict with base in authored.py"), items
+    assert len(items) == 1 + len(DRAFT_FACT["unresolved"])
+
+    # delivery_result says draft.
+    assert result.facts["delivery_result"].startswith("draft:")
+
+    # The delivery gate returns "proceed" (early return for draft).
+    # The run ended done, not looping back.
+    assert result.exit_ok
+
+
+def test_draft_failing_merged_check(github, tmp_path, monkeypatch):
+    """A draft run with a failing merged-result check: draft PR opened, run's own commit pushed."""
+    repo = git_repo(tmp_path / "repo_mfail")
+    (repo / "config.txt").write_text("ok\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base config ok")
+    slug = "acme/draft-mfail"
+    _published(github, slug, repo)
+
+    def advance_main():
+        other = tmp_path / "other_mfail"
+        if not other.exists():
+            git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+            (other / "config.txt").write_text("broken\n")
+            git(other, "add", ".")
+            git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                "commit", "-q", "-m", "base breaks config")
+            git(other, "push", "-q", "origin", "main")
+
+    run = tmp_path / "run_mfail"
+    seen: dict = {}
+    result = _design_draft(
+        run, github, tmp_path, target=repo,
+        emit={"tool.py": "import sys; sys.exit(1 if open('config.txt').read().strip() == 'broken' else 0)\n"},
+        check="python tool.py",
+        advance_main=advance_main, seen=seen,
+    )
+    assert result.exit_ok, result.error
+
+    calls = _calls(tmp_path)
+    assert "--draft" in calls
+
+    # The pushed head is the run's own commit, never the merge whose check failed: the
+    # commit delivery found before it started, with one parent and the base's config.
+    found = worktree.recorded(run)
+    remote = _remote_head(github, slug, found.branch)
+    assert remote == seen["head"], f"expected run's own commit {seen['head']}, got {remote}"
+    assert len(_parents(github, slug, remote)) == 1
+    assert _shown(github, slug, remote, "config.txt") == "ok"
+    # ...and the record claims no merge.
+    rec = _record(run)
+    assert rec["head"] == seen["head"] and "merge_commit" not in rec and "merge_check" not in rec
+
+    # delivery_result says draft.
+    assert result.facts["delivery_result"].startswith("draft:")
+
+    # The PR body names the check failure first in the unresolved section.
+    [pull] = _pulls(github, slug)
+    items = _draft_items(pull["body"])
+    assert items[0].startswith("- Merged-result check failed"), items
+
+
+def test_draft_existing_pr_converted_to_draft(github, tmp_path, monkeypatch):
+    """A draft run with an existing open PR: gh pr ready --undo + body prepend."""
+    run = tmp_path / "run_existing"
+    # First do a normal run to create an open PR.
+    result = _design(run)
+    assert result.exit_ok, result.error
+    slug = f"{LOGIN}/{NAME}"
+    [pull_before] = _pulls(github, slug)
+    old_body = pull_before["body"]
+
+    # Now call deliver_design with draft_delivery on the same run.
+    facts = dict(result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    outcome = delivery.deliver_design(nn.RunContext(run, facts=facts, enforce_writes=False))
+
+    calls = _calls(tmp_path)
+    assert "pr ready --undo" in calls, f"expected pr ready --undo in: {calls}"
+    assert "pr edit" in calls, f"expected pr edit in: {calls}"
+
+    # The PR body is the unresolved preamble followed by the previous body.
+    pulls = _pulls(github, slug)
+    updated_pull = next(p for p in pulls if p["number"] == pull_before["number"])
+    assert updated_pull["body"].startswith("## Unresolved review findings"), updated_pull["body"][:200]
+    # The old body is preserved after the preamble.
+    assert old_body in updated_pull["body"], "old body should be preserved"
+    assert updated_pull.get("draft") is True
+
+
+def test_draft_closed_pr_opens_no_second_pr(github, tmp_path, monkeypatch):
+    """A draft run with a closed PR: delivery does NOT open a second PR."""
+    run = tmp_path / "run_closed"
+    # First do a normal run to create an open PR.
+    result = _design(run)
+    assert result.exit_ok, result.error
+    slug = f"{LOGIN}/{NAME}"
+    [pull_before] = _pulls(github, slug)
+
+    # Close the PR.
+    pulls = _pulls(github, slug)
+    for p in pulls:
+        if p["number"] == pull_before["number"]:
+            p["state"] = "CLOSED"
+    (github / f"{slug}.pulls.json").write_text(json.dumps(pulls, indent=2))
+
+    # Now call deliver_design with draft_delivery on the same run.
+    facts = dict(result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    outcome = delivery.deliver_design(nn.RunContext(run, facts=facts, enforce_writes=False))
+
+    # No second PR was opened — the result is kept local.
+    final_pulls = _pulls(github, slug)
+    assert len(final_pulls) == 1, "should not open a second PR"
+
+    # Nothing was delivered, so nothing is recorded or reported as a draft: the
+    # record, the result and `refactory projects` say what they say without the fact.
+    rec = _record(run)
+    assert rec["status"] == "kept local"
+    assert "draft" not in rec and "draft_reason" not in rec
+    assert outcome["delivery_result"].startswith("not delivered: the pull request for"), outcome
+    assert "draft" not in outcome["delivery_result"].split("; to finish")[0]
+    assert _registry_note(run)["delivery"] == "kept local"
+
+
+def test_draft_conflict_existing_open_pr(github, tmp_path, monkeypatch):
+    """A draft with a base conflict and an existing open PR: pr ready --undo,
+    body names the conflict first."""
+    repo = git_repo(tmp_path / "repo_cex")
+    (repo / "authored.py").write_text("line1\nline2\nline3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base with authored")
+    slug = "acme/draft-cex"
+    _published(github, slug, repo)
+
+    # First, create an existing open PR via a normal design run.
+    first_run = tmp_path / "first_cex"
+    first_result = _design(first_run, {"tool.py": "print('built')\n",
+                                        "authored.py": "line1\nfirst_run\nline3\n"},
+                           target=str(repo), check="python tool.py")
+    assert first_result.exit_ok, first_result.error
+    [pull_before] = _pulls(github, slug)
+
+    # Advance main to create a conflict.
+    other = tmp_path / "other_cex"
+    git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+    (other / "authored.py").write_text("line1\nchanged_by_base\nline3\n")
+    git(other, "add", ".")
+    git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+        "commit", "-q", "-m", "base changes authored.py")
+    git(other, "push", "-q", "origin", "main")
+
+    # Now call deliver_design on the same run with draft_delivery, which will
+    # find the existing PR and encounter the conflict.
+    reviewed = worktree.recorded(first_run).head  # before delivery can move the record
+    facts = dict(first_result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    outcome = delivery.deliver_design(nn.RunContext(first_run, facts=facts, enforce_writes=False))
+
+    calls = _calls(tmp_path)
+    assert "pr ready --undo" in calls, f"expected pr ready --undo in: {calls}"
+    assert outcome["delivery_result"].startswith("draft:"), outcome["delivery_result"]
+
+    # The PR body names the conflict first.
+    pulls_list = _pulls(github, slug)
+    updated = next(p for p in pulls_list if p["number"] == pull_before["number"])
+    items = _draft_items(updated["body"])
+    assert items[0].startswith("- Merge conflict with base in authored.py"), items
+
+    # The pushed head is the run's own commit: one parent, the run's version.
+    found = worktree.recorded(first_run)
+    remote = _remote_head(github, slug, found.branch)
+    assert remote == reviewed
+    assert len(_parents(github, slug, remote)) == 1
+    assert _shown(github, slug, remote, "authored.py") == "line1\nfirst_run\nline3"
+
+
+def test_draft_no_pr_mode(github, tmp_path):
+    """A draft run with --no-pr: PR text has the section, record says draft,
+    finish commands include --draft."""
+    repo = git_repo(tmp_path / "repo_nopr")
+    _published(github, "acme/nopr", repo)
+
+    run = tmp_path / "run_nopr"
+    result = _design_draft(run, github, tmp_path, mode=_mode(pr=False), target=repo)
+    assert result.exit_ok, result.error
+
+    # The PR text carries the unresolved preamble.
+    pr_text = (run / delivery.BODY).read_text()
+    assert pr_text.startswith("## Unresolved review findings"), pr_text[:200]
+
+    # Delivery record says draft.
+    rec = _record(run)
+    assert rec["draft"] is True
+    assert rec["check_passed"] is True
+    assert rec["draft_reason"] == "review reloop limit reached after 3 review cycle(s)"
+
+    # delivery_result starts with "not delivered (draft):".
+    assert result.facts["delivery_result"].startswith("not delivered (draft):"), result.facts["delivery_result"]
+
+    # Finish commands include --draft.
+    finish = rec.get("finish", [])
+    gh_cmd = next((c for c in finish if "gh pr create" in c), "")
+    assert "--draft" in gh_cmd, f"expected --draft in finish commands: {finish}"
+
+
+def test_spine_draft_delivery_across_processes(github, tmp_path, monkeypatch):
+    """The spine carries draft_delivery across processes via facts.json.
+
+    Uses ``node_runner.run_node`` (separate processes, as the spine runs them),
+    with the fact in the run's facts file, and shows the draft opening on the
+    fake GitHub.
+    """
+    from refactory_dsh import lowering, design_ops
+    from refactory_dsh.run import run_node
+
+    run = tmp_path / "run_spine"
+    # First do a normal run to set up the worktree, evidence and delivery plan.
+    result = _design(run)
+    assert result.exit_ok, result.error
+
+    # Write the draft_delivery fact into facts.json on disk — the spine's channel.
+    facts = json.loads((run / "facts.json").read_text()) if (run / "facts.json").exists() else {}
+    facts.update(result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    (run / "facts.json").write_text(json.dumps(facts))
+
+    # Write declarations so run_node can look up the node's reads/writes/produces.
+    lowering.write_declarations(DesignMode().state_dict(), run)
+
+    # Read the evidence's settings so run_node's knobs match the evidence currency check.
+    ev_path = run / "authoring-evidence.json"
+    ev = json.loads(ev_path.read_text()) if ev_path.exists() else {}
+    knobs = dict(ev.get("settings", {}))
+    knobs["check_timeout_s"] = 180
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps(knobs))
+
+    # Run report through run_node (reads draft_delivery from facts.json).
+    run_node(f"{design_ops.__name__}:report_artifact", workdir=run, node_id="report")
+
+    # Run deliver through run_node.
+    run_node("refactory_dsh.delivery:deliver_design", workdir=run, node_id="deliver")
+
+    # Read back the facts run_node persisted to disk.
+    saved = json.loads((run / "facts.json").read_text())
+    assert saved["delivery_result"].startswith("draft:"), saved["delivery_result"]
+
+    # The fake gh saw --draft (for the existing PR, it's pr ready --undo).
+    calls = _calls(tmp_path)
+    assert "pr ready --undo" in calls or "--draft" in calls
+
+
+# ── draft delivery: the review's findings (#500) ──────────────────────────
+def test_draft_pr_body_hides_credentials_and_keeps_each_item_on_one_line(github, tmp_path):
+    """Every value in the draft section reaches GitHub, so each goes through `_public`
+    on one line, as every other field of the description: the merged check's own
+    output, the reason and each item. A line break in an item cannot start a heading."""
+    repo = git_repo(tmp_path / "repo_sec")
+    (repo / "config.txt").write_text("ok\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base config ok")
+    slug = "acme/draft-sec"
+    _published(github, slug, repo)
+
+    def advance_main():
+        other = tmp_path / "other_sec"
+        if not other.exists():
+            git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+            (other / "config.txt").write_text("broken\n")
+            git(other, "add", ".")
+            git(other, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "brk")
+            git(other, "push", "-q", "origin", "main")
+
+    fact = {"reason": "limit reached\nANTHROPIC_API_KEY=sk-ant-in-the-reason",
+            "unresolved": [{"text": "the reviewer saw OPENAI_API_KEY=sk-live-reviewer-quoted\n## Injected",
+                            "source": "review", "rounds": [1]}]}
+    tool = ("import sys\n"
+            "if open('config.txt').read().strip() == 'broken':\n"
+            "    print('GITHUB_TOKEN=ghp_SECRETVALUE123 failed', file=sys.stderr)\n"
+            "    print('second line', file=sys.stderr)\n"
+            "    sys.exit(1)\n")
+    result = _design_draft(tmp_path / "run_sec", github, tmp_path, target=repo, emit={"tool.py": tool},
+                           check="python tool.py", advance_main=advance_main, draft_fact=fact)
+    assert result.exit_ok, result.error
+
+    [pull] = _pulls(github, slug)
+    body = pull["body"]
+    for secret in ("ghp_SECRETVALUE123", "sk-live-reviewer-quoted", "sk-ant-in-the-reason"):
+        assert secret not in body, secret
+    assert "GITHUB_TOKEN=***" in body and "OPENAI_API_KEY=***" in body
+    assert "**Reason:** limit reached ANTHROPIC_API_KEY=***" in body
+    assert "\n## Injected" not in body
+    items = _draft_items(body)
+    assert items[0].startswith("- Merged-result check failed:") and "GITHUB_TOKEN=***" in items[0], items
+    assert "second line" in items[0]
+    assert items[1] == "- the reviewer saw OPENAI_API_KEY=*** ## Injected (source: review) (rounds: 1)"
+    assert "sk-ant-in-the-reason" not in result.facts["delivery_result"]
+
+
+def test_draft_without_any_check_evidence_is_refused(github, tmp_path):
+    """A draft says what its check showed, so report refuses a draft run with no check
+    evidence at all, whether or not the runtime_evidence fact is set. (Without the
+    fact, require_completion is unchanged.)"""
+    from refactory_dsh.design_ops import report_artifact
+    from refactory_dsh.authoring_evidence import SETTINGS
+
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    ev_path = run / "authoring-evidence.json"
+    knobs = {key: json.loads(ev_path.read_text()).get("settings", {}).get(key) for key in SETTINGS}
+    ev_path.unlink()
+    facts = {**result.facts, "draft_delivery": DRAFT_FACT}
+    facts.pop("runtime_evidence", None)
+    with pytest.raises(ValueError, match="authoritative runtime evidence is missing"):
+        report_artifact(nn.RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
+    facts["runtime_evidence"] = True
+    with pytest.raises(ValueError, match="authoritative runtime evidence is missing"):
+        report_artifact(nn.RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
+
+
+def test_draft_with_stale_identity_is_refused(github, tmp_path):
+    """A draft needs evidence for what it delivers: a design changed after validation
+    is refused on the draft path as on the complete one."""
+    from refactory_dsh.design_ops import report_artifact
+    from refactory_dsh.authoring_evidence import SETTINGS
+
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    ev = json.loads((run / "authoring-evidence.json").read_text())
+    knobs = {key: ev.get("settings", {}).get(key) for key in SETTINGS}
+    (run / "design.md").write_text((run / "design.md").read_text() + "\nchanged after validation\n")
+    facts = {**result.facts, "draft_delivery": DRAFT_FACT}
+    with pytest.raises(ValueError, match="artifact, accepted inputs or user intent changed after validation"):
+        report_artifact(nn.RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
+
+
+def test_a_draft_github_refuses_opens_ready_with_its_title_marked(github, tmp_path):
+    """GitHub has no draft pull requests for private repositories on some plans: the
+    pull request opens ready for review, its title starting "[draft] " and its
+    unresolved section still first, and the record says what happened."""
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/nodrafts", repo)
+    (github / "acme/nodrafts.json").write_text(json.dumps({"visibility": "private", "default_branch": "main",
+                                                           "drafts": False}))
+    run = tmp_path / "run"
+    result = _design_draft(run, github, tmp_path, target=repo)
+    assert result.exit_ok, result.error
+
+    [pull] = _pulls(github, "acme/nodrafts")
+    assert pull["title"].startswith(delivery.DRAFT_TITLE) and pull["draft"] is False
+    assert pull["title"] == delivery.DRAFT_TITLE + _record(run)["title"]
+    assert pull["body"].startswith(delivery.DRAFT_HEADING)
+    rec = _record(run)
+    assert (rec["status"], rec["pull_request"]) == ("opened", result.facts["pull_request"])
+    assert rec["draft"] is True and "Draft pull requests are not supported" in rec["draft_note"]
+    assert result.facts["delivery_result"].startswith(f"draft: {rec['pull_request']}")
+    assert "GitHub refused a draft pull request" in result.facts["delivery_result"]
+
+
+def test_a_pull_request_github_will_not_make_a_draft_keeps_its_delivery(github, tmp_path):
+    """`gh pr ready --undo` refused on the open pull request: the unresolved section is
+    still put first, and the record names the pushed commit and the pull request and
+    says it could not be converted."""
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    slug = f"{LOGIN}/{NAME}"
+    meta = json.loads((github / f"{slug}.json").read_text())
+    (github / f"{slug}.json").write_text(json.dumps({**meta, "drafts": False}))
+    url = result.facts["pull_request"]
+
+    outcome = delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": DRAFT_FACT},
+                                                    enforce_writes=False))
+    rec = _record(run)
+    assert (rec["status"], rec["pull_request"], rec["draft"]) == ("updated", url, True)
+    assert _remote_head(github, slug, rec["branch"]) == rec["head"] == worktree.recorded(run).head
+    assert "could not be converted to a draft" in rec["draft_note"]
+    assert outcome["delivery_result"].startswith(f"draft: {url}")
+    assert "could not be converted to a draft" in outcome["delivery_result"]
+    [pull] = _pulls(github, slug)
+    assert pull["body"].startswith(delivery.DRAFT_HEADING) and pull["draft"] is False
+
+
+def test_a_draft_whose_description_gh_cannot_edit_still_records_its_push(github, tmp_path, monkeypatch):
+    """Converting the open pull request runs after the push, so a refusal there leaves
+    the pushed branch and the pull request in the record."""
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    real = delivery._gh
+
+    def gh(*args, **kwargs):
+        if args[:2] == ("pr", "edit"):
+            raise delivery.NotDelivered("`gh pr edit` failed: HTTP 502")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(delivery, "_gh", gh)
+    url = result.facts["pull_request"]
+    delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": DRAFT_FACT},
+                                          enforce_writes=False))
+    rec = _record(run)
+    found = worktree.recorded(run)
+    assert (rec["status"], rec["pull_request"], rec["pushed"]) == (
+        "kept local", url, f"{LOGIN}/{NAME}:{found.branch}")
+
+
+def test_delivering_a_draft_again_replaces_its_unresolved_section(github, tmp_path):
+    """A second draft delivery on the same pull request replaces the section the first
+    one wrote, rather than stacking a second above it."""
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    slug = f"{LOGIN}/{NAME}"
+    [first] = _pulls(github, slug)
+    later = {"reason": "overall attempts limit reached",
+             "unresolved": [{"text": "Still flaky", "source": "review", "rounds": [4]}]}
+    for fact in (DRAFT_FACT, later):
+        delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": fact},
+                                              enforce_writes=False))
+    [pull] = _pulls(github, slug)
+    assert pull["body"].count(delivery.DRAFT_HEADING) == 1
+    assert "overall attempts limit reached" in pull["body"] and DRAFT_FACT["reason"] not in pull["body"]
+    assert _draft_items(pull["body"]) == ["- Still flaky (source: review) (rounds: 4)"]
+    assert pull["body"].endswith(first["body"])
+
+
+def test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft(github, tmp_path):
+    """On a refinement the refined pull request becomes the draft, its own description
+    kept below one unresolved section, however often it is delivered."""
+    repo, url, pull = _opened(github, tmp_path)
+    run = tmp_path / "refine"
+    result = _design(run, refine=url)
+    assert result.exit_ok, result.error
+    for _ in range(2):
+        again = delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": DRAFT_FACT},
+                                                      enforce_writes=False))
+    [after] = _pulls(github, "acme/app")
+    assert after["draft"] is True and after["body"].count(delivery.DRAFT_HEADING) == 1
+    assert after["body"].startswith(delivery.DRAFT_HEADING) and after["body"].endswith(pull["body"])
+    assert again["delivery_result"].startswith(f"draft: {url}")
+
+
+def test_a_draft_whose_pull_request_merged_is_recorded_merged(github, tmp_path):
+    """Merged is merged: not recorded or reported as a draft, and not converted."""
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    slug = f"{LOGIN}/{NAME}"
+    pulls = _pulls(github, slug)
+    pulls[0]["state"] = "MERGED"
+    (github / f"{slug}.pulls.json").write_text(json.dumps(pulls))
+    again = delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": DRAFT_FACT},
+                                                  enforce_writes=False))
+    rec = _record(run)
+    assert rec["status"] == "merged" and "draft" not in rec and "draft_reason" not in rec
+    assert again["delivery_result"].startswith(f"merged: {result.facts['pull_request']}"), again
+    assert _registry_note(run)["delivery"] == "merged"
+    assert "pr ready" not in _calls(tmp_path)
+
+
+def test_a_draft_whose_merge_was_abandoned_is_not_succeeded(github, tmp_path):
+    """An abandoned merge stops a draft as it stops any delivery: kept local, not
+    called a draft, and the run's worktree record not marked succeeded."""
+    repo = git_repo(tmp_path / "repo")
+    slug = "acme/draft-abandoned"
+    _published(github, slug, repo)
+    run = tmp_path / "run"
+
+    def advance_main():
+        other = tmp_path / "other"
+        if not other.exists():
+            git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+            (other / "blocker.txt").write_text("from base\n")
+            git(other, "add", ".")
+            git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                "commit", "-q", "-m", "base adds blocker")
+            git(other, "push", "-q", "origin", "main")
+        # An untracked file of that name in the worktree: git merge refuses, with no
+        # conflicted file, so the merge is abandoned.
+        (Path(worktree.recorded(run).path) / "blocker.txt").write_text("untracked content\n")
+
+    result = _design_draft(run, github, tmp_path, target=repo, advance_main=advance_main)
+    assert result.exit_ok, result.error
+    found = worktree.recorded(run)
+    assert worktree._json(worktree._record_path(found)).get("outcome") != "succeeded"
+    rec = _record(run)
+    assert rec["status"] == "kept local" and rec.get("merge_abandoned") and "draft" not in rec
+    assert result.facts["delivery_result"].startswith("not delivered: merge abandoned")
+    assert _remote_head(github, slug, found.branch) == ""
+
+
+def test_a_draft_whose_push_is_refused_keeps_the_work_local_as_without_the_fact(github, tmp_path, monkeypatch):
+    """A refused push stops a draft as it stops any delivery: no pull request, kept
+    local, said and recorded as without the fact; its text and finishing commands
+    still open a draft."""
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+
+    def push_refused(*args, **kwargs):
+        raise delivery.NotDelivered("push refused by GitHub")
+
+    monkeypatch.setattr(delivery, "_push", push_refused)
+    run = tmp_path / "run"
+    result = _design_draft(run, github, tmp_path, target=repo)
+    assert result.exit_ok, result.error
+    assert _pulls(github, "acme/app") == []
+    rec = _record(run)
+    assert (rec["status"], rec["pushed"], rec["pull_request"]) == ("kept local", "", "")
+    assert "draft" not in rec
+    assert result.facts["delivery_result"].startswith("not delivered: push refused by GitHub")
+    assert _registry_note(run)["delivery"] == "kept local"
+    assert (run / delivery.BODY).read_text().startswith(delivery.DRAFT_HEADING)
+    assert any(cmd.startswith("gh pr create") and cmd.endswith(" --draft") for cmd in rec["finish"])
+
+
+def test_the_delivery_gate_never_reloops_a_draft(tmp_path):
+    """The delivery gate proceeds on a draft run even with conflicts named (the build
+    loop's limits are spent); without the fact, or with one that is not a mapping, it
+    reloops to the builder as before."""
+    conflicted = {"delivery_conflict_files": ["authored.py"], "delivery_target_tip": "a" * 40}
+    gate = delivery.evaluate_delivery_conflicts
+    assert gate(nn.RunContext(tmp_path, facts={**conflicted, "draft_delivery": DRAFT_FACT})) == "proceed"
+    for fact in ({}, {"draft_delivery": "not a mapping"}):
+        verdict = gate(nn.RunContext(tmp_path, facts={**conflicted, **fact}))
+        assert verdict == "reloop", verdict
+
+
+def test_a_draft_fact_that_is_not_a_mapping_is_no_draft(github, tmp_path, capsys):
+    """A fact that is not a mapping is read as no draft, with a warning, rather than
+    failing report or deliver."""
+    from refactory_dsh.design_ops import report_artifact
+    from refactory_dsh.authoring_evidence import SETTINGS
+
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    ev = json.loads((run / "authoring-evidence.json").read_text())
+    knobs = {key: ev.get("settings", {}).get(key) for key in SETTINGS}
+    facts = {**result.facts, "draft_delivery": json.dumps(DRAFT_FACT)}
+    capsys.readouterr()
+    designed = report_artifact(nn.RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))["designed"]
+    assert "draft" not in json.loads(designed)
+    assert "the draft_delivery fact is a str, not a mapping" in capsys.readouterr().err
+    again = delivery.deliver_design(nn.RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
+    assert again["delivery_result"].startswith("already open:"), again
+    assert "pr ready" not in _calls(tmp_path)
 
 
 # ── the paths a person takes ───────────────────────────────────────────────
@@ -2431,7 +3254,7 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
         "- PIT-001: addressed at `tool.py:1`\n"
     )
     answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-               tricky_design, DESIGN_REVIEW_ANSWER,
+               tricky_design,
                tricky_design,
                render({"tool.py": "print('built')\n"}),
                *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
@@ -3503,7 +4326,6 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         design_with_polling,   # design_doc writes design.md with "polling loop"
-        DESIGN_REVIEW_ANSWER,  # design_review passes
         # pick_corrections is a gate — no model answer needed
         corrected_design,      # apply_corrections rewrites design.md to "websockets"
         render({"tool.py": "print('built')\n"}),  # emit
@@ -3545,6 +4367,55 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     # Process notes should not appear in the design.
     assert "try harder" not in design_text.lower(), \
         "process note should not appear in design.md"
+
+
+def test_gate_corrections_on_a_design_without_a_summary_reach_the_pr(github, tmp_path):
+    """A light design need not have ## Summary. Approved with a correction, its corrected
+    design is the one delivered: design.md keeps the correction, and the pull request's
+    title and text come from it.
+
+    Fails without the change: delivery read the missing Summary as a broken contract and
+    restored the pre-correction design, so the correction was dropped from both.
+    """
+    from refactory_dsh.steering import Ledger
+
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/no-summary", repo)
+    polling = ("# Use a polling loop to check for updates\n\n"
+               "## Changes\n\n- `tool.py` \u2014 poll for updates in a loop\n\n"
+               "## Tests\n\n- `tool.py` \u2014 prints built\n")
+    websockets = ("# Use websockets to receive updates\n\n"
+                  "## Changes\n\n- `tool.py` \u2014 receive updates over websockets\n\n"
+                  "## Tests\n\n- `tool.py` \u2014 prints built\n\n"
+                  "## Corrections at approval\n\n"
+                  "- \"use websockets instead of a polling loop\" \u2014 \u00a7 Changes\n")
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    ledger = Ledger.seed(run, "Build a tool\nthat prints built.")
+    ledger.verdict("gate_strategy", "proceed", approval=True)
+    ledger.note("constraint", "use websockets instead of a polling loop")
+    model = FakeModel([
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        polling,      # design_doc
+        websockets,   # apply_corrections
+        render({"tool.py": "print('built')\n"}),
+        *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3],
+    ])
+    model._siteless_clause = {"kind": "design", "heading": "Changes"}
+    result = DesignMode().run(
+        run, model=model, verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    assert result.exit_ok, result.error
+
+    assert (run / "design.md").read_text() == websockets
+    assert _record(run)["title"] == "Use websockets to receive updates"
+    pr_text = (run / delivery.BODY).read_text()
+    heading = "## Corrections given at approval\n\n"
+    assert heading + "> - use websockets instead of a polling loop\n" in pr_text, pr_text
+    before, after = pr_text.split(heading, 1)
+    assert "polling" not in (before + after.split("\n## ", 1)[1]).lower(), pr_text
 
 
 def test_unparseable_design_after_corrections_is_restored(tmp_path):

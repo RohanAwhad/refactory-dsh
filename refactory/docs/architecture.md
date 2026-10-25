@@ -383,38 +383,41 @@ loop.
 subagent answer each question, a strategy director chooses the perspectives and
 records which asks each one covers, `synthesize_strategy` compiles them into one
 intent-faithful plan, and design-v2 adds `design_doc` — the design document the
-code is written from. Between `design_doc` and `gate_strategy`, a **design review**
-step checks the document: a `design_review` agent reads the design, the brief and
-the code the design cites, and writes `reviews/design-review.md` listing open
-alternatives and unconfirmed claims as `BLOCKING:` findings. Between `design_doc`
-and `design_review`, a deterministic `check_design_claims` fn-gate verifies each
-claim in the subject-at-citation-quote format: that cited paths exist, quoted lines
-match within ±3 lines, and named identifiers from the claim's subject are present
-(Python via `ast`, TypeScript via word-boundary search). Mismatches reloop
-`design_doc` without spending a design-review attempt; on exhaustion the mismatches
-are appended to the review's feedback. `gate_design_review`
-reads that review using the same verdict and blocking-findings parsing as
-`gate_overwatch`, and adds two mechanical checks with no false positives: every
-`path:line` citation names an existing file with that many lines, and every
-quotation the design attributes to the brief appears verbatim in the brief. A fifth
-mechanical check validates per-changed-function repository questions (duplicates,
-callers, shared state) and the brief-example trace, for repository-change runs only.
+code is written from. As in remote-factory's design mode, research, strategy and
+design go straight to the person's gate: **no reviewer** sits between `design_doc` and
+`gate_strategy`, at either scale. Two deterministic steps run there. The
+`check_design_claims` op verifies each claim in the subject-at-citation-quote format:
+that the cited path names a file (as written, or the one tracked file that ends with it,
+by the resolver `classify_scale` uses, and never a file outside the checkout), that the quoted line is within ±20 lines of the
+citation (a quote with an ellipsis matches where its parts appear in order there,
+within the cited lines plus two and never more than fifteen, the first part holding a
+word; a line that drifted gets the note "cited N, found at M"), and that named identifiers from
+the claim's subject are present (Python via `ast`, TypeScript via word-boundary search).
+What it cannot confirm is an **unverified claim**; it never sends the design back. Then
+`gate_design_review` checks the design itself.
 
-The gate sends a design back only for what would make the build wrong or leave an ask
-unmet: a blocking finding from the review agent, a review that did not pass, a
-citation past the end of its file, a quotation the brief does not contain, a missing
-required section (including the `## Ask mapping`), or an unanswered high-risk pitfall.
-Everything else it notices is **advisory**: a quotation that differs from the brief
-only in punctuation, case or markdown, a missing `## Failure trace`, rule-site marker
-and title formatting, missing repository questions, and the review agent's own
-`## Notes`. Advisory items are listed at the person's gate under an Advisory heading
-and never cost a round. Research and perspective findings the design does not cite
-are recorded in the `finding_coverage` fact and not listed at all. On a blocking problem it reloops to
-`design_doc`; when its rounds run out, it proceeds to `gate_strategy` with the
-findings shown — it never fails the run. A scoped change has no review agent (below);
-when the gate's own checks block its design, it goes back to `design_doc` once for a
-rewrite before the person sees it. A full design gets `design_review_attempts`
-(default 2).
+**One design pass.** The design is written to a light template: `## Summary`,
+`## Changes` (one bullet per file and what changes) and `## Tests` (repo-relative ids
+and what each proves); `apply_corrections` adds `## Corrections at approval` when the
+person corrected the design. Every other section is optional — Failure trace, Ask
+mapping, Rule and sites with its markers, the two exemption sections, Anti-patterns,
+Docs, Runtime coverage — and every consumer of one treats its absence as a design
+without it. `gate_design_review` sends a design back only when `## Changes` is missing
+or empty, at most `design_review_attempts` times (default 1). Everything else is
+**advisory** and shown on the approval gate's card: unverified claims first, then the
+claims check's notes, then a missing `## Summary` or `## Tests`, a citation past the end
+of its file, a quotation the brief does not contain (or differs from only in
+punctuation), rule-site marker and title formatting, and — when the design has an
+`## Anti-patterns to avoid` section — a high-risk pitfall it does not answer (without
+that section, one line naming the high-risk pitfalls left unchecked). An optional
+section a design leaves out is not checked. Research and perspective findings
+the design does not cite are recorded in the `finding_coverage` fact and not listed at
+all. When its rewrite is spent the gate proceeds to `gate_strategy` with the gap shown —
+it never reads a review and never fails the run. In design mode the research and
+pitfalls gates never fail the run either: each sends its step back once only when it
+produced nothing parseable, and lists anything else it finds on the card (create mode's
+research gate is unchanged). docs/hardening.md, "One design pass", has the measurements
+behind this.
 
 **Design scale.** Scale is decided after research by a deterministic `classify_scale`
 op node placed between `gate_research` and `pitfalls_researcher`. `prepare_design`
@@ -426,23 +429,16 @@ rule: the change is scoped only when it touches at most two existing functions, 
 nothing new, and changes no shared engine. Anything else is full; so is a direction
 with no footprint key, or an entry without file:line evidence. The brief is never
 read by the classifier. The `research_scope_reason` fact records why the run was
-classed as it was. A scoped change gets at most five pitfalls, and two steps are
-left out: `route_strategy` sends it from the pitfalls straight to
-`synthesize_strategy`, which plans "the simplest thing that could pass the check"
-from the research and pitfalls with no perspectives step, and `route_design_review`
-sends its design from `check_design_claims` straight to `gate_design_review`, whose
-own checks (an Ask mapping present, citations and quotes true, high-risk pitfalls
-answered, required sections present) and the person's approval are its review — there
-is no agent to flag an ask without a row, an open alternative or a design-time
-repository question; the approval gate's status line says "Design review (automatic
-checks; scoped change — <reason>)". `route_design_review` records which in
-`design_review_by`, so a run whose graph predates it keeps its agent's review. Both
-routing gates answer `scoped` or `proceed` (also what a person's skip of a gate sends
-on the spine), which both runtimes follow as edge labels. Non-refine research is
-always 3 to 5 directions. A full design keeps the perspectives step and the
-design-review agent. At either scale the design cites a research finding only where
-it changes a decision; the findings stay in `research/` and `strategy/` for the
-design writer and the reviewer to read.
+classed as it was, and the approval card's scale line shows it ("Scale: scoped —
+<reason>"). A scoped change gets at most five pitfalls, and one step is left out:
+`route_strategy` sends it from the pitfalls straight to `synthesize_strategy`, which
+plans "the simplest thing that could pass the check" from the research and pitfalls
+with no perspectives step. The routing gate answers `scoped` or `proceed` (also what a
+person's skip of a gate sends on the spine), which both runtimes follow as edge labels.
+Non-refine research is guided to 3 to 5 directions. A full design keeps the
+perspectives step. At either scale the design cites a research finding only where it changes a
+decision; the findings stay in `research/` and `strategy/` for the design writer to
+read.
 
 The `deliverable_kind` fact, computed by `prepare_design`, distinguishes repository
 changes from artifacts. The `review_instructions` fact renders `REPO_CHANGE_REVIEW_INSTRUCTIONS`
@@ -457,10 +453,10 @@ For the post-build QA gate, `gate_qa` validates each of the three review files i
 naming the reviewer and function in any refusal. Missing repository questions are
 advisory: the gate proceeds, nothing is re-run, and the pull request lists them. The fast `gate_qa` validates `focused-qa.json`'s
 `repo_questions` key and strips `[repo-questions]`-prefixed problems from `failure_kind`'s
-word scan. `gate_strategy` now opens with a `design_review_status` fact: "Design review:
-PASS" (with ", N advisory" when the gate listed advisory items) or "Design review:
-FAIL, N unresolved" followed by the blocking findings, where N counts blocking
-findings only,
+word scan. `gate_strategy` now opens with a `design_review_status` fact, the approval
+card: "Design review: PASS" or "Design review: FAIL, N unresolved" with the section
+still missing, then the scale, the unverified claims, the claims check's notes and the
+other advisories,
 carried by fact substitution to all template-rendered surfaces (terminal, GUI,
 headless refusal, `refactory status`). A **person answers `gate_strategy`** at that point, because a
 run that can approve its own plan is not reviewed at all, so a walker run stops at
@@ -468,7 +464,7 @@ the gate and records the visit; a headless DSH run stops and prints the steer an
 the caller can supply the verdict up front via the ledger. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. In design mode the check runs **beside the reviews**, as a branch of the review fork, on the commit `prepare_check` settles first, and `gate_check` routes on it after the join (docs/hardening.md, "The check beside the reviews"). Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in
 parallel** and merge into one synthesis. In create and edit, the QA gate reads its
-blocking findings, and Overwatch audits them against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. In design mode **judges decide**: a QA judge reads the synthesis whole and writes a JSON verdict (proceed, or redo with what must be fixed) and the evidence map; a correction audit measures each correction's sites against the diff and its tests, and decides nothing; Overwatch reads that audit and writes its own JSON verdict. Each gate reads its judge's JSON and never scans prose. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, a correction Overwatch finds unmet always does, and a judge whose verdict cannot be read is asked again once, judge only (docs/hardening.md, "Judges decide QA in design mode"). An **independent verifier** runs in parallel with the reviews as a branch of the review fork, applying design-blind methods to the brief, diff and repository without reading design.md, within ten minutes — for a repository change only those the code reviewers do not apply (M1, M2, M13, M15), for a new artifact all seven; see docs/hardening.md §15. Overwatch judges its findings; in design mode the QA judge reads its report with the reviews. A **failure digest** is built from the check output per runner (pytest, vitest, node's test runner) and stored in `check-record.json`, which survives redo; the builder receives the digest rather than the raw output. A **builder probe** is available during emit, design_doc, and design_review: the builder can test named failing tests in a throwaway standalone clone before making its final emission, and design agents can run commands (`--command`) in the clone to verify mechanisms the design relies on. At the post-build gates, **per-correction audit** checks each gate correction item by item: for every correction in the ledger it records the site in the diff, the test that reaches that site (via mechanical hunk-level revert), and the evidence scope (via AST-based patch-target detection); see docs/hardening.md §25-27. A QA or
+blocking findings, and Overwatch audits them against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. In design mode **judges decide**: a QA judge reads the synthesis whole and writes a JSON verdict (proceed, or redo with what must be fixed) and the evidence map; a correction audit measures each correction's sites against the diff and its tests, and decides nothing; Overwatch reads that audit and writes its own JSON verdict. Each gate reads its judge's JSON and never scans prose. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, a correction Overwatch finds unmet always does, and a judge whose verdict cannot be read is asked again once, judge only (docs/hardening.md, "Judges decide QA in design mode"). An **independent verifier** runs in parallel with the reviews as a branch of the review fork, applying design-blind methods to the brief, diff and repository without reading design.md, within ten minutes — for a repository change only those the code reviewers do not apply (M1, M2, M13, M15), for a new artifact all seven; see docs/hardening.md §15. Overwatch judges its findings; in design mode the QA judge reads its report with the reviews. A **failure digest** is built from the check output per runner (pytest, vitest, node's test runner) and stored in `check-record.json`, which survives redo; the builder receives the digest rather than the raw output. A **builder probe** is available during emit and design_doc: the builder can test named failing tests in a throwaway standalone clone before making its final emission, and design agents can run commands (`--command`) in the clone to verify mechanisms the design relies on. At the post-build gates, **per-correction audit** checks each gate correction item by item: for every correction in the ledger it records the site in the diff, the test that reaches that site (via mechanical hunk-level revert), and the evidence scope (via AST-based patch-target detection); see docs/hardening.md §25-27. A QA or
 overwatch reloop goes back to the emit step, not to the plan a person approved.
 
 **Core and non-core findings.** In create, edit and the fast modes, every post-build reviewer (the three reviews, Overwatch,

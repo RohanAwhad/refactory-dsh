@@ -26,7 +26,7 @@ from refactory_dsh.design import DesignMode
 from refactory_dsh.edit import EditMode
 from refactory_dsh.run import FAILURE_MARKER, main as runner_main
 from refactory_dsh.steering import Ledger
-from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, OVERWATCH_JUDGE_MARK,
+from tests_support import (DESIGN_DOC_ANSWER, OVERWATCH_JUDGE_MARK,
                            PITFALLS_ANSWER, QA_JUDGE_MARK, RESEARCH_ANSWER, VERIFICATION_ANSWER,
                            FakeModel, Scripted, git, git_repo, overwatch_judgment, qa_judgment,
                            render)
@@ -52,7 +52,7 @@ def _round(emission: str, *, reviews: tuple[str, str, str] = (HEALTH, CODE, QA),
 
 def _answers(*rounds: list[str]) -> list[str]:
     head = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER]
+            DESIGN_DOC_ANSWER]
     return head + [answer for one in rounds for answer in one]
 
 

@@ -23,7 +23,7 @@ from refactory_dsh.create_ops import repair
 from refactory_dsh.fast_ops import _repair as fast_repair
 from refactory_dsh.nn import Verdict
 from refactory_dsh.design import DesignMode
-from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+from tests_support import (DESIGN_DOC_ANSWER,
                            PITFALLS_ANSWER, RESEARCH_ANSWER,
                            REVIEW_ANSWERS, VERIFICATION_ANSWER,
                            FakeModel as _FakeModel,
@@ -150,7 +150,7 @@ def test_is_signal_crash_none_returncode():
 def _design_answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            DESIGN_DOC_ANSWER, *emits,
             *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 

@@ -91,13 +91,10 @@ maps diff hunk line ranges onto function spans via `ast` (Python) and hunk-range
 `_check_in_worktree` (conditional). The `changed_functions` fact is rendered into each
 reviewer prompt as `{{changed_functions}}`.
 
-The design review also traces the brief's own example through the code in time order,
-naming the route a real run takes for every runtime that runs it.
-
 `gate_qa` and the fast `gate_qa` refuse a reviewer output that lacks an entry for a
-changed function, or gives an answer with no `path:line` evidence. `gate_design_review`
-performs the same check against the design's `[changed]` sites, but at design time a
-missing entry is advisory: it is listed at the person's gate and never re-runs the review.
+changed function, or gives an answer with no `path:line` evidence. Nothing asks them at
+design time: design mode has no design reviewer (docs/hardening.md, "One design
+pass").
 
 ### Marker placement rule
 
@@ -113,10 +110,11 @@ rule, so a review that ignores it can still trip the parser (tracker dm-220).
 
 ### Claim checking
 
-The design review and code_reviewer check each factual claim about existing code at
-`file:line`, including uncited premises. A false claim is BLOCKING in the review output.
-Cited claims will be checked by a deterministic module (from a parallel run) once it
-lands; uncited-claim checking is prompt-only.
+The code_reviewer checks each factual claim about existing code at `file:line`,
+including uncited premises; a false claim is BLOCKING in the review output. At design
+time, `check_design_claims` checks the design's cited claims mechanically and lists
+what it cannot confirm as unverified claims on the approval card; it never sends the
+design back. Uncited-claim checking is prompt-only.
 
 ### Deliverable-kind conditioning
 
@@ -145,8 +143,7 @@ Missing repository questions are advisory at every gate, and nothing is re-run f
 them: they are the reviewers' bookkeeping, not a defect in the change. A post-build
 gate used to re-run every reviewer once when they were its only problem; on a measured
 run (dm-149, 2026-10-22) that cost ten minutes and left the same answer missing. The
-gate records them in `reviews/qa-gate.txt`, the design review's advisory list, or fast
-mode's `fast-report.json`, and the pull request's Verification section lists them. They
+gate records them in `reviews/qa-gate.txt` or fast mode's `fast-report.json`, and the pull request's Verification section lists them. They
 never send a build back, re-run a review, or end a run.
 
 

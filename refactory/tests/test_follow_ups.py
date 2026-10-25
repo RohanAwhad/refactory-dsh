@@ -18,7 +18,7 @@ import pytest
 
 from refactory_dsh import create_ops, lowering, registry
 from refactory_dsh.create_ops import MARKER_RULE, OVERWATCH_VERDICT_RULE, SEVERITY_RULE, is_non_core, split_core
-from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+from tests_support import (DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
                            RESEARCH_ANSWER, VERIFICATION_ANSWER, FakeModel, git_repo,
                            overwatch_judgment, qa_judgment, render)
 
@@ -53,7 +53,7 @@ def _round(health="health: ok", code="code review: ok", qa="qa: ok"):
 
 def _planning():
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER]
+            DESIGN_DOC_ANSWER]
 
 
 # ── the tags ──────────────────────────────────────────────────────────────
@@ -358,9 +358,10 @@ def test_every_post_build_reviewer_is_told_to_tag_its_findings(tmp_path, mode_pa
 
 
 @pytest.mark.parametrize("mode_path, reviewers", [
-    # Design mode's overwatch is a judge that writes JSON, and carries no marker rule.
+    # Design mode has no design reviewer, and its overwatch is a judge that writes JSON:
+    # neither carries the marker rule.
     ("refactory_dsh.design:DesignMode",
-     ("health_checker", "code_reviewer", "qa_director", "design_review")),
+     ("health_checker", "code_reviewer", "qa_director")),
     ("refactory_dsh.create:CreateMode",
      ("health_checker", "code_reviewer", "qa_director", "overwatch")),
     ("refactory_dsh.edit:EditMode",
@@ -480,7 +481,7 @@ def test_verifier_prompt_carries_marker_rule():
 
 @pytest.mark.parametrize("mode_path, reviewers", [
     ("refactory_dsh.design:DesignMode",
-     ("health_checker", "code_reviewer", "qa_director", "overwatch", "design_review")),
+     ("health_checker", "code_reviewer", "qa_director", "overwatch")),
     ("refactory_dsh.create:CreateMode",
      ("health_checker", "code_reviewer", "qa_director", "overwatch")),
     ("refactory_dsh.edit:EditMode",
