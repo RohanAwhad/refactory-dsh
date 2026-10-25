@@ -1365,9 +1365,13 @@ def gate_check(ctx: Any) -> Any:
     decided = _decided(ctx, attempt)
     if decided:
         if decided.get("error_type"):
-            # The check stopped the run, as it would have before the reviews.
-            raise (RuntimeError if decided["error_type"] == "RuntimeError" else ValueError)(
-                str(decided.get("error") or "the check failed"))
+            # The check stopped the run, as it would have before the reviews: a
+            # build-loop limit stays a BuildLoopStop, so the spine records the run failed.
+            from refactory_dsh.run import BuildLoopStop
+
+            kind = {"RuntimeError": RuntimeError, "BuildLoopStop": BuildLoopStop}.get(
+                str(decided["error_type"]), ValueError)
+            raise kind(str(decided.get("error") or "the check failed"))
         label = str(decided.get("verdict") or "")
         return "proceed" if label == "proceed" else Verdict(label, str(decided.get("reason") or ""))
     validation = (ctx.read_json(evidence.EVIDENCE, {}) if ctx.exists(evidence.EVIDENCE)
