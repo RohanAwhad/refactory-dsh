@@ -792,7 +792,10 @@ def _recover_interrupted_merge(found: worktree.Worktree) -> None:
 def deliver_design(ctx: Any) -> dict[str, Any]:
     """The `deliver` step: what the approval gate said delivery would do, and nothing else.
 
-    It runs after `report`, so only once the reviews passed. The plan is made again, and
+    It runs after `report`, so only once the reviews passed -- or, on a draft delivery
+    (the `draft_delivery` fact), once the build loop's limits were spent with current
+    check evidence: the pull request is then a draft whose description lists what is
+    still unresolved, first. The plan is made again, and
     a plan that now differs from the approved one -- another repository, another branch,
     or no pull request -- keeps the work local. So does anything GitHub refuses, which
     is reported as a run warning, not a failure: the work passed its reviews and is on
@@ -802,11 +805,12 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     """
     approved = dict(ctx.facts.get("delivery_plan") or {})
     found = worktree.recorded(ctx.workdir)
+    draft_delivery = draft_fact(ctx)
 
     # No worktree: nothing to write.
     if found is None:
         result = _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
-                       title="", finish=[])
+                       title="", finish=[], draft_delivery=draft_delivery)
         result["delivery_conflict_files"] = []
         return result
 
@@ -820,13 +824,13 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     # All paths with a worktree write the pull request text once.
     found = worktree.require_current(ctx.workdir)
     _validate_design_after_corrections(Path(ctx.workdir))
-    title = _write_pr_text(ctx, found)
+    title = _write_pr_text(ctx, found, draft_delivery=draft_delivery)
 
     # ── action "none" (--no-pr, never planned) ──────────────────────────
     if approved.get("action") in (None, "none"):
-        finish = _finish_commands(ctx, found, title)
+        finish = _finish_commands(ctx, found, title, draft=bool(draft_delivery))
         result = _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
-                       title=title, finish=finish)
+                       title=title, finish=finish, draft_delivery=draft_delivery)
         result["delivery_conflict_files"] = []
         return result
 
@@ -839,21 +843,26 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                rev=str(inputs.get("rev") or ""), enabled=bool(inputs["enabled"]), owner=inputs["owner"],
                visibility=inputs["visibility"], refine=inputs["refine"])
     repo_slug = now.get("repo") or approved.get("repo")
-    finish = _finish_commands(ctx, found, title, repo_slug)
+    finish = _finish_commands(ctx, found, title, repo_slug, draft=bool(draft_delivery))
     if now["action"] == "none":
-        result = _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish)
+        result = _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish,
+                       draft_delivery=draft_delivery)
         result["delivery_conflict_files"] = []
         return result
     if not matches(now, approved) or now.get("branch") != approved.get("branch"):
         result = _kept(ctx, approved, found, f"delivery would now be different from what the approval gate "
                                              f"showed: it {now['summary']}",
-                       title=title, finish=finish)
+                       title=title, finish=finish, draft_delivery=draft_delivery)
         result["delivery_conflict_files"] = []
         return result
     try:
-        outcome = _deliver(ctx, found, now, title=title)
+        outcome = _deliver(ctx, found, now, title=title, draft_delivery=draft_delivery)
     except NotDelivered as reason:
         merge = reason.merge
+        # Whatever stopped delivery -- a closed pull request, a refused push, an
+        # abandoned merge -- is reported and recorded as without the fact: nothing was
+        # delivered, so nothing is called a draft.  (The pull request text and the
+        # finishing commands still open a draft.)
         result = _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed,
                        title=title, finish=finish, merge=merge)
         if merge is not None and merge.conflicts:
@@ -892,13 +901,14 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                         worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
                 except ValueError:
                     worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
-    result = _delivered(ctx, approved, found, outcome, title=title)
+    updated_dd = outcome.get("_draft_delivery", draft_delivery)
+    result = _delivered(ctx, approved, found, outcome, title=title, draft_delivery=updated_dd)
     result["delivery_conflict_files"] = []
     return result
 
 
 def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
-             title: str = "") -> dict[str, Any]:
+             title: str = "", draft_delivery: dict[str, Any] | None = None) -> dict[str, Any]:
     """Push and open, or push onto the refined pull request; never a second pull request."""
     path, slug, branch = Path(found.path), str(planned["repo"]), str(planned["branch"])
     into = str(planned["into"])
@@ -909,12 +919,27 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
     check_timeout_s = float(ctx.knob("check_timeout_s", 180))
     merge = _merge_target(ctx, path, slug, into, generate, reviewed_commit,
                           check_timeout_s, str(planned["branch"]))
-    if merge.conflicts:
+
+    # ── draft conflict handling: drop the merge, record unresolved, continue ──
+    draft_conflict_item: str | None = None
+    if draft_delivery and merge.conflicts:
+        draft_conflict_item = (
+            f"Merge conflict with base in {', '.join(merge.conflicts)}"
+        )
+        # Abort the merge and reset to the reviewed commit.
+        try:
+            worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
+        except ValueError:
+            pass
+        worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+        merge = MergeResult()  # clear the merge — we push the run's own commit
+    elif not draft_delivery and merge.conflicts:
         raise NotDelivered(
             f"authored-file conflicts in {', '.join(merge.conflicts)}; "
             "delivery does not push; the run loops back to the builder",
             merge=merge,
         )
+
     if merge.merge_commit:
         check_failure, infra_flag = _check_merged(ctx, found, merge.merge_commit, reviewed_commit,
                                                    check_timeout_s)
@@ -925,17 +950,29 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
                     f"delivery stopped: infrastructure failure in merged-tree check: {check_failure}"
                 )
             merge = MergeResult(check_failed=check_failure)
+
     # R1: a signal crash in _merge_target's generate stops as infrastructure.
     if merge.infrastructure:
         raise ValueError(
             f"delivery stopped: infrastructure failure in merge: {merge.abandoned}"
         )
-    if merge.check_failed:
-        raise NotDelivered(
-            f"the check failed on the merged result: {merge.check_failed[:500]}; "
-            "delivery does not push",
-            merge=merge,
+
+    if draft_delivery and merge.check_failed:
+        # The check's own output goes into the pull request: credential values hidden,
+        # on one line, as every other field of its description.
+        draft_conflict_item = (
+            f"Merged-result check failed: {_shorten(_flat(merge.check_failed), 500)}"
         )
+        # Reset to the reviewed commit — push without the failing merge.
+        worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+        merge = MergeResult()
+    elif not draft_delivery:
+        if merge.check_failed:
+            raise NotDelivered(
+                f"the check failed on the merged result: {merge.check_failed[:500]}; "
+                "delivery does not push",
+                merge=merge,
+            )
     if merge.abandoned:
         raise NotDelivered(
             f"merge abandoned: {merge.abandoned[:500]}; delivery does not push",
@@ -943,22 +980,40 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
         )
     push_head = merge.merge_commit or found.head
 
+    # ── insert draft conflict item into unresolved list ───────────────
+    if draft_conflict_item and draft_delivery is not None:
+        unresolved = list(draft_delivery.get("unresolved", []))
+        unresolved.insert(0, {"text": draft_conflict_item, "source": "delivery", "rounds": []})
+        draft_delivery = {**draft_delivery, "unresolved": unresolved}
+        # Rewrite the PR body with the updated unresolved list.
+        ctx.write_text(BODY, _body(ctx, found))
+        _prepend_draft_preamble(ctx, draft_delivery)
+
     # ── rewrite the PR body with merge information ────────────────────
-    if merge.merge_commit or merge.conflicts or merge.check_failed or merge.abandoned:
+    if not draft_conflict_item and (merge.merge_commit or merge.conflicts or merge.check_failed or merge.abandoned):
         ctx.write_text(BODY, _body(ctx, found, merge=merge))
+        # On a draft run, re-prepend the preamble after the body rewrite.
+        if draft_delivery:
+            _prepend_draft_preamble(ctx, draft_delivery)
 
     if planned["action"] == "refine":
         url = str(planned["pull_request"])
         before = json.loads(_gh("pr", "view", url, "--json", "headRefOid")).get("headRefOid")
         _push(path, slug, push_head, branch, default="")
         status = "already updated" if before == push_head else "updated"
-        return {"status": status, "merge": merge,
+        # After the push, so a refusal from here on leaves the push and the pull request
+        # in the record (`_after_push`).
+        note = (_after_push(lambda: _redraft(ctx, url, draft_delivery), slug, branch, url)
+                if draft_delivery else "")
+        return {"status": status, "merge": merge, "_draft_delivery": draft_delivery, "draft_note": note,
                 "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
     if planned["action"] == "create":
         _create(Path(found.target), slug, str(planned["visibility"]))
     existing = _existing_pull(path, slug, branch)
     if existing is not None and existing.get("state") == "MERGED" and existing.get("headRefOid") in (found.head, push_head):
-        return {"status": "merged", "merge": merge, "pull_request": str(existing["url"])}
+        # Merged is merged: not reported or recorded as a draft.
+        return {"status": "merged", "merge": merge, "_draft_delivery": None,
+                "pull_request": str(existing["url"])}
     if existing is not None and existing.get("state") != "OPEN":
         raise NotDelivered(f"the pull request for {branch}, {existing['url']}, is "
                            f"{str(existing['state']).lower()}, and delivery never opens a second one",
@@ -969,27 +1024,84 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
         raise NotDelivered(str(reason), str((existing or {}).get("url") or ""),
                            merge=merge) from reason
     if existing is not None:
-        status = "already open" if existing.get("headRefOid") == push_head else "updated"
         url = str(existing["url"])
-        return {"status": status, "merge": merge,
+        if draft_delivery:
+            # After the push, so a refusal from here on leaves the push and the pull
+            # request in the record (`_after_push`).
+            note = _after_push(lambda: _redraft(ctx, url, draft_delivery), slug, branch, url)
+            return {"status": "updated", "merge": merge, "_draft_delivery": draft_delivery,
+                    "draft_note": note,
+                    "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
+        status = "already open" if existing.get("headRefOid") == push_head else "updated"
+        return {"status": status, "merge": merge, "_draft_delivery": draft_delivery,
                 "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
     body = Path(ctx.workdir) / BODY
-    opened = _after_push(lambda: _open(path, slug, branch, str(planned["into"]), title, body), slug, branch)
+    note = ""
+    if draft_delivery:
+        opened, note = _after_push(lambda: _open_draft(path, slug, branch, into, title, body), slug, branch)
+    else:
+        opened = _after_push(lambda: _open(path, slug, branch, into, title, body), slug, branch)
     url = next((line.strip() for line in reversed(opened.splitlines()) if "/pull/" in line), opened.strip())
-    return {"status": "opened", "merge": merge,
+    return {"status": "opened", "merge": merge, "_draft_delivery": draft_delivery, "draft_note": note,
             "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
 
 
-def _open(path: Path, slug: str, branch: str, into: str, title: str, body: Path) -> str:
+def _open(path: Path, slug: str, branch: str, into: str, title: str, body: Path, *,
+          draft: bool = False) -> str:
     """Open the pull request; one gh opened although it reported failing counts as opened."""
     try:
-        return _gh("pr", "create", "--repo", slug, "--base", into, "--head", branch, "--title", title,
-                   "--body-file", str(body), cwd=path)
+        args = ["pr", "create", "--repo", slug, "--base", into, "--head", branch, "--title", title,
+                "--body-file", str(body)]
+        if draft:
+            args.append("--draft")
+        return _gh(*args, cwd=path)
     except NotDelivered:
         existing = _existing_pull(path, slug, branch)
         if existing is None or existing.get("state") != "OPEN":
             raise
         return str(existing["url"])
+
+
+#: What a draft delivery's title starts with where GitHub refuses draft pull requests.
+DRAFT_TITLE = "[draft] "
+
+
+def _open_draft(path: Path, slug: str, branch: str, into: str, title: str, body: Path) -> tuple[str, str]:
+    """Open a draft pull request, or, where GitHub refuses drafts, a ready one titled "[draft] …".
+
+    GitHub has no draft pull requests for private repositories on some plans. The
+    description is the same either way, its unresolved section first. Returns what gh
+    printed and a note naming the refusal, empty when the draft opened.
+    """
+    try:
+        return _open(path, slug, branch, into, title, body, draft=True), ""
+    except NotDelivered as refused:
+        if "draft pull request" not in str(refused).lower():
+            raise
+        said = str(refused)
+    opened = _open(path, slug, branch, into, DRAFT_TITLE + title, body)
+    return opened, (f"GitHub refused a draft pull request ({said}), so it was opened ready for review, "
+                    f"its title starting {DRAFT_TITLE.strip()}")
+
+
+def _redraft(ctx: Any, url: str, draft_delivery: dict[str, Any]) -> str:
+    """Make the open pull request at ``url`` a draft, its unresolved section first.
+
+    The section replaces one an earlier draft delivery wrote, so delivering again never
+    stacks a second. Where GitHub refuses the conversion the section is still written,
+    and the returned note says the pull request stayed ready for review; it is empty
+    when the conversion worked.
+    """
+    note = ""
+    try:
+        _gh("pr", "ready", "--undo", url)
+    except NotDelivered as refused:
+        note = f"{url} could not be converted to a draft ({refused}), so it stays ready for review"
+    old_body = str(json.loads(_gh("pr", "view", url, "--json", "body")).get("body") or "")
+    body_path = Path(ctx.workdir) / BODY
+    body_path.write_text(_with_draft_section(old_body, draft_delivery))
+    _gh("pr", "edit", url, "--body-file", str(body_path))
+    return note
 
 
 def _after_push(step: Any, slug: str, branch: str, pull_request: str = "") -> Any:
@@ -1818,6 +1930,10 @@ def evaluate_delivery_conflicts(ctx: Any) -> "Verdict | str":
     # else.  This is the only place a stale MERGE_HEAD is cleaned up.
     _abort_pending_merge(ctx)
 
+    # Draft runs never reloop — the build loop's limits are spent.
+    if draft_fact(ctx):
+        return "proceed"
+
     conflict_files = ctx.facts.get("delivery_conflict_files") or []
     if not conflict_files:
         return "proceed"
@@ -1936,15 +2052,84 @@ def _validate_design_after_corrections(workdir: Path) -> None:
         target_guard.warn("design.md was unparseable after corrections; restored the pre-correction version")
 
 
-def _write_pr_text(ctx: Any, found: worktree.Worktree) -> str:
+def draft_fact(ctx: Any) -> dict[str, Any] | None:
+    """The run's ``draft_delivery`` fact when it asks for a draft, else None.
+
+    The fact is a mapping ``{reason, unresolved: [{text, source, rounds}]}``. Anything
+    else is no draft, said as a run warning, so report and deliver behave as without the
+    fact rather than failing on it.
+    """
+    fact = ctx.facts.get("draft_delivery")
+    if not fact:
+        return None
+    if not isinstance(fact, dict):
+        target_guard.warn(f"the draft_delivery fact is a {type(fact).__name__}, not a mapping, so this "
+                          "run is delivered as one without it")
+        return None
+    if not isinstance(fact.get("unresolved", []), list):
+        target_guard.warn("the draft_delivery fact's unresolved items are not a list; none are listed")
+        return {**fact, "unresolved": []}
+    return fact
+
+
+def _flat(text: Any) -> str:
+    """``text`` for one line of a pull request: credential values hidden (`_public`), breaks folded."""
+    return _public(" ".join(str(text).split()))
+
+
+#: The heading of a draft delivery's section, first in its pull request's description.
+DRAFT_HEADING = "## Unresolved review findings"
+_DRAFT_SECTION = re.compile(r"^## Unresolved review findings[ \t]*\r?\n.*?(?=^## |\Z)", re.M | re.S)
+
+
+def _draft_preamble(draft_delivery: dict[str, Any]) -> str:
+    """Build the ``## Unresolved review findings`` section for a draft PR.
+
+    The one writer of the section. Every value in it reaches GitHub, so each goes
+    through ``_flat``: credential values hidden as in the rest of the description, and
+    one line per item, so no item can start a heading of its own.
+    """
+    reason = _flat(draft_delivery.get("reason") or "unknown")
+    lines = [DRAFT_HEADING, "", f"**Reason:** {reason}", ""]
+    for item in draft_delivery.get("unresolved", []):
+        text = _flat(item.get("text", "") if isinstance(item, dict) else item)
+        source = _flat(item.get("source", "")) if isinstance(item, dict) else ""
+        rounds = item.get("rounds", []) if isinstance(item, dict) else []
+        parts = [f"- {text}"]
+        if source:
+            parts.append(f" (source: {source})")
+        if rounds and isinstance(rounds, list):
+            parts.append(f" (rounds: {', '.join(_flat(r) for r in rounds)})")
+        lines.append("".join(parts))
+    return "\n".join(lines)
+
+
+def _with_draft_section(body: str, draft_delivery: dict[str, Any]) -> str:
+    """``body`` with the draft section first, in place of any section an earlier delivery wrote."""
+    rest = _DRAFT_SECTION.sub("", body).lstrip("\r\n")
+    section = _draft_preamble(draft_delivery)
+    return f"{section}\n\n{rest}" if rest else f"{section}\n"
+
+
+def _prepend_draft_preamble(ctx: Any, draft_delivery: dict[str, Any]) -> None:
+    """Put the draft section first in the already-written PR body."""
+    body_path = Path(ctx.workdir) / BODY
+    existing_body = body_path.read_text() if body_path.exists() else ""
+    body_path.write_text(_with_draft_section(existing_body, draft_delivery))
+
+
+def _write_pr_text(ctx: Any, found: worktree.Worktree, *,
+                   draft_delivery: dict[str, Any] | None = None) -> str:
     """Write ``pull-request.md`` once and return the title.  The single call site."""
     title = _title(ctx)
     ctx.write_text(BODY, _body(ctx, found))
+    if draft_delivery:
+        _prepend_draft_preamble(ctx, draft_delivery)
     return title
 
 
 def _finish_commands(ctx: Any, found: worktree.Worktree, title: str,
-                     repo_slug: str | None = None) -> list[str]:
+                     repo_slug: str | None = None, *, draft: bool = False) -> list[str]:
     """Shell commands that finish a kept-local delivery from any directory.
 
     When ``repo_slug`` is provided it is used directly; otherwise the repository is
@@ -1963,10 +2148,13 @@ def _finish_commands(ctx: Any, found: worktree.Worktree, title: str,
         return []
     body_path = str(Path(ctx.workdir).resolve() / BODY)
     wt_path = str(Path(found.path).resolve())
+    pr_cmd = (f"gh pr create --repo {slug} --head {found.branch}"
+              f" --title {shlex.quote(title)} --body-file {shlex.quote(body_path)}")
+    if draft:
+        pr_cmd += " --draft"
     return [
         f"git -C {shlex.quote(wt_path)} push {shlex.quote(_url(slug))} {found.head}:refs/heads/{found.branch}",
-        (f"gh pr create --repo {slug} --head {found.branch}"
-         f" --title {shlex.quote(title)} --body-file {shlex.quote(body_path)}"),
+        pr_cmd,
     ]
 
 
@@ -1979,7 +2167,8 @@ def _record(ctx: Any, record: dict[str, Any]) -> None:
 
 
 def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
-               outcome: dict[str, Any], *, title: str = "") -> dict[str, Any]:
+               outcome: dict[str, Any], *, title: str = "",
+               draft_delivery: dict[str, Any] | None = None) -> dict[str, Any]:
     url = str(outcome["pull_request"])
     merge: MergeResult | None = outcome.get("merge")
     record: dict[str, Any] = {
@@ -2002,6 +2191,18 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
     if title:
         record["title"] = title
         record["pr_text"] = BODY
+    if draft_delivery:
+        record["draft"] = True
+        ev = ctx.read_json("authoring-evidence.json", None)
+        record["check_passed"] = bool(
+            ev and isinstance(ev.get("validation"), dict)
+            and ev["validation"].get("status") == "pass"
+        )
+        record["draft_reason"] = draft_delivery.get("reason", "")
+        # Where GitHub refused the draft (a ready "[draft] …" pull request, or an
+        # existing one it would not convert), the record says so.
+        if outcome.get("draft_note"):
+            record["draft_note"] = outcome["draft_note"]
     from refactory_dsh.create_ops import follow_ups
 
     left = follow_ups(ctx)
@@ -2009,8 +2210,18 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
         record["follow_ups"] = left
     _record(ctx, record)
     worktree.record_outcome(found, "succeeded")
-    projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status=outcome["status"])
+    if draft_delivery:
+        projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status="draft")
+    else:
+        projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status=outcome["status"])
     delivered_head = (merge.merge_commit if merge and merge.merge_commit else found.head)
+    if draft_delivery:
+        n_unresolved = len(draft_delivery.get("unresolved", []))
+        reason = _flat(draft_delivery.get("reason", ""))
+        note = f"; {outcome['draft_note']}" if outcome.get("draft_note") else ""
+        return {"delivery_result": (f"draft: {url}, at {delivered_head[:12]}, "
+                                    f"with {n_unresolved} unresolved item(s): {reason}{note}"),
+                "pull_request": url}
     return {"delivery_result": f"{outcome['status']}: {url}, at {delivered_head[:12]}"
                                + (f", with {len(left)} follow-up(s)" if left else ""),
             "pull_request": url}
@@ -2019,7 +2230,8 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
 def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, why: str,
           pull_request: str = "", pushed: str = "", *,
           title: str = "", finish: list[str] | None = None,
-          merge: MergeResult | None = None) -> dict[str, Any]:
+          merge: MergeResult | None = None,
+          draft_delivery: dict[str, Any] | None = None) -> dict[str, Any]:
     """Nothing delivered: say why, and where the work is, as a run warning unless the person chose it.
 
     ``pull_request`` is one GitHub already had for the branch, which stays in the record;
@@ -2041,6 +2253,14 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
     if title:
         record["title"] = title
         record["pr_text"] = BODY
+    if draft_delivery:
+        record["draft"] = True
+        ev = ctx.read_json("authoring-evidence.json", None)
+        record["check_passed"] = bool(
+            ev and isinstance(ev.get("validation"), dict)
+            and ev["validation"].get("status") == "pass"
+        )
+        record["draft_reason"] = draft_delivery.get("reason", "")
     # Do not print "to finish: git push" when the merge failed, as that would push
     # the reviewed commit without main — the exact problem this change fixes.
     if merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
@@ -2053,15 +2273,39 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
     # A run that delivers is succeeded only after its push (_delivered).
     # A run looping back for conflict resolution is NOT succeeded yet.
     if found is not None:
+        # The same rule with or without a draft: a draft kept local (--no-pr, a plan that
+        # changed) has no merge and is succeeded; an abandoned merge never is.
         if not (merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned)):
             worktree.record_outcome(found, "succeeded")
-        projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
-                                 status="pushed, no pull request" if pushed and not pull_request else "kept local")
+        if draft_delivery:
+            projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
+                                     status="draft")
+        else:
+            projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
+                                     status="pushed, no pull request" if pushed and not pull_request else "kept local")
     # Build the human-readable ``where`` from the finish commands.
     finish_cmds = finish or []
     if merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
         finish_cmds = []
     gh_cmd = next((cmd for cmd in finish_cmds if cmd.startswith("gh pr create")), "")
+    if draft_delivery:
+        n_unresolved = len(draft_delivery.get("unresolved", []))
+        reason = _flat(draft_delivery.get("reason", ""))
+        if pushed and gh_cmd:
+            where = (f"; the branch {branch} is already on GitHub, as {pushed}; to finish: {gh_cmd}")
+        elif finish_cmds:
+            where = f"; to finish: {' && '.join(finish_cmds)}"
+        elif found is not None:
+            body_path = str(Path(ctx.workdir).resolve() / BODY)
+            where = (f"; the work is on branch {branch}; pull request text is at {body_path}")
+        else:
+            where = ""
+        if found is not None and not approved.get("chosen"):
+            said = f"{pull_request} was not updated" if pull_request else "no pull request was opened"
+            target_guard.warn(f"{said}: {why}{where}")
+        return {"delivery_result": (f"not delivered (draft): {why}, "
+                                    f"with {n_unresolved} unresolved item(s): {reason}{where}"),
+                "pull_request": pull_request}
     if pushed and gh_cmd:
         where = (f"; the branch {branch} is already on GitHub, as {pushed}; to finish: {gh_cmd}")
     elif finish_cmds:
