@@ -2265,6 +2265,27 @@ themselves showed the finding form inside a code span, teaching reviewers
 the quoted form.
 
 **The rule.** `create_ops.MARKER_RULE` tells every reviewer to write the
+blocking marker only at the start of a finding line, in its plain form,
+to call it "the blocking marker" when discussing it, to write every real
+finding as a plain line outside any fenced code block, and to put an
+example of the format inside one, because fenced blocks are not read as
+findings. It is a prompt rule, so
+it makes a misread less likely rather than impossible. Every site that
+showed the finding format in a code span now shows it as plain text. The
+parser (`blocking_findings`) is unchanged: a real finding at the start of a
+line, outside a fenced block, a blockquote, or a section marked as a
+previous or superseded review, still blocks.
+
+**Held by.** `test_follow_ups.py::test_every_reviewer_carries_marker_rule`,
+`test_follow_ups.py::test_every_lowered_node_that_asks_for_findings_carries_the_rule`,
+`test_follow_ups.py::test_marker_rule_keeps_its_wording`,
+`test_follow_ups.py::test_verifier_prompt_carries_marker_rule`,
+`test_follow_ups.py::test_no_reviewer_prompt_shows_blocking_in_code_span`,
+`test_follow_ups.py::test_verifier_prompt_no_code_span_blocking`,
+`test_follow_ups.py::test_no_lowered_prompt_uses_the_marker_in_prose`,
+`test_gate_stale_findings.py::test_fenced_code_blocking_is_skipped`,
+`test_gate_stale_findings.py::test_reviewer_prompts_ask_for_structured_blocking_format`.
+
 ## 30. Draft delivery (dm-224)
 
 ### What it is
@@ -2298,9 +2319,9 @@ build-loop limit and ended with nothing delivered:
 ### What report and deliver do on a draft run
 
 - `report_artifact` calls `require_current_evidence` (the evidence-currency
-  checks factored out of `current_problems`) instead of `require_completion`.
-  It requires current evidence for the pushed commit but not the review sign-off
-  or a passing check.
+  checks factored out of `current_problems` via `_evidence_currency_problems`)
+  instead of `require_completion`.  It requires current evidence for the pushed
+  commit but not the review sign-off or a passing check.
 - `deliver_design` opens the PR with `--draft` and prepends a "## Unresolved
   review findings" section listing the reason and each unresolved item.
 - On a base conflict or failing merged-result check, delivery drops the merge
@@ -2325,24 +2346,3 @@ build-loop limit and ended with nothing delivered:
 - `refactory/tests/test_delivery.py::test_draft_conflict_existing_open_pr`
 - `refactory/tests/test_delivery.py::test_draft_no_pr_mode`
 - `refactory/tests/test_delivery.py::test_spine_draft_delivery_across_processes`
-
-blocking marker only at the start of a finding line, in its plain form,
-to call it "the blocking marker" when discussing it, to write every real
-finding as a plain line outside any fenced code block, and to put an
-example of the format inside one, because fenced blocks are not read as
-findings. It is a prompt rule, so
-it makes a misread less likely rather than impossible. Every site that
-showed the finding format in a code span now shows it as plain text. The
-parser (`blocking_findings`) is unchanged: a real finding at the start of a
-line, outside a fenced block, a blockquote, or a section marked as a
-previous or superseded review, still blocks.
-
-**Held by.** `test_follow_ups.py::test_every_reviewer_carries_marker_rule`,
-`test_follow_ups.py::test_every_lowered_node_that_asks_for_findings_carries_the_rule`,
-`test_follow_ups.py::test_marker_rule_keeps_its_wording`,
-`test_follow_ups.py::test_verifier_prompt_carries_marker_rule`,
-`test_follow_ups.py::test_no_reviewer_prompt_shows_blocking_in_code_span`,
-`test_follow_ups.py::test_verifier_prompt_no_code_span_blocking`,
-`test_follow_ups.py::test_no_lowered_prompt_uses_the_marker_in_prose`,
-`test_gate_stale_findings.py::test_fenced_code_blocking_is_skipped`,
-`test_gate_stale_findings.py::test_reviewer_prompts_ask_for_structured_blocking_format`.

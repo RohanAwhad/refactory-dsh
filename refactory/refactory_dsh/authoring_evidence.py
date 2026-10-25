@@ -431,6 +431,32 @@ def record_skip(workdir: Path, node: str, provenance: dict[str, str]) -> dict[st
     return record(context, outcome)
 
 
+def _evidence_currency_problems(ctx: Any) -> list[str]:
+    """The evidence-currency checks shared by ``current_problems`` and ``require_current_evidence``.
+
+    Checks: evidence exists, identity matches the current artifact and intent,
+    settings match the current knobs, receipt hashes are intact, and runtime
+    outputs match.  Does NOT check ``validation.status``, worker sign-offs,
+    intent audit, or correction audit.
+    """
+    if not ctx.exists(EVIDENCE):
+        return ["authoritative runtime evidence is missing"] if ctx.facts.get("runtime_evidence") else []
+    evidence = ctx.read_json(EVIDENCE, {})
+    now = delivery_identity(ctx.workdir)
+    problems: list[str] = []
+    if now is None or now["identity"] != digest(evidence.get("identity")):
+        problems.append("artifact, accepted inputs or user intent changed after validation; rerun validation and reviews")
+    if evidence.get("settings") != {key: ctx.knob(key, None) for key in SETTINGS}:
+        problems.append("validation inputs or comparison policy changed after execution")
+    for name_, expected in evidence.get("receipts", {}).items():
+        path = ctx.workdir / name_
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            problems.append(f"authoritative receipt {name_} changed after validation")
+    if "outputs" in evidence and evidence["outputs"] != runtime_outputs(ctx):
+        problems.append("canonical runtime output files changed after validation")
+    return problems
+
+
 def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
     """Legacy reports remain readable; new evidence cannot authorize old sign-off."""
     # Check skip provenance before the early return.
@@ -457,23 +483,15 @@ def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
                 return ["authoritative runtime evidence is missing"]
         else:
             return ["authoritative runtime evidence is missing"]
+    # Currency checks (identity, settings, receipts, outputs) — factored into
+    # ``_evidence_currency_problems`` so ``require_current_evidence`` shares them.
+    problems = _evidence_currency_problems(ctx)
     if not ctx.exists(EVIDENCE):
-        return ["authoritative runtime evidence is missing"] if ctx.facts.get("runtime_evidence") else []
+        return problems  # _evidence_currency_problems already handled the missing-evidence case
     evidence = ctx.read_json(EVIDENCE, {})
     now = delivery_identity(ctx.workdir)
-    problems = []
-    if now is None or now["identity"] != digest(evidence.get("identity")):
-        problems.append("artifact, accepted inputs or user intent changed after validation; rerun validation and reviews")
     if not person_skip_accepted and evidence.get("validation", {}).get("status") != "pass":
         problems.append("required runtime validation did not pass")
-    if evidence.get("settings") != {key: ctx.knob(key, None) for key in SETTINGS}:
-        problems.append("validation inputs or comparison policy changed after execution")
-    for name_, expected in evidence.get("receipts", {}).items():
-        path = ctx.workdir / name_
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            problems.append(f"authoritative receipt {name_} changed after validation")
-    if "outputs" in evidence and evidence["outputs"] != runtime_outputs(ctx):
-        problems.append("canonical runtime output files changed after validation")
     if workers:
         from refactory_dsh.agent_delivery import receipts_in
 
@@ -1402,24 +1420,11 @@ def require_current_evidence(ctx: Any) -> None:
 
     Used by ``report_artifact`` on the draft path: a draft delivery requires
     current evidence but not a passing check or review sign-off.
+
+    Calls ``_evidence_currency_problems`` — the same function ``current_problems``
+    calls for its currency checks — so the two can never diverge.
     """
-    if not ctx.exists(EVIDENCE):
-        if ctx.facts.get("runtime_evidence"):
-            raise ValueError("authoritative runtime evidence is missing")
-        return  # no evidence expected
-    evidence = ctx.read_json(EVIDENCE, {})
-    now = delivery_identity(ctx.workdir)
-    problems: list[str] = []
-    if now is None or now["identity"] != digest(evidence.get("identity")):
-        problems.append("artifact, accepted inputs or user intent changed after validation; rerun validation and reviews")
-    if evidence.get("settings") != {key: ctx.knob(key, None) for key in SETTINGS}:
-        problems.append("validation inputs or comparison policy changed after execution")
-    for name, expected in evidence.get("receipts", {}).items():
-        path = ctx.workdir / name
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            problems.append(f"authoritative receipt {name} changed after validation")
-    if "outputs" in evidence and evidence["outputs"] != runtime_outputs(ctx):
-        problems.append("canonical runtime output files changed after validation")
+    problems = _evidence_currency_problems(ctx)
     if problems:
         raise ValueError("evidence is not current: " + "; ".join(problems))
 

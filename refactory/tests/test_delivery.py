@@ -1415,37 +1415,44 @@ def test_draft_no_evidence_refused(github, tmp_path):
 
 def test_no_draft_fact_requires_signoff(github, tmp_path):
     """Without draft_delivery, a run whose sign-off is missing is refused by report.
-    With the fact, the same run delivers a draft."""
+    With the fact, the same run delivers a draft (evidence is current, only sign-off missing)."""
     from refactory_dsh.design_ops import report_artifact
     from refactory_dsh.nn.executor import RunContext
+    from refactory_dsh.authoring_evidence import SETTINGS
 
     run = tmp_path / "run_signoff"
     # Run a full design first to set up the worktree and evidence.
     result_normal = _design(run)
     assert result_normal.exit_ok, result_normal.error
 
-    # Now call report_artifact directly without the fact, but with tampered evidence
-    # to make the sign-off stale.
+    # Tamper the evidence to make the validation status "fail".
+    # This makes require_completion fail ("required runtime validation did not pass")
+    # but require_current_evidence pass (it does not check validation.status).
+    ev_path = run / "authoring-evidence.json"
+    ev = json.loads(ev_path.read_text())
+    ev["validation"]["status"] = "fail"
+    ev_path.write_text(json.dumps(ev))
+
+    # Build knobs from the evidence so currency checks pass.
+    knobs = {key: ev.get("settings", {}).get(key) for key in SETTINGS}
+
+    # Without the fact: report refuses with sign-off error.
     facts = dict(result_normal.facts)
     facts.pop("draft_delivery", None)
-
-    # Tamper the evidence identity to make sign-off stale.
-    ev_path = run / "authoring-evidence.json"
-    if ev_path.exists():
-        ev = json.loads(ev_path.read_text())
-        ev["identity"] = {"root": "/nonexistent", "files": {}}
-        ev_path.write_text(json.dumps(ev))
-
-    ctx = RunContext(run, facts=facts, enforce_writes=False)
+    ctx = RunContext(run, knobs=knobs, facts=facts, enforce_writes=False)
     with pytest.raises(ValueError, match="sign-off is incomplete or stale"):
         report_artifact(ctx)
 
-    # Now with the fact, the same stale evidence causes a different error
-    # (evidence not current), not a sign-off error.
+    # With the fact: the same run delivers a draft (require_current_evidence passes).
     facts["draft_delivery"] = DRAFT_FACT
-    ctx2 = RunContext(run, facts=facts, enforce_writes=False)
-    with pytest.raises(ValueError, match="evidence is not current"):
-        report_artifact(ctx2)
+    ctx2 = RunContext(run, knobs=knobs, facts=facts, enforce_writes=False)
+    report_result = report_artifact(ctx2)
+    assert "designed" in report_result
+
+    # Complete the draft delivery.
+    facts.update(report_result)
+    outcome = delivery.deliver_design(RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
+    assert outcome["delivery_result"].startswith("draft:"), outcome["delivery_result"]
 
 
 def test_draft_conflict_with_base(github, tmp_path, monkeypatch):
@@ -1681,21 +1688,45 @@ def test_draft_no_pr_mode(github, tmp_path):
 
 
 def test_spine_draft_delivery_across_processes(github, tmp_path, monkeypatch):
-    """The spine carries draft_delivery across processes via facts.json."""
-    # This test verifies the spine path by running deliver_design directly
-    # with draft_delivery in the context facts, simulating what node_runner.run_node
-    # does (it reads from facts.json).
+    """The spine carries draft_delivery across processes via facts.json.
+
+    Uses ``node_runner.run_node`` (separate processes, as the spine runs them),
+    with the fact in the run's facts file, and shows the draft opening on the
+    fake GitHub.
+    """
+    from refactory_dsh import lowering, design_ops
+    from refactory_dsh.run import run_node
+
     run = tmp_path / "run_spine"
-    # First do a normal run to set up the worktree and evidence.
+    # First do a normal run to set up the worktree, evidence and delivery plan.
     result = _design(run)
     assert result.exit_ok, result.error
 
-    # Now call deliver_design with draft_delivery in the facts.
-    facts = dict(result.facts)
+    # Write the draft_delivery fact into facts.json on disk — the spine's channel.
+    facts = json.loads((run / "facts.json").read_text()) if (run / "facts.json").exists() else {}
+    facts.update(result.facts)
     facts["draft_delivery"] = DRAFT_FACT
+    (run / "facts.json").write_text(json.dumps(facts))
 
-    outcome = delivery.deliver_design(nn.RunContext(run, facts=facts, enforce_writes=False))
-    assert outcome["delivery_result"].startswith("draft:"), outcome["delivery_result"]
+    # Write declarations so run_node can look up the node's reads/writes/produces.
+    lowering.write_declarations(DesignMode().state_dict(), run)
+
+    # Read the evidence's settings so run_node's knobs match the evidence currency check.
+    ev_path = run / "authoring-evidence.json"
+    ev = json.loads(ev_path.read_text()) if ev_path.exists() else {}
+    knobs = dict(ev.get("settings", {}))
+    knobs["check_timeout_s"] = 180
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps(knobs))
+
+    # Run report through run_node (reads draft_delivery from facts.json).
+    run_node(f"{design_ops.__name__}:report_artifact", workdir=run, node_id="report")
+
+    # Run deliver through run_node.
+    run_node("refactory_dsh.delivery:deliver_design", workdir=run, node_id="deliver")
+
+    # Read back the facts run_node persisted to disk.
+    saved = json.loads((run / "facts.json").read_text())
+    assert saved["delivery_result"].startswith("draft:"), saved["delivery_result"]
 
     # The fake gh saw --draft (for the existing PR, it's pr ready --undo).
     calls = _calls(tmp_path)

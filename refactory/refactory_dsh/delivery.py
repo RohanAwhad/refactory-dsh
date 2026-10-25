@@ -842,21 +842,23 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     repo_slug = now.get("repo") or approved.get("repo")
     finish = _finish_commands(ctx, found, title, repo_slug, draft=bool(draft_delivery))
     if now["action"] == "none":
-        result = _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish)
+        result = _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish,
+                       draft_delivery=draft_delivery)
         result["delivery_conflict_files"] = []
         return result
     if not matches(now, approved) or now.get("branch") != approved.get("branch"):
         result = _kept(ctx, approved, found, f"delivery would now be different from what the approval gate "
                                              f"showed: it {now['summary']}",
-                       title=title, finish=finish)
+                       title=title, finish=finish, draft_delivery=draft_delivery)
         result["delivery_conflict_files"] = []
         return result
     try:
         outcome = _deliver(ctx, found, now, title=title, draft_delivery=draft_delivery)
     except NotDelivered as reason:
         merge = reason.merge
+        updated_dd = getattr(reason, '_draft_delivery', draft_delivery)
         result = _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed,
-                       title=title, finish=finish, merge=merge, draft_delivery=draft_delivery)
+                       title=title, finish=finish, merge=merge, draft_delivery=updated_dd)
         if merge is not None and merge.conflicts:
             result["delivery_conflict_files"] = merge.conflicts
             result["delivery_conflict_detail"] = merge.conflict_detail
@@ -893,7 +895,8 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                         worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
                 except ValueError:
                     worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
-    result = _delivered(ctx, approved, found, outcome, title=title, draft_delivery=draft_delivery)
+    updated_dd = outcome.get("_draft_delivery", draft_delivery)
+    result = _delivered(ctx, approved, found, outcome, title=title, draft_delivery=updated_dd)
     result["delivery_conflict_files"] = []
     return result
 
@@ -981,13 +984,25 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
     # ── rewrite the PR body with merge information ────────────────────
     if not draft_conflict_item and (merge.merge_commit or merge.conflicts or merge.check_failed or merge.abandoned):
         ctx.write_text(BODY, _body(ctx, found, merge=merge))
+        # On a draft run, re-prepend the preamble after the body rewrite.
+        if draft_delivery:
+            _prepend_draft_preamble(ctx, draft_delivery)
 
     if planned["action"] == "refine":
         url = str(planned["pull_request"])
         before = json.loads(_gh("pr", "view", url, "--json", "headRefOid")).get("headRefOid")
         _push(path, slug, push_head, branch, default="")
         status = "already updated" if before == push_head else "updated"
-        return {"status": status, "merge": merge,
+        if draft_delivery:
+            # Convert the existing refined PR to a draft and prepend the preamble.
+            _gh("pr", "ready", "--undo", url)
+            body_path = Path(ctx.workdir) / BODY
+            old_body = json.loads(_gh("pr", "view", url, "--json", "body")).get("body", "")
+            preamble = _draft_preamble(draft_delivery)
+            new_body = preamble + "\n\n" + old_body if old_body else preamble
+            body_path.write_text(new_body)
+            _gh("pr", "edit", url, "--body-file", str(body_path))
+        return {"status": status, "merge": merge, "_draft_delivery": draft_delivery,
                 "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
     if planned["action"] == "create":
         _create(Path(found.target), slug, str(planned["visibility"]))
@@ -1015,17 +1030,17 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
             new_body = preamble + "\n\n" + old_body if old_body else preamble
             body_path.write_text(new_body)
             _gh("pr", "edit", url, "--body-file", str(body_path))
-            return {"status": "updated", "merge": merge,
+            return {"status": "updated", "merge": merge, "_draft_delivery": draft_delivery,
                     "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
         status = "already open" if existing.get("headRefOid") == push_head else "updated"
         url = str(existing["url"])
-        return {"status": status, "merge": merge,
+        return {"status": status, "merge": merge, "_draft_delivery": draft_delivery,
                 "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
     body = Path(ctx.workdir) / BODY
     opened = _after_push(lambda: _open(path, slug, branch, str(planned["into"]), title, body,
                                        draft=bool(draft_delivery)), slug, branch)
     url = next((line.strip() for line in reversed(opened.splitlines()) if "/pull/" in line), opened.strip())
-    return {"status": "opened", "merge": merge,
+    return {"status": "opened", "merge": merge, "_draft_delivery": draft_delivery,
             "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
 
 
