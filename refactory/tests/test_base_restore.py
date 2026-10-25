@@ -901,10 +901,10 @@ def test_e2e_design_survives_guarded_test(tmp_path, monkeypatch):
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER,
-        first_emit, VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,  # reviews after first attempt (if they run)
-        second_emit, VERIFICATION_ANSWER,
-        *REVIEW_ANSWERS,
+        # The first attempt's failing test goes back from the self-check, before any
+        # review runs (b41a); the reviews run once, on the second emission.
+        first_emit, second_emit,
+        *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3],
     ]
     # Allow enough answers for a two-attempt run
     answers = answers + [""] * 20

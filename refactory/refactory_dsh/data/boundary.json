@@ -105,7 +105,8 @@
     "refactory_dsh.builder_probe",
     "refactory_dsh.feedback_refill",
     "refactory_dsh.changed_functions",
-    "refactory_dsh.patch_scope"
+    "refactory_dsh.patch_scope",
+    "refactory_dsh.test_selection"
   ],
   "allowed_leaks": {
     "refactory_dsh.run": [

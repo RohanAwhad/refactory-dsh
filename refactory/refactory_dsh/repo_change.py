@@ -959,8 +959,13 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
         )
     # No drift warning: the run's base is pinned, so a moving checkout changes nothing it sees.
     attempt = len(worktree.git(path, "rev-list", f"{found.base}..HEAD").split()) + 1
+    # An emission after a self-check fix-up (`design_ops._self_check_fixup`) finishes the
+    # attempt the self-check sent back, so it is amended into it, and the branch keeps one
+    # commit an attempt.
+    fixup = bool(int(ctx.facts.get("self_check_fixup_count") or 0))
     try:
-        advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)
+        advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}",
+                                           deletes, amending=fixup)
     except BaseException:
         # On any commit failure during a merge, abort so the worktree is clean.
         if merge_in_progress:

@@ -1803,6 +1803,13 @@ the base, the next check runs those tests first through the
 targeted-command builder (`build_probe_command`), with a short timeout of
 `min(check_timeout_s // 3, 120)`.
 
+In `prepare_check` the pre-pass is now part of the self-check (b41a, below): the last check's failing tests join the self-check's selection, and
+`prepare_check` has one test-running path. A test that failed in the last check
+and still fails now gets up to `self_check_fixups` (2) fix-ups, spending no
+attempt, before the early stop spends one; before, it spent one at once. The
+pre-pass's other callers, `check_artifact` and design_fast's `focused_check`,
+pass no selection and are unchanged.
+
 **Early stop**: the pre-pass stops early — skipping the full check — only
 when **all** of the following hold:
 
@@ -1839,6 +1846,161 @@ pre-pass uses at most `min(budget // 3, 120)` plus one install (normally a
 cache hit), which the `3 × INSTALL_TIMEOUT_S` slack absorbs.  The total of
 pre-pass + full check ≤ `4/3 × budget`, well within the `3 × budget` in the
 envelope.  b33b extracts the envelope and will adjust if needed.
+
+
+## Self-check inside the attempt (b41a)
+
+### Why
+
+Two runs on 2026-10-24 (b39a, b39b) failed round 1 only on mechanical failures,
+and each cost a full round: a second emit and a second review fork.
+
+- **b39a**: 5 of 2,841 pytest tests failed: a lowering snapshot not regenerated,
+  two tests pinning the old node list, and two whose scripted answers fell out of
+  order. The mechanical round cost about $60 and 37 min.
+- **b39b**: 14 of 2,835 failed: a new core-to-product import (the boundary test),
+  ten "every mode validates" tests (V7: a knob no node consumed), two snapshot
+  tests and one test pinning the replaced behaviour. That round cost about $90 and
+  49 min.
+
+### What runs, and when
+
+`prepare_check` runs the self-check (`design_ops._self_check`) on every applied
+attempt, round 1 included: after `prepare_attempt` has installed, run `generate`
+(amending what it writes into the attempt) and run `setup`, and before the review
+fork. The repository's `docs:generate` now also regenerates the lowering
+snapshots (`regenerate_snapshots`), so the run's generate step keeps them current.
+It runs the selected tests in the attempt's prepared worktree through
+`repo_change.run_check(prepared=True)` and `check_digest.build_probe_command`.
+
+### The selection (`test_selection`)
+
+The engine reads the repository's own imports; it names no test or file.
+
+- **On a fix-up, the tests the last self-check found failing,** first, as ids.
+- **Engine tests, when the emission changed a hub.** A hub is a source
+  module at least a quarter of the check's Python test files import (here the
+  `nn` package, the registry and the design graph). The engine tests are the
+  structural tests, which import no module of the repository (they read it as
+  files: the boundary record, the docs), and the tests that import every hub,
+  the ones built on the whole engine (lowering smoke, the edit-design tests with
+  their mode validation, the design worktree tests).
+- **The test files the emission touched.**
+- **The last check's failures** that are not inherited (dm-128's set), as ids.
+- **The tests that import a changed module**, depth 1 (`from package import name`
+  resolves to the submodule), and the structural tests when a source changed but no
+  hub did: **cheapest first**, so a slow file at the limit does not hide cheap ones
+  behind it. A file's cost is the seconds an earlier self-check of the run timed it
+  at (a chunk's time shared among its files by size), else its size, put in seconds
+  at the rate the timed files ran.
+
+Only tests the check's pytest steps collect are selected (their path arguments),
+and the hubs are counted among them. A TypeScript runner gets only the spec files
+the emission touched: the check's own `vitest run` has no related-file selection
+(`--related` is an unknown option to it, and `vitest related` is a different
+command), so a source change selects no spec, and a Python-only selection never
+starts the vitest step. Docs (`.md`, `.rst`, `.txt`) and generated files select
+nothing; a docs-only emission runs nothing.
+
+A test file is passed whole to its runner (`build_probe_command(test_files=…)`):
+pytest and vitest both take a file path where they take a test id.
+
+### The cut
+
+The selection is cut, in order, into about `SELF_CHECK_CHUNKS` (6) chunks of at most
+`SELF_CHECK_CHUNK_FILES` (4) tests, so a chunk the limit stops loses little, each its
+own targeted command and each holding one runner's tests: the targeted command
+keeps the check's `&&` between steps, so a failing vitest step would otherwise
+stop the Python files beside it. The limit is `min(self_check_timeout_s, check_timeout_s // 3)` (300 s
+with the lab's 1,800 s check). No chunk starts once the limit is spent; a chunk
+still running at the limit is stopped and does not count, because a killed runner
+names no failure, but every finished chunk's failures do. A chunk that reports
+nothing (no failure named, its environment failed) ran nothing that counts, so its
+tests are recorded as not run. A module that does not import is that file's
+failure (pytest's `ERROR <file>` line); pytest then stops before the chunk's other
+tests, so they run again without it. The record says what ran and what was cut,
+and how long each chunk took.
+
+### Only the change's failures go back
+
+A failure counts only by the check's own rule (`base_check.compare_failures`).
+Failures that could be inherited (the change did not touch their file and neither
+the brief nor the design names them) are looked up on the base
+(`base_check.targeted_base_failures`): the check's cached base result when there
+is one; otherwise only those tests run in the base worktree base_check prepares,
+after the run's generate and setup there, with the base's own HOME. What a base
+run learns about a test is kept (`.refactory/base-targeted.json`), with whether the
+base was prepared for that base commit, setup and generate, so a fix-up runs only
+new tests there and does not prepare the base again. A failure id the parser cut
+(a parametrized test whose parameter holds a space, `test_x[a b]` read as
+`test_x[a`) cannot be passed back to pytest, so its whole file runs instead, on the
+base and on a fix-up's rerun. A base that cannot be prepared, runs out of time or
+names no result is unavailable, and then nothing is inherited.
+
+### The fix-up, and its bound
+
+The change's failures go back to emit through prepare_check's existing reloop, as
+a refused emission does: `validation` carries them on the walker and the
+verdict's reason on the spine. The feedback leads with "self-check fix-up N of M",
+then the failing ids, their digest, the design's `[left: …]` constraint lines
+(R5), and the failures that are the base's. Nothing is spent: `attempts_used`,
+`check_attempts_used` and `review_attempts_used` do not move, and no review runs.
+The next emission is amended into the attempt (`worktree.commit_attempt(amending=True)`,
+which stages with the attempt's guards and commits through `worktree.amend`), so an
+attempt stays one commit. The reviewers still see what sent the attempt back
+before its fix-ups (`review_feedback`).
+
+- At most `self_check_fixups` (2) fix-ups an attempt, and `self_check_fixups ×
+  check_attempts` (6) a run (`self_check_fixup_count`, `total_self_check_fixups_used`).
+- Past either bound a still-failing self-check is the early stop, which spends
+  the attempt (`repair(…, early_stop=True)`); b39b's limits then apply unchanged.
+- A refused fix-up emission counts toward b39b's refusal bound like any other. A
+  fix-up that takes the attempt back to the commit it builds on is refused too
+  ("the emission undoes the whole attempt"), rather than amended into an empty
+  commit, which git refuses. When the generate step's amendment is what empties the
+  attempt (it regenerates the only files the attempt still changed), it is kept as
+  an attempt that changes nothing (`--allow-empty`), checked and reviewed as such.
+- A result that says nothing (a chunk stopped at the limit, a runner it cannot
+  target, nothing collected, a failure that names no test) goes on to the reviews
+  and the whole check.
+
+prepare_check's `max_iterations` follows the knobs (`design.prepare_check_iterations`,
+applied by `DesignMode.graph` and `DesignMode.state_dict`, so the walker and the
+lowered graph get the same number). Its reloops are fix-ups, early stops and
+refusals: applied emissions are at most the attempts (`check_attempt_cap` when it is
+above `check_attempts`) plus the run's fix-ups, each after at most
+`refusal_attempts − 1` refusals, so the limit is
+(attempts + fix-ups + 1) × refusals + fix-ups + attempts + 1: 45 with the defaults
+((8 + 6 + 1) × 2 + 6 + 8 + 1), 102 at the knobs' upper bounds. Both runtimes count it
+per gate (the walker's `_count_retry`, the spine's `reloopCap`), and b39b's stop
+always ends the run first.
+
+### The record
+
+Each self-check appends one line to `self-check-record.jsonl` in the run
+directory: the attempt, the commit, the fix-ups before it, the selection and how
+it was made, what ran and what was cut, the commands, the limit, the duration,
+the outcome (`pass`, `fixup`, `exhausted`, `inherited`, `inconclusive`,
+`nothing selected`), the failing ids, the ones inherited and what the base said.
+It also prints one `refactory: self-check …` line, as a gate logs. `refactory
+status` shows a fix-up through the lines it already prints: the gate's reloop
+reason and `validation`.
+
+### Tests
+
+`refactory/tests/test_self_check.py`: the loop through the walker's design graph
+(a stale generated file and a pinned test fixed inside the attempt; a clean
+emission; the bound and the early stop; the worst case with two refusals before
+every applied emission ending in the build-loop stop, at the defaults and at the
+knobs' bounds; a fix-up that undoes the attempt; a fix-up generate empties; the
+whole check still binding after a cut self-check), the base comparison (a new
+failure goes back and the base's does not; a base out of time, a base run naming
+nothing and a base whose generate fails let nothing be inherited; the base's own
+HOME; knowledge from another base not reused; the base prepared once), the cut
+with real chunks (a slow file at the limit, a module that does not import), an
+inconclusive self-check, a docs-only emission, the spine across node processes,
+the run cap, the amendment path, design_fast and `check_artifact` unchanged, the
+selection's order, and b39a's and b39b's attempt-1 changes as fixtures.
 
 
 ## Stuck detection (dm-128)
