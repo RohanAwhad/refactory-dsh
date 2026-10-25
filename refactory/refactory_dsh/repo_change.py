@@ -755,9 +755,10 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
     already in the last attempt -- does not end the run: it is recorded as
     ``emission_refused``, and the check sends the reason back to emit.
     """
-    # Sweep dead probes before proceeding
-    from refactory_dsh.builder_probe import sweep_dead_probes
+    # Sweep dead probes and warm clones before proceeding
+    from refactory_dsh.builder_probe import sweep_dead_probes, sweep_warm_clones
     sweep_dead_probes(ctx.workdir)
+    sweep_warm_clones(ctx.workdir)
     try:
         found = worktree.recorded(ctx.workdir)
         # Cleared only once set, so a run whose graph predates the fact still materialises.
