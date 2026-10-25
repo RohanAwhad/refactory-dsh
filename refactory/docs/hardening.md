@@ -38,7 +38,7 @@ they reach the refill logic only through the entry point.
 The emit prompt's "do not apply or test your change anywhere" exists because
 direct edits to the worktree bypass materialise and the check.  The builder probe
 gives a safe alternative.  Since dm-133, the probe is also available to
-`design_doc` and `design_review` via `--command` (no `--emission`); the clone
+`design_doc` via `--command` (no `--emission`); the clone
 runs at the run's base with `emission=None`, and the same isolation guarantees
 apply:
 
@@ -736,7 +736,7 @@ and the fail-open case when no run is open.
 **Which gates enforce this.**
 
 - **`gate_qa`** and **`gate_overwatch`** (both in `create_ops.py`) enforce this. Both call `scope_filter_findings()` on the raw blocking findings before deciding whether to reloop.
-- **`gate_design_review`** (`design_ops.py`) does not need it — it reloops to `design_doc`, which can fix `design.md`.
+- **`gate_design_review`** (`design_ops.py`) does not need it — it reads no review prose, and reloops to `design_doc` only when `design.md` has no `## Changes`.
 - **`check_artifact`** (`design_ops.py`) does not need it — its findings come from test runner output (assertion errors, test names), not from free-form review text parsed by `blocking_findings()`.
 - **`fast_ops.gate_qa`** (`fast_ops.py`) does not need it — it uses structured JSON checks from `focused-qa.json`, not `blocking_findings()` on review prose.
 - **`fast_ops.gate_emit`** (`fast_ops.py`) does not need it — it reloops on materialise refusals, not review findings.
@@ -1770,7 +1770,7 @@ write to the target bypasses every step after emit.
 ### Scope
 
 The refusal applies to every agent node of a worktree run, not only output-only
-nodes. Reviewers, the verifier, overwatch, design_review, apply_corrections and
+nodes. Reviewers, the verifier, overwatch, apply_corrections and
 expanded researchers are all guarded.
 
 Concurrent runs on one target refuse each other's in-flight nodes when either
@@ -2285,3 +2285,115 @@ previous or superseded review, still blocks.
 `test_follow_ups.py::test_no_lowered_prompt_uses_the_marker_in_prose`,
 `test_gate_stale_findings.py::test_fenced_code_blocking_is_skipped`,
 `test_gate_stale_findings.py::test_reviewer_prompts_ask_for_structured_blocking_format`.
+
+## 30. One design pass
+
+### Evidence
+
+On full runs b39a, b39b, b40a and b41a (2026-10-24/25) the design phase took 81–87
+minutes, against a target of about 35–40 (and under 10–15 for a small change).
+
+- `design_doc` was written three or four times, about 32–35 minutes. `check_design_claims`
+  sent it back for a line that had drifted ("quote not found near line 940 … found at
+  line 944"), for a quote with "…" in it, and for an ambiguous bare file name
+  ("run.py is ambiguous"): 13–33 minutes per run.
+- The design-review agent took 9–23 minutes per round, and the `design_doc` rewrite its
+  BLOCKING findings triggered made it 38–54 minutes per full run. It still missed what
+  the person at the gate had to correct.
+
+### The rule
+
+Design mode's design phase now runs like remote-factory's: research, strategy and
+design go straight to the person's gate, and that gate is the design check.
+
+- **No design reviewer.** The `design_review` agent node and the `route_design_review`
+  gate are removed, not renamed: `design_doc → check_design_claims → gate_design_review →
+  gate_strategy` at every scale. A reviewer that cost 9–23 minutes a round and still
+  missed what the person corrected was not earning its place before a person who reads
+  the design anyway.
+- **A light template.** `design_doc` must write `## Summary`, `## Changes` (one bullet
+  per file and what changes) and `## Tests` (repo-relative ids and what each proves);
+  `apply_corrections` adds `## Corrections at approval`. Every other section is optional,
+  and every consumer of one treats its absence as a design without it
+  (`design_contract.REQUIRED_SECTIONS`; docs/models.md has the table).
+- **One pass.** `gate_design_review` sends a design back only when `## Changes` is missing
+  or empty (`design_contract.BUILD_SECTIONS`), at most `design_review_attempts` times
+  (default 1). It counts rewrites (`design_review_rewrites`), not visits, so a design the
+  person sends back at `gate_strategy` keeps its rewrite. Everything else it finds is
+  advisory and goes on the card; an optional section a design leaves out is not
+  checked. It never reads a review.
+- **The claims check resolves drift.** `check_design_claims` is an op, not a gate, so no
+  edge can send the design back from it.
+  - A quoted line that begins within ±20 lines (`QUOTE_WINDOW`) of its citation counts,
+    and the note says "cited N, found at M"; the nearest match wins, and blank lines
+    inside a quote that spans lines are skipped.
+  - A quote with "…" or "..." matches where its parts appear in order, all of them inside
+    that window.
+  - A bare or package-relative path names the one tracked file that ends with it. This
+    is `design_ops.cited_candidates`, the resolver `classify_scale` uses (dm-200).
+  - What still cannot be confirmed is an **unverified claim**: a quote not in the window,
+    a path not in the checkout or naming several files, an identifier the file does not
+    define, or a probe id `probes.jsonl` does not hold. It is listed first on the card,
+    as high severity.
+- **Research and pitfalls never fail a design run.** Design mode's `gate_research`
+  (`design_ops.gate_design_research`) and `gate_pitfalls` each send their step back once
+  only when it produced nothing parseable, then proceed with whatever exists. Everything
+  else — a plan outside 3–5 directions, an empty field, a pitfall with bad evidence — is
+  listed on the card (`research_advisory`, `pitfalls_advisory`). Create mode keeps
+  `create_ops.gate_research` exactly as it was; both use `create_ops.research_problems`.
+  `research_attempts` and `pitfalls_attempts` are gone from design mode.
+
+### The card
+
+`design_review_status` builds the card, in this order:
+
+1. `Design review: PASS` or `FAIL, N unresolved`, with the section still missing.
+2. `Scale: <scoped|full> — <reason>`.
+3. `Unverified claims (high, advisory): N`.
+4. `Claims check (advisory): N notes`.
+5. `Other advisories: N`, with the research and pitfalls notes prefixed.
+
+`gate_strategy`'s question opens with the card.
+
+### Both runtimes
+
+The gates and the claims check are Python on both runtimes; the spine runs each as
+`python -m refactory_dsh.run`. Each node declares the facts it sets: `claims_check` and
+`claims_check_feedback` (`check_design_claims`), `research_advisory` and
+`pitfalls_advisory` (the two research gates). The design probe still reaches
+`design_doc`: `steering.design_probe_steps` finds the writer whose output a person's gate
+reads and a check between it and its reloop gate reads too, so it needs no reviewer.
+The probe's call-site review line (`design_probe_review`) went with the reviewer.
+
+`claims_check_attempts`, `research_attempts` and `pitfalls_attempts` are gone from
+design mode, because nothing reads them; validation V7 refuses an unused knob.
+
+### Tests that hold it
+
+- `test_design_one_pass.py::test_no_reviewer_runs_between_the_design_and_the_gate` (full, scoped)
+- `test_design_one_pass.py::test_drift_ellipsis_and_a_bare_name_cost_no_round`
+- `test_design_one_pass.py::test_an_unverified_claim_is_listed_first_and_costs_no_round`
+- `test_design_one_pass.py::test_a_design_missing_changes_goes_back_exactly_once`
+- `test_design_one_pass.py::test_a_rewrite_is_counted_not_a_visit`
+- `test_design_one_pass.py::test_the_gate_runs_through_the_node_runner` (proceed, reloop)
+- `test_design_one_pass.py::test_a_light_design_is_read_as_a_contract_design`
+- `test_design_one_pass.py::test_corrections_keep_a_light_design_and_restore_one_that_lost_its_changes`
+- `test_design_one_pass.py::test_research_with_one_direction_proceeds_with_a_card_note`
+- `test_design_one_pass.py::test_unparseable_research_goes_back_once_then_proceeds`
+- `test_design_one_pass.py::test_unparseable_pitfalls_go_back_once_then_proceed`
+- `test_design_one_pass.py::test_pitfalls_with_bad_entries_proceed_with_the_problems_listed`
+- `test_design_one_pass.py::test_create_research_gate_is_unchanged`
+- `test_design_claims.py::test_misplaced_quote_within_the_window_is_a_note`
+- `test_design_claims.py::test_quote_beyond_the_window_is_unverified`
+- `test_design_claims.py::test_an_ellipsis_quote_matches_its_parts_in_order`
+- `test_design_claims.py::test_an_ellipsis_quote_needs_its_parts_inside_the_window`
+- `test_design_claims.py::test_a_quote_that_begins_inside_the_window_counts`
+- `test_design_claims.py::test_the_nearest_match_in_the_window_is_the_one_noted`
+- `test_design_claims.py::test_a_quote_spanning_a_blank_line_matches`
+- `test_design_claims.py::test_a_bare_or_package_relative_path_names_its_one_tracked_file`
+- `test_design_scale.py::test_only_a_missing_or_empty_changes_section_sends_the_design_back`
+- `test_design_scale.py::test_a_light_design_passes_with_nothing_to_list`
+- `test_design_scale.py::test_every_scale_gets_one_rewrite_for_a_missing_section`
+- `test_design_contract_extensions.py::test_prompt_contract_requires_only_summary_changes_and_tests`
+- `test_design_contract_extensions.py::test_an_optional_section_left_out_is_not_checked`
+- `spine.spec.ts`: "a scoped change skips the perspectives step, and no reviewer runs at either scale"

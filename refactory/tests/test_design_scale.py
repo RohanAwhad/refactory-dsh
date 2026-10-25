@@ -2,12 +2,13 @@
 
 A scoped change (a refine, or one whose research footprint shows \u22642 existing functions
 touched \u2014 counted by (path, name) \u2014 nothing new added, no shared engine changed) gets at
-most five pitfalls, one strategy perspective and one design-review round.  Non-refine
-research is always 3 to 5 directions; classify_scale runs after research and sets the
-class from the footprint.  At every scale the design-review gate sends a design back only
-for an unmet ask, a false claim the design relies on, a missing high-risk pitfall or a
-blocking finding from the review agent; everything else is listed as advisory at the
-person's gate and costs no round.
+most five pitfalls, one strategy perspective.  Non-refine research is guided to 3 to 5 directions;
+classify_scale runs after research and sets the class from the footprint.  At every
+scale the design goes straight from the claims check to the design-review gate, which
+sends it back only when its ## Changes section is missing or empty, and once; everything
+else -- a misquote, a citation past the end of its file, an unanswered high-risk
+pitfall -- is listed as advisory at the person's gate and costs no round, and an
+optional section a design leaves out is not checked.
 """
 from __future__ import annotations
 
@@ -25,13 +26,9 @@ from refactory_dsh.design_ops import (
 )
 from test_design_contract_extensions import FakeCtx, _make_design
 
-PASSING_REVIEW = "No issues found.\n\nVERDICT: PASS"
-
-
 def _gate(design: str, *, brief: str = "a tool", scope: str = "full", source: str = "",
-          review: str = PASSING_REVIEW, pitfalls: list | None = None):
-    files = {"reviews/design-review.md": review, "design.md": design,
-             "brief.json": json.dumps({"brief": brief})}
+          pitfalls: list | None = None):
+    files = {"design.md": design, "brief.json": json.dumps({"brief": brief})}
     if pitfalls is not None:
         files["pitfalls.json"] = json.dumps(pitfalls)
     ctx = FakeCtx(
@@ -44,50 +41,86 @@ def _gate(design: str, *, brief: str = "a tool", scope: str = "full", source: st
 
 # ── what blocks ────────────────────────────────────────────────────────────────
 
-def test_a_missing_ask_mapping_still_sends_the_design_back():
-    ctx, verdict = _gate(_make_design(ask_mapping=False))
+def test_only_a_missing_or_empty_changes_section_sends_the_design_back():
+    ctx, verdict = _gate(_make_design().replace("## Changes", "## Notes"))
     assert verdict == "reloop"
-    assert "Ask mapping" in verdict.reason
-
-
-def test_a_citation_past_the_end_of_its_file_still_blocks(tmp_path):
-    (tmp_path / "tool.py").write_text("x = 1\ny = 2\n")
-    design = _make_design().replace("## Changes", "`x` at `tool.py:40`: `x = 1`\n\n## Changes")
-    ctx, verdict = _gate(design, source=str(tmp_path))
-    assert verdict == "reloop"
-    assert "tool.py has 2 lines, not 40" in verdict.reason
-
-
-def test_a_misquote_of_the_brief_still_blocks():
-    design = _make_design() + '\nThe brief says "remove the flag from the command".\n'
-    ctx, verdict = _gate(design, brief="Add the flag to the command.")
-    assert verdict == "reloop"
-    assert "does not appear verbatim in the brief" in verdict.reason
-
-
-def test_a_misquote_that_drops_a_negation_still_blocks():
-    # "able" is inside "unable": a word-level match must not accept the inverted quote.
-    design = _make_design() + '\nThe brief says "Able to overwrite files".\n'
-    ctx, verdict = _gate(design, brief="The tool is unable to overwrite files.")
-    assert verdict == "reloop"
-    assert "does not appear verbatim in the brief" in verdict.reason
-
-
-def test_a_missing_high_risk_pitfall_still_blocks():
-    ctx, verdict = _gate(_make_design(), pitfalls=[
-        {"id": "PIT-001", "risk": "high", "text": "the cache key ignores the base"}])
-    assert verdict == "reloop"
-    assert "PIT-001" in verdict.reason
+    assert "the build needs, or it is empty: ## Changes" in verdict.reason
+    # A heading with nothing under it is as missing as no heading.
+    ctx, verdict = _gate(_make_design().replace("- tool.py\n", ""))
+    assert verdict == "reloop" and "## Changes" in verdict.reason
+    # Rule and sites is optional now: a design without it goes to the person.
+    ctx, verdict = _gate(_make_design().replace("## Rule and sites", "## Notes"))
+    assert verdict == "proceed"
 
 
 # ── what is advisory ──────────────────────────────────────────────────────────
+
+def test_a_light_design_passes_with_nothing_to_list():
+    light = ("# Make the tool print what it built\n\n## Summary\n\nIt prints nothing now.\n\n"
+             "## Changes\n\n- `tool.py` \u2014 print the built name\n\n"
+             "## Tests\n\n- `tests/test_tool.py::test_build` \u2014 the name is printed\n")
+    ctx, verdict = _gate(light, pitfalls=[
+        {"id": "PIT-001", "risk": "high", "text": "the cache key ignores the base"}])
+    assert verdict == "proceed"
+    assert ctx.facts["design_review_advisory"] == ""
+    assert ctx.facts["design_review_status"] == "Design review: PASS"
+    # No Anti-patterns section: the pitfalls are not checked against it.
+    assert "not checked" in ctx.facts["pitfall_coverage"]
+
+
+def test_a_missing_summary_or_tests_section_is_listed():
+    ctx, verdict = _gate(_make_design().replace("## Tests", "## Notes")
+                         .replace("## Summary", "## Notes"))
+    assert verdict == "proceed"
+    assert "the design is missing section(s): Summary, Tests" in ctx.facts["design_review_advisory"]
+
+
+def test_a_missing_ask_mapping_or_failure_trace_is_not_checked():
+    ctx, verdict = _gate(_make_design(ask_mapping=False, failure_trace=False))
+    assert verdict == "proceed"
+    assert ctx.facts["design_review_advisory"] == ""
+
+
+def test_a_citation_past_the_end_of_its_file_is_listed(tmp_path):
+    (tmp_path / "tool.py").write_text("x = 1\ny = 2\n")
+    design = _make_design().replace("## Changes", "`x` at `tool.py:40`: `x = 1`\n\n## Changes")
+    ctx, verdict = _gate(design, source=str(tmp_path))
+    assert verdict == "proceed"
+    assert "tool.py has 2 lines, not 40" in ctx.facts["design_review_advisory"]
+
+
+def test_a_misquote_of_the_brief_is_listed():
+    design = _make_design() + '\nThe brief says "remove the flag from the command".\n'
+    ctx, verdict = _gate(design, brief="Add the flag to the command.")
+    assert verdict == "proceed"
+    assert "does not appear verbatim in the brief" in ctx.facts["design_review_advisory"]
+
+
+def test_a_misquote_that_drops_a_negation_is_not_called_a_punctuation_slip():
+    # "able" is inside "unable": a word-level match must not accept the inverted quote.
+    design = _make_design() + '\nThe brief says "Able to overwrite files".\n'
+    ctx, verdict = _gate(design, brief="The tool is unable to overwrite files.")
+    assert verdict == "proceed"
+    assert "does not appear verbatim in the brief" in ctx.facts["design_review_advisory"]
+    assert "only in punctuation" not in ctx.facts["design_review_advisory"]
+
+
+def test_a_missing_high_risk_pitfall_is_listed_when_the_design_answers_pitfalls():
+    design = _make_design() + "\n## Anti-patterns to avoid\n\n- PIT-002: addressed at \u00a7 Changes\n"
+    ctx, verdict = _gate(design, pitfalls=[
+        {"id": "PIT-001", "risk": "high", "text": "the cache key ignores the base"}])
+    assert verdict == "proceed"
+    assert "high-risk pitfall(s) not addressed in the design: PIT-001" in (
+        ctx.facts["design_review_advisory"])
+
 
 def test_a_quote_differing_only_in_punctuation_and_case_is_advisory():
     design = _make_design() + '\nThe brief says "add the **flag** to the command".\n'
     ctx, verdict = _gate(design, brief="Add the flag to the command.")
     assert verdict == "proceed"
     assert "differs from the brief only in punctuation" in ctx.facts["design_review_advisory"]
-    assert ctx.facts["design_review_status"] == "Design review: PASS, 1 advisory"
+    assert ctx.facts["design_review_status"].splitlines()[0] == "Design review: PASS"
+    assert "Other advisories: 1" in ctx.facts["design_review_status"]
 
 
 def test_paperwork_items_are_listed_and_cost_no_round():
@@ -99,30 +132,21 @@ def test_paperwork_items_are_listed_and_cost_no_round():
     ctx, verdict = _gate(design)
     assert verdict == "proceed"
     advisory = ctx.facts["design_review_advisory"]
-    assert "Failure trace" in advisory
+    assert "Failure trace" not in advisory  # optional: not checked
     assert "title is the run name" in advisory
     assert "other.py:3" in advisory
-    assert ctx.facts["design_review_status"] == "Design review: PASS, 3 advisory"
-    assert "## Advisory" in ctx.facts["design_review_findings"]
+    status = ctx.facts["design_review_status"]
+    assert status.splitlines()[0] == "Design review: PASS"
+    assert "Other advisories: 2" in status and "other.py:3" in status
 
 
 def test_an_unmentioned_medium_pitfall_is_not_called_missing():
-    ctx, verdict = _gate(_make_design(), pitfalls=[
+    design = _make_design() + "\n## Anti-patterns to avoid\n\n- none of high risk\n"
+    ctx, verdict = _gate(design, pitfalls=[
         {"id": "PIT-002", "risk": "medium", "text": "a slower path on large inputs"}])
     assert verdict == "proceed"
     assert "PIT-002 (medium): not mentioned" in ctx.facts["pitfall_coverage"]
     assert "MISSING" not in ctx.facts["pitfall_coverage"]
-
-
-def test_the_review_agents_notes_reach_the_person():
-    review = ("The design meets the brief.\n\n## Notes\n"
-              "- docs/cli.md describes the flag; the Docs section leaves it out\n\n"
-              "VERDICT: PASS")
-    ctx, verdict = _gate(_make_design(), review=review)
-    assert verdict == "proceed"
-    assert ("review note: docs/cli.md describes the flag; the Docs section leaves it out"
-            in ctx.facts["design_review_advisory"])
-    assert ctx.facts["design_review_status"] == "Design review: PASS, 1 advisory"
 
 
 def test_the_fail_count_counts_only_blocking_findings():
@@ -133,20 +157,21 @@ def test_the_fail_count_counts_only_blocking_findings():
              "design_review_blocking": "- a blocking finding",
              "design_review_advisory": "- a note\n- another note"}
     assert design_review_status(facts) == (
-        "Design review: FAIL, 1 unresolved, 2 advisory\n- a blocking finding")
+        "Design review: FAIL, 1 unresolved\n- a blocking finding\n"
+        "Other advisories: 2\n- a note\n- another note")
 
 
 # ── rounds ────────────────────────────────────────────────────────────────────
 
-def test_a_scoped_change_gets_one_design_review_round():
-    design = _make_design(ask_mapping=False)
-    full_ctx, full_verdict = _gate(design, scope="full")
-    scoped_ctx, scoped_verdict = _gate(design, scope="scoped")
-    assert full_verdict == "reloop"
-    # The scoped design goes to the person after one round, with its finding shown.
-    assert scoped_verdict == "proceed"
-    assert scoped_ctx.facts["design_review_status"].startswith("Design review: FAIL, 1 unresolved")
-    assert "Ask mapping" in scoped_ctx.facts["design_review_findings"]
+def test_every_scale_gets_one_rewrite_for_a_missing_section():
+    design = _make_design().replace("## Changes", "## Notes")
+    for scope in ("full", "scoped"):
+        ctx, first = _gate(design, scope=scope)
+        assert first == "reloop", scope
+        second = gate_design_review(ctx)
+        assert second == "proceed", scope
+        assert ctx.facts["design_review_status"].startswith("Design review: FAIL, 1 unresolved")
+        assert "## Changes" in ctx.facts["design_review_findings"]
 
 
 # ── the prompts scale with the change ─────────────────────────────────────────
@@ -168,9 +193,8 @@ def test_the_design_does_not_account_for_every_finding():
     design_doc = nodes["design_doc"].prompt_template
     assert "neither addressed nor set aside is blocking" not in design_doc
     assert "where it changes a decision" in design_doc
-    review = nodes["design_review"].prompt_template
-    assert "## Notes" in review
-    assert "Notes do not send the design back" in review
+    # Nothing reviews the design before the person does.
+    assert "design_review" not in nodes
 
 
 # ── classify_scale unit tests ─────────────────────────────────────────────────
@@ -488,11 +512,11 @@ def test_classify_scale_reason_in_design_review_status():
     scoped_facts = {
         "design_review_attempts_used": 1,
         "design_review_findings": "(none: the design review passed)",
-        "design_review_by": "automatic",
+        "research_scope": "scoped",
         "research_scope_reason": "touches 1 existing function(s) (f at x.py:1), adds nothing new, no shared engine",
     }
     status = design_review_status(scoped_facts)
-    assert "scoped change" in status
+    assert "Scale: scoped" in status
     assert "touches 1 existing function" in status
     assert "PASS" in status
 
@@ -510,11 +534,11 @@ def test_classify_scale_reason_in_design_review_status():
     refine_facts = {
         "design_review_attempts_used": 1,
         "design_review_findings": "(none: the design review passed)",
-        "design_review_by": "automatic",
+        "research_scope": "scoped",
         "research_scope_reason": REFINE_SCOPE_REASON,
     }
     status = design_review_status(refine_facts)
-    assert "scoped change" in status
+    assert "Scale: scoped" in status
     assert "refinement" in status
 
 
@@ -560,7 +584,7 @@ _FULL_BUILD = [
 
 def test_structural_brief_naming_files_is_full(tmp_path):
     from tests_support import (
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+        DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
         RESEARCH_ANSWER, VERIFICATION_ANSWER, render,
     )
 
@@ -572,14 +596,13 @@ def test_structural_brief_naming_files_is_full(tmp_path):
              "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER, "VERDICT: PASS"]
     run, model = _design_run(tmp_path, brief, [
         RESEARCH_ANSWER, PITFALLS_ANSWER, *_FULL_BUILD, DESIGN_DOC_ANSWER,
-        DESIGN_REVIEW_ANSWER, *build])
+        *build])
 
     assert run.exit_ok, run.error
     assert run.facts["research_scope"] == "full"
     assert "no usable footprint" in run.facts["research_scope_reason"]
-    # perspectives and design review ran
+    # perspectives ran
     assert any("strategy director" in p.lower() for p in model.prompts)
-    assert any("high-risk pitfall, confirm" in p for p in model.prompts)
 
 
 def test_one_line_doc_fix_stays_scoped(tmp_path):
@@ -602,7 +625,7 @@ def test_one_line_doc_fix_stays_scoped(tmp_path):
 
 def test_brief_calling_itself_scoped_is_still_full(tmp_path):
     from tests_support import (
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+        DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
         RESEARCH_ANSWER, VERIFICATION_ANSWER, render,
     )
 
@@ -611,7 +634,7 @@ def test_brief_calling_itself_scoped_is_still_full(tmp_path):
              "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER, "VERDICT: PASS"]
     run, model = _design_run(tmp_path, brief, [
         RESEARCH_ANSWER, PITFALLS_ANSWER, *_FULL_BUILD, DESIGN_DOC_ANSWER,
-        DESIGN_REVIEW_ANSWER, *build])
+        *build])
 
     assert run.exit_ok, run.error
     assert run.facts["research_scope"] == "full"
@@ -650,7 +673,7 @@ def test_refine_run_stays_scoped(tmp_path, monkeypatch):
 
 def test_no_footprint_means_full_end_to_end(tmp_path):
     from tests_support import (
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
+        DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
         RESEARCH_ANSWER, VERIFICATION_ANSWER, render,
     )
 
@@ -658,7 +681,7 @@ def test_no_footprint_means_full_end_to_end(tmp_path):
              "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER, "VERDICT: PASS"]
     run, model = _design_run(tmp_path, "Improve the logging.", [
         RESEARCH_ANSWER, PITFALLS_ANSWER, *_FULL_BUILD, DESIGN_DOC_ANSWER,
-        DESIGN_REVIEW_ANSWER, *build])
+        *build])
 
     assert run.exit_ok, run.error
     assert run.facts["research_scope"] == "full"

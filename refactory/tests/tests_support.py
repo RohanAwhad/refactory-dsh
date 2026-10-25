@@ -371,24 +371,6 @@ REVIEW_ANSWERS = [
     "VERDICT: PASS",
 ]
 
-#: The design review agent's answer: a passing review that ends with the verdict.
-#: design_review is an agent node that consumes a FakeModel answer, placed after
-#: design_doc in graph order.
-DESIGN_REVIEW_ANSWER = (
-    "No open alternatives found. All citations confirmed. "
-    "All brief references verified.\n\n"
-    "## Repository questions\n\n"
-    "```json\n"
-    '[{"function":"tool.py", "duplicates":"absent: searched the repository for tool.py", '
-    '"callers":"runner.py:10 calls tool.py:1", '
-    '"shared_state":"absent: searched tool.py for shared state"}]\n'
-    "```\n\n"
-    "## Brief example trace\n\n"
-    "The brief's example runs through runner.py:5 → tool.py:1 "
-    "in both the walker and DSH runtimes.\n\n"
-    "VERDICT: PASS"
-)
-
 #: The verifier's answer: a passing verification with no blocking findings.
 VERIFICATION_ANSWER = "No blocking findings.\n\nVERDICT: PASS"
 
@@ -407,6 +389,8 @@ DESIGN_DOC_ANSWER = (
     "- docs/models.md\n\n"
     "## Changes\n\n"
     "- tool.py\n\n"
+    "## Tests\n\n"
+    "- `test_tool.py::test_build` — tool.py prints what it built\n\n"
     "## Research and perspective findings\n\n"
     "- FND-api-surface-1: addressed at `tool.py:1`\n"
     "- FND-existing-modes-1: addressed at § Changes\n"

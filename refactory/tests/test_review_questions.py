@@ -110,37 +110,6 @@ def test_check_review_questions_no_section():
     assert any("Repository questions" in p and "code_reviewer" in p for p in problems)
 
 
-def test_check_review_questions_brief_trace_missing():
-    from refactory_dsh.authoring_evidence import check_review_questions
-
-    review = (
-        "## Repository questions\n\n"
-        '```json\n[{"function":"my_fn", "duplicates":"foo.py:1", '
-        '"callers":"bar.py:2", "shared_state":"absent: nothing"}]\n```\n\n'
-        "VERDICT: PASS"
-    )
-    problems = check_review_questions(
-        review, ["my_fn"], "design_review", require_brief_trace=True, target="refactory")
-    assert any("Brief example trace" in p for p in problems)
-
-
-def test_check_review_questions_brief_trace_present():
-    from refactory_dsh.authoring_evidence import check_review_questions
-
-    review = (
-        "## Repository questions\n\n"
-        '```json\n[{"function":"my_fn", "duplicates":"foo.py:1", '
-        '"callers":"bar.py:2", "shared_state":"absent: nothing"}]\n```\n\n'
-        "## Brief example trace\n\n"
-        "The brief's example runs through runner.py:5 → tool.py:1 "
-        "in both the walker and DSH runtimes.\n\n"
-        "VERDICT: PASS"
-    )
-    problems = check_review_questions(
-        review, ["my_fn"], "design_review", require_brief_trace=True, target="refactory")
-    assert not problems
-
-
 # ── Integration: deliverable_kind conditioning ──
 
 
@@ -395,74 +364,28 @@ def test_design_fast_repo_questions_are_advisory_without_a_rerun(tmp_path, monke
     assert "focused_qa" in advisory and "tool.py" in advisory
 
 
-def test_design_review_repo_questions_are_advisory_without_a_rerun(tmp_path, monkeypatch):
-    """(d) Missing repository questions at design time are listed at the person's gate;
-    the design review is not re-run for them and the run does not fail."""
-    import sys
-    from refactory_dsh.design import DesignMode
-    from tests_support import (FakeModel, RESEARCH_ANSWER, PITFALLS_ANSWER,
-                               DESIGN_DOC_ANSWER, VERIFICATION_ANSWER,
-                               REVIEW_ANSWERS, git_repo, render)
+def test_design_time_asks_no_repository_questions(tmp_path, monkeypatch):
+    """(d) Repository questions are the code reviewers', after the build. Design mode
+    has no design reviewer to ask them, so the design-review gate lists none and the
+    design goes from design_doc to the person's gate."""
+    from tests_support import (RESEARCH_ANSWER, PITFALLS_ANSWER, DESIGN_DOC_ANSWER,
+                               VERIFICATION_ANSWER, render)
 
-    repo = git_repo(tmp_path / "repo")
-    tool = "def build():\n    print('built')\n"
-
-    # design_review answer: PASS verdict but empty repo_questions (missing tool.py)
-    bad_design_review = (
-        "No open alternatives found.\n\n"
-        "## Repository questions\n\n"
-        "```json\n[]\n```\n\n"
-        "## Brief example trace\n\n"
-        "The brief's example runs through runner.py:5 \u2192 tool.py:1 "
-        "in both the walker and DSH runtimes.\n\n"
-        "VERDICT: PASS"
-    )
-
-    answers = [
-        RESEARCH_ANSWER,             # research_director
-        PITFALLS_ANSWER,             # pitfalls_researcher
-        "perspectives",              # strategy_director
-        "one plan",                  # synthesize_strategy
-        DESIGN_DOC_ANSWER,           # design_doc
-        bad_design_review,           # design_review (missing questions → advisory, proceed)
-        # gate_strategy → proceed (via verdicts)
-        render({"tool.py": tool}),   # emit
-        # Reviewers (fork_qa: health, code, qa, verifier):
-        "health: ok",               # health_checker
-        "code review: ok",          # code_reviewer
-        "qa: ok",                    # qa_director
-        VERIFICATION_ANSWER,         # verifier
-        # gate_qa → proceed
-        "VERDICT: PASS",             # overwatch
-    ]
-
-    model = FakeModel(answers)
-    mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["pr"]["value"] = False
-    state["knobs"]["design_review_attempts"]["value"] = 1
-    mode.load_state_dict(state)
-
-    run = mode.run(
-        tmp_path / "run", model=model,
-        verdicts={"gate_strategy": "proceed"},
-        task={"name": "rq_exhaust_dr", "brief": "a tool",
-              "check": f"{sys.executable} tool.py",
-              "target": str(repo)})
+    run, model = _design_run(tmp_path, [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan", DESIGN_DOC_ANSWER,
+        render({"tool.py": "def build():\n    print('built')\n"}),
+        "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER, "VERDICT: PASS"])
 
     assert run.exit_ok, run.error
-
-    # design_review ran once: the missing questions cost no round
-    dr_prompts = [p for p in model.prompts
-                  if "Read the design document from `design.md`" in p
-                  and "BLOCKING" in p and "open alternative" in p.lower()]
-    assert len(dr_prompts) == 1, (
-        f"design_review ran {len(dr_prompts)} times, expected 1"
-    )
-    # The gap is shown at the person's gate as advisory
-    assert "[repo-questions]" in run.facts["design_review_advisory"]
-    assert "Advisory" in run.facts["design_review_findings"]
-    assert run.facts["design_review_status"].startswith("Design review: PASS, ")
+    design = next(i for i, p in enumerate(model.prompts)
+                  if "Write the design document for this artifact" in p)
+    # The next model call is the build: nothing is asked between the design and the gate.
+    assert "Write the artifact `" in model.prompts[design + 1]
+    assert "[repo-questions]" not in run.facts["design_review_advisory"]
+    assert run.facts["design_review_status"].startswith("Design review: PASS")
+    # The code reviewers still answer them for the built change.
+    assert "## Repository questions" in next(
+        p for p in model.prompts if "You are the code reviewer." in p)
 
 
 def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path, monkeypatch):
@@ -471,7 +394,7 @@ def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path
     from refactory_dsh.fast import DesignFastMode
     from refactory_dsh.design import DesignMode
     from tests_support import (FakeModel, VERIFICATION_ANSWER, RESEARCH_ANSWER,
-                               PITFALLS_ANSWER, DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                               PITFALLS_ANSWER, DESIGN_DOC_ANSWER,
                                REVIEW_ANSWERS, git_repo, render)
 
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path / "project"))
@@ -515,7 +438,7 @@ def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path
     mode_dm.load_state_dict(state)
     model_dm_repo = FakeModel([
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": tool}), *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]])
     run_dm_repo = mode_dm.run(
         tmp_path / "run_dm_repo", model=model_dm_repo,
@@ -534,7 +457,7 @@ def test_repo_change_and_artifact_render_different_instructions_via_run(tmp_path
     mode_dm2.load_state_dict(state2)
     model_dm_art = FakeModel([
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": tool}), *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]])
     run_dm_art = mode_dm2.run(
         tmp_path / "run_dm_art", model=model_dm_art,
@@ -584,7 +507,7 @@ def _design_run(tmp_path, answers):
 
 def _design_answers(emitted: str, reviews: list[str]) -> list[str]:
     from tests_support import (RESEARCH_ANSWER, PITFALLS_ANSWER, DESIGN_DOC_ANSWER,
-                               DESIGN_REVIEW_ANSWER, VERIFICATION_ANSWER)
+                               VERIFICATION_ANSWER)
 
     # Interleave VERIFICATION_ANSWER after every 3 reviewer answers
     # (the verifier runs as the 4th fork branch in each review round)
@@ -594,7 +517,7 @@ def _design_answers(emitted: str, reviews: list[str]) -> list[str]:
         if (i + 1) % 3 == 0:
             interleaved.append(VERIFICATION_ANSWER)
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, emitted,
+            DESIGN_DOC_ANSWER, emitted,
             *interleaved, "VERDICT: PASS"]
 
 
@@ -643,27 +566,3 @@ def test_design_mode_only_product_functions_need_repo_questions(tmp_path, monkey
     entries = json.loads((tmp_path / "run/changed-functions.json").read_text())
     assert {e["function"]: e["test"] for e in entries} == {
         "tool.py::build": False, "tests/test_tool.py::test_build": True}
-
-
-def test_design_review_asks_repository_questions_for_product_sites_only(tmp_path, monkeypatch):
-    """A design that changes tool.py and its test: the design review answers for tool.py
-    only and passes on its first run."""
-    from tests_support import (RESEARCH_ANSWER, PITFALLS_ANSWER, DESIGN_DOC_ANSWER,
-                               DESIGN_REVIEW_ANSWER, VERIFICATION_ANSWER, render)
-
-    site = "- `tool.py:1` — **[changed]**\n\n"
-    assert site in DESIGN_DOC_ANSWER
-    design = DESIGN_DOC_ANSWER.replace(
-        site, "- `tool.py:1` — **[changed]**\n- `tests/test_tool.py:1` — **[changed]**\n\n")
-    run, model = _design_run(tmp_path, [
-        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan", design,
-        DESIGN_REVIEW_ANSWER,  # answers for tool.py only
-        render({"tool.py": "def build():\n    print('built')\n",
-                "tests/test_tool.py": "def test_build():\n    assert True\n"}),
-        "health: ok", "code review: ok", "qa: ok", VERIFICATION_ANSWER, "VERDICT: PASS"])
-
-    assert run.exit_ok, run.error
-    # The test file needs no repository questions: nothing about it is listed.
-    assert "[repo-questions]" not in run.facts["design_review_advisory"]
-    assert "test_tool.py" not in run.facts["design_review_advisory"]
-    assert run.facts["design_review_status"].startswith("Design review: PASS")

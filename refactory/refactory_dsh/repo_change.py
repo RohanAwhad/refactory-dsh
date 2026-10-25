@@ -152,7 +152,7 @@ def knob_names() -> tuple[str, ...]:
 def produces() -> tuple[str, ...]:
     """The facts `locate` returns, for the prepare node's ``produces``."""
     return ("target", "worktree", "branch", "base", "source", "check_root", "emit_scope", "setup", "generate", "probe_instruction",
-            "design_probe_instruction", "design_probe_review")
+            "design_probe_instruction")
 
 
 def materialise_node(**fields: Any) -> Node:
@@ -490,7 +490,7 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
     else:
         probe_instruction = ""
 
-    # Design probe instruction: for design_doc and design_review nodes
+    # Design probe instruction: for the design writer (design_doc)
     if in_worktree and located.get("worktree") and located["worktree"] != NO_WORKTREE:
         design_probe_instruction = (
             "\n## Design probe\n\n"
@@ -522,23 +522,12 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
             "target_guard refuses and restores a write to the target.\n"
             "- The CLI exits 0 for successful dispatch; argparse errors exit 2.\n"
         )
-        design_probe_review = (
-            "\n## Design probe — call-site verification\n\n"
-            "When the design relies on a call site, import path, or integration "
-            "point in the existing code, use the design probe to verify it exists "
-            "and is reachable. If a probe shows a call site the design wires into "
-            "is never reached, report it as:\n"
-            "BLOCKING: <path>: call site unreached — "
-            "probe `<command>` showed <result>\n"
-        )
     else:
         design_probe_instruction = ""
-        design_probe_review = ""
 
     return {**located, "setup": setup, "generate": generate,
             "probe_instruction": probe_instruction,
-            "design_probe_instruction": design_probe_instruction,
-            "design_probe_review": design_probe_review}
+            "design_probe_instruction": design_probe_instruction}
 
 
 # ── what lands: emit.txt, applied ─────────────────────────────────────────────

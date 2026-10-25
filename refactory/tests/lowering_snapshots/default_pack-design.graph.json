@@ -12,7 +12,7 @@
       "blocking": true,
       "role": "ceo",
       "model": "",
-      "prompt_template": "Read `design.md` from the run directory.\n\nThe following gate corrections were given when the design was approved:\n\n{{gate_corrections}}\n\nUpdate `design.md` so that every part of it the corrections touch says what they say: the ## Summary, the heading (H1), each site entry in ## Rule and sites, and in ## Changes and ## Docs any wording, example text or file list a correction replaces or adds to. Leave no part stating what a correction overrides, because the builder reads the whole document. Keep the sections the corrections do not touch as they are, and keep the document's section headings and structure. Write the updated `design.md`. Return a short message listing what was changed.",
+      "prompt_template": "Read `design.md` from the run directory.\n\nThe following gate corrections were given when the design was approved:\n\n{{gate_corrections}}\n\nUpdate `design.md` so that every part of it the corrections touch says what they say: the heading (H1), ## Summary, ## Changes and ## Tests, and any optional section the design has (such as ## Rule and sites or ## Docs) whose wording, example text or file list a correction replaces or adds to. Leave no part stating what a correction overrides, because the builder reads the whole document. Keep the sections the corrections do not touch as they are, and keep the document's section headings and structure. Then add a `## Corrections at approval` section: one bullet per correction, quoting it and naming the section(s) of the design that now carry it. Write the updated `design.md`. Return a short message listing what was changed.",
       "tools": [],
       "timeout": null,
       "max_iterations": 1,
@@ -46,16 +46,12 @@
       "reads": [
         "design.md"
       ],
-      "writes": [
-        "reviews/design-review-feedback.txt"
-      ],
+      "writes": [],
       "blocking": true,
-      "evaluator_type": "fn",
-      "evaluator_role": null,
-      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_claims:check_design_claims",
-      "gate_prompt": "deterministic check: cited paths exist, quoted lines match, named identifiers are present; reloop to design_doc on mismatch",
-      "max_iterations": 4,
-      "_type": "GateNode"
+      "command": "python -m refactory_dsh.run refactory_dsh.design_claims:check_design_claims",
+      "callable_name": "refactory_dsh.design_claims:check_design_claims",
+      "notes": "deterministic check: cited paths exist, quoted lines match within a window, named identifiers are present; resolves drift, lists the rest",
+      "_type": "FnNode"
     },
     "classify_scale": {
       "id": "classify_scale",
@@ -140,28 +136,7 @@
       "blocking": true,
       "role": "ceo",
       "model": "",
-      "prompt_template": "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\nThe check, run from {{check_root}}:\n    {{check}}\n\n## The plan\n{{strategy}}\n\n## Pitfalls\n{{pitfalls}}\n\n## What the design review found\n{{design_review_feedback}}\n\nAcceptance baseline: the original brief, any approved design, and explicit user steering. Preserve user-approved non-goals. A README limitation, proposed exclusion, coordinator summary or reviewer note cannot waive a requested behavior without explicit user agreement to that change. Report conflicts instead of silently narrowing scope. Reviews must mark observed noncompliance as BLOCKING even when the limitation is documented.\n\nWrite the design document for this artifact: every file it will add or change, what each one does, the interfaces between them, and how the check exercises them. Be concrete \u2014 the next step writes the code from this document and the brief. Specify accepted input syntax and unambiguous rejection behavior: unsupported counts, signs, units, or other values must not silently become different valid requests. For visual output, plan a rendered inspection as well as format/geometry checks, including labels, margins, clipping, and agreement with the requested dimensions.\n\nMake exactly one decision for each design choice \u2014 do not present alternatives, do not end a choice with 'a simpler alternative\u2026' or leave it open. A choice left open here becomes an unreviewed decision in the code. Cite every claim about existing code with its file path and line number or range (e.g. `path/to/file.py:42` or `path/to/file.py:42-58`). When claiming what the brief says, quote the brief's words verbatim. The document holds only the final result \u2014 no 'Wait\u2014', 'Actually', 'Let me reconsider' or other working-out.\n\nFor claims about existing code, use the subject-at-citation-quote form: `name()` at `path/to/file.py:42`: `def name(self):`. The subject (the backtick span before `at`) names the function, attribute or class the claim is about; the quote (the backtick span after `:`) is the line content at that position. This form is mechanically checked before the design review runs. Bare citations without a quoted line (for files being added, or site markers) are fine as-is.\n\nYour design.md must contain these sections, in this order:\n\n1. An H1 heading (`#`) that says what the change does. Never use the run name or artifact name as the title.\n\n2. `## Summary` \u2014 a prose summary of the problem and the change, in two to four sentences.\n\n3. `## Failure trace` \u2014 for each failure the brief reports, a file:line chain from the symptom to the root cause, and the link (call, import, config) the fix breaks or replaces. When the brief asks for a new feature with no existing failures, write `N/A \u2014 this is a new feature.` The section heading is always required.\n\n4. `## Ask mapping` \u2014 a markdown table with columns `| Ask (quoted from brief) | Design section | Test |`, one row per ask in the brief. Quote the brief's words verbatim in the Ask column.\n\n5. `## Rule and sites` \u2014 the rule this change makes or corrects, then every place in the code that applies or restates that rule, found by searching the source. List each as a bullet with its file path and line range cited, and mark it [changed] (this change modifies it) or [left: <reason>] (this change leaves it unchanged, with the reason). A site left unchanged without a reason is a defect.\n\n6. `## Docs` \u2014 the docs that describe the changed behaviour, found by searching `docs/` and any other documentation directories. List each as a bullet with its path, and say what update the design plans for it.\n\n7. `## Changes` \u2014 the list of files this change adds or modifies, as bullets.\n\n8. `## Test guardedness exemptions` (optional) \u2014 when the design expects new tests that pass on the base (for example, tests that pin existing behaviour), list each test file path and the reason it cannot fail without the change. A new test that passes on the base and is not listed here will be rejected.\n\n9. `## Site revert exemptions` (optional) \u2014 when a changed site cannot be caught by a mechanical revert-and-test (for example, a change that affects only logging or a side-channel that no test observes), list the site path:line and the reason. A changed site whose revert is not caught and that is not listed here will block the correction audit.\n\n\n9. `## Anti-patterns to avoid` (when the research produced pitfalls) \u2014 for each high-risk pitfall id, either address it by naming the site (a backticked `path:line` from Rule and sites) or the section (\u00a7 heading name) that handles it, or set it aside with `[set-aside: <reason>]`. A high-risk pitfall that is missing or set aside without a reason fails the contract. Medium and low pitfalls appear only where they change a decision.\n\n10. Research and perspective findings \u2014 read research/*.md and strategy/*.md directly, and cite a finding id (FND-<slug>-<n>) where it changes a decision. Do not list findings that change nothing; the document is for building the change, not for accounting for the research.\n\n\n## Claims check feedback\n{{claims_check_feedback}}",
-      "tools": [],
-      "timeout": null,
-      "max_iterations": 1,
-      "post_checks": [],
-      "_type": "AgentNode"
-    },
-    "design_review": {
-      "id": "design_review",
-      "reads": [
-        "brief.json",
-        "design.md",
-        "pitfalls.json",
-        "reviews/design-review-feedback.txt"
-      ],
-      "writes": [
-        "reviews/design-review.md"
-      ],
-      "blocking": true,
-      "role": "ceo",
-      "model": "",
-      "prompt_template": "## Pitfalls\n{{pitfalls}}\n\nFor every high-risk pitfall, confirm the design accounts for it in its Anti-patterns section \u2014 either addressed with a site or section that handles it, or set aside with a reason. A high pitfall that is missing from the Anti-patterns section is BLOCKING.\n\nArtifact name: {{name}}\nBrief: {{brief}}\nSource: {{source}}\n\n## Previous feedback\n{{design_review_feedback}}\n\nRead the design document from `design.md` in the run directory. Read the brief from `brief.json` in the run directory.\n\nFor every claim the design makes about existing code, read the cited file and line range in {{source}} and confirm the claim matches what is there. For every claim the design makes about what the brief says, find the quoted text verbatim in the brief. For every design choice, confirm that exactly one decision is made and no alternative is left open.\n\nReport as BLOCKING only what would make the build wrong or leave an ask unmet:\n- An open alternative or a choice left undecided.\n- A claim about code you cannot confirm in the cited file.\n- A claim about the brief the brief does not say (a difference only in punctuation or formatting is a note, not a finding).\n- A command, flag or file the design tells a person or the builder to use that does not exist.\n- A piece the design adds that nothing in the design uses or starts.\n- A planned test that cannot fail when the code is wrong, such as one that asserts on values it built itself, or reads through a stand-in the real code would not provide.\n- A new mechanism where the code already has one that does the job, naming the existing one.\n- A place in the code that applies or restates the same rule the design changes, found by searching the source, that the design leaves unchanged without giving a reason, or does not list at all in '## Rule and sites'. Search every caller of a changed function in every mode and graph, not only the brief's own path.\n- An ask in the brief with no row in the Ask mapping table, or whose named test does not exercise it.\n\nList each finding as a line starting with BLOCKING: <path>: <description> where <path> is the file the builder must change to fix the problem. Write the blocking marker only at the start of a finding line, in its plain form: BLOCKING: <path>: <description>. Never wrap it in backticks, a code span, or quotation marks while explaining a check or describing the parser. When discussing the marker itself, call it \"the blocking marker\". Write every real finding as a plain line outside any fenced code block, because fenced blocks are not read as findings. When you show the format as an example rather than report a finding, put the example inside a fenced code block.\n\nWrite anything else under `## Notes`, never as a blocking finding: a doc the '## Docs' section leaves out, a missing or thin Failure trace, a quotation that differs only in punctuation or formatting, and style or structure that does not change the build. Notes do not send the design back.\n\n{{review_instructions}}\n\nTrace the brief's own example through the code in time order, naming the route a real run takes for every runtime that runs it. Write the trace in a section headed `## Brief example trace`, with path:line citations for each step.\n\nEnd with a line that is exactly `VERDICT: PASS` when there are no blocking findings, or `VERDICT: FAIL` when there are any.",
+      "prompt_template": "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\nThe check, run from {{check_root}}:\n    {{check}}\n\n## The plan\n{{strategy}}\n\n## Pitfalls\n{{pitfalls}}\n\n## What the design checks found\n{{design_review_feedback}}\n\nAcceptance baseline: the original brief, any approved design, and explicit user steering. Preserve user-approved non-goals. A README limitation, proposed exclusion, coordinator summary or reviewer note cannot waive a requested behavior without explicit user agreement to that change. Report conflicts instead of silently narrowing scope. Reviews must mark observed noncompliance as BLOCKING even when the limitation is documented.\n\nWrite the design document for this artifact: every file it will add or change, what each one does, the interfaces between them, and how the check exercises them. Be concrete \u2014 the next step writes the code from this document and the brief. Specify accepted input syntax and unambiguous rejection behavior: unsupported counts, signs, units, or other values must not silently become different valid requests. For visual output, plan a rendered inspection as well as format/geometry checks, including labels, margins, clipping, and agreement with the requested dimensions.\n\nMake exactly one decision for each design choice \u2014 do not present alternatives, do not end a choice with 'a simpler alternative\u2026' or leave it open. A choice left open here becomes an unreviewed decision in the code. Cite every claim about existing code with its file path and line number or range (e.g. `path/to/file.py:42` or `path/to/file.py:42-58`). When claiming what the brief says, quote the brief's words verbatim. The document holds only the final result \u2014 no 'Wait\u2014', 'Actually', 'Let me reconsider' or other working-out.\n\nFor claims about existing code, use the subject-at-citation-quote form: `name()` at `path/to/file.py:42`: `def name(self):`. The subject (the backtick span before `at`) names the function, attribute or class the claim is about; the quote (the backtick span after `:`) is the line content at that position. This form is mechanically checked, and a claim the check cannot confirm is shown to the person who approves the design. Bare citations without a quoted line (for files being added, or site markers) are fine as-is.\n\nYour design.md must contain, in this order:\n\n1. An H1 heading (`#`) that says what the change does. Never use the run name or artifact name as the title.\n\n2. `## Summary` \u2014 the problem and the change, in two to four sentences.\n\n3. `## Changes` \u2014 one bullet per file the change adds or modifies: `path` \u2014 what changes. This is the one section the build cannot proceed without.\n\n4. `## Tests` \u2014 one bullet per test: its repo-relative id (for example `tests/test_foo.py::test_bar`) and what it proves.\n\nWhen the person corrects the design at the approval gate, the step that applies the corrections adds `## Corrections at approval`; do not write it yourself.\n\nAdd any of these optional sections only where it helps the build; leave out the ones that would say nothing:\n- `## Failure trace` \u2014 for a failure the brief reports, a file:line chain from the symptom to the root cause.\n- `## Ask mapping` \u2014 a table `| Ask (quoted from brief) | Design section | Test |`, one row per ask, quoting the brief verbatim.\n- `## Rule and sites` \u2014 the rule the change makes or corrects, then each place in the code that applies or restates it, as a bullet citing file and line, marked [changed] or [left: <reason>].\n- `## Test guardedness exemptions` \u2014 when a new test passes on the base (for example one that pins existing behaviour), its file path and why it cannot fail without the change. A new test that passes on the base and is not listed here is rejected.\n- `## Site revert exemptions` \u2014 a changed site that a mechanical revert-and-test cannot catch (logging, a side channel no test observes), as `path:line` and the reason.\n- `## Anti-patterns to avoid` \u2014 for a high-risk pitfall, the site or \u00a7 section that handles it, or `[set-aside: <reason>]`.\n- `## Docs` \u2014 the docs that describe the changed behaviour, and the update each needs.\n- `## Runtime coverage` \u2014 which runtimes run the changed code, and how each is covered.\n\nResearch and perspective findings \u2014 read research/*.md and strategy/*.md directly, and cite a finding id (FND-<slug>-<n>) where it changes a decision. Do not list findings that change nothing; the document is for building the change, not for accounting for the research. The person who approves the design reads it: keep it short.\n\n\n## Claims check feedback\n{{claims_check_feedback}}",
       "tools": [],
       "timeout": null,
       "max_iterations": 1,
@@ -251,7 +226,6 @@
         "design.md",
         "pitfalls.json",
         "research/",
-        "reviews/design-review.md",
         "strategy/"
       ],
       "writes": [
@@ -261,7 +235,7 @@
       "evaluator_type": "fn",
       "evaluator_role": null,
       "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:gate_design_review",
-      "gate_prompt": "proceed on PASS with no findings; reloop to design_doc otherwise; never fail the run",
+      "gate_prompt": "reloop to design_doc only for a missing or empty ## Changes; list everything else on the approval card; never fail the run",
       "max_iterations": 6,
       "_type": "GateNode"
     },
@@ -301,7 +275,7 @@
       "evaluator_type": "fn",
       "evaluator_role": null,
       "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:gate_pitfalls",
-      "gate_prompt": "proceed only when pitfalls.json is valid; reloop to pitfalls_researcher otherwise",
+      "gate_prompt": "reloop once only when there are no parseable pitfalls; otherwise proceed, with what is off listed on the approval card",
       "max_iterations": 8,
       "_type": "GateNode"
     },
@@ -347,8 +321,8 @@
       "blocking": true,
       "evaluator_type": "fn",
       "evaluator_role": null,
-      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.create_ops:gate_research",
-      "gate_prompt": "proceed only when the plan is a plan and its findings exist",
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:gate_design_research",
+      "gate_prompt": "reloop once only when there is no parseable plan; otherwise proceed, with what is off listed on the approval card",
       "max_iterations": 8,
       "_type": "GateNode"
     },
@@ -589,18 +563,6 @@
       "post_checks": [],
       "_type": "AgentNode"
     },
-    "route_design_review": {
-      "id": "route_design_review",
-      "reads": [],
-      "writes": [],
-      "blocking": true,
-      "evaluator_type": "fn",
-      "evaluator_role": null,
-      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:route_design_review",
-      "gate_prompt": "a scoped change's design is checked automatically; a full design is reviewed",
-      "max_iterations": 8,
-      "_type": "GateNode"
-    },
     "route_strategy": {
       "id": "route_strategy",
       "reads": [],
@@ -707,13 +669,8 @@
     },
     {
       "source": "check_design_claims",
-      "target": "design_doc",
-      "condition": "reloop"
-    },
-    {
-      "source": "check_design_claims",
-      "target": "route_design_review",
-      "condition": "proceed"
+      "target": "gate_design_review",
+      "condition": null
     },
     {
       "source": "classify_scale",
@@ -738,11 +695,6 @@
     {
       "source": "design_doc",
       "target": "check_design_claims",
-      "condition": null
-    },
-    {
-      "source": "design_review",
-      "target": "gate_design_review",
       "condition": null
     },
     {
@@ -891,16 +843,6 @@
       "condition": null
     },
     {
-      "source": "route_design_review",
-      "target": "design_review",
-      "condition": "proceed"
-    },
-    {
-      "source": "route_design_review",
-      "target": "gate_design_review",
-      "condition": "scoped"
-    },
-    {
       "source": "route_strategy",
       "target": "strategy_director",
       "condition": "proceed"
@@ -934,14 +876,11 @@
   "start_node": "prepare",
   "terminal": true,
   "knob_values": {
-    "research_attempts": 3.0,
     "check_attempts": 3.0,
     "review_attempts": 3.0,
     "check_timeout_s": 180.0,
     "check_attempt_cap": 8.0,
-    "design_review_attempts": 2.0,
-    "pitfalls_attempts": 2.0,
-    "claims_check_attempts": 2.0,
+    "design_review_attempts": 1.0,
     "name": "",
     "brief": "",
     "check": "",
@@ -959,17 +898,6 @@
     "review_comments": 0.0
   },
   "knob_specs": {
-    "research_attempts": {
-      "default": 3,
-      "kind": "int",
-      "lo": 1,
-      "hi": 8,
-      "enum": [],
-      "values": [],
-      "frozen": false,
-      "description": "how many times the research step may be retried when its plan is not a plan or its findings were never written",
-      "required": false
-    },
     "check_attempts": {
       "default": 3,
       "kind": "int",
@@ -1015,36 +943,14 @@
       "required": false
     },
     "design_review_attempts": {
-      "default": 2,
+      "default": 1,
       "kind": "int",
-      "lo": 1,
-      "hi": 4,
+      "lo": 0,
+      "hi": 3,
       "enum": [],
       "values": [],
       "frozen": false,
-      "description": "how many times the design review may reloop before proceeding to the approval gate with its remaining findings",
-      "required": false
-    },
-    "pitfalls_attempts": {
-      "default": 2,
-      "kind": "int",
-      "lo": 1,
-      "hi": 5,
-      "enum": [],
-      "values": [],
-      "frozen": false,
-      "description": "how many times the pitfalls step may be retried when its output is invalid",
-      "required": false
-    },
-    "claims_check_attempts": {
-      "default": 2,
-      "kind": "int",
-      "lo": 1,
-      "hi": 4,
-      "enum": [],
-      "values": [],
-      "frozen": false,
-      "description": "how many times the claims checker may reloop before passing mismatches to the review",
+      "description": "how many times a design whose ## Changes section is missing or empty is sent back for a rewrite before it goes to the approval gate as it is; every other finding is advisory and never sends it back",
       "required": false
     },
     "name": {

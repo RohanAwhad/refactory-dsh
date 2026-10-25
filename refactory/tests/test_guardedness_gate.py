@@ -262,7 +262,7 @@ def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):
     ExecutionError instead of a clean repair cycle.
     """
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+    from tests_support import (DESIGN_DOC_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                VERIFICATION_ANSWER,
                                REVIEW_ANSWERS, FakeModel, git_repo, render)
@@ -288,7 +288,7 @@ def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):
 
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('v1')\n",
                 "test_foo.py": "def test_foo():\n    assert True\n"}),  # first emit: test_foo.py in added_files
         render({"tool.py": "print('v2')\n",

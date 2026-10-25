@@ -14,7 +14,6 @@ from refactory_dsh.design import DesignMode
 from refactory_dsh.nn import Verdict
 from tests_support import (
     DESIGN_DOC_ANSWER,
-    DESIGN_REVIEW_ANSWER,
     FakeModel,
     PITFALLS_ANSWER,
     RESEARCH_ANSWER,
@@ -226,8 +225,8 @@ def test_set_aside_backtick_marker_recognised():
 
 # ── gate_design_review pitfall check ───────────────────────────────────────
 
-def test_gate_design_review_refuses_missing_high_pitfall(tmp_path):
-    """The contract refuses a design that omits a high pitfall id."""
+def test_gate_design_review_lists_missing_high_pitfall(tmp_path):
+    """A design that omits a high pitfall id is listed for the person, not sent back."""
     ctx = nn.RunContext(tmp_path)
     ctx.facts.update({
         "source": str(tmp_path),
@@ -237,14 +236,22 @@ def test_gate_design_review_refuses_missing_high_pitfall(tmp_path):
     (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
     ctx.write_text("reviews/design-review.md",
                    "All confirmed.\n\nVERDICT: PASS\n")
-    # A contract-compliant design with NO Anti-patterns section.
-    ctx.write_text("design.md", _contract())
+    # A design whose Anti-patterns section leaves PIT-001 out.
+    ctx.write_text("design.md", _contract(anti="- PIT-009: addressed at § Changes"))
     ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
     ctx.write_json("pitfalls.json", [_pit()])
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_design_review(ctx)
-    assert verdict == "reloop"
-    assert "PIT-001" in verdict.reason
+    assert verdict == "proceed"
+    assert "high-risk pitfall(s) not addressed in the design: PIT-001" in (
+        ctx.facts["design_review_advisory"])
+    assert "PIT-001 (high): MISSING" in ctx.facts["pitfall_coverage"]
+    # The section is optional: a design without it is not checked against the pitfalls.
+    ctx.write_text("design.md", _contract())
+    ctx.facts["design_review_attempts_used"] = 0
+    assert ops.gate_design_review(ctx) == "proceed"
+    assert "PIT-001" not in ctx.facts["design_review_advisory"]
+    assert "not checked" in ctx.facts["pitfall_coverage"]
 
 
 def test_gate_design_review_passes_set_aside(tmp_path):
@@ -314,36 +321,36 @@ def test_design_prompts_contain_pitfalls():
     """The strategy and design prompts contain {{pitfalls}}."""
     graph = DesignMode().build()
     for node_id in ("strategy_director", "synthesize_strategy", "design_doc",
-                    "design_review", "code_reviewer"):
+                    "code_reviewer"):
         assert "{{pitfalls}}" in graph.nodes[node_id].prompt_template, (
             f"{node_id} prompt must contain {{{{pitfalls}}}}"
         )
 
 
-def test_gate_pitfalls_validates_and_reloops(tmp_path):
-    """gate_pitfalls reloops when pitfalls.json is invalid."""
-    ctx = nn.RunContext(tmp_path, knobs={"pitfalls_attempts": 3})
+def test_gate_pitfalls_reloops_once_when_nothing_parses(tmp_path):
+    """gate_pitfalls sends the step back when pitfalls.json holds no parseable pitfalls."""
+    ctx = nn.RunContext(tmp_path)
     ctx.facts.update({"source": str(tmp_path), "pitfalls_attempts_used": 0})
     ctx.write_text("pitfalls.json", "not json")
     import refactory_dsh.design_ops as ops
     verdict = ops.gate_pitfalls(ctx)
     assert verdict == "reloop"
-    assert "not valid JSON" in verdict.reason
+    assert "no parseable pitfalls" in verdict.reason
 
 
-def test_gate_pitfalls_stops_when_exhausted(tmp_path):
-    """gate_pitfalls raises ValueError when attempts are exhausted."""
-    ctx = nn.RunContext(tmp_path, knobs={"pitfalls_attempts": 1})
-    ctx.facts.update({"source": str(tmp_path), "pitfalls_attempts_used": 0})
+def test_gate_pitfalls_never_stops_the_run(tmp_path):
+    """Once its one resend is spent, gate_pitfalls proceeds with the problem listed."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "pitfalls_attempts_used": 1})
     ctx.write_text("pitfalls.json", "not json")
     import refactory_dsh.design_ops as ops
-    with pytest.raises(ValueError, match="still not valid"):
-        ops.gate_pitfalls(ctx)
+    assert ops.gate_pitfalls(ctx) == "proceed"
+    assert "the design proceeded without pitfalls" in ctx.facts["pitfalls_advisory"]
 
 
 def test_gate_pitfalls_proceeds_on_valid(tmp_path):
     """gate_pitfalls proceeds when pitfalls.json is valid."""
-    ctx = nn.RunContext(tmp_path, knobs={"pitfalls_attempts": 3})
+    ctx = nn.RunContext(tmp_path)
     ctx.facts.update({"source": str(tmp_path), "pitfalls_attempts_used": 0})
     ctx.write_text("pitfalls.json", PITFALLS_ANSWER)
     import refactory_dsh.design_ops as ops
@@ -390,7 +397,7 @@ def test_fixture_repo_gets_pitfall_for_pinning_test(tmp_path):
 
     # ── run context pointing at the fixture repo as its source ──
     run = tmp_path / "run"
-    ctx = nn.RunContext(run, knobs={"pitfalls_attempts": 3})
+    ctx = nn.RunContext(run)
     ctx.facts.update({"source": str(repo), "pitfalls_attempts_used": 0})
     ctx.write_text("pitfalls.json", pitfall_answer)
 
@@ -470,7 +477,6 @@ def test_new_project_design_run_passes_pitfalls_gate(tmp_path):
         "perspectives",
         "one plan",
         design_doc,
-        DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
         *REVIEW_ANSWERS[:3],
         VERIFICATION_ANSWER,
@@ -494,7 +500,7 @@ def test_empty_target_absent_evidence_passes_gate(tmp_path):
     source = tmp_path / "repo"
     source.mkdir()
     run = tmp_path / "run"
-    ctx = nn.RunContext(run, knobs={"pitfalls_attempts": 3})
+    ctx = nn.RunContext(run)
     ctx.facts.update({"source": str(source), "pitfalls_attempts_used": 0})
     pitfalls_data = json.dumps([{
         "id": "PIT-001", "risk": "high", "category": "scope_boundaries",

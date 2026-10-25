@@ -219,7 +219,6 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
 
     claims_facts = {
         "claims_check_feedback": "",
-        "claims_check_attempts_used": 0,
         "design_review_status": "",
     } if deliver else {}
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
@@ -265,86 +264,40 @@ def route_strategy(ctx: Any) -> Any:
     return Verdict("proceed", "a full design weighs perspectives before the plan")
 
 
-def route_design_review(ctx: Any) -> Any:
-    """Send a scoped change's design to the automatic checks; a full design is reviewed.
-
-    For a scoped change the design-review gate's own checks (an Ask mapping present,
-    citations and quotes true, high-risk pitfalls answered, required sections present)
-    and the person's approval are the review; the review agent adds a round to a change
-    whose design is a page long. The gate learns which from `design_review_by`, so a
-    run whose graph predates this gate keeps its agent's review.
-    """
-    from refactory_dsh.nn import Verdict
-
-    if ctx.facts.get("research_scope") == "scoped":
-        ctx.set_fact("design_review_by", "automatic")
-        return Verdict("scoped", "a scoped change's design is checked automatically")
-    ctx.set_fact("design_review_by", "agent")
-    return Verdict("proceed", "a full design is reviewed by the design-review agent")
-
-
 def gate_design_review(ctx: Any) -> str:
-    """Proceed when the design review passes and the mechanical checks hold.
+    """Send a design back only when the build cannot proceed without a rewrite.
 
-    Never raises ValueError: when attempts are exhausted, it proceeds to
-    gate_strategy with the remaining findings in the design_review_findings
-    fact, so the person decides. A design `route_design_review` sent here without the
-    review agent (`design_review_by` is ``automatic``) has only the mechanical checks;
-    any review file is not its review.
+    One design pass, with no reviewer between the design and the person's gate: a
+    design goes back to design_doc only when its ``## Changes`` section is missing or
+    empty, at most ``design_review_attempts`` times (default 1). Everything else is
+    advisory and is shown on the approval gate's card (`design_review_status`): the
+    claims check's unverified claims and notes (`design_claims.check_design_claims`), and
+    this gate's own checks -- the light template's other required sections, citations,
+    quotations of the brief, and the optional sections a design has (rule-site markers,
+    pitfall answers). An optional section a design leaves out is not checked. Never
+    reads a review, and never fails the run.
     """
-    from refactory_dsh.create_ops import PASS_MARK, blocking_findings
+    from refactory_dsh import design_contract
     from refactory_dsh.nn import Verdict
 
-    scoped = ctx.facts.get("design_review_by") == "automatic"
-    # ── read the agent's review ──
-    review_text = ctx.read_text("reviews/design-review.md") if ctx.exists(
-        "reviews/design-review.md") and not scoped else ""
+    # Only what the build cannot proceed without; it is the one thing that costs a round.
     problems: list[str] = []
-    # What the gate notices that does not change what gets built. It is shown to the
-    # person and never costs a round: a design goes back only for a problem in `problems`.
+    # What the gate notices that the person should see. It never costs a round.
     advisories: list[str] = []
 
-    # Verdict and blocking findings, same parsing as gate_overwatch. A scoped change's
-    # design had no review agent, so any review file is not its review.
-    if scoped:
-        pass
-    elif review_text.strip():
-        verdict_line = review_text.strip().splitlines()[-1].strip()
-        problems.extend(blocking_findings(review_text))
-        if verdict_line != PASS_MARK:
-            problems.append(f"the review did not state {PASS_MARK!r}; "
-                            f"its last line is: {verdict_line!r}")
-    else:
-        problems.append("reviews/design-review.md is empty or missing")
-
-    # ── mechanical check 1: cited file:line references exist ──
     design_text = ctx.read_text("design.md") if ctx.exists("design.md") else ""
     source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
 
-    # Build an index of tracked files for bare-name resolution.
-    tracked_files: list[str] = []
-    if source:
-        try:
-            output = worktree.git(Path(source), "ls-files")
-            tracked_files = [f for f in output.splitlines() if f.strip()]
-        except ValueError:
-            pass
+    # ── what blocks: the section the build needs ──
+    missing_build = design_contract.missing_sections(design_text)
+    if missing_build:
+        problems.append(
+            "the design is missing the section the build needs, or it is empty: "
+            + ", ".join(f"## {section}" for section in missing_build))
 
-    def _resolve_citation(file_path: str) -> Path | None:
-        """Resolve a citation path: try direct, then match as a suffix of tracked files."""
-        full = Path(source) / file_path
-        if full.is_file():
-            return full
-        # Bare or partial path: find a tracked file whose path ends with it.
-        matches = []
-        for tracked in tracked_files:
-            if tracked == file_path or tracked.endswith("/" + file_path):
-                candidate = Path(source) / tracked
-                if candidate.is_file():
-                    matches.append(candidate)
-        return matches[0] if len(matches) == 1 else None
-
+    # ── advisory 1: cited file:line references exist ──
     if design_text and source:
+        tracked = tracked_files(source)
         # Match path.ext:N or path.ext:N-M  (the format design_doc is told to use)
         for match in _re.finditer(
             r'(?<!\w)([A-Za-z_][\w/._-]*\.\w+):(\d+)(?:-(\d+))?(?!\w)',
@@ -358,18 +311,20 @@ def gate_design_review(ctx: Any) -> str:
             file_path = match.group(1)
             start_s, end_s = match.group(2), match.group(3)
             line_num = int(end_s) if end_s else int(start_s)
-            resolved = _resolve_citation(file_path)
+            resolved = resolve_cited(source, file_path, tracked)
             if resolved is None:
                 continue
-            else:
-                actual_lines = resolved.read_text().splitlines()
-                if line_num > len(actual_lines):
-                    problems.append(
-                        f"citation {match.group(0)!r}: {file_path} has "
-                        f"{len(actual_lines)} lines, not {line_num}"
-                    )
+            try:
+                actual_lines = (Path(source) / resolved).read_text().splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            if line_num > len(actual_lines):
+                advisories.append(
+                    f"citation {match.group(0)!r}: {file_path} has "
+                    f"{len(actual_lines)} lines, not {line_num}"
+                )
 
-    # ── mechanical check 2: brief quotations are verbatim ──
+    # ── advisory 2: brief quotations are verbatim ──
     if design_text:
         brief_text = ""
         if ctx.exists("brief.json"):
@@ -399,21 +354,21 @@ def gate_design_review(ctx: Any) -> str:
                             f"in punctuation or formatting"
                         )
                     else:
-                        problems.append(
+                        advisories.append(
                             f"the design attributes {quoted!r} to the brief, but "
                             f"that text does not appear verbatim in the brief"
                         )
 
-    # ── mechanical check 3: design-document contract ──
-    from refactory_dsh import design_contract
-
+    # ── advisory 3: the rest of the light template, and the optional sections present ──
     if design_text:
         run_name = str(ctx.facts.get("name") or "")
         parsed = design_contract.parse(design_text, run_name)
-        missing = design_contract.missing_parts(parsed)
+        missing = [section for section in design_contract.missing_sections(
+            design_text, design_contract.REQUIRED_SECTIONS)
+            if section not in design_contract.BUILD_SECTIONS]
         if missing:
-            problems.append(
-                f"the design is missing required section(s): {', '.join(missing)}"
+            advisories.append(
+                f"the design is missing section(s): {', '.join(missing)}"
             )
         left_no_reason = design_contract.left_without_reason(parsed)
         if left_no_reason:
@@ -442,23 +397,16 @@ def gate_design_review(ctx: Any) -> str:
                 "the design's title is the run name; it must say what the change does"
             )
 
-    # ── mechanical check 3a: failure trace section ──
-    if design_text:
-        if not design_contract.has_non_empty_section(design_text, design_contract.FAILURE_TRACE):
-            advisories.append(
-                "the design is missing the required ## Failure trace section (or it is empty)"
-            )
-
-    # ── mechanical check 3b: ask mapping section ──
-    if design_text:
-        if not design_contract.has_non_empty_section(design_text, design_contract.ASK_MAPPING):
-            problems.append(
-                "the design is missing the required ## Ask mapping table (or it is empty)"
-            )
-
-    # ── mechanical check 4: pitfall coverage ──
+    # ── advisory 4: pitfall coverage, when the design answers pitfalls ──
     has_pitfalls = ctx.facts.get("has_pitfalls_step", False)
-    if has_pitfalls:
+    answers_pitfalls = not design_contract.missing_sections(
+        design_text, (design_contract.ANTI_PATTERNS,))
+    if has_pitfalls and not answers_pitfalls:
+        # An optional section: a design without it is not checked against the pitfalls.
+        ctx.set_fact("pitfall_coverage",
+                     "pitfall coverage not checked: the design has no "
+                     "## Anti-patterns to avoid section (optional)")
+    elif has_pitfalls:
         from refactory_dsh import pitfalls as pitfalls_mod
 
         if ctx.exists("pitfalls.json"):
@@ -466,13 +414,15 @@ def gate_design_review(ctx: Any) -> str:
                 pitfalls_raw = ctx.read_text("pitfalls.json")
                 pitfalls_data = json.loads(pitfalls_raw)
                 if isinstance(pitfalls_data, list):
+                    # gate_pitfalls lets a malformed entry through; only objects count.
+                    pitfalls_data = [p for p in pitfalls_data if isinstance(p, dict)]
                     addressed, aside, pit_missing = pitfalls_mod.pitfall_coverage(
                         design_text, pitfalls_data)
                     missing_high = [pid for pid in pit_missing
                                    if any(p.get("id") == pid and p.get("risk") == "high"
                                           for p in pitfalls_data)]
                     if missing_high:
-                        problems.append(
+                        advisories.append(
                             f"high-risk pitfall(s) not addressed in the design: "
                             f"{', '.join(missing_high)}"
                         )
@@ -494,102 +444,59 @@ def gate_design_review(ctx: Any) -> str:
                         ctx.set_fact("pitfall_coverage",
                                      "Pitfall coverage:\n" + "\n".join(coverage_lines))
             except (json.JSONDecodeError, UnicodeDecodeError):
-                problems.append("pitfalls.json exists but is not valid JSON")
+                advisories.append("pitfalls.json exists but is not valid JSON")
         else:
-            problems.append(
-                "pitfalls.json is missing (gate_pitfalls should have validated it)")
+            advisories.append("pitfalls.json is missing")
     else:
         ctx.set_fact("pitfall_coverage",
                      "pitfalls check skipped: no pitfalls_researcher in this graph")
 
-    # ── mechanical check 5: finding coverage ──
-    # Research and perspective findings are read by the design writer and the reviewer.
-    # A design cites only the ones that change a decision, so an uncited finding is
-    # recorded in the finding_coverage fact, never listed at the gate or sent back.
+    # ── advisory 5: finding coverage ──
+    # Research and perspective findings are read by the design writer. A design cites
+    # only the ones that change a decision, so an uncited finding is recorded in the
+    # finding_coverage fact, never listed at the gate or sent back.
     from refactory_dsh import findings_coverage
     findings_coverage.gate_problems(ctx)
 
-    # The review agent's notes do not send the design back; the person sees them.
-    advisories.extend(f"review note: {note}" for note in _review_notes(review_text))
-
-    # ── mechanical check 6: repository questions and brief-example trace ──
-    deliverable_kind_value = ctx.facts.get("deliverable_kind", "")
-    if deliverable_kind_value == "repository_change" and design_text and not scoped:
-        from refactory_dsh.authoring_evidence import check_review_questions
-        from refactory_dsh.changed_functions import is_generated, is_test_path
-        from refactory_dsh import design_contract
-
-        run_name = str(ctx.facts.get("name") or "")
-        parsed = design_contract.parse(design_text, run_name)
-        changed_fns = [
-            design_contract._extract_file_path(site["path"])
-            for site in parsed.rule_sites
-            if site["status"] == "changed"
-        ]
-        target = str(ctx.facts.get("target") or "")
-        # Normalise and deduplicate; only product code needs repository questions.
-        seen_fns: set[str] = set()
-        deduped_fns: list[str] = []
-        for fn in changed_fns:
-            fn_norm = _re.sub(r':\d+(-\d+)?$', '', fn).strip()
-            file_path = fn_norm.split("::", 1)[0]
-            if (not fn_norm or fn_norm in seen_fns or is_test_path(file_path)
-                    or (target and is_generated(Path(target), file_path))):
-                continue
-            seen_fns.add(fn_norm)
-            deduped_fns.append(fn_norm)
-        if deduped_fns:
-            rq_problems = check_review_questions(
-                review_text, deduped_fns, "design_review",
-                require_brief_trace=True,
-                target=target,
-            )
-            # Repository questions are the code reviewers' bookkeeping; at design time
-            # they are listed, never a round of their own.
-            advisories.extend(rq_problems)
-
-    # ── decide: proceed, reloop, or exhaust ──
-    # A full design gets the configured number of rounds. A scoped design checked only
-    # automatically gets one rewrite for what those checks block on, before the person
-    # sees it: a rewrite costs one design step and no review agent. A scoped design the
-    # review agent reviewed (a graph from before route_design_review) keeps one round.
-    allowed = int(ctx.knob("design_review_attempts", 2))
-    if scoped:
-        allowed = min(allowed, 2)
-    elif ctx.facts.get("research_scope") == "scoped":
-        allowed = min(allowed, 1)
+    # ── decide: proceed, or one rewrite for the section the build needs ──
+    # Rewrites are counted, not visits: a design a person sends back at gate_strategy
+    # that then lacks ## Changes still gets the rewrite it has not had.
+    allowed = int(ctx.knob("design_review_attempts", 1))
+    rewrites = int(ctx.facts.get("design_review_rewrites", 0) or 0)
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
     ctx.set_fact("design_review_attempts_used", used)
     ctx.set_fact("design_review_advisory", "\n".join(f"- {a}" for a in advisories))
     advisory_block = _advisory_block(advisories)
     coverage = ctx.facts.get("pitfall_coverage", "")
+    coverage_block = f"\n\n{coverage}" if coverage else ""
 
     if not problems:
         ctx.write_text("reviews/design-review-feedback.txt",
-                       "the design review passed\n" + advisory_block)
-        ctx.set_fact("design_review_feedback", "(the design review passed)")
+                       "nothing blocks the build\n" + advisory_block)
+        ctx.set_fact("design_review_feedback", "(nothing blocks the build)")
         ctx.set_fact("design_review_blocking", "")
-        ctx.set_fact("design_review_findings",
-                     "(none: the design review passed)" + advisory_block
-                     + (f"\n\n{coverage}" if coverage else ""))
+        ctx.set_fact("design_review_findings", "(none: nothing blocks the build)" + coverage_block)
         ctx.set_fact("design_review_status", design_review_status(ctx.facts))
         return "proceed"
 
     report = "\n".join(f"- {p}" for p in problems)
     ctx.set_fact("design_review_blocking", report)
+
+    if rewrites < allowed:
+        # The one rewrite: the writer also sees what is advisory, to fix while it is there.
+        ctx.set_fact("design_review_rewrites", rewrites + 1)
+        feedback = report + _advisory_block(advisories)
+        ctx.write_text("reviews/design-review-feedback.txt", feedback + "\n")
+        ctx.set_fact("design_review_feedback", feedback)
+        ctx.set_fact("design_review_findings", "(no findings yet)")
+        return Verdict("reloop", report)
+
+    # Out of rewrites: the person decides, with the gap shown.
     ctx.write_text("reviews/design-review-feedback.txt", report + "\n" + advisory_block)
     ctx.set_fact("design_review_feedback", report)
-
-    if used >= allowed:
-        # Out of rounds: proceed to gate_strategy with the findings shown.
-        ctx.set_fact("design_review_findings",
-                     report + advisory_block + (f"\n\n{coverage}" if coverage else ""))
-        ctx.set_fact("design_review_status", design_review_status(ctx.facts))
-        return "proceed"
-
-    # Reloop to design_doc with the blocking findings.
-    ctx.set_fact("design_review_findings", "(no findings yet)")
-    return Verdict("reloop", report)
+    ctx.set_fact("design_review_findings", report + coverage_block)
+    ctx.set_fact("design_review_status", design_review_status(ctx.facts))
+    return "proceed"
 
 
 #: A research direction's footprint has exactly these keys, each a list (dm-200).
@@ -601,13 +508,46 @@ _FUNCTION_CITATION = _re.compile(
     r"(?P<path>[^\s:]+):(?P<line>[1-9]\d*)(?:-[1-9]\d*)?\s+(?P<name>[A-Za-z_][\w.]*(?:\(\))?)")
 
 
-def _tracked_files(source: str) -> set[str] | None:
+def tracked_files(source: str) -> set[str] | None:
     """The checkout's tracked files, or None when *source* is not a git checkout."""
     try:
         listing = worktree.git(Path(source), "ls-files", "-z")
     except Exception:  # not a git checkout: the caller checks the file system instead
         return None
     return {name for name in listing.split("\0") if name}
+
+
+def cited_candidates(source: str, cited: str, tracked: set[str] | None) -> list[str]:
+    """Every checkout file a cited path could name, as a path from the checkout's root.
+
+    A citation names a path from the repository root, from a package, or a bare file
+    name; *tracked* (`tracked_files`) is what counts: the path itself when it is
+    tracked, otherwise every tracked file ending with ``/<cited>``. Without a git
+    checkout the file system decides. A path outside the checkout names nothing.
+    """
+    if cited.startswith(("/", "~")) or ".." in Path(cited).parts:
+        return []
+    if tracked is not None:
+        if cited in tracked:
+            return [cited]
+        return sorted(name for name in tracked if name.endswith("/" + cited))
+    try:
+        root = Path(source).resolve()
+        path = (root / cited).resolve()
+        return [cited] if path.is_relative_to(root) and path.is_file() else []
+    except OSError:  # a path too long for the file system names no file
+        return []
+
+
+def resolve_cited(source: str, cited: str, tracked: set[str] | None) -> str | None:
+    """The checkout file a citation names: its only candidate, or None (#498).
+
+    With no checkout to verify against (*source* empty) the citation stands as written.
+    """
+    if not source:
+        return cited
+    candidates = cited_candidates(source, cited, tracked)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def classify_scale(ctx: Any) -> dict[str, Any]:
@@ -642,30 +582,7 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
     # ── where cited code must exist ───────────────────────────────────
     # The target's own checkout (the run's worktree), never the run directory.
     source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
-    tracked = _tracked_files(source) if source else None
-
-    def _resolve(cited: str) -> str | None:
-        """The checkout file a citation names, or None when it names none.
-
-        Research cites paths from the repository root, from a package, or by a bare
-        file name; any of them counts when exactly one tracked file ends with it.
-        A path outside the checkout never counts.
-        """
-        if not source:
-            return cited  # no checkout to verify against
-        if cited.startswith(("/", "~")) or ".." in Path(cited).parts:
-            return None
-        if tracked is not None:
-            if cited in tracked:
-                return cited
-            matches = [name for name in tracked if name.endswith("/" + cited)]
-            return matches[0] if len(matches) == 1 else None
-        try:
-            root = Path(source).resolve()
-            path = (root / cited).resolve()
-            return cited if path.is_relative_to(root) and path.is_file() else None
-        except OSError:  # a path too long for the file system names no file
-            return None
+    tracked = tracked_files(source) if source else None
 
     # ── aggregate footprint ────────────────────────────────────────────
     touched: dict[tuple[str, str, str], str] = {}   # (file, name, line) -> citation
@@ -688,7 +605,7 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
                 return _full(f"no usable footprint: {key} is not a list: {footprint[key]!r}"[:300])
         for entry in footprint["existing_functions"]:
             match = _FUNCTION_CITATION.fullmatch(entry.strip()) if isinstance(entry, str) else None
-            resolved = _resolve(match["path"]) if match else None
+            resolved = resolve_cited(source, match["path"], tracked) if match else None
             if resolved is None:
                 return _full(f"footprint without evidence: {entry!r}"[:300])
             # By file, name and line: same-named methods in one file are different
@@ -714,68 +631,61 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
     return {"research_scope": "scoped", "research_scope_reason": reason}
 
 def design_review_status(facts: dict) -> str:
-    """One-line status for the approval gate, from the run's facts.
+    """The approval gate's card, from the run's facts.
 
-    Returns '' when no review has run; 'Design review: PASS' on pass, with
-    ', N advisory' when the gate listed items that do not change the build; or
-    'Design review: FAIL, N unresolved' plus one line per blocking finding. Advisory
-    items never count toward FAIL.
+    '' until the design-review gate has decided (and while it sends a design back).
+    Then, in order:
+
+    - ``Design review: PASS``, or ``Design review: FAIL, N unresolved`` and the line
+      naming the section the build needs that is still missing;
+    - ``Scale: <scoped|full> — <reason>``;
+    - ``Unverified claims (high, advisory): N``, one ``- unverified claim: …`` line each:
+      what the claims check could not confirm;
+    - ``Claims check (advisory): N notes``: where a drifted quote was found;
+    - ``Other advisories: N``: the gate's other items, and what the research and
+      pitfalls gates let through.
+
+    Only the headline's unresolved lines sent the design back; nothing below them did.
     """
-    used = int(facts.get("design_review_attempts_used", 0))
+    used = int(facts.get("design_review_attempts_used", 0) or 0)
     if used == 0:
         return ""
     findings = str(facts.get("design_review_findings", ""))
     if findings == "(no findings yet)":
         return ""
-    advisory_n = sum(1 for ln in str(facts.get("design_review_advisory", "")).splitlines()
-                     if ln.startswith("- "))
-    advisory = f", {advisory_n} advisory" if advisory_n else ""
-    reason = facts.get("research_scope_reason", "")
-    # A scoped change's design had no review agent; the person is told so.
-    automatic = ""
-    if facts.get("design_review_by") == "automatic":
-        automatic = (" (automatic checks; scoped change"
-                     + (f" — {reason}" if reason else "")
-                     + ")")
-    if "(none: the design review" in findings:
-        status = f"Design review{automatic}: PASS{advisory}"
-        if not automatic and reason:
-            status += f"\nScale: full — {reason}"
-        return status
     blocking = facts.get("design_review_blocking")
-    source = str(blocking) if blocking is not None else findings
-    lines = [
-        ln for ln in source.splitlines()
-        if ln.startswith("- ")
-        and not ln.startswith("- the review did not state 'VERDICT: PASS'")
-    ]
-    n = len(lines)
-    status = (
-        f"Design review{automatic}: FAIL, {n} unresolved{advisory}\n"
-        + "\n".join(lines)
-    )
-    if not automatic and reason:
-        status += f"\nScale: full — {reason}"
-    return status
+    unresolved = [ln for ln in (str(blocking) if blocking is not None else findings).splitlines()
+                  if ln.startswith("- ")]
+    lines = ["Design review: " + (f"FAIL, {len(unresolved)} unresolved" if unresolved else "PASS"),
+             *unresolved]
+    reason = facts.get("research_scope_reason")
+    if reason:
+        lines.append(f"Scale: {facts.get('research_scope') or 'full'} — {reason}")
+    claims = facts.get("claims_check")
+    claims = claims if isinstance(claims, dict) else {}
+    unverified = [str(item) for item in claims.get("unverified") or ()]
+    if unverified:
+        lines.append(f"Unverified claims (high, advisory): {len(unverified)}")
+        lines.extend(f"- unverified claim: {item}" for item in unverified)
+    notes = [str(note) for note in claims.get("notes") or ()]
+    if notes:
+        lines.append(f"Claims check (advisory): {len(notes)} note{'s' if len(notes) != 1 else ''}")
+        lines.extend(f"- {note}" for note in notes)
+    advisories = [ln for ln in str(facts.get("design_review_advisory") or "").splitlines()
+                  if ln.startswith("- ")]
+    for step in ("research", "pitfalls"):
+        advisories.extend(f"- {step}: {ln[2:]}"
+                          for ln in str(facts.get(f"{step}_advisory") or "").splitlines()
+                          if ln.startswith("- "))
+    if advisories:
+        lines.append(f"Other advisories: {len(advisories)}")
+        lines.extend(advisories)
+    return "\n".join(lines)
 
 
 def _quote_words(text: str) -> str:
     """Text reduced to its words: case, punctuation, markdown and spacing dropped."""
     return " ".join(_re.findall(r"[^\W_]+", text.lower()))
-
-
-def _review_notes(review_text: str) -> list[str]:
-    """The bullets under the review's ``## Notes`` heading, without an empty 'none'."""
-    section = _re.search(r"(?im)^##\s+notes\s*$(.*?)(?=^#{1,2}\s|^\s*VERDICT:|\Z)",
-                         review_text, _re.S | _re.M)
-    if section is None:
-        return []
-    notes = []
-    for line in section[1].splitlines():
-        bullet = _re.match(r"\s*(?:[-*\u2022]|\d+[.)])\s+(.*\S)", line)
-        if bullet and not _re.fullmatch(r"(?i)none\.?", bullet[1].strip()):
-            notes.append(bullet[1].strip())
-    return notes
 
 
 def _advisory_block(advisories: list[str]) -> str:
@@ -786,35 +696,89 @@ def _advisory_block(advisories: list[str]) -> str:
             + "\n".join(f"  · {a}" for a in advisories))
 
 
-def gate_pitfalls(ctx: Any) -> str:
-    """Validate pitfalls.json structure; reloop to pitfalls_researcher when invalid.
+#: How many times design mode's research and pitfalls gates send their step back: once,
+#: and only when it produced nothing parseable. They never fail the run.
+DESIGN_STEP_RELOOPS = 1
 
-    When attempts are exhausted, stops the run as gate_research does.
+
+def _resend_once(ctx: Any, used_fact: str, review_file: str, review_fact: str,
+                 why: str) -> Verdict | None:
+    """Send the step back once for *why*; None once its one resend is spent."""
+    used = int(ctx.facts.get(used_fact, 0) or 0)
+    if used >= DESIGN_STEP_RELOOPS:
+        return None
+    ctx.set_fact(used_fact, used + 1)
+    ctx.write_text(review_file, f"- {why}\n")
+    ctx.set_fact(review_fact, f"- {why}")
+    return Verdict("reloop", why)
+
+
+def gate_design_research(ctx: Any) -> Any:
+    """Design mode's research gate: research guides the design and never fails the run.
+
+    Create mode keeps `create_ops.gate_research`, which refuses a plan it cannot use. Here
+    the plan is sent back once only when research-plan.json holds no parseable plan at
+    all; then the run proceeds with whatever exists. Everything else that gate checks --
+    three to five directions (one to three for a scoped change), empty fields, slugs, the
+    findings files -- is guidance: it is listed as advisory (``research_advisory``) on
+    the approval gate's card. Never raises.
+    """
+    from refactory_dsh.create_ops import _plan, research_problems
+
+    raw = ctx.read_text("research-plan.json") if ctx.exists("research-plan.json") else ""
+    scope = str(ctx.facts.get("research_scope") or "full")
+    # Every step after this one declares research/ as an input: it exists, if empty.
+    ctx.path("research").mkdir(parents=True, exist_ok=True)
+    if not _plan(raw):
+        why = research_problems(ctx, raw, scope)[0]
+        resent = _resend_once(ctx, "research_attempts_used", "research-review.txt",
+                              "research_review", why)
+        if resent is not None:
+            ctx.set_fact("research_advisory", "")
+            return resent
+        ctx.set_fact("research_advisory",
+                     f"- {why}; the design proceeded without a research plan")
+        return "proceed"
+    # The plan parses: create's checks, as advice.
+    notes = [f"- {problem}" for problem in research_problems(ctx, raw, scope, count="suggested")]
+    ctx.write_text("research-review.txt", "ok\n" if not notes else "\n".join(notes) + "\n")
+    ctx.set_fact("research_review", "(the research plan is used as it is)")
+    ctx.set_fact("research_advisory", "\n".join(notes))
+    return "proceed"
+
+
+def gate_pitfalls(ctx: Any) -> Any:
+    """Design mode's pitfalls gate: pitfalls guide the design and never fail the run.
+
+    pitfalls.json is sent back once only when it holds no parseable pitfalls (not JSON,
+    or no object in a non-empty array); then the run proceeds with whatever exists.
+    Anything else `pitfalls.validate_pitfalls` finds is listed as advisory
+    (``pitfalls_advisory``) on the approval gate's card. Never raises.
     """
     from refactory_dsh import pitfalls as pitfalls_mod
 
     raw = ctx.read_text("pitfalls.json") if ctx.exists("pitfalls.json") else ""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        data = None
+    if not (isinstance(data, list) and any(isinstance(entry, dict) for entry in data)):
+        why = f"pitfalls.json holds no parseable pitfalls: {raw.strip()[:200]!r}"
+        resent = _resend_once(ctx, "pitfalls_attempts_used", "pitfalls-review.txt",
+                              "pitfalls_review", why)
+        if resent is not None:
+            ctx.set_fact("pitfalls_advisory", "")
+            return resent
+        ctx.set_fact("pitfalls_advisory", f"- {why}; the design proceeded without pitfalls")
+        return "proceed"
     source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
     problems = pitfalls_mod.validate_pitfalls(raw, source, run_dir=str(ctx.workdir))
-
-    if not problems:
-        ctx.write_text("pitfalls-review.txt", "ok\n")
-        ctx.set_fact("pitfalls_review", "(pitfalls validated)")
-        return "proceed"
-
-    allowed = int(ctx.knob("pitfalls_attempts", 2))
-    used = int(ctx.facts.get("pitfalls_attempts_used", 0)) + 1
-    ctx.set_fact("pitfalls_attempts_used", used)
-
     report = "\n".join(f"- {p}" for p in problems)
-    ctx.write_text("pitfalls-review.txt", report + "\n")
-    ctx.set_fact("pitfalls_review", report)
-
-    if used >= allowed:
-        raise ValueError(
-            f"pitfalls are still not valid after {used} attempt(s):\n{report}"
-        )
-    return Verdict("reloop", report)
+    ctx.write_text("pitfalls-review.txt", (report or "ok") + "\n")
+    ctx.set_fact("pitfalls_review", "(pitfalls validated)" if not problems
+                 else "(the pitfalls are used as they are)")
+    ctx.set_fact("pitfalls_advisory", report)
+    return "proceed"
 
 
 def apply_cwd_escaped(result: Any, outcome: dict[str, Any]) -> None:
@@ -1503,7 +1467,7 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
             try:
                 rec = json.loads(wf.read_text())
                 nid = rec.get("node_id", "")
-                if nid in ("design_doc", "design_review"):
+                if nid == "design_doc":
                     route = rec.get("actual_route") or rec.get("requested_route") or {}
                     planning_models[nid] = route.get("model") or None
             except (json.JSONDecodeError, OSError):

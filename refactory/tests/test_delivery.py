@@ -21,7 +21,7 @@ import pytest
 from refactory_dsh import cli, console, delivery, nn, projects, worktree
 from refactory_dsh.design import DesignMode
 from refactory_dsh.projects import projects_dir
-from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, VERIFICATION_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
+from tests_support import DESIGN_DOC_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, VERIFICATION_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
 
 NAME = "delivered_tool"
 FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
@@ -1239,7 +1239,7 @@ def _answers(*emits: str) -> list[str]:
     and apply_corrections does not run — no model answer consumed.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits,
+            DESIGN_DOC_ANSWER, *emits,
             *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
 
 
@@ -2431,7 +2431,7 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
         "- PIT-001: addressed at `tool.py:1`\n"
     )
     answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-               tricky_design, DESIGN_REVIEW_ANSWER,
+               tricky_design,
                tricky_design,
                render({"tool.py": "print('built')\n"}),
                *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER, REVIEW_ANSWERS[3]]
@@ -3503,7 +3503,6 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         design_with_polling,   # design_doc writes design.md with "polling loop"
-        DESIGN_REVIEW_ANSWER,  # design_review passes
         # pick_corrections is a gate — no model answer needed
         corrected_design,      # apply_corrections rewrites design.md to "websockets"
         render({"tool.py": "print('built')\n"}),  # emit
