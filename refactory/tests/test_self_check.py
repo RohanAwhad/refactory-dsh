@@ -349,6 +349,32 @@ def test_the_cut_keeps_a_finished_chunks_failure(tmp_path, monkeypatch):
     assert record["duration_s"] < 30
 
 
+def test_a_chunk_runs_one_runner_so_a_failing_spec_cannot_hide_a_python_failure(tmp_path):
+    """The targeted command keeps the check's ``&&``: a chunk holding a spec and a Python
+    file would never run the Python file once vitest failed. Chunks hold one runner."""
+    from refactory_dsh.sandbox import SandboxResult
+
+    (tmp_path / "package.json").write_text('{"scripts": {"test": "vitest run"}}')
+    selection = [*(f"tests/test_p{n}.py" for n in (1, 2, 3)), "web/tests/s.spec.ts",
+                 *(f"tests/test_p{n}.py" for n in (4, 5, 6))]
+
+    def run(command: str, timeout: float) -> SandboxResult:
+        if command.startswith("pnpm test"):  # vitest fails before naming a test; && stops there
+            return SandboxResult(ok=False, returncode=1, stdout="vitest could not start", stderr="",
+                                 timed_out=False, elapsed_s=0.1)
+        if "tests/test_p3.py" in command:
+            return SandboxResult(ok=False, returncode=1, stderr="", timed_out=False, elapsed_s=0.1,
+                                 stdout="FAILED tests/test_p3.py::test_x - AssertionError\n1 failed in 0.10s")
+        return SandboxResult(ok=True, returncode=0, stdout="2 passed in 0.10s", stderr="",
+                             timed_out=False, elapsed_s=0.1)
+
+    prepass = failfast.targeted_prepass({}, "pnpm test && python -m pytest -q tests", run, 180,
+                                        root=str(tmp_path), selection=selection, self_check_timeout_s=300)
+    assert prepass.failing_ids == ["tests/test_p3.py::test_x"]
+    assert all(("pnpm test" in command) != ("pytest" in command) for command in prepass.commands)
+    assert "chunk 3 did not count" in " ".join(prepass.notes)
+
+
 def test_a_self_check_that_says_nothing_goes_on_with_no_fixup(tmp_path, monkeypatch):
     """Its only chunk runs past the limit: inconclusive, so the attempt goes on to the
     reviews and the whole check, with nothing spent and nothing sent back."""

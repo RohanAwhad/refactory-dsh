@@ -58,15 +58,11 @@ class Selection:
                 "importers": self.importers, "structural": self.structural}
 
 
-def _test_file_pattern():
-    from refactory_dsh.base_check import _TEST_FILE_PATTERNS
-
-    return _TEST_FILE_PATTERNS
-
-
 def is_test_file(path: str) -> bool:
     """Whether a runner collects ``path`` as a test module (pytest's or vitest's naming)."""
-    return bool(_test_file_pattern().search(path))
+    from refactory_dsh.base_check import _TEST_FILE_PATTERNS
+
+    return bool(_TEST_FILE_PATTERNS.search(path))
 
 
 def repository_files(root: Path) -> list[str]:

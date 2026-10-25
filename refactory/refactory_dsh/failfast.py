@@ -60,9 +60,28 @@ def self_check_limit(self_check_timeout_s: float, check_timeout_s: float) -> flo
     return float(min(self_check_timeout_s, check_timeout_s // 3))
 
 
+def _runner_of(name: str) -> str:
+    from refactory_dsh.check_digest import _SCRIPT_TEST_FILE
+
+    if " > " in name or _SCRIPT_TEST_FILE.search(name.split("::")[0]):
+        return "vitest"
+    return "pytest" if "::" in name or name.endswith(".py") else "other"
+
+
 def _chunks(selection: list[str]) -> list[list[str]]:
+    """The selection in order, cut into about `SELF_CHECK_CHUNKS` chunks of one runner each.
+
+    The targeted command keeps the check's ``&&`` between steps, so a chunk that held
+    two runners' tests would not run the second runner's once the first failed.
+    """
     size = max(1, math.ceil(len(selection) / SELF_CHECK_CHUNKS))
-    return [selection[start:start + size] for start in range(0, len(selection), size)]
+    chunks: list[list[str]] = []
+    for name in selection:
+        if chunks and len(chunks[-1]) < size and _runner_of(chunks[-1][-1]) == _runner_of(name):
+            chunks[-1].append(name)
+        else:
+            chunks.append([name])
+    return chunks
 
 
 def _output(result: Any) -> str:
