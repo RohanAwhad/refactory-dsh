@@ -362,17 +362,30 @@ def test_a_chunk_runs_one_runner_so_a_failing_spec_cannot_hide_a_python_failure(
         if command.startswith("pnpm test"):  # vitest fails before naming a test; && stops there
             return SandboxResult(ok=False, returncode=1, stdout="vitest could not start", stderr="",
                                  timed_out=False, elapsed_s=0.1)
-        if "tests/test_p3.py" in command:
+        failing = [name for name in ("tests/test_p3.py", "tests/test_p5.py") if name in command]
+        if failing:
             return SandboxResult(ok=False, returncode=1, stderr="", timed_out=False, elapsed_s=0.1,
-                                 stdout="FAILED tests/test_p3.py::test_x - AssertionError\n1 failed in 0.10s")
+                                 stdout="".join(f"FAILED {name}::test_x - AssertionError\n"
+                                                for name in failing) + "1 failed in 0.10s")
         return SandboxResult(ok=True, returncode=0, stdout="2 passed in 0.10s", stderr="",
                              timed_out=False, elapsed_s=0.1)
 
     prepass = failfast.targeted_prepass({}, "pnpm test && python -m pytest -q tests", run, 180,
                                         root=str(tmp_path), selection=selection, self_check_timeout_s=300)
-    assert prepass.failing_ids == ["tests/test_p3.py::test_x"]
+    # The failures before and after the spec's chunk both come back.
+    assert prepass.failing_ids == ["tests/test_p3.py::test_x", "tests/test_p5.py::test_x"]
     assert all(("pnpm test" in command) != ("pytest" in command) for command in prepass.commands)
     assert "chunk 3 did not count" in " ".join(prepass.notes)
+    # The spec's chunk reported nothing, so it is not counted as run.
+    assert "web/tests/s.spec.ts" in prepass.cut_ids and "web/tests/s.spec.ts" not in prepass.ran_ids
+
+
+def test_a_chunk_holds_at_most_four_tests():
+    """About six chunks, but never more than four tests in one, so a chunk the limit
+    stops loses little."""
+    chunks = failfast._chunks([f"tests/test_{n}.py" for n in range(60)])
+    assert [len(chunk) for chunk in chunks] == [4] * 15
+    assert [len(chunk) for chunk in failfast._chunks([f"tests/test_{n}.py" for n in range(7)])] == [2, 2, 2, 1]
 
 
 def test_a_self_check_that_says_nothing_goes_on_with_no_fixup(tmp_path, monkeypatch):
@@ -545,6 +558,338 @@ def test_design_fast_and_the_sequential_check_keep_the_dm128_prepass(tmp_path, m
     assert not (run / SELF_CHECK_RECORD).exists()
 
 
+# ── review of #502: an undone attempt, collection errors, the cut's order ─────
+
+
+UNDOES = render({"tool.py": "VERSION = 1\n"})
+BREAKS = render({"tool.py": "VERSION = 2\n"})
+PIN_FIXED = render({"tests/test_pin.py": "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 2\n"})
+GENERATED = {
+    "gen.py": "import tool\nopen('generated.txt', 'w').write(f'version {tool.VERSION}\\n')\n",
+    "generated.txt": "version 1\n",
+}
+
+
+def test_a_fixup_that_undoes_the_whole_attempt_is_refused_not_a_crash(tmp_path):
+    """The builder answers the pinned test by reverting its change: the amend would empty
+    the attempt, which git refuses. It is a refused emission instead, and the run goes on."""
+    repo = _target(tmp_path / "repo", PINNED)
+    model = FakeModel(_answers(BREAKS, UNDOES, PIN_FIXED))
+    run = tmp_path / "run"
+    result = _design(run, model, repo)
+    assert result.exit_ok, result.error
+    emits = [prompt for prompt in model.prompts if EMIT in prompt]
+    assert len(emits) == 3 and "undoes the whole attempt" in emits[2]
+    assert [entry["outcome"] for entry in _records(run)] == ["fixup", "pass"]
+    assert _commits(run) == [f"{NAME}: attempt 1"]
+    assert git(Path(worktree.recorded(run).path), "show", "HEAD:tool.py") == "VERSION = 2"
+
+
+def test_a_fixup_that_generate_turns_into_no_change_is_kept_not_a_crash(tmp_path):
+    """The fix-up reverts the source but not the file generate wrote from it; generate then
+    writes that file back too, so its amend would empty the attempt. It is kept, as an
+    attempt that changes nothing, and goes on to its check and reviews."""
+    repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
+    model = FakeModel(_answers(BREAKS, UNDOES))
+    run = tmp_path / "run"
+    result = _design(run, model, repo, generate="python gen.py")
+    assert result.exit_ok, result.error
+    assert [entry["outcome"] for entry in _records(run)] == ["fixup", "pass"]
+    found = worktree.recorded(run)
+    assert _commits(run) == [f"{NAME}: attempt 1"]
+    assert git(Path(found.path), "diff", "--stat", found.base, "HEAD") == ""
+
+
+def test_on_the_spine_a_fixup_that_undoes_the_attempt_is_a_counted_refusal(tmp_path, monkeypatch):
+    repo = _target(tmp_path / "repo", PINNED)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500012")
+    _emit(run, BREAKS, monkeypatch)
+    assert "self-check fix-up 1 of 2" in _prepare(run, monkeypatch)[1]
+    _emit(run, UNDOES, monkeypatch)
+    facts = _facts(run)
+    assert facts["consecutive_refusals"] == 1 and "undoes the whole attempt" in facts["emission_refused"]
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and out.strip().endswith("reloop") and "materialise could not apply" in out, err
+    assert _facts(run)["self_check_fixup_count"] == 1
+    found = worktree.recorded(run)
+    assert _commits(run) == [f"{NAME}: attempt 1"] and worktree.tracked_edits(found) == []
+    assert git(Path(found.path), "show", "HEAD:tool.py") == "VERSION = 2"
+
+
+def test_a_module_that_does_not_import_goes_back_with_the_chunks_other_failures(tmp_path, monkeypatch):
+    """pytest stops a chunk when a module does not import, so its other tests never ran:
+    the module goes back as its file's failure, the rest of the chunk runs again, and a
+    real failure there goes back too."""
+    plain = "import tool\n\n\ndef test_{n}():\n    assert tool\n"
+    files = {f"tests/test_{n}.py": plain.format(n=n) for n in range(1, 8)}
+    files["tests/test_3.py"] = "import tool\nfrom tool import OLD\n\n\ndef test_3():\n    assert OLD\n"
+    files["tests/test_4.py"] = "import tool\n\n\ndef test_4():\n    assert tool.VERSION == 1\n"
+    repo = _target(tmp_path / "repo", {"tool.py": "VERSION = 1\nOLD = 1\n", **files})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500013")
+    _emit(run, BREAKS, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    [record] = _records(run)
+    assert record["failing_ids"] == ["tests/test_3.py", "tests/test_4.py::test_4"]
+    assert sorted(record["ran"]) == sorted(files) and record["cut"] == []
+    assert "tests/test_3.py did not import" in " ".join(record["notes"])
+
+
+def test_a_slow_file_at_the_cut_does_not_hide_cheap_failures_after_it(tmp_path, monkeypatch):
+    """The rest of the selection runs cheapest first, so the slow (big) file is the one the
+    limit cuts, and the cheap failing file behind it in name order still reports."""
+    slow = "import time\nimport m1\n" + "# padding\n" * 400 + "\n\ndef test_a():\n    time.sleep(60)\n"
+    files = {"tests/test_a_slow.py": slow,
+             **{f"tests/test_{c}.py": f"import m{n}\n\n\ndef test_{c}():\n    assert m{n}\n"
+                for n, c in ((2, "b"), (3, "c"), (4, "d"))},
+             "tests/test_e_fails.py": "import m5\n\n\ndef test_e():\n    assert m5.X == 1\n",
+             **{f"m{n}.py": "X = 1\n" for n in range(1, 6)}}
+    repo = _target(tmp_path / "repo", files)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500014", self_check_timeout_s=10)
+    _emit(run, render({f"m{n}.py": "X = 2\n" for n in range(1, 6)}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    [record] = _records(run)
+    assert record["failing_ids"] == ["tests/test_e_fails.py::test_e"]
+    assert record["selection"][-1] == "tests/test_a_slow.py" and record["cut"] == ["tests/test_a_slow.py"]
+
+
+def test_a_fixup_runs_the_last_self_checks_failures_first(tmp_path, monkeypatch):
+    repo = _target(tmp_path / "repo", PINNED)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500015")
+    _emit(run, BREAKS, monkeypatch)
+    _prepare(run, monkeypatch)
+    _emit(run, render({"tool.py": "VERSION = 3\n"}), monkeypatch)
+    _prepare(run, monkeypatch)
+    first, second = _records(run)
+    assert first["selection"][0] == "tests/test_pin.py" and first["how_selected"]["first"] == []
+    assert second["selection"][0] == PIN and second["how_selected"]["first"] == [PIN]
+
+
+def test_timed_costs_order_the_rest(tmp_path):
+    """A file an earlier self-check timed costs what it took; untimed files cost their size."""
+    repo = _target(tmp_path / "repo", {
+        "m1.py": "X = 1\n", "m2.py": "X = 1\n",
+        "tests/test_big_fast.py": "import m1\n" + "# padding\n" * 300 + "\n\ndef test_a():\n    pass\n",
+        "tests/test_small_slow.py": "import m2\n\n\ndef test_b():\n    pass\n",
+    })
+    files = test_selection.repository_files(repo)
+    by_size = test_selection.select(["m1.py", "m2.py"], repo, {}, check_command=CHECK, files=files)
+    assert by_size.tests == ["tests/test_small_slow.py", "tests/test_big_fast.py"]
+    earlier = [{"timings": [{"tests": ["tests/test_small_slow.py"], "s": 30.0, "counted": True},
+                            {"tests": ["tests/test_big_fast.py::test_a"], "s": 0.5, "counted": True},
+                            {"tests": ["tests/test_big_fast.py"], "s": 99.0, "counted": False}]}]
+    costs = test_selection.costs_from_record(earlier, repo)
+    assert costs == {"tests/test_small_slow.py": 30.0, "tests/test_big_fast.py": 0.5}
+    timed = test_selection.select(["m1.py", "m2.py"], repo, {}, check_command=CHECK, files=files,
+                                  costs=costs)
+    assert timed.tests == ["tests/test_big_fast.py", "tests/test_small_slow.py"]
+
+
+def test_the_full_check_still_runs_and_binds_after_a_self_check_cut_at_the_limit(tmp_path):
+    """The self-check's limit stops it before the failing test: it says nothing, and the
+    whole check beside the reviews still finds the failure and sends the attempt back."""
+    repo = _target(tmp_path / "repo", {
+        "tool.py": "VERSION = 1\n",
+        "tests/test_a_slow.py": "import time\nimport tool\n\n\ndef test_a():\n    time.sleep(15)\n",
+        "tests/test_z_pin.py": "import tool\n\n\ndef test_z():\n    assert tool.VERSION == 1\n",
+    })
+    fixed = render({"tests/test_z_pin.py": "import tool\n\n\ndef test_z():\n    assert tool.VERSION == 2\n"})
+    model = FakeModel(_answers(BREAKS, fixed))
+    run = tmp_path / "run"
+    result = _design(run, model, repo, _mode(self_check_timeout_s=10, check_timeout_s=60))
+    assert result.exit_ok, result.error
+    assert [entry["outcome"] for entry in _records(run)] == ["inconclusive", "inconclusive"]
+    assert [entry["cut"] for entry in _records(run)] == [["tests/test_a_slow.py",
+                                                         "tests/test_z_pin.py"]] * 2
+    assert result.facts["attempts_used"] == 1 and result.facts["check_attempts_used"] == 1
+    assert _commits(run) == [f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
+    assert _count(model, HEALTH) == 2
+
+
+def _base_runs(monkeypatch, result=None):
+    """Count the base runs the self-check makes, and answer them with ``result`` if given."""
+    from refactory_dsh import base_check
+
+    runs = []
+    real = base_check.sandbox.run_command
+
+    def run_command(command, *, workdir, **kw):
+        if Path(workdir).name.startswith(base_check.BASE_WORKTREE_PREFIX):
+            runs.append((command, kw.get("home")))
+            if result is not None:
+                return result
+        return real(command, workdir=workdir, **kw)
+
+    monkeypatch.setattr(base_check.sandbox, "run_command", run_command)
+    return runs
+
+
+def test_a_base_run_that_names_no_failure_is_unavailable(tmp_path, monkeypatch):
+    from refactory_dsh import base_check
+    from refactory_dsh.sandbox import SandboxResult
+
+    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500016")
+    _emit(run, render({"tool.py": "VERSION = 1\nMARK = 1\n"}), monkeypatch)
+    _base_runs(monkeypatch, SandboxResult(ok=False, returncode=1, stdout="the base broke",
+                                          stderr="", timed_out=False, elapsed_s=0.1))
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    [record] = _records(run)
+    assert record["failing_ids"] == [ENV_FAILURE] and record["inherited_filtered"] == []
+    assert record["base"] == ("unavailable, so nothing is inherited: the base run failed (exit 1) "
+                              "without naming a failing test")
+    # Nothing is learned from it.
+    assert json.loads((run / base_check.TARGETED_CACHE_FILE).read_text())["tests"] == {}
+
+
+def test_a_base_whose_generate_fails_is_unavailable(tmp_path, monkeypatch):
+    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500017")
+    facts = _facts(run)
+    (run / "facts.json").write_text(json.dumps({**facts, "generate": "test -f attempt.flag"}))
+    _emit(run, render({"tool.py": "VERSION = 1\nMARK = 1\n", "attempt.flag": "x\n"}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    [record] = _records(run)
+    assert record["failing_ids"] == [ENV_FAILURE] and record["inherited_filtered"] == []
+    assert record["base"].startswith("unavailable, so nothing is inherited: the base's generate "
+                                     "or setup failed")
+
+
+def test_a_preparation_failure_during_a_fixup_ends_the_fixups(tmp_path, monkeypatch):
+    """A fix-up whose emission breaks the generate step is judged by the whole check, which
+    spends the attempt: the next emission is a new attempt, not an amendment."""
+    repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500018")
+    facts = _facts(run)
+    (run / "facts.json").write_text(json.dumps({**facts, "generate": "python gen.py"}))
+    _emit(run, BREAKS, monkeypatch)
+    assert "self-check fix-up 1 of 2" in _prepare(run, monkeypatch)[1]
+    _emit(run, render({"gen.py": "raise SystemExit('generate broke')\n"}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and out.strip().endswith("reloop"), err
+    facts = _facts(run)
+    assert facts["self_check_fixup_count"] == 0 and facts["attempts_used"] == 1
+    _emit(run, render({"gen.py": GENERATED["gen.py"], "tool.py": "VERSION = 1\n"}), monkeypatch)
+    assert _commits(run) == [f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
+
+
+def test_the_exhausted_early_stop_keeps_the_bases_failures_out(tmp_path, monkeypatch):
+    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500019", self_check_fixups=0)
+    _emit(run, BREAKS, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up" not in out, err
+    assert _records(run)[0]["outcome"] == "exhausted"
+    record = json.loads((run / "check-record.json").read_text())
+    assert record["inherited"] == [ENV_FAILURE]
+    assert [f["test_id"] for runner in record["runners"] for f in runner["failures"]] == [PIN]
+
+
+def test_what_was_learned_on_another_base_is_not_reused(tmp_path, monkeypatch):
+    from refactory_dsh import base_check
+
+    repo = _target(tmp_path / "repo", PINNED)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500020")
+    _emit(run, BREAKS, monkeypatch)
+    stale = base_check.cache_key("0" * 40, "", "", CHECK)
+    (run / base_check.TARGETED_CACHE_FILE).write_text(json.dumps(
+        {"cache_key": stale, "prepared": True, "tests": {PIN: True}}))
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    [record] = _records(run)
+    assert record["failing_ids"] == [PIN] and record["inherited_filtered"] == []
+    assert record["base"] == "compared with a run of 1 test(s) on the base"
+
+
+def test_the_base_runs_with_its_own_home(tmp_path, monkeypatch):
+    home_test = ("import os\nimport tool\n\n\ndef test_home():\n"
+                 "    assert os.environ['HOME'].endswith('base-check-home')\n")
+    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_home.py": home_test})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500021")
+    _emit(run, render({"tool.py": "VERSION = 1\nMARK = 1\n"}), monkeypatch)
+    runs = _base_runs(monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    [record] = _records(run)
+    # It fails in the attempt's HOME and passes in the base's: the change's, not inherited.
+    assert record["failing_ids"] == ["tests/test_home.py::test_home"]
+    assert record["inherited_filtered"] == []
+    assert [Path(home).name for _, home in runs] == ["base-check-home"]
+
+
+def test_the_base_is_prepared_once_for_its_key(tmp_path, monkeypatch):
+    """A fix-up whose self-check needs the base again runs the new tests there without
+    preparing the base a second time."""
+    from refactory_dsh import base_check
+
+    other = "import tool\n\n\ndef test_other():\n    assert not hasattr(tool, 'BROKEN')\n"
+    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS,
+                                       "tests/test_other.py": other})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500022")
+    prepared = []
+    real = base_check._ensure_base_worktree
+    monkeypatch.setattr(base_check, "_ensure_base_worktree",
+                        lambda ctx: prepared.append(1) or real(ctx))
+    runs = _base_runs(monkeypatch)
+    _emit(run, BREAKS, monkeypatch)
+    assert "self-check fix-up 1 of 2" in _prepare(run, monkeypatch)[1]
+    _emit(run, render({"tool.py": "VERSION = 2\nBROKEN = 1\n"}), monkeypatch)
+    assert "self-check fix-up 2 of 2" in _prepare(run, monkeypatch)[1]
+    first, second = _records(run)
+    assert first["inherited_filtered"] == [ENV_FAILURE] and first["failing_ids"] == [PIN]
+    assert second["failing_ids"] == [PIN, "tests/test_other.py::test_other"]
+    assert len(runs) == 2 and prepared == [1]
+
+
+def test_an_amendment_puts_the_worktree_back_first(tmp_path):
+    """What a check or reviewer changed in the worktree is put back before a fix-up is
+    amended in, so the amendment holds only the emission."""
+    repo = _target(tmp_path / "repo", PINNED)
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef500023", run)
+    found = worktree.commit_attempt(run, {Path("tool.py"): "VERSION = 2\n"}, f"{NAME}: attempt 1")
+    path = Path(found.path)
+    (path / "app.py").write_text("print('left by a reviewer')\n")
+    found = worktree.commit_attempt(run, {Path("tests/test_pin.py"): "x = 2\n"}, "unused", amending=True)
+    assert worktree.tracked_edits(found) == []
+    assert (path / "app.py").read_text() == "print('app')\n"
+    assert git(path, "show", "HEAD:app.py") == "print('app')"
+
+
+def test_prepare_checks_limit_follows_the_knobs_to_their_bounds():
+    from refactory_dsh.design import prepare_check_iterations
+
+    assert prepare_check_iterations({}) == 45 == DesignMode().graph().nodes["prepare_check"].max_iterations
+    widest = _mode(check_attempts=5, self_check_fixups=5)
+    # (8 + 25 + 1) x 2 + 25 + 8 reloops at most, so 102.
+    assert widest.graph().nodes["prepare_check"].max_iterations == 102
+    state = widest.state_dict()
+    assert state["graph"]["nodes"]["prepare_check"]["max_iterations"] == 102
+    assert lowering.to_workflow(state).nodes["prepare_check"].max_iterations == 102
+    capped = _mode(check_attempts=5, self_check_fixups=5, check_attempt_cap=20)
+    assert capped.graph().nodes["prepare_check"].max_iterations == (20 + 25 + 1) * 2 + 25 + 20 + 1
+
+
+def test_the_worst_case_at_the_knobs_bounds_still_ends_in_the_stop(tmp_path):
+    """Five attempts of five fix-ups each, two refusals before every applied emission: 89
+    reloops of prepare_check, under its limit of 102 and twice the old fixed 45."""
+    repo = _target(tmp_path / "repo", PINNED)
+    refused = "===EDIT: tool.py===\n<<<<<<< SEARCH\nnot in the file\n=======\nx\n>>>>>>> REPLACE\n"
+    emits = [emission for n in range(30) for emission in (refused, refused,
+                                                          render({"tool.py": f"VERSION = {10 + n}\n"}))]
+    model = FakeModel(_answers(*emits))
+    run = tmp_path / "run"
+    result = _design(run, model, repo, _mode(check_attempts=5, self_check_fixups=5))
+    assert not result.exit_ok
+    assert "BuildLoopStop" in (result.error or "") and "check attempts exhausted" in result.error
+    assert "max_iterations" not in result.error
+    assert [entry["outcome"] for entry in _records(run)] == (["fixup"] * 5 + ["exhausted"]) * 5
+    assert _count(model, EMIT) == 90
+
+
 # ── the selection ─────────────────────────────────────────────────────────────
 
 
@@ -552,17 +897,20 @@ def _synthetic(root: Path) -> Path:
     """A repository whose tests mostly import two engine modules, with features on top, a
     structural test, a helper, a generated file, a spec, docs, and a test outside the
     check's scope."""
-    def test(name: str, imports: str) -> tuple[str, str]:
-        return f"tests/test_{name}.py", f"{imports}\n\n\ndef test_{name}():\n    pass\n"
+    def test(name: str, imports: str, pad: int = 0) -> tuple[str, str]:
+        # ``pad`` makes a file bigger, so costlier to the selection's estimate.
+        padding = f"# {'x' * pad}\n" if pad else ""
+        return f"tests/test_{name}.py", f"{padding}{imports}\n\n\ndef test_{name}():\n    pass\n"
 
     files = dict([
-        test("layout", "from pathlib import Path"),
+        test("layout", "from pathlib import Path", 300),
         *(test(f"whole_{n}", "from pkg import core, engine") for n in (1, 2, 3)),
-        *(test(f"engine_{n}", "from pkg import engine") for n in ("a", "b")),
+        test("engine_a", "from pkg import engine", 200),
+        test("engine_b", "from pkg import engine"),
         test("core_a", "from pkg import core"),
-        test("feature", "from pkg import engine, feature"),
+        test("feature", "from pkg import engine, feature", 50),
         test("leaf", "from pkg import core, engine, leaf"),
-        test("leaf_and_feature", "from pkg import engine, feature, leaf"),
+        test("leaf_and_feature", "from pkg import engine, feature, leaf", 100),
         test("gone", "from pkg.gone import Z"),
         test("helped", "import helpers"),
     ])
@@ -590,27 +938,34 @@ def test_the_selection_order(tmp_path):
     def select(touched: list[str], prev: dict | None = None, listing: list[str] = files):
         return test_selection.select(touched, repo, prev or {}, check_command=check, files=listing)
 
-    # A feature change: the last failures, then the importers with the most changed
-    # modules first, then the structural test; nothing that cannot reach the change.
+    # A feature change: the last failures, then the importers and the structural test,
+    # cheapest (smallest) first; nothing that cannot reach the change.
     leaf = select(["pkg/leaf.py", "pkg/feature.py"], last)
     assert leaf.hubs_changed == [] and leaf.engine == []
-    assert leaf.tests == ["tests/test_feature.py::test_feature", "tests/test_leaf_and_feature.py",
-                          "tests/test_feature.py", "tests/test_leaf.py", "tests/test_layout.py"]
+    assert leaf.tests == ["tests/test_feature.py::test_feature", "tests/test_leaf.py",
+                          "tests/test_feature.py", "tests/test_leaf_and_feature.py",
+                          "tests/test_layout.py"]
 
     # An engine change: the structural test and the tests on the whole engine (every hub)
-    # first, then the tests the emission touched, then the rest of the importers.
+    # first, then the tests the emission touched, then the rest of the importers, cheapest
+    # first.
     engine = select(["pkg/engine.py", "tests/test_feature.py"])
     assert engine.hubs_changed == ["pkg/engine.py"]
     assert engine.engine == ["tests/test_layout.py", "tests/test_whole_1.py", "tests/test_whole_2.py",
                              "tests/test_whole_3.py", "tests/test_leaf.py"]
-    assert engine.tests == [*engine.engine, "tests/test_feature.py", "tests/test_engine_a.py",
-                            "tests/test_engine_b.py", "tests/test_leaf_and_feature.py"]
+    assert engine.tests == [*engine.engine, "tests/test_feature.py", "tests/test_engine_b.py",
+                            "tests/test_leaf_and_feature.py", "tests/test_engine_a.py"]
+
+    # On a fix-up, what the last self-check found failing runs first of all.
+    fixup = test_selection.select(["pkg/engine.py"], repo, {}, check_command=check, files=files,
+                                  first=["tests/test_engine_a.py::test_engine_a"])
+    assert fixup.tests[0] == "tests/test_engine_a.py::test_engine_a"
 
     # A deleted module's importers are found, and a helper's; a test the check does not
     # collect is not.
     gone = select(["pkg/gone.py", "tests/helpers.py"],
                   listing=[name for name in files if name != "pkg/gone.py"])
-    assert gone.tests == ["tests/test_gone.py", "tests/test_helped.py", "tests/test_layout.py"]
+    assert gone.tests == ["tests/test_helped.py", "tests/test_gone.py", "tests/test_layout.py"]
 
     # A spec runs when it is touched, never because a source it imports is.
     assert select(["web/src/a.ts"]).tests == ["tests/test_layout.py"]
