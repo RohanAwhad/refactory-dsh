@@ -38,9 +38,10 @@ OVERWATCH_VERDICTS = ("pass", "redo")
 #: person instead of sending the builder a defect it cannot fix.
 UNAVAILABLE = "UNAVAILABLE:"
 
-#: A line of a judge's file that starts with the marker: the run stops, as create's
-#: overwatch gate stops on one. A JSON string cannot hold a raw line break, so no line
-#: of a JSON verdict starts with it; only prose around or instead of the JSON can.
+#: A line of a judge's file that starts with the marker: when the file holds no readable
+#: verdict, the run stops, as create's overwatch gate stops on one. A JSON string cannot
+#: hold a raw line break, so no line of a JSON verdict starts with it; only prose around
+#: or instead of the JSON can.
 UNAVAILABLE_LINE = re.compile(r"(?im)^\s*UNAVAILABLE:.*$")
 
 #: The severities a must-fix item may carry, and those that block on their own.

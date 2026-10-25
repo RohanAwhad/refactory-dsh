@@ -213,8 +213,10 @@ def test_b39b_removed_unchanged_and_untested_sites_with_a_passing_overwatch_reac
     the same evidence."""
     repo = _calc_repo(tmp_path)
     run, key = _correction_run(tmp_path, CORRECTION)
+    # Evidence with a line break and a heading of its own, which the PR must not render.
     verdict = overwatch_judgment("pass", corrections=[
-        {"id": key, "met": True, "evidence": "calc.py:2 returns x >= 0; app.py is unchanged"}])
+        {"id": key, "met": True,
+         "evidence": "calc.py:2 returns x >= 0;\n## Injected heading\napp.py is unchanged"}])
     emission = render({"calc.py": "def validate(x):\n    return x >= 0\n"})
     model = FakeModel(_answers(_round(emission, overwatch=verdict)))
     model._correction_sites = {CORRECTION: SITES}
@@ -244,7 +246,8 @@ def test_b39b_removed_unchanged_and_untested_sites_with_a_passing_overwatch_reac
     # The pull request takes its wording from the overwatch's verdict, not the audit's.
     body = (run / delivery.BODY).read_text()
     assert "- **Corrections, as the overwatch judged them:**" in body
-    assert f"{key}: met — calc.py:2 returns x >= 0; app.py is unchanged" in body
+    assert f"  - {key}: met — calc.py:2 returns x >= 0; ## Injected heading app.py is unchanged\n" in body
+    assert "\n## Injected heading" not in body
     assert "Correction-audit checks to confirm by hand" not in body
     assert "site app.py:1 is unchanged" not in body and "site calc.py:5 is removed" not in body
     assert "and the overwatch audit passed" in body, body
@@ -354,6 +357,27 @@ def test_a_judge_whose_verdict_cannot_be_read_is_asked_again_with_no_builder_rou
     assert "overwatch-verdict.json holds no JSON object" in ow_second
     assert (run / "reviews/qa-gate.txt").read_text().startswith(
         "proceed: the QA judge found nothing that must be fixed")
+    assert (run / "reviews/overwatch-gate.txt").read_text().startswith("proceed: overwatch passed")
+
+
+def test_each_round_gets_its_own_reread(tmp_path):
+    """The reread count is per round: round 1 spends its reread on each judge, and round 2,
+    after the overwatch sends the change back, gets its own."""
+    repo = git_repo(tmp_path / "repo")
+    redo = overwatch_judgment("redo", must_fix=[{"what": "prints the wrong word", "severity": "high"}])
+    model = FakeModel(_answers(
+        _round(_tool("bilt"), judge=[Scripted("unreadable"), qa_judgment("proceed")],
+               overwatch=[Scripted("unreadable"), redo]),
+        _round(_tool("built"), judge=[Scripted("unreadable"), qa_judgment("proceed")],
+               overwatch=[Scripted("unreadable"), overwatch_judgment("pass")])))
+    run = tmp_path / "run"
+    result = _design(run, model, repo)
+
+    assert result.exit_ok, result.error
+    assert len(_prompts(model, EMIT_MARK)) == 2 and result.facts["review_attempts_used"] == 1
+    assert len(_prompts(model, QA_JUDGE_MARK)) == 4
+    assert len(_prompts(model, OVERWATCH_JUDGE_MARK)) == 4
+    assert "could not be read" not in (run / "reviews/follow-ups.md").read_text()
     assert (run / "reviews/overwatch-gate.txt").read_text().startswith("proceed: overwatch passed")
 
 
@@ -542,16 +566,28 @@ UNAVAILABLE_ITEM = {"what": "UNAVAILABLE: no browser to render the page; install
     ("gate_overwatch", _overwatch_ctx, overwatch_judgment("redo", must_fix=[UNAVAILABLE_ITEM])),
     ("gate_qa", _gate_ctx, "UNAVAILABLE: no browser to render the page; install chromium"),
     ("gate_overwatch", _overwatch_ctx,
-     "UNAVAILABLE: no browser to render the page; install chromium\n" + overwatch_judgment("pass")),
+     "I could not judge.\nUNAVAILABLE: no browser to render the page; install chromium\n"),
 ])
 def test_a_judge_that_needs_an_unavailable_tool_stops_the_run(tmp_path, gate, context, text):
-    """R17: a judge says a dependency is missing in a must-fix item, or its file holds an
-    `UNAVAILABLE:` line as create's overwatch report would, and the run stops for a person
-    instead of sending the builder a defect it cannot fix, or reading the judge again."""
+    """R17: a judge says a dependency is missing in a must-fix item, or its file holds no
+    verdict but an `UNAVAILABLE:` line, as create's overwatch report would, and the run
+    stops for a person instead of sending the builder a defect it cannot fix, or reading
+    the judge again."""
     ctx = context(tmp_path, text)
     with pytest.raises(ValueError, match="validation unavailable: UNAVAILABLE: no browser"):
         getattr(design_ops, gate)(ctx)
     assert not ctx.facts.get("review_attempts_used") and not ctx.facts.get("qa_judge_rereads")
+
+
+@pytest.mark.parametrize("gate, context, verdict", [
+    ("gate_qa", _gate_ctx, qa_judgment("proceed")),
+    ("gate_overwatch", _overwatch_ctx, overwatch_judgment("pass")),
+])
+def test_an_unavailable_line_beside_a_readable_verdict_decides_nothing(tmp_path, gate, context, verdict):
+    """A readable verdict decides: prose beside it that starts `UNAVAILABLE:` is not a stop.
+    A judge that needs a tool says so in a must-fix item, which its gate stops on."""
+    ctx = context(tmp_path, "UNAVAILABLE: none, all tools present\n" + verdict)
+    assert getattr(design_ops, gate)(ctx) == "proceed"
 
 
 def test_a_review_that_says_a_tool_is_unavailable_stops_the_run(tmp_path):
@@ -597,6 +633,7 @@ MINOR = {"source": "code_reviewer", "where": "tool.py:3", "what": "no --quiet fl
     ({**MINOR, "severity": "medium", "breaks": "ask"}, True),
     ({**MINOR, "severity": "low", "breaks": "correction"}, True),
     ({**MINOR, "severity": "low", "breaks": "health"}, True),
+    ({**MINOR, "severity": "low", "breaks": "regression"}, True),
     ({key: value for key, value in MINOR.items() if key != "severity"}, True),
 ])
 def test_only_what_holds_the_change_back_sends_it_back(tmp_path, item, back):
@@ -885,22 +922,26 @@ def test_an_unmet_correction_reaches_the_builders_prompt_on_the_spine(tmp_path, 
     assert "ledger-2: NOT met — UNMET-EVIDENCE-42" in render(emit, nn.RunContext(run, facts=facts))
 
 
-@pytest.mark.parametrize("node, answer_file, other", [
-    ("qa_judge", judges.QA_JUDGE, evidence.AUDIT),
-    ("overwatch", judges.OVERWATCH_VERDICT, None),
+@pytest.mark.parametrize("mode, node, answer_file, other", [
+    (DesignMode, "qa_judge", judges.QA_JUDGE, evidence.AUDIT),
+    (DesignMode, "overwatch", judges.OVERWATCH_VERDICT, None),
+    # create's overwatch too: its report, not the evidence map it also writes.
+    (CreateMode, "overwatch", "reviews/overwatch.md", evidence.AUDIT),
 ])
 def test_a_judge_that_answers_in_its_message_is_captured_into_its_verdict_file(
-        tmp_path, monkeypatch, node, answer_file, other):
+        tmp_path, monkeypatch, mode, node, answer_file, other):
     """Spine and walker parity: the spine's worker captures an answer the agent did not
     write into the node's first declared output, as the walker does -- the verdict file,
-    not whichever declared file sorts first (intent-audit.json for the QA judge)."""
+    not whichever declared file sorts first (intent-audit.json for the QA judge, and for
+    create's overwatch, whose report is reviews/overwatch.md)."""
     import shlex
 
     from refactory_dsh import workers
     from refactory_dsh.model import DshModelClient
     from refactory_dsh.worker_node import execute
 
-    verdict = qa_judgment("proceed") if node == "qa_judge" else overwatch_judgment("pass")
+    verdict = (qa_judgment("proceed") if node == "qa_judge" else overwatch_judgment("pass")
+               if mode is DesignMode else "Every ask has evidence.\n\nVERDICT: PASS")
 
     def complete(self, prompt, *, system="", workdir=None):
         if other:
@@ -911,7 +952,7 @@ def test_a_judge_that_answers_in_its_message_is_captured_into_its_verdict_file(
     monkeypatch.setenv("REFACTORY_WORKER_BACKEND", "dsh")
     run = tmp_path / "run"
     run.mkdir()
-    state = DesignMode().state_dict()
+    state = mode().state_dict()
     lowering.write_declarations(state, run)
     lowered = workers.lower_workflow(lowering.to_workflow(state), run,
                                      DshModelClient(python_bin=Path(sys.executable).parent).context(),
@@ -926,4 +967,4 @@ def test_a_judge_that_answers_in_its_message_is_captured_into_its_verdict_file(
     receipt = execute(spec, run)
     assert receipt["status"] == "delivered", receipt
     assert receipt["captured_final"] == answer_file
-    assert json.loads((run / answer_file).read_text())["verdict"] in ("proceed", "pass")
+    assert (run / answer_file).read_text() == verdict

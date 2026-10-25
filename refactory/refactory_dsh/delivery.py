@@ -1793,7 +1793,10 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     if judged is not None:
         if judged:
             verification += ("\n- **Corrections, as the overwatch judged them:**\n"
-                             + "\n".join(f"  - {_public(judges.correction_line(item))}"
+                             # One line each, as the follow-ups are: the overwatch's
+                             # evidence is its own text, and a line break in it must not
+                             # start a heading or a list of the pull request's own.
+                             + "\n".join(f"  - {_public(' '.join(judges.correction_line(item).split()))}"
                                          for item in judged) + "\n")
     else:
         # Correction-audit checks a reviewer confirms by hand: those the audit could not

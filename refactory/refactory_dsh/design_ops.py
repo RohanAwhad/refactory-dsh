@@ -1742,8 +1742,10 @@ def _read_judge(ctx: Any, name: str, verdicts: tuple[str, ...], *, who: str,
                 count: str, prompt_fact: str) -> tuple[Any, Any, str]:
     """``(judgment, reread, note)``: the judge's verdict, or a reread, or why there is none.
 
-    A file with a line that starts ``UNAVAILABLE:`` stops the run, as create's overwatch
-    gate does. A file that is missing or is not one JSON verdict is reread: the judge is
+    A file with no readable verdict and a line that starts ``UNAVAILABLE:`` stops the run,
+    as create's overwatch gate does; a readable verdict says so in a must-fix item, which
+    its gate stops on, so a prose line beside it decides nothing. Any other file that is
+    missing or is not one JSON verdict is reread: the judge is
     asked again, with the reason in its prompt (``prompt_fact``) and no builder round,
     as many times a round as the frozen ``judge_rereads`` knob allows (``count`` counts
     them; `synthesize_qa` starts it again each round). After that the gate goes on
@@ -1752,14 +1754,15 @@ def _read_judge(ctx: Any, name: str, verdicts: tuple[str, ...], *, who: str,
     from refactory_dsh import authoring_evidence as evidence
     from refactory_dsh import judges
 
+    text = ""
     try:
         text = judges.text_of(ctx, name)
-        line = judges.UNAVAILABLE_LINE.search(text)
-        if line:
-            evidence.stop_unrepairable("unavailable", line[0].strip())
         return judges.parse(text, verdicts, name=name), None, ""
     except judges.Unreadable as exc:
         problem = str(exc)
+    line = judges.UNAVAILABLE_LINE.search(text)
+    if line:
+        evidence.stop_unrepairable("unavailable", line[0].strip())
     used = int(ctx.facts.get(count) or 0)
     allowed = int(ctx.knob("judge_rereads", 1))
     if used < allowed:

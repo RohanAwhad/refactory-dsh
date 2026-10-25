@@ -882,9 +882,10 @@ tests.
   - Still unreadable, the QA gate goes on with a note, because the overwatch still
     judges. The overwatch gate goes on with a note that acceptance was not judged, and
     the pull request's Reviews line does not say the audit passed.
-  - A judge's file with a line starting `UNAVAILABLE:` stops the run, as create's
-    overwatch gate does. So does a must-fix item whose `what` starts `UNAVAILABLE:`,
-    which is how each judge is told to report a missing tool or credential.
+  - A must-fix item whose `what` starts `UNAVAILABLE:` stops the run: it is how each
+    judge is told to report a missing tool or credential. A file with no readable
+    verdict and a line starting `UNAVAILABLE:` stops it too, as create's overwatch gate
+    does; beside a readable verdict, such a line decides nothing.
 - **The judges' prompts carry no reviewer markers.** The overwatch gets
   `JUDGE_REVIEW_CONTEXT` (`wire_reviews(..., judge_nodes=("overwatch",))`), not the
   reviewers' context, which asks for `UNAVAILABLE:` lines in a report and for errors to
@@ -942,7 +943,9 @@ tests.
   the spine the IR keeps writes as a set, and the worker captured into the first file in
   sorted order (`intent-audit.json` for the QA judge). The declarations now carry each
   agent's `answer_file` (`lowering.node_declarations`), and `workers.lower_workflow`
-  puts it first in the worker spec.
+  puts it first in the worker spec. This holds for every mode: create's and edit's
+  overwatch now has an answer captured into its report, `reviews/overwatch.md`, which
+  its gate reads, where the spine used to put it in `intent-audit.json`.
 - **Reviewer prompts are unchanged.** The `BLOCKING` marker and the `[core]` tags decide
   nothing in design mode. create, edit and the fast modes keep `create_ops.gate_qa` and
   `create_ops.gate_overwatch` exactly as they were.
@@ -1000,7 +1003,10 @@ named otherwise:
   - `test_a_skipped_judge_never_reads_an_earlier_rounds_verdict_on_the_spine`;
   - `test_an_unmet_correction_reaches_the_builders_prompt_on_the_spine`.
 - **The spine's worker:**
-  `test_a_judge_that_answers_in_its_message_is_captured_into_its_verdict_file`.
+  `test_a_judge_that_answers_in_its_message_is_captured_into_its_verdict_file`, for
+  both judges and create's overwatch.
+- `test_an_unavailable_line_beside_a_readable_verdict_decides_nothing`,
+  `test_each_round_gets_its_own_reread`.
 - **The spine itself:** `spine.spec.ts` walks the lowered design graph through
   `qa_judge`, `audit_corrections`, both gates and both `reread` edges.
 
