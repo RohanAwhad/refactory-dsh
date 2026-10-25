@@ -240,18 +240,31 @@ def runnable(test_id: str) -> str:
 def costs_from_record(entries: list[dict[str, Any]], root: Path) -> dict[str, float]:
     """Each test file's seconds, from the chunks earlier self-checks timed.
 
-    A chunk's time is shared among its files by their size; the latest chunk wins.
+    Each file of a counted chunk gets the chunk's full elapsed time as its estimate
+    (not a size-proportional share), because per-file timing would require separate
+    subprocesses that defeat chunking.  A non-timed-out entry always overwrites a
+    timed-out entry; a later non-timed-out entry overwrites an earlier one.
     """
     costs: dict[str, float] = {}
+    timed_out_flag: dict[str, bool] = {}  # True when the best entry is timed_out
     for entry in entries:
         for chunk in entry.get("timings", []):
             if not chunk.get("counted"):
                 continue
             chunk_files = list(dict.fromkeys(_file_of(name) for name in chunk.get("tests", [])))
-            sizes = {name: _size(root, name) for name in chunk_files}
-            total = sum(sizes.values()) or 1
+            is_timed_out = bool(chunk.get("timed_out"))
+            s = float(chunk.get("s", 0))
             for name in chunk_files:
-                costs[name] = float(chunk.get("s", 0)) * sizes[name] / total
+                prev_timed_out = timed_out_flag.get(name, True)
+                if is_timed_out:
+                    # A timed_out entry sets the cost only when no entry yet or only timed_out.
+                    if name not in costs or prev_timed_out:
+                        costs[name] = s
+                        timed_out_flag[name] = True
+                else:
+                    # A non-timed_out entry always overwrites.
+                    costs[name] = s
+                    timed_out_flag[name] = False
     return costs
 
 
@@ -329,7 +342,7 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
     selection.importers = [test for test in rest if test in importers]
     selection.structural = [test for test in rest if test not in importers]
     ordered: list[str] = list(dict.fromkeys(selection.first))
-    whole: set[str] = set()
+    whole: set[str] = {name for name in ordered if "::" not in name}
     for name in [*selection.engine, *selection.touched_tests]:
         if name not in whole:
             whole.add(name)

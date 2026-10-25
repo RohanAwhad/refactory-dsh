@@ -1265,6 +1265,45 @@ def prepare_check(ctx: Any) -> Any:
         _record_prepared(ctx, attempt, None)
         _record_check_verdict(ctx, attempt, verdict)
         return verdict
+    # BUG-4: detect empty-diff attempts (generate put back everything).
+    found = worktree.recorded(ctx.workdir)
+    if found is not None:
+        head_tree = worktree.git(Path(found.path), "rev-parse", f"{found.head}^{{tree}}")
+        parent_tree = worktree.git(Path(found.path), "rev-parse", f"{found.head}~1^{{tree}}")
+        if head_tree.strip() == parent_tree.strip():
+            used = _fixups_used(ctx)
+            allowed = int(ctx.knob("self_check_fixups", 2))
+            run_used = int(ctx.facts.get("total_self_check_fixups_used") or 0)
+            run_cap = allowed * int(ctx.knob("check_attempts", 3))
+            entry = {
+                "attempt": int(ctx.facts.get("attempts_used", 0)) + 1,
+                "commit": str(ctx.facts.get("commit") or ""),
+                "fixups_before": used,
+                "selection": [], "how_selected": {},
+                "ran": [], "cut": [], "commands": [],
+                "notes": ["generate put back everything this attempt changed"],
+                "limit_s": 0, "duration_s": 0, "timings": [],
+                "failing_ids": [], "inherited_filtered": [], "base": "",
+            }
+            if used < allowed and run_used < run_cap:
+                detail = ("generate put back everything this attempt changed; "
+                          "the attempt's tree equals its parent's")
+                ctx.write_text("check.txt", detail + "\n")
+                ctx.set_fact("validation", detail)
+                ctx.set_fact("self_check_fixup_count", used + 1)
+                ctx.set_fact("total_self_check_fixups_used", run_used + 1)
+                _record_self_check(ctx, {**entry, "outcome": "empty_diff_fixup"})
+                return Verdict("reloop", detail)
+            why = (f"{used} of {allowed} fix-ups used on this attempt" if used >= allowed
+                   else f"{run_used} of {run_cap} fix-ups used on this run")
+            _record_self_check(ctx, {**entry, "outcome": "exhausted", "why": why})
+            _end_fixups(ctx)
+            from refactory_dsh.failfast import targeted_prepass
+            empty_prepass = targeted_prepass(prev_record, command,
+                lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False,
+                                                            prepared=True),
+                check_timeout, root=found.path, selection=[], self_check_timeout_s=300)
+            return _early_stop(ctx, empty_prepass, prev_record, saved_base_unavailable)
     return _self_check(ctx, command, check_timeout, prev_record, saved_base_unavailable, attempt)
 
 

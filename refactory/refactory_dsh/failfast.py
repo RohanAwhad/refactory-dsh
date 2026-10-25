@@ -30,6 +30,8 @@ SELF_CHECK_CHUNK_FILES = 4
 _COLLECTION_ERROR = re.compile(r"^ERROR\s+([\w/.\[\]-]+\.py)\s*(?:-\s.*)?$", re.MULTILINE)
 #: pytest stops before running anything once a module does not import.
 _INTERRUPTED = re.compile(r"Interrupted: \d+ errors? during collection")
+#: pytest's "not found" line for an id that does not exist on disk.
+_NOT_FOUND = re.compile(r"ERROR:\s+not found:\s+\S+?(tests/[\w/.\-]+(?:::[\w\[\]\-]+)+)", re.MULTILINE)
 
 
 @dataclass
@@ -93,6 +95,11 @@ def _chunks(selection: list[str]) -> list[list[str]]:
         else:
             chunks.append([name])
     return chunks
+
+
+def _not_found_ids(output: str) -> set[str]:
+    """The test ids pytest reports as ``ERROR: not found:`` — ids that do not exist."""
+    return set(_NOT_FOUND.findall(output))
 
 
 def _output(result: Any) -> str:
@@ -191,6 +198,9 @@ def _self_check(
         result = run_check_fn(command, remaining)
         last = result
         if getattr(result, "timed_out", False):
+            elapsed = round(time.monotonic() - began, 1)
+            timings.append({"tests": chunk, "s": elapsed,
+                            "timed_out": True, "counted": True})
             for later in (chunk, *queue):
                 cut.extend(later)
             notes.append(f"chunk {number} of {of} was stopped at the "
@@ -201,6 +211,35 @@ def _self_check(
         timings.append({"tests": chunk, "s": round(time.monotonic() - began, 1),
                         "counted": not why_not})
         if why_not:
+            if "exit 4" in why_not:
+                dropped = _not_found_ids(_output(result))
+                if dropped:
+                    remaining = [name for name in chunk if name not in dropped]
+                    if remaining:
+                        ids2 = [name for name in remaining if "::" in name or " > " in name]
+                        files2 = [name for name in remaining if name not in ids2]
+                        cmd2, ref2 = build_probe_command(check_command, ids2,
+                                                         root=root_path, test_files=files2)
+                        if not ref2:
+                            result2 = run_check_fn(cmd2, limit_s - (time.monotonic() - started))
+                            found2, why2 = _chunk_report(result2, inherited)
+                            timings.append({"tests": remaining,
+                                            "s": round(time.monotonic() - began, 1),
+                                            "counted": not why2})
+                            commands.append(cmd2)
+                            notes.append(f"chunk {number}: dropped not-found ids "
+                                         f"{sorted(dropped)}, reran the rest")
+                            if not why2:
+                                for test_id in sorted(found2):
+                                    if test_id not in failing:
+                                        failing.append(test_id)
+                                if found2:
+                                    failed_outputs.append(_output(result2))
+                                ran.extend(remaining)
+                                continue
+                            # Rerun also failed: fall through to cut.
+                    notes.append(f"chunk {number}: dropped not-found ids "
+                                 f"{sorted(dropped)}, nothing left or rerun also failed")
             cut.extend(chunk)
             notes.append(f"chunk {number} did not count: {why_not}")
             continue
