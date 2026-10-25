@@ -400,6 +400,36 @@ def test_ceo_skip_is_refused_by_require_completion(tmp_path):
     assert any("ceo" in p for p in problems), f"CEO skip should be refused, got: {problems}"
 
 
+def _skip_check(tmp_path, ctx, source):
+    """The check node skipped by ``source``, and the evidence that skip records."""
+    at = "2026-10-20T22:25:29+00:00"
+    decl_dir = tmp_path / ".refactory"
+    decl_dir.mkdir(exist_ok=True)
+    (decl_dir / "declarations.json").write_text(json.dumps({"check": {"produces": ["runtime_evidence"]}}))
+    (decl_dir / "spine-checkpoint.json").write_text(json.dumps({"state": {
+        "skipped": ["check"], "skip_provenance": {"check": {"source": source, "at": at}}}}))
+    evidence.record(ctx, {"status": "skipped", "source": source, "at": at, "via": "graph-control",
+                          "node": "check"})
+
+
+def test_ceo_skip_is_refused_on_the_draft_path(tmp_path):
+    """A draft's report refuses a check the CEO skipped exactly as require_completion
+    does: only a person's skip is accepted (#500)."""
+    ctx = audit_context(tmp_path)
+    _skip_check(tmp_path, ctx, "ceo")
+    assert evidence.current_problems(ctx) == [
+        "required runtime validation was skipped by ceo; only a person's skip is accepted"]
+    with pytest.raises(ValueError, match="skipped by ceo; only a person's skip is accepted"):
+        evidence.require_current_evidence(ctx)
+
+
+def test_person_skip_is_accepted_on_the_draft_path(tmp_path):
+    """The control: a person's skip, recorded as such, passes the draft path's checks."""
+    ctx = audit_context(tmp_path)
+    _skip_check(tmp_path, ctx, "person")
+    evidence.require_current_evidence(ctx)
+
+
 def test_fast_mode_ceo_skip_refused(tmp_path):
     """AC-13: fast_ops.report_artifact raises ValueError naming 'ceo' when the
     check was skipped by the CEO, independently of the current_problems path."""
