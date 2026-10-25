@@ -2265,6 +2265,67 @@ themselves showed the finding form inside a code span, teaching reviewers
 the quoted form.
 
 **The rule.** `create_ops.MARKER_RULE` tells every reviewer to write the
+## 30. Draft delivery (dm-224)
+
+### What it is
+
+A draft delivery opens a pull request with `gh pr create --draft` when the
+`draft_delivery` fact is set on the run.  The fact carries:
+
+- `reason` (string): the limit or stop that ended the build (e.g. "review
+  reloop limit reached after 3 review cycle(s)").
+- `unresolved` (list of dicts): each item has `text`, `source` (one of
+  `"review"`, `"overwatch"`, `"correction_audit"`, `"delivery"`), and
+  `rounds` (list of int, possibly empty).
+
+Nothing sets this fact until b40b (routes `BuildLoopStop` into it).
+
+### Why
+
+Four runs between 2026-10-23 and 2026-10-24 passed their check but hit a
+build-loop limit and ended with nothing delivered:
+
+- **measure3-dm149_20261023_0351** and **measure4-dm149_20261023_1337**: each
+  stopped at gate_qa with "review reloop limit reached after 3 review
+  cycle(s)", with its latest check record a pass, and opened no pull request.
+- **b37b_marker_rule** (dm-223): attempt 3 passed the full check, then stopped
+  at gate_qa's review limit. Delivered by hand as #495.
+- **b39b_progress** (2026-10-24): attempt 3 passed the full check, gate_qa
+  found no core defect, overwatch's verdict was PASS.  Overwatch's correction
+  audit then sent it to repair, which reached the overall attempts limit.
+  Delivered by hand as #496.
+
+### What report and deliver do on a draft run
+
+- `report_artifact` calls `require_current_evidence` (the evidence-currency
+  checks factored out of `current_problems`) instead of `require_completion`.
+  It requires current evidence for the pushed commit but not the review sign-off
+  or a passing check.
+- `deliver_design` opens the PR with `--draft` and prepends a "## Unresolved
+  review findings" section listing the reason and each unresolved item.
+- On a base conflict or failing merged-result check, delivery drops the merge
+  (back to the run's own commit), records it as the first unresolved item, and
+  continues to push and open the draft.
+- Every other `NotDelivered` (closed/merged PR, push refused) keeps today's
+  behaviour.
+- `evaluate_delivery_conflicts` returns `"proceed"` immediately (never
+  reloops) on a draft run.
+- The run ends done, not failed.
+
+### Tests
+
+- `refactory/tests/test_delivery.py::test_draft_passing_check_opens_draft_pr`
+- `refactory/tests/test_delivery.py::test_draft_failing_check_opens_draft_pr`
+- `refactory/tests/test_delivery.py::test_draft_no_evidence_refused`
+- `refactory/tests/test_delivery.py::test_no_draft_fact_requires_signoff`
+- `refactory/tests/test_delivery.py::test_draft_conflict_with_base`
+- `refactory/tests/test_delivery.py::test_draft_failing_merged_check`
+- `refactory/tests/test_delivery.py::test_draft_existing_pr_converted_to_draft`
+- `refactory/tests/test_delivery.py::test_draft_closed_pr_opens_no_second_pr`
+- `refactory/tests/test_delivery.py::test_draft_conflict_existing_open_pr`
+- `refactory/tests/test_delivery.py::test_draft_no_pr_mode`
+- `refactory/tests/test_delivery.py::test_spine_draft_delivery_across_processes`
+
 blocking marker only at the start of a finding line, in its plain form,
 to call it "the blocking marker" when discussing it, to write every real
 finding as a plain line outside any fenced code block, and to put an

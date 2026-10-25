@@ -468,10 +468,10 @@ def current_problems(ctx: Any, workers: tuple[str, ...] = ()) -> list[str]:
         problems.append("required runtime validation did not pass")
     if evidence.get("settings") != {key: ctx.knob(key, None) for key in SETTINGS}:
         problems.append("validation inputs or comparison policy changed after execution")
-    for name, expected in evidence.get("receipts", {}).items():
-        path = ctx.workdir / name
+    for name_, expected in evidence.get("receipts", {}).items():
+        path = ctx.workdir / name_
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            problems.append(f"authoritative receipt {name} changed after validation")
+            problems.append(f"authoritative receipt {name_} changed after validation")
     if "outputs" in evidence and evidence["outputs"] != runtime_outputs(ctx):
         problems.append("canonical runtime output files changed after validation")
     if workers:
@@ -1390,6 +1390,38 @@ def correction_audit_advisories(ctx: Any) -> list[str]:
         for clause in item.get("clauses", []) if isinstance(clause, dict)
         for note in clause.get("advisory", [])
     ]
+
+
+def require_current_evidence(ctx: Any) -> None:
+    """The evidence-currency checks from ``current_problems``, without sign-off or audit.
+
+    Ensures evidence exists, identity matches the current artifact and intent,
+    settings match the current knobs, receipt hashes are intact, and runtime
+    outputs match.  Does NOT check ``validation.status``, worker sign-offs,
+    intent audit, or correction audit.
+
+    Used by ``report_artifact`` on the draft path: a draft delivery requires
+    current evidence but not a passing check or review sign-off.
+    """
+    if not ctx.exists(EVIDENCE):
+        if ctx.facts.get("runtime_evidence"):
+            raise ValueError("authoritative runtime evidence is missing")
+        return  # no evidence expected
+    evidence = ctx.read_json(EVIDENCE, {})
+    now = delivery_identity(ctx.workdir)
+    problems: list[str] = []
+    if now is None or now["identity"] != digest(evidence.get("identity")):
+        problems.append("artifact, accepted inputs or user intent changed after validation; rerun validation and reviews")
+    if evidence.get("settings") != {key: ctx.knob(key, None) for key in SETTINGS}:
+        problems.append("validation inputs or comparison policy changed after execution")
+    for name, expected in evidence.get("receipts", {}).items():
+        path = ctx.workdir / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            problems.append(f"authoritative receipt {name} changed after validation")
+    if "outputs" in evidence and evidence["outputs"] != runtime_outputs(ctx):
+        problems.append("canonical runtime output files changed after validation")
+    if problems:
+        raise ValueError("evidence is not current: " + "; ".join(problems))
 
 
 def require_completion(ctx: Any) -> None:

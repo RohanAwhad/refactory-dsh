@@ -63,7 +63,7 @@ def _view(slug: str, pull: dict, fields: str) -> dict:
              "state": pull["state"], "headRefName": pull["head"], "headRefOid": _head(slug, pull["head"]),
              "baseRefName": pull["base"], "isCrossRepository": pull.get("cross", False),
              "title": pull["title"], "body": pull["body"], "reviews": pull.get("reviews", []),
-             "comments": pull.get("comments", [])}
+             "comments": pull.get("comments", []), "isDraft": pull.get("draft", False)}
     return {field: shown[field] for field in fields.split(",")}
 
 
@@ -126,10 +126,39 @@ def main(args: list[str]) -> None:
         if not _head(slug, head):
             _fail(f"pull request create failed: GraphQL: Head sha can't be blank, No commits between main and {head}")
         pulls = _pulls(slug)
+        draft = "--draft" in args
         pulls.append({"number": len(pulls) + 1, "head": head, "base": _option(args, "--base"), "state": "OPEN",
-                      "title": _option(args, "--title"), "body": Path(_option(args, "--body-file")).read_text()})
+                      "title": _option(args, "--title"), "body": Path(_option(args, "--body-file")).read_text(),
+                      "draft": draft})
         _save(slug, pulls)
         print(f"https://github.com/{slug}/pull/{len(pulls)}")
+    elif args[:2] == ["pr", "ready"]:
+        # `gh pr ready --undo <url>` converts an open PR to draft.
+        if "--undo" in args:
+            ref = args[2] if len(args) > 2 and not args[2].startswith("-") else args[-1]
+            slug, pull = _find(ref, args)
+            pull["draft"] = True
+            pulls = _pulls(slug)
+            for i, p in enumerate(pulls):
+                if p["number"] == pull["number"]:
+                    pulls[i] = pull
+            _save(slug, pulls)
+            print(f"https://github.com/{slug}/pull/{pull['number']}")
+        else:
+            _fail("fake gh does not know this pr ready variant")
+    elif args[:2] == ["pr", "edit"]:
+        # `gh pr edit <url> --body-file <path>`
+        ref = args[2] if len(args) > 2 and not args[2].startswith("-") else ""
+        slug, pull = _find(ref, args)
+        body_file = _option(args, "--body-file")
+        if body_file:
+            pull["body"] = Path(body_file).read_text()
+            pulls = _pulls(slug)
+            for i, p in enumerate(pulls):
+                if p["number"] == pull["number"]:
+                    pulls[i] = pull
+            _save(slug, pulls)
+        print(f"https://github.com/{slug}/pull/{pull['number']}")
     elif args[:2] == ["pr", "view"]:
         slug, pull = _find(args[2], args)
         print(json.dumps(_view(slug, pull, _option(args, "--json"))))

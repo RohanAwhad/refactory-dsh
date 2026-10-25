@@ -1478,13 +1478,18 @@ def enforce_guardedness(ctx: Any) -> list[str]:
 
 def report_artifact(ctx: Any) -> dict[str, Any]:
     """Say what was produced, so a run's output is discoverable rather than inferred."""
-    from refactory_dsh.authoring_evidence import require_completion
+    from refactory_dsh.authoring_evidence import require_completion, require_current_evidence
 
     if worktree.recorded(ctx.workdir) is not None:
         # Where the worktree stands first, so a moved HEAD is named as such and not as a
         # stale sign-off.
         worktree.require_current(ctx.workdir)
-    require_completion(ctx)
+
+    draft_delivery = ctx.facts.get("draft_delivery")
+    if draft_delivery:
+        require_current_evidence(ctx)
+    else:
+        require_completion(ctx)
     ev = ctx.read_json("authoring-evidence.json", None)
     audit = ctx.read_json("intent-audit.json", None)
     # Collect planning model info from worker receipts (R5).
@@ -1550,5 +1555,14 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
                         else {"followed": None, "detail": "compliance not verified by audit"})}
             for note in process_notes
         ]
+    if draft_delivery:
+        report_payload["draft"] = True
+        ev_for_draft = ctx.read_json("authoring-evidence.json", None)
+        report_payload["check_passed"] = bool(
+            ev_for_draft and isinstance(ev_for_draft.get("validation"), dict)
+            and ev_for_draft["validation"].get("status") == "pass"
+        )
+        report_payload["draft_reason"] = draft_delivery.get("reason", "")
+        report_payload["draft_unresolved"] = draft_delivery.get("unresolved", [])
     payload = repo_change.report(ctx, "design.json", report_payload)
     return {"designed": json.dumps(payload, default=str)}

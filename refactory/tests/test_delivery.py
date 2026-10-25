@@ -1266,6 +1266,442 @@ def _record(workdir: Path) -> dict:
     return json.loads((workdir / delivery.RECORD).read_text())
 
 
+# ── draft delivery tests ──────────────────────────────────────────────────
+
+DRAFT_FACT = {
+    "reason": "review reloop limit reached after 3 review cycle(s)",
+    "unresolved": [
+        {"text": "The logging format is inconsistent", "source": "review", "rounds": [1, 2, 3]},
+        {"text": "Missing error handling in parser", "source": "overwatch", "rounds": [2]},
+    ],
+}
+
+
+def _design_draft(workdir, github, tmp_path, *, mode=None, emit=None, target=None,
+                  check="python tool.py", generate="", draft_fact=None,
+                  advance_main=None, monkeypatch=None):
+    """Run a full design with the draft_delivery fact injected via monkeypatch.
+
+    When *target* is None the run creates a new project (same as ``_design``).
+    When *target* is a repo path, the run uses that existing repo.
+    """
+    fact = draft_fact if draft_fact is not None else DRAFT_FACT
+
+    import refactory_dsh.design_ops as design_ops_mod
+    real_report = design_ops_mod.report_artifact
+    real_deliver = delivery.deliver_design
+
+    def inject_draft_report(ctx):
+        ctx.facts["draft_delivery"] = fact
+        return real_report(ctx)
+
+    def inject_draft_deliver(ctx):
+        ctx.facts["draft_delivery"] = fact
+        if advance_main is not None:
+            advance_main()
+        return real_deliver(ctx)
+
+    # Use a simple setattr/restore pattern when monkeypatch is not available.
+    saved_report = design_ops_mod.report_artifact
+    saved_deliver = delivery.deliver_design
+    design_ops_mod.report_artifact = inject_draft_report
+    delivery.deliver_design = inject_draft_deliver
+    try:
+        task_kw: dict[str, str] = {}
+        if target is not None:
+            task_kw["target"] = str(target)
+        if generate:
+            task_kw["generate"] = generate
+        model = FakeModel(_answers(render(emit or {"tool.py": "print('built')\n"})))
+        result = (mode or DesignMode()).run(
+            workdir, model=model, verdicts={"gate_strategy": "proceed"},
+            task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+                  "check": check, **task_kw},
+        )
+    finally:
+        design_ops_mod.report_artifact = saved_report
+        delivery.deliver_design = saved_deliver
+    return result
+
+
+def test_draft_passing_check_opens_draft_pr(github, tmp_path):
+    """A draft run with a passing check opens a draft PR with the unresolved section."""
+    run = tmp_path / "run"
+    result = _design_draft(run, github, tmp_path)
+    assert result.exit_ok, result.error
+
+    # The fake gh saw `pr create` with `--draft`.
+    calls = _calls(tmp_path)
+    assert "--draft" in calls, f"expected --draft in calls: {calls}"
+
+    # The PR body starts with the unresolved section.
+    slug = f"{LOGIN}/{NAME}"
+    [pull] = _pulls(github, slug)
+    assert pull["body"].startswith("## Unresolved review findings"), pull["body"][:200]
+    assert "review reloop limit reached" in pull["body"]
+    assert "The logging format is inconsistent" in pull["body"]
+    assert "source: review" in pull["body"]
+    assert "rounds: 1, 2, 3" in pull["body"]
+    assert "Missing error handling in parser" in pull["body"]
+    assert "source: overwatch" in pull["body"]
+    assert pull.get("draft") is True
+
+    # delivery_result starts with "draft:".
+    assert result.facts["delivery_result"].startswith("draft:"), result.facts["delivery_result"]
+    assert "2 unresolved item(s)" in result.facts["delivery_result"]
+
+    # Delivery record has draft fields.
+    rec = _record(run)
+    assert rec["draft"] is True
+    assert rec["check_passed"] is True
+    assert rec["draft_reason"] == "review reloop limit reached after 3 review cycle(s)"
+
+
+def test_draft_failing_check_opens_draft_pr(github, tmp_path):
+    """A draft run with a failing check: report does NOT raise, the draft PR opens.
+
+    The evidence shows status='fail' but require_current_evidence accepts it
+    because it does not check validation.status.
+    """
+    from refactory_dsh.design_ops import report_artifact
+    from refactory_dsh.nn.executor import RunContext
+    from refactory_dsh.authoring_evidence import SETTINGS
+
+    run = tmp_path / "run"
+    # First do a normal run to set up worktree and evidence.
+    result = _design(run)
+    assert result.exit_ok, result.error
+
+    # Tamper the evidence to show a failing check.
+    ev_path = run / "authoring-evidence.json"
+    ev = json.loads(ev_path.read_text())
+    ev["validation"]["status"] = "fail"
+    ev_path.write_text(json.dumps(ev))
+
+    # Call report_artifact with draft_delivery.
+    # Use the same knobs from the evidence so currency checks pass.
+    knobs = {key: ev.get("settings", {}).get(key) for key in SETTINGS}
+    facts = dict(result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    ctx = RunContext(run, knobs=knobs, facts=facts, enforce_writes=False)
+    report_result = report_artifact(ctx)
+    assert "designed" in report_result
+
+    # Call deliver_design with draft_delivery.
+    facts.update(report_result)
+    outcome = delivery.deliver_design(RunContext(run, knobs=knobs, facts=facts, enforce_writes=False))
+    assert outcome["delivery_result"].startswith("draft:"), outcome["delivery_result"]
+
+    rec = _record(run)
+    assert rec["draft"] is True
+    assert rec["check_passed"] is False
+
+
+def test_draft_no_evidence_refused(github, tmp_path):
+    """A draft run with no/stale evidence: report refuses."""
+    # We need to test that require_current_evidence raises when there's no evidence.
+    # Build a RunContext directly.
+    from refactory_dsh.authoring_evidence import require_current_evidence
+    from refactory_dsh.nn.executor import RunContext
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    # Write facts with runtime_evidence set (so evidence is expected).
+    facts = {"draft_delivery": DRAFT_FACT, "runtime_evidence": True}
+    ctx = RunContext(run, facts=facts)
+    with pytest.raises(ValueError, match="evidence is missing"):
+        require_current_evidence(ctx)
+
+
+def test_no_draft_fact_requires_signoff(github, tmp_path):
+    """Without draft_delivery, a run whose sign-off is missing is refused by report.
+    With the fact, the same run delivers a draft."""
+    from refactory_dsh.design_ops import report_artifact
+    from refactory_dsh.nn.executor import RunContext
+
+    run = tmp_path / "run_signoff"
+    # Run a full design first to set up the worktree and evidence.
+    result_normal = _design(run)
+    assert result_normal.exit_ok, result_normal.error
+
+    # Now call report_artifact directly without the fact, but with tampered evidence
+    # to make the sign-off stale.
+    facts = dict(result_normal.facts)
+    facts.pop("draft_delivery", None)
+
+    # Tamper the evidence identity to make sign-off stale.
+    ev_path = run / "authoring-evidence.json"
+    if ev_path.exists():
+        ev = json.loads(ev_path.read_text())
+        ev["identity"] = {"root": "/nonexistent", "files": {}}
+        ev_path.write_text(json.dumps(ev))
+
+    ctx = RunContext(run, facts=facts, enforce_writes=False)
+    with pytest.raises(ValueError, match="sign-off is incomplete or stale"):
+        report_artifact(ctx)
+
+    # Now with the fact, the same stale evidence causes a different error
+    # (evidence not current), not a sign-off error.
+    facts["draft_delivery"] = DRAFT_FACT
+    ctx2 = RunContext(run, facts=facts, enforce_writes=False)
+    with pytest.raises(ValueError, match="evidence is not current"):
+        report_artifact(ctx2)
+
+
+def test_draft_conflict_with_base(github, tmp_path, monkeypatch):
+    """A draft run with a merge conflict: draft PR opened, run's own commit pushed,
+    conflict named in the unresolved section."""
+    repo = git_repo(tmp_path / "repo_conflict")
+    (repo / "authored.py").write_text("line1\nline2\nline3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base with authored")
+    slug = "acme/draft-conflict"
+    _published(github, slug, repo)
+
+    def advance_main():
+        other = tmp_path / "other_conflict"
+        if not other.exists():
+            git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+            (other / "authored.py").write_text("line1\nchanged_by_base\nline3\n")
+            git(other, "add", ".")
+            git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                "commit", "-q", "-m", "base changes authored.py")
+            git(other, "push", "-q", "origin", "main")
+
+    run = tmp_path / "run_conflict"
+    result = _design_draft(run, github, tmp_path, target=repo,
+                           emit={"tool.py": "print('built')\n",
+                                 "authored.py": "line1\nchanged_by_run\nline3\n"},
+                           advance_main=advance_main)
+    assert result.exit_ok, result.error
+
+    calls = _calls(tmp_path)
+    assert "--draft" in calls
+
+    # The pushed head is the run's own commit (not a merge).
+    found = worktree.recorded(run)
+    branch = found.branch
+    remote = _remote_head(github, slug, branch)
+    assert remote == found.head, f"expected run's own commit {found.head}, got {remote}"
+
+    # The PR body's unresolved section names the conflict first.
+    [pull] = _pulls(github, slug)
+    assert "## Unresolved review findings" in pull["body"]
+    assert "Merge conflict" in pull["body"]
+    assert "authored.py" in pull["body"]
+
+    # delivery_result says draft.
+    assert result.facts["delivery_result"].startswith("draft:")
+
+    # The delivery gate returns "proceed" (early return for draft).
+    # The run ended done, not looping back.
+    assert result.exit_ok
+
+
+def test_draft_failing_merged_check(github, tmp_path, monkeypatch):
+    """A draft run with a failing merged-result check: draft PR opened, run's own commit pushed."""
+    repo = git_repo(tmp_path / "repo_mfail")
+    (repo / "config.txt").write_text("ok\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base config ok")
+    slug = "acme/draft-mfail"
+    _published(github, slug, repo)
+
+    def advance_main():
+        other = tmp_path / "other_mfail"
+        if not other.exists():
+            git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+            (other / "config.txt").write_text("broken\n")
+            git(other, "add", ".")
+            git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                "commit", "-q", "-m", "base breaks config")
+            git(other, "push", "-q", "origin", "main")
+
+    run = tmp_path / "run_mfail"
+    result = _design_draft(
+        run, github, tmp_path, target=repo,
+        emit={"tool.py": "import sys; sys.exit(1 if open('config.txt').read().strip() == 'broken' else 0)\n"},
+        check="python tool.py",
+        advance_main=advance_main,
+    )
+    assert result.exit_ok, result.error
+
+    calls = _calls(tmp_path)
+    assert "--draft" in calls
+
+    # The pushed head is the run's own commit.
+    found = worktree.recorded(run)
+    remote = _remote_head(github, slug, found.branch)
+    assert remote == found.head
+
+    # delivery_result says draft.
+    assert result.facts["delivery_result"].startswith("draft:")
+
+    # The PR body names the check failure in the unresolved section.
+    [pull] = _pulls(github, slug)
+    assert "## Unresolved review findings" in pull["body"]
+    assert "check failed" in pull["body"].lower() or "Merged-result check failed" in pull["body"]
+
+
+def test_draft_existing_pr_converted_to_draft(github, tmp_path, monkeypatch):
+    """A draft run with an existing open PR: gh pr ready --undo + body prepend."""
+    run = tmp_path / "run_existing"
+    # First do a normal run to create an open PR.
+    result = _design(run)
+    assert result.exit_ok, result.error
+    slug = f"{LOGIN}/{NAME}"
+    [pull_before] = _pulls(github, slug)
+    old_body = pull_before["body"]
+
+    # Now call deliver_design with draft_delivery on the same run.
+    facts = dict(result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    outcome = delivery.deliver_design(nn.RunContext(run, facts=facts, enforce_writes=False))
+
+    calls = _calls(tmp_path)
+    assert "pr ready --undo" in calls, f"expected pr ready --undo in: {calls}"
+    assert "pr edit" in calls, f"expected pr edit in: {calls}"
+
+    # The PR body is the unresolved preamble followed by the previous body.
+    pulls = _pulls(github, slug)
+    updated_pull = next(p for p in pulls if p["number"] == pull_before["number"])
+    assert updated_pull["body"].startswith("## Unresolved review findings"), updated_pull["body"][:200]
+    # The old body is preserved after the preamble.
+    assert old_body in updated_pull["body"], "old body should be preserved"
+    assert updated_pull.get("draft") is True
+
+
+def test_draft_closed_pr_opens_no_second_pr(github, tmp_path, monkeypatch):
+    """A draft run with a closed PR: delivery does NOT open a second PR."""
+    run = tmp_path / "run_closed"
+    # First do a normal run to create an open PR.
+    result = _design(run)
+    assert result.exit_ok, result.error
+    slug = f"{LOGIN}/{NAME}"
+    [pull_before] = _pulls(github, slug)
+
+    # Close the PR.
+    pulls = _pulls(github, slug)
+    for p in pulls:
+        if p["number"] == pull_before["number"]:
+            p["state"] = "CLOSED"
+    (github / f"{slug}.pulls.json").write_text(json.dumps(pulls, indent=2))
+
+    # Now call deliver_design with draft_delivery on the same run.
+    facts = dict(result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    outcome = delivery.deliver_design(nn.RunContext(run, facts=facts, enforce_writes=False))
+
+    # No second PR was opened — the result is kept local.
+    final_pulls = _pulls(github, slug)
+    assert len(final_pulls) == 1, "should not open a second PR"
+
+    rec = _record(run)
+    assert rec["status"] == "kept local"
+    # But the draft fields are still set.
+    assert rec.get("draft") is True
+
+
+def test_draft_conflict_existing_open_pr(github, tmp_path, monkeypatch):
+    """A draft with a base conflict and an existing open PR: pr ready --undo,
+    body names the conflict first."""
+    repo = git_repo(tmp_path / "repo_cex")
+    (repo / "authored.py").write_text("line1\nline2\nline3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base with authored")
+    slug = "acme/draft-cex"
+    _published(github, slug, repo)
+
+    # First, create an existing open PR via a normal design run.
+    first_run = tmp_path / "first_cex"
+    first_result = _design(first_run, {"tool.py": "print('built')\n",
+                                        "authored.py": "line1\nfirst_run\nline3\n"},
+                           target=str(repo), check="python tool.py")
+    assert first_result.exit_ok, first_result.error
+    [pull_before] = _pulls(github, slug)
+
+    # Advance main to create a conflict.
+    other = tmp_path / "other_cex"
+    git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+    (other / "authored.py").write_text("line1\nchanged_by_base\nline3\n")
+    git(other, "add", ".")
+    git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+        "commit", "-q", "-m", "base changes authored.py")
+    git(other, "push", "-q", "origin", "main")
+
+    # Now call deliver_design on the same run with draft_delivery, which will
+    # find the existing PR and encounter the conflict.
+    facts = dict(first_result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+    outcome = delivery.deliver_design(nn.RunContext(first_run, facts=facts, enforce_writes=False))
+
+    calls = _calls(tmp_path)
+    assert "pr ready --undo" in calls, f"expected pr ready --undo in: {calls}"
+    assert outcome["delivery_result"].startswith("draft:"), outcome["delivery_result"]
+
+    # The PR body names the conflict first.
+    pulls_list = _pulls(github, slug)
+    updated = next(p for p in pulls_list if p["number"] == pull_before["number"])
+    assert "## Unresolved review findings" in updated["body"]
+    assert "Merge conflict" in updated["body"]
+
+    # The pushed head is the run's own commit.
+    found = worktree.recorded(first_run)
+    remote = _remote_head(github, slug, found.branch)
+    assert remote == found.head
+
+
+def test_draft_no_pr_mode(github, tmp_path):
+    """A draft run with --no-pr: PR text has the section, record says draft,
+    finish commands include --draft."""
+    repo = git_repo(tmp_path / "repo_nopr")
+    _published(github, "acme/nopr", repo)
+
+    run = tmp_path / "run_nopr"
+    result = _design_draft(run, github, tmp_path, mode=_mode(pr=False), target=repo)
+    assert result.exit_ok, result.error
+
+    # The PR text carries the unresolved preamble.
+    pr_text = (run / delivery.BODY).read_text()
+    assert pr_text.startswith("## Unresolved review findings"), pr_text[:200]
+
+    # Delivery record says draft.
+    rec = _record(run)
+    assert rec["draft"] is True
+    assert rec["check_passed"] is True
+    assert rec["draft_reason"] == "review reloop limit reached after 3 review cycle(s)"
+
+    # delivery_result starts with "not delivered (draft):".
+    assert result.facts["delivery_result"].startswith("not delivered (draft):"), result.facts["delivery_result"]
+
+    # Finish commands include --draft.
+    finish = rec.get("finish", [])
+    gh_cmd = next((c for c in finish if "gh pr create" in c), "")
+    assert "--draft" in gh_cmd, f"expected --draft in finish commands: {finish}"
+
+
+def test_spine_draft_delivery_across_processes(github, tmp_path, monkeypatch):
+    """The spine carries draft_delivery across processes via facts.json."""
+    # This test verifies the spine path by running deliver_design directly
+    # with draft_delivery in the context facts, simulating what node_runner.run_node
+    # does (it reads from facts.json).
+    run = tmp_path / "run_spine"
+    # First do a normal run to set up the worktree and evidence.
+    result = _design(run)
+    assert result.exit_ok, result.error
+
+    # Now call deliver_design with draft_delivery in the facts.
+    facts = dict(result.facts)
+    facts["draft_delivery"] = DRAFT_FACT
+
+    outcome = delivery.deliver_design(nn.RunContext(run, facts=facts, enforce_writes=False))
+    assert outcome["delivery_result"].startswith("draft:"), outcome["delivery_result"]
+
+    # The fake gh saw --draft (for the existing PR, it's pr ready --undo).
+    calls = _calls(tmp_path)
+    assert "pr ready --undo" in calls or "--draft" in calls
+
+
 # ── the paths a person takes ───────────────────────────────────────────────
 def test_a_new_project_gets_a_private_repository_whose_first_pull_request_holds_all_the_code(github, tmp_path):
     run = tmp_path / "run"
