@@ -203,8 +203,6 @@ def test_light_refine_reloop_at_gate_strategy(tmp_path):
         DESIGN_DOC_ANSWER,  # second design_doc
         *BUILD,
     ]
-    # The first gate_strategy returns "reloop", the second "proceed".
-    verdict_seq = iter(["reloop", "proceed"])
 
     repo = git_repo(tmp_path / "repo")
     head_oid = _head_commit(repo)
@@ -215,33 +213,62 @@ def test_light_refine_reloop_at_gate_strategy(tmp_path):
     state["knobs"]["refine_design"]["value"] = "light"
     mode.load_state_dict(state)
 
-    with mock.patch("refactory_dsh.delivery._gh", side_effect=_stub_gh_factory(head_oid)):
-        with mock.patch("refactory_dsh.delivery._remote",
-                        return_value=("origin", "test/repo")):
-            with mock.patch("refactory_dsh.delivery._present", return_value=True):
-                with mock.patch("refactory_dsh.delivery._fetch"):
-                    run = mode.run(
-                        tmp_path / "run", model=model,
-                        verdicts={"gate_strategy": "reloop"},
-                        task={
-                            "name": "refine_tool",
-                            "brief": "Fix the widget rendering",
-                            "check": f"{sys.executable} tool.py",
-                            "target": str(repo),
-                            "refine": "https://github.com/test/repo/pull/42",
-                        },
-                    )
+    run_dir = tmp_path / "run"
+    # Pre-write a person's note to the ledger so it reaches agent prompts
+    # on the reloop path (synthesize_strategy and the second design_doc).
+    from refactory_dsh.steering import Ledger
+    ledger = Ledger(run_dir)
+    ledger.note("correction", "RELOOP-NOTE: please split the module")
 
-    # The run stopped at gate_strategy on the reloop (since verdicts only has "reloop",
-    # it will stop after the first gate_strategy hit).
+    # Sequential verdicts for gate_strategy: reloop once, then proceed.
+    # The executor's _answered_verdict uses dict.get which never consumes,
+    # so we patch it to return different values on successive visits.
+    from refactory_dsh.nn.executor import Executor
+    _orig_answered = Executor._answered_verdict
+    gate_visits = [0]
+
+    def _seq_answered(self, node):
+        if node.id == "gate_strategy":
+            gate_visits[0] += 1
+            return "reloop" if gate_visits[0] == 1 else "proceed"
+        return _orig_answered(self, node)
+
+    with mock.patch.object(Executor, '_answered_verdict', _seq_answered):
+        with mock.patch("refactory_dsh.delivery._gh", side_effect=_stub_gh_factory(head_oid)):
+            with mock.patch("refactory_dsh.delivery._remote",
+                            return_value=("origin", "test/repo")):
+                with mock.patch("refactory_dsh.delivery._present", return_value=True):
+                    with mock.patch("refactory_dsh.delivery._fetch"):
+                        run = mode.run(
+                            run_dir, model=model,
+                            task={
+                                "name": "refine_tool",
+                                "brief": "Fix the widget rendering",
+                                "check": f"{sys.executable} tool.py",
+                                "target": str(repo),
+                                "refine": "https://github.com/test/repo/pull/42",
+                            },
+                        )
+
+    assert run.exit_ok, run.error
     # No research, pitfalls or strategy_director agents.
     assert not [p for p in model.prompts if RESEARCH_DIRECTOR in p]
     assert not [p for p in model.prompts if PITFALLS_RESEARCHER in p]
     assert not [p for p in model.prompts if STRATEGY_DIRECTOR in p]
 
-    # design_doc was visited (at least once).
+    # design_doc was visited at least twice (before and after reloop).
     design_prompts = [p for p in model.prompts if "Write the design document" in p]
-    assert len(design_prompts) >= 1
+    assert len(design_prompts) >= 2
+
+    # The person's note reaches the new design: the synthesize_strategy output
+    # (which incorporates the person's feedback) appears in the second
+    # design_doc prompt via the {{strategy}} template variable.
+    assert "revised plan with person's note" in design_prompts[1]
+
+    # The ledger correction (person's note) reaches synthesize_strategy.
+    synth_prompts = [p for p in model.prompts if PLAN_STEP in p]
+    assert len(synth_prompts) >= 1
+    assert "RELOOP-NOTE" in synth_prompts[0]
 
 
 def test_route_refine_design_unit(tmp_path):

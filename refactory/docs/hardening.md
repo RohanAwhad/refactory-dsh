@@ -2637,7 +2637,7 @@ research, pitfalls or `strategy_director`.
 - `test_design_refine.py::test_light_refine_reloop_at_gate_strategy`
 - `test_design_refine.py::test_route_refine_design_unit`
 - `test_design_refine_spine.py::test_spine_route_refine_design_light`
-- `test_design_refine_spine.py::test_spine_route_refine_design_full_on_non_refine`
+- `test_design_refine_spine.py::test_spine_route_refine_design_proceed_on_non_refine`
 
 **Tests.** `test_check_beside_reviews.py`: the graph and the lowered workflow; what the
 reviews read and see; scripted runs whose check passes, and whose first check fails
