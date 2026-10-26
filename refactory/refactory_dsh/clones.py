@@ -12,9 +12,9 @@ prepares:
   amended a lockfile, an emission was refused and another applied -- resets the clone to
   it (``reset``). A head that did not move keeps the clone as the agent left it
   (``kept``), so a refused emission's work is still there to fix.
-- **Installs and setup run again only when the manifests change** (`worktree.manifest_key`,
-  the key `worktree.ensure_environment` records its installs under). Generate runs on
-  every dispatch.
+- **Installs and setup run again only when the manifests change**: any dependency
+  manifest or lockfile anywhere in the clone (`dependency_fingerprint`), or after a reset.
+  Generate runs on every dispatch.
 - **A cheap first clone.** It shares the target's objects (``git clone --shared``) and
   keeps its own refs, no remote and no hooks, as the probe's clone does.
 
@@ -25,6 +25,7 @@ whole artifact, as materialise writes it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -36,11 +37,20 @@ from typing import Any
 from refactory_dsh import worktree
 from refactory_dsh.git_hooks import NO_HOOKS
 from refactory_dsh.invocations import HOOK_SUPPRESS
-from refactory_dsh.workspace import (EXCLUDED_DIRS, OWN, WorkspaceError, derive_emission, file_state,
-                                     strip_run_paths)
+from refactory_dsh.workspace import (EXCLUDED_DIRS, OWN, WorkspaceError, _excluded, cache_environment,
+                                     derive_emission, file_state, strip_run_paths)
 
 #: The branch name a clone's environment record is keyed by. Nothing creates the branch.
 BRANCH = f"{worktree.BRANCH_PREFIX}workspace"
+
+#: The files whose content decides what an install makes, wherever in the repository they
+#: are: a nested workspace member's manifest changes an install as the root's does.
+MANIFEST_NAMES = frozenset({
+    "pyproject.toml", "setup.py", "setup.cfg", "uv.lock", "poetry.lock", "Pipfile", "Pipfile.lock",
+    "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "package-lock.json", "npm-shrinkwrap.json",
+    "yarn.lock", ".npmrc", ".gitmodules", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum", "Gemfile",
+    "Gemfile.lock",
+})
 
 #: What a tree comparison leaves out, as ignore patterns: refactory's own directory and
 #: the environments. Patterns rather than exclude pathspecs, because `git add` refuses a
@@ -67,6 +77,9 @@ def clone_shared(source: Path, dest: Path, rev: str, *, timeout: float = 120) ->
                              f"{error.stderr.decode(errors='replace').strip()}") from error
     worktree.git(dest, "remote", "remove", "origin")
     worktree.git(dest, "config", "core.hooksPath", "/dev/null")
+    # Only the repository's own ignore rules decide what the agent's change is: a person's
+    # global ignore file would silently drop a new file from it.
+    worktree.git(dest, "config", "core.excludesFile", "/dev/null")
     worktree.git(dest, "config", "advice.detachedHead", "false")
     worktree.git(dest, *NO_HOOKS, "checkout", "-q", "--detach", rev)
     exclude = dest / ".git" / "info" / "exclude"
@@ -109,6 +122,32 @@ def _json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     Path(path).write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def dependency_fingerprint(repo: Path) -> str:
+    """A digest of every dependency manifest and lockfile in ``repo``, at any depth.
+
+    Found by name (`MANIFEST_NAMES`, and ``requirements*.txt``) among the files git tracks
+    or would add, outside the environments, so it holds for any project's layout.
+    """
+    listing = worktree.git(Path(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    found: dict[str, str] = {}
+    for name in sorted(set(listing.split("\0"))):
+        relative = Path(name)
+        if not name or _excluded(relative):
+            continue
+        if relative.name in MANIFEST_NAMES or (relative.name.startswith("requirements")
+                                               and relative.suffix == ".txt"):
+            target = Path(repo) / relative
+            if target.is_file():
+                found[name] = hashlib.sha256(target.read_bytes()).hexdigest()
+    return hashlib.sha256(json.dumps(found, sort_keys=True).encode()).hexdigest()
+
+
+def _reset(repo: Path, rev: str) -> None:
+    """Put ``repo`` at ``rev`` exactly: a merge in progress or committed in it is dropped too."""
+    worktree.git(repo, *NO_HOOKS, "reset", "-q", "--hard", rev)
+    _clean(repo)
 
 
 def _clean(repo: Path) -> None:
@@ -155,8 +194,13 @@ def prepare(workdir: Path, root: Path, of: str, *, facts: dict[str, Any], comman
         synced = "cloned"
     elif of == "base":
         # A clone of the base starts every dispatch from it.
-        worktree.git(repo, *NO_HOOKS, "checkout", "-q", "--detach", "-f", want)
-        _clean(repo)
+        _reset(repo, want)
+        synced = "reset"
+    elif state.get("base") == want and state.get("merge") and not _pending_tip(workdir):
+        # The merge the clone holds was given up -- materialise refused it and dropped the
+        # pending merge -- so what it brought in is main's, not the agent's change: the
+        # clone goes back to the attempt rather than emit main's files as its own.
+        _reset(repo, want)
         synced = "reset"
     elif state.get("base") == want:
         # Nothing was materialised since: the clone holds the agent's last work.
@@ -166,8 +210,7 @@ def prepare(workdir: Path, root: Path, of: str, *, facts: dict[str, Any], comman
         worktree.git(repo, *NO_HOOKS, "reset", "-q", want)
         synced = "verified"
     else:
-        worktree.git(repo, *NO_HOOKS, "checkout", "-q", "--detach", "-f", want)
-        _clean(repo)
+        _reset(repo, want)
         synced = "reset"
     if synced == "reset":
         # What setup made in the working tree went with the reset: it runs again.
@@ -182,11 +225,14 @@ def prepare(workdir: Path, root: Path, of: str, *, facts: dict[str, Any], comman
     # the check's would be (`worktree._installs`).
     clone_found = worktree.Worktree(path=str(repo), branch=BRANCH, base=found.base, head=want,
                                     target=found.target, run=str(workdir))
-    deps = worktree.manifest_key(repo)
+    deps = dependency_fingerprint(repo)
     before = file_state(repo)
     if deps != state.get("deps") or not state.get("ready"):
         from refactory_dsh.repo_change import prepare_check_environment
 
+        if deps != state.get("deps"):
+            # The install record knows only the root's manifests; a nested one changed too.
+            (root / "environment.json").unlink(missing_ok=True)
         state["ready"] = False
         _write_json(state_path, state)
         _, env, problems, _ = prepare_check_environment(
@@ -233,11 +279,18 @@ def agent_environment(env: dict[str, str], run_worktree: str | None, home: Path)
     The clone's own tools first (`worktree.check_environment`), the run worktree's taken
     off PATH, its own HOME, no hook managers, and a git identity for a commit it makes
     there. A clone without its own virtual environment does not inherit the worktree's.
+    Every cache a tool writes is inside that HOME, which is inside what the sandbox lets
+    the agent write: pnpm's store (the person's, which the check's environment names, is
+    read-only there), uv's cache and the XDG cache directory.
     """
     result: dict[str, str | None] = dict(strip_run_paths(env, run_worktree))
-    result.update(HOME=str(home), **HOOK_SUPPRESS, **worktree.COMMITTER)
+    result.update(HOME=str(home), **HOOK_SUPPRESS, **worktree.COMMITTER, **cache_environment(home))
     result.setdefault("VIRTUAL_ENV", None)
     return result
+
+
+def _pending_tip(workdir: Path) -> str:
+    return str(_json(Path(workdir) / ".refactory" / "pending-merge.json").get("target_tip") or "")
 
 
 def _pending_merge(workdir: Path, repo: Path, state: dict[str, Any], synced: str) -> tuple[str, tuple[str, ...]]:
@@ -248,6 +301,11 @@ def _pending_merge(workdir: Path, repo: Path, state: dict[str, Any], synced: str
     diff is taken from the merge as git left it, conflict markers and all, and the
     conflicted files are always part of it: the emission then holds the resolutions and
     the agent's own changes, and git merges the rest again in the worktree.
+
+    A conflicted file the run did not author (a generated one) is resolved to main's side,
+    as materialise resolves it, so only the authored conflicts are the agent's. A merge
+    the agent finished -- still in progress, or committed in the clone -- is kept across a
+    refused round rather than started again over its resolution.
     """
     pending = _json(Path(workdir) / ".refactory" / "pending-merge.json")
     tip = str(pending.get("target_tip") or "")
@@ -260,7 +318,8 @@ def _pending_merge(workdir: Path, repo: Path, state: dict[str, Any], synced: str
         worktree.git(repo, "rev-parse", "--verify", "-q", "MERGE_HEAD")
     except ValueError:
         in_progress = False
-    if not (merge.get("tip") == tip and in_progress and synced == "kept"):
+    holds_merge = in_progress or _contains(repo, tip)
+    if not (merge.get("tip") == tip and holds_merge and synced == "kept"):
         if in_progress:
             worktree.git(repo, *NO_HOOKS, "merge", "--abort")
         try:
@@ -268,10 +327,27 @@ def _pending_merge(workdir: Path, repo: Path, state: dict[str, Any], synced: str
                          "--no-verify", tip, env={**os.environ, **worktree.COMMITTER})
         except ValueError:
             pass  # conflicts: the agent resolves them
+        authored = set(pending.get("conflict_files") or ())
+        for name in worktree.git(repo, "diff", "--name-only", "--diff-filter=U").split():
+            if name not in authored:
+                try:
+                    worktree.git(repo, *NO_HOOKS, "checkout", "--theirs", "--", name)
+                    worktree.git(repo, *NO_HOOKS, "add", "--", name)
+                except ValueError:
+                    pass  # as materialise leaves it
         unmerged = worktree.git(repo, "diff", "--name-only", "--diff-filter=U").split()
         merge = {"tip": tip, "tree": tree_of(repo), "conflicts": sorted(unmerged)}
         state["merge"] = merge
     return str(merge["tree"]), tuple(merge.get("conflicts") or ())
+
+
+def _contains(repo: Path, rev: str) -> bool:
+    """Whether the clone's HEAD has ``rev`` in its history: a merge the agent committed."""
+    try:
+        worktree.git(repo, "merge-base", "--is-ancestor", rev, "HEAD")
+    except ValueError:
+        return False
+    return True
 
 
 def _prepare_detached(workdir: Path, root: Path, facts: dict[str, Any]) -> dict[str, Any]:
@@ -299,6 +375,7 @@ def _prepare_detached(workdir: Path, root: Path, facts: dict[str, Any]) -> dict[
                 shutil.copy2(Path(source) / relative, destination)
         subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True, timeout=60)
         worktree.git(repo, "config", "core.hooksPath", "/dev/null")
+        worktree.git(repo, "config", "core.excludesFile", "/dev/null")
         (repo / ".git" / "info").mkdir(parents=True, exist_ok=True)
         with (repo / ".git" / "info" / "exclude").open("a") as stream:
             stream.write(f"\n/{OWN}/\n")
@@ -310,6 +387,7 @@ def _prepare_detached(workdir: Path, root: Path, facts: dict[str, Any]) -> dict[
         synced = "seeded"
     home = repo / OWN / "home"
     home.mkdir(parents=True, exist_ok=True)
-    env: dict[str, str | None] = {"HOME": str(home), **HOOK_SUPPRESS, **worktree.COMMITTER}
+    env: dict[str, str | None] = {"HOME": str(home), **HOOK_SUPPRESS, **worktree.COMMITTER,
+                                  **cache_environment(home)}
     return {"path": str(repo), "base": state["base"], "env": env, "synced": synced, "deletes": False,
             "prepared": "nothing: a run without a worktree installs nothing before its check"}

@@ -182,15 +182,19 @@ def provider_rows(route: dict[str, Any], provider_config: dict[str, Any] | None)
 
 def write_patch(path: Path, runtime_root: Path, route: dict[str, Any],
                 provider_config: dict[str, Any] | None = None, *,
-                workspace_root: Path | None = None) -> None:
+                workspace_root: Path | None = None, tool_home: Path | None = None) -> None:
     """Compose installed DSH services, never a parallel agent wire protocol.
 
     ``workspace_root`` confines the node's tools to its workspace (`permission_patch`).
+    ``tool_home`` is the DSH home the node's shell is told (`workspace.tool_dsh_home`):
+    the DSH process keeps its own, and a command run in a workspace never reaches it.
     """
     observer = Path(__file__).with_name('worker_observer.mjs')
     rows: list[dict[str, Any]] = [{'insert': [
         {'id': 'refactory-worker-observer', 'name': str(observer)}]}]
     rows.extend(permission_patch(route, workspace_root=workspace_root))
+    if tool_home is not None:
+        rows.append({'id': 'shell-env', 'config': {'dshHome': str(tool_home)}})
     rows.extend(provider_rows(route, provider_config))
     inner_backend = route['worker_backend']
     if inner_backend == 'openshell':

@@ -170,16 +170,48 @@ def test_a_scratch_solver_works_in_a_new_empty_folder_and_its_answer_is_collecte
     assert all({"id": "approval", "config": {"policy": "never"}} in rows for rows in patches)
 
 
-def test_without_a_working_sandbox_the_node_keeps_full_access_and_says_so(tmp_path, monkeypatch, capsys):
+def test_without_a_working_sandbox_a_workspace_with_a_shell_is_refused_unless_chosen(tmp_path, monkeypatch, capsys):
+    """Nothing here can confine the shell: the node is refused, not run with full access and
+    the person's DSH home, unless the person opts in; then it runs unconfined and says so,
+    and its shell is still given a DSH home of its own."""
     monkeypatch.setattr(workspace, "_sandbox_runner", lambda root: ("", "no runner here"))
     workdir = tmp_path / "run"
     workdir.mkdir()
-    _walk(Graph.from_state(_state("scratch")["graph"]), workdir, _client(_agent(tmp_path, SOLVER)))
+    graph = Graph.from_state(_state("scratch")["graph"])
+    ctx = RunContext(workdir, knobs={}, facts={}, task={})
+    ctx.model = _client(_agent(tmp_path, SOLVER))
+    refused = Executor(graph, ctx).run(start="solve")
+    assert "nothing on this machine can confine it (no runner here)" in str(refused.error)
+    assert not (tmp_path / "seen.jsonl").exists(), "the agent never ran"
+
+    monkeypatch.setenv(*workspace.UNCONFINED_OPT_IN)
+    _walk(graph, workdir, _client(_agent(tmp_path, SOLVER)))
     rows = json.loads(next((workdir / ".refactory" / "workers").glob("*.patch.yml")).read_text())
     assert {"id": "sandbox-policy", "config": {"mode": "danger-full-access"}} in rows
+    [seen] = _seen(tmp_path)
+    assert {"id": "shell-env", "config": {"dshHome": str(Path(seen["cwd"]) / ".refactory" / "dsh-home")}} in rows
     dispatch = json.loads((workdir / workspace.ROOT / "solve" / "dispatch.json").read_text())
-    assert dispatch["sandbox"] == "not confined: no runner here"
-    assert "without DSH's workspace-write policy (no runner here)" in capsys.readouterr().err
+    assert dispatch["sandbox"] == "not confined: REFACTORY_WORKSPACE_SANDBOX=unconfined"
+    assert "without DSH's workspace-write policy" in capsys.readouterr().err
+
+
+def test_a_native_backend_runs_under_its_own_sandbox_with_its_own_login(tmp_path, monkeypatch):
+    """codex and Claude Code bring their own sandbox and find their login under HOME: no DSH
+    policy is set for them, nothing is refused, and their process keeps the person's HOME
+    and cache directory (checked statically: no live login here). Even where DSH could
+    confine a shell, theirs is not DSH's to confine."""
+    monkeypatch.setattr(workspace, "_sandbox_runner", lambda root: ("landlock", ""))
+    for backend in ("codex", "claude_code"):
+        route = {"worker_backend": backend, "permission_mode": "skip"}
+        assert workspace.confinement(route)[0] == ""
+        assert not workspace._needs_confinement(route)
+        assert workers.permission_patch(route, workspace_root=tmp_path) == []
+    run, place = _workspace_with(tmp_path)
+    native = workspace.agent_env(place, {"worker_backend": "codex"})
+    assert "HOME" not in native and "XDG_CACHE_HOME" not in native
+    assert native["BASH_ENV"] == place.env["BASH_ENV"] and native["PATH"] == place.env["PATH"]
+    dsh = workspace.agent_env(place, {"worker_backend": "dsh"})
+    assert dsh["HOME"] == str(place.path / ".refactory" / "home")
 
 
 def test_a_client_that_cannot_run_in_a_workspace_is_refused(tmp_path):
@@ -196,7 +228,8 @@ def test_a_client_that_cannot_run_in_a_workspace_is_refused(tmp_path):
     assert not (workdir / ANSWER).exists()
 
 
-def test_the_run_end_removes_the_workspaces(tmp_path):
+def test_the_run_end_removes_the_workspaces(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace, "_sandbox_runner", lambda root: ("landlock", ""))
     workdir = tmp_path / "run"
     workdir.mkdir()
     graph = Graph.from_state(_state("scratch")["graph"])
@@ -404,6 +437,9 @@ def test_a_clone_is_prepared_once_and_reinstalls_only_when_its_manifests_change(
     assert (first.synced, first.prepared) == ("cloned", "installs, generate and setup")
     assert calls() == ["uv", "generate", "setup"]
     (first.path / "app.py").write_text("print('attempt 1')\n")
+    # A file the agent adds is in the commit, and the clone holds it, untracked.
+    (first.path / "added").mkdir()
+    (first.path / "added" / "tool.py").write_text("print('new')\n")
     head = _attempt(run, first).head
 
     second = workspace.prepare(run, "emit", declared, facts=facts)
@@ -423,14 +459,19 @@ def test_a_clone_is_prepared_once_and_reinstalls_only_when_its_manifests_change(
     assert kept.synced == "kept" and (kept.path / "draft.py").exists()
 
 
-def test_a_head_the_clone_does_not_hold_resets_the_clone_to_it(tmp_path):
-    run, place = _workspace_with(tmp_path)
+def test_a_head_the_clone_does_not_hold_resets_the_clone_to_it(tmp_path, monkeypatch):
+    log = _logging_tools(tmp_path, monkeypatch)
+    facts = {"setup": f"echo setup >> {log}"}
+    run, repo, found = _run_with_worktree(tmp_path)
+    place = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts=facts)
     (place.path / "app.py").write_text("print('mine')\n")
     # The attempt became something else: a check amended it, say.
     found = worktree.commit_attempt(run, {Path("app.py"): "print('theirs')\n"}, "tool: attempt 1")
-    again = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    again = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts=facts)
     assert again.synced == "reset" and again.base == found.head
     assert (again.path / "app.py").read_text() == "print('theirs')\n"
+    # A reset removed what setup made, so setup runs again though no manifest changed.
+    assert log.read_text().splitlines() == ["setup", "setup"]
 
 
 def test_a_failed_preparation_step_is_reported_to_the_agent_not_fatal(tmp_path):
@@ -633,3 +674,299 @@ def test_a_workspace_in_use_is_not_swept_and_is_once_it_is_free(tmp_path):
         assert place.path.is_dir(), "the dispatch holding it keeps it"
     workspace.sweep(run)
     assert not (run / workspace.ROOT).exists()
+
+
+# ── the second review's fixes ─────────────────────────────────────────────────
+
+def test_the_shells_caches_are_inside_the_workspace_and_writable_there(tmp_path, monkeypatch):
+    """pnpm's store, uv's cache and the XDG cache are the workspace HOME's: the person's are
+    read-only under the sandbox, and pnpm and uv fail there (H1). Under the Landlock launcher
+    DSH confines a shell with, where this machine has one, they are written."""
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "persons-uv-cache"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "persons-cache"))
+    run, place = _workspace_with(tmp_path)
+    home = place.path / ".refactory" / "home"
+    assert place.env["pnpm_config_store_dir"] is None
+    assert place.env["UV_CACHE_DIR"] == str(home / ".cache" / "uv")
+    assert place.env["XDG_CACHE_HOME"] == str(home / ".cache")
+    from refactory_dsh.paths import dsh_root
+    launcher = workspace._landlock_launcher(Path(dsh_root()).expanduser().resolve())
+    if launcher is None or subprocess.run([str(launcher), "--probe"], capture_output=True).returncode:
+        pytest.skip("no Landlock launcher on this machine")
+    env = {**os.environ, **{k: v for k, v in place.env.items() if v is not None}}
+    env.pop("pnpm_config_store_dir", None)
+    grants = [str(launcher), "--ro", "/", "--rw", "/dev/null", "--rw", "/tmp", "--rw", str(place.path), "--"]
+    command = 'mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME/x" && touch "$UV_CACHE_DIR/ok" "$XDG_CACHE_HOME/x/ok"'
+    confined = subprocess.run([*grants, "bash", "-c", command], env=env, capture_output=True, text=True,
+                              cwd=place.path)
+    assert confined.returncode == 0, confined.stderr
+    assert not (tmp_path / "persons-uv-cache").exists() and not (tmp_path / "persons-cache").exists()
+
+
+RUN_ONLY = ("REFACTORY_WORKDIR", "REFACTORY_PROJECT", "REFACTORY_RUNTIME_ROOT", "SRF_WORK_DIR", "VENV_BIN")
+
+ENV_PROBE = (
+    "shell = subprocess.run(['bash', '-c', 'env'], capture_output=True, text=True).stdout\n"
+    "pathlib.Path(os.environ['ENV_PROBE_OUT']).write_text(json.dumps({'process': dict(os.environ), "
+    "'shell': dict(line.split('=', 1) for line in shell.splitlines() if '=' in line)}))\n"
+    "(cwd / 'answer.txt').write_text('42\\n')\nprint('done')\n")
+
+
+def test_the_runs_variables_reach_the_dsh_process_but_not_the_shell(tmp_path, monkeypatch):
+    """The DSH process keeps the run's own variables (its observer reads them); the shell it
+    runs a command in, `bash -c` as DSH's bash tool does, does not see them (H2)."""
+    monkeypatch.setattr(workspace, "_sandbox_runner", lambda root: ("landlock", ""))
+    for name in RUN_ONLY:
+        monkeypatch.setenv(name, f"/run-only/{name}")
+    from refactory_dsh.budgets import ResourceLimits, RunBudget
+    ledger = RunBudget.open(tmp_path / "budgeted", ResourceLimits(max_elapsed_s=3600)).path
+    monkeypatch.setenv("REFACTORY_BUDGET_LEDGER", str(ledger))
+    monkeypatch.setenv("ENV_PROBE_OUT", str(tmp_path / "envs.json"))
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    _walk(Graph.from_state(_state("scratch")["graph"]), workdir, _client(_agent(tmp_path, ENV_PROBE)))
+    envs = json.loads((tmp_path / "envs.json").read_text())
+    for name in RUN_ONLY:
+        assert name in envs["process"], name
+        assert name not in envs["shell"], name
+    assert envs["process"]["REFACTORY_WORKDIR"] == "/run-only/REFACTORY_WORKDIR"
+    assert envs["process"]["REFACTORY_BUDGET_LEDGER"] == str(ledger)
+    assert "REFACTORY_BUDGET_LEDGER" not in envs["shell"]
+    assert "REFACTORY_WORKER_RECEIPT" in envs["process"]
+    assert not [name for name in envs["shell"] if name.startswith(("REFACTORY_", "SRF_"))]
+    assert "BASH_ENV" not in envs["shell"] and envs["shell"]["HOME"] == envs["process"]["HOME"]
+
+
+def test_a_round_that_adds_a_file_is_verified_not_reset(tmp_path):
+    run, place = _workspace_with(tmp_path)
+    (place.path / "pkg").mkdir()
+    (place.path / "pkg" / "new.py").write_text("x = 1\n")
+    _attempt(run, place)
+    again = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    assert again.synced == "verified"
+    # The added file, unchanged since, is no change; changed, it is one.
+    workspace.collect(again, run, ["emit.txt"])
+    assert "has no change" in (workspace.refusal_for(run, "emit.txt", (run / "emit.txt").read_text()) or "")
+    (again.path / "pkg" / "new.py").write_text("x = 2\n")
+    workspace.collect(again, run, ["emit.txt"])
+    assert (run / "emit.txt").read_text() == "===FILE: pkg/new.py===\nx = 2\n"
+
+
+def _conflicting_run(tmp_path: Path):
+    """A run whose attempt and main both changed app.py and gen.txt, and whose delivery sent
+    it back to merge main: app.py is the run's own conflict, gen.txt a generated one."""
+    run, repo, found = _run_with_worktree(tmp_path, {"gen.txt": "generated 0\n"})
+    worktree.commit_attempt(run, {Path("app.py"): "print('attempt')\n", Path("gen.txt"): "generated 1\n"},
+                            "tool: attempt 1")
+    (repo / "app.py").write_text("print('main moved')\n")
+    (repo / "gen.txt").write_text("generated 2\n")
+    (repo / "main_only.py").write_text("print('main')\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "main moved")
+    tip = git(repo, "rev-parse", "main")
+    (run / ".refactory" / "pending-merge.json").write_text(
+        json.dumps({"target_tip": tip, "conflict_files": ["app.py"]}))
+    return run, tip
+
+
+def _materialise(run: Path) -> dict:
+    ctx = RunContext(run, knobs={}, facts={"name": "tool"}, task={})
+    ctx.enforce_writes = False
+    return repo_change.materialise(ctx)
+
+
+def test_a_generated_conflict_resolves_to_mains_side_as_materialise_resolves_it(tmp_path):
+    run, tip = _conflicting_run(tmp_path)
+    place = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    assert place.conflicts == ("app.py",)
+    assert (place.path / "gen.txt").read_text() == "generated 2\n"
+    (place.path / "app.py").write_text("print('both')\n")
+    workspace.collect(place, run, ["emit.txt"])
+    assert (run / "emit.txt").read_text() == "===FILE: app.py===\nprint('both')\n"
+    assert "emission_refused" not in _materialise(run)
+    merged = worktree.recorded(run)
+    assert git(Path(merged.path), "show", f"{merged.head}:gen.txt") == "generated 2"
+
+
+def test_a_given_up_merge_never_reaches_the_next_emission_as_the_agents_change(tmp_path):
+    """Materialise refused the merge (markers left in) and dropped the pending merge: the
+    next dispatch puts the clone back at the attempt, so main's files are not emitted, in a
+    one-parent commit, as the agent's own."""
+    run, tip = _conflicting_run(tmp_path)
+    place = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    workspace.collect(place, run, ["emit.txt"])  # app.py still holds its markers
+    assert "conflict markers" in _materialise(run)["emission_refused"]
+    assert not (run / ".refactory" / "pending-merge.json").exists()
+    again = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    assert again.synced == "reset"
+    assert not (again.path / "main_only.py").exists()
+    (again.path / "tool.py").write_text("print(1)\n")
+    workspace.collect(again, run, ["emit.txt"])
+    assert (run / "emit.txt").read_text() == "===FILE: tool.py===\nprint(1)\n"
+
+
+def test_a_merge_the_agent_committed_survives_a_refused_round(tmp_path):
+    run, tip = _conflicting_run(tmp_path)
+    place = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    (place.path / "app.py").write_text("print('both')\n")
+    git(place.path, "add", "-A")
+    git(place.path, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "merged")
+    (place.path / "logo.png").write_bytes(b"\0binary")  # refused by collect: the merge stays pending
+    workspace.collect(place, run, ["emit.txt"])
+    assert workspace.refusal_for(run, "emit.txt", (run / "emit.txt").read_text())
+    again = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    assert again.synced == "kept" and again.conflicts == ("app.py",)
+    assert (again.path / "app.py").read_text() == "print('both')\n", "the resolution is kept"
+    (again.path / "logo.png").unlink()
+    workspace.collect(again, run, ["emit.txt"])
+    assert "emission_refused" not in _materialise(run)
+    merged = worktree.recorded(run)
+    assert git(Path(merged.path), "show", f"{merged.head}:app.py") == "print('both')"
+    assert merged.base == tip
+
+
+def test_a_path_the_emission_cannot_carry_is_refused_by_name(tmp_path):
+    assert workspace.EMISSION_PATH == repo_change.EMISSION_PATH
+    run, place = _workspace_with(tmp_path)
+    (place.path / "my notes.md").write_text("x\n")
+    (place.path / "ok.py").write_text("y\n")
+    workspace.collect(place, run, ["emit.txt"])
+    refusal = workspace.refusal_for(run, "emit.txt", (run / "emit.txt").read_text())
+    assert refusal and "'my notes.md' has a whitespace" in refusal
+
+
+def test_a_nested_manifest_change_installs_again(tmp_path, monkeypatch):
+    log = _logging_tools(tmp_path, monkeypatch)
+    run, repo, found = _run_with_worktree(tmp_path, {"pyproject.toml": "[project]\nname = 'x'\n",
+                                                     "packages/a/package.json": "{}\n"})
+    declared = {"kind": "clone", "collect": "diff"}
+    first = workspace.prepare(run, "emit", declared, facts={})
+    (first.path / "packages" / "a" / "package.json").write_text('{"dependencies": {"b": "1"}}\n')
+    _attempt(run, first)
+    again = workspace.prepare(run, "emit", declared, facts={})
+    assert (again.synced, again.prepared) == ("verified", "installs, generate and setup")
+    assert [line.split()[0] for line in log.read_text().splitlines()] == ["uv", "uv"]
+
+
+def test_a_file_too_large_to_review_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace, "MAX_FILE_BYTES", 1000)
+    monkeypatch.setattr(workspace, "MAX_TOTAL_BYTES", 1500)
+    run, place = _workspace_with(tmp_path)
+    (place.path / "big.txt").write_text("x" * 2000)
+    workspace.collect(place, run, ["emit.txt"])
+    refusal = workspace.refusal_for(run, "emit.txt", (run / "emit.txt").read_text()) or ""
+    assert "big.txt is 0 MB, over the 0 MB a collected file may be" in refusal
+    (place.path / "big.txt").unlink()
+    for name in ("a.txt", "b.txt"):
+        (place.path / name).write_text("x" * 900)
+    workspace.collect(place, run, ["emit.txt"])
+    assert "add up to" in (workspace.refusal_for(run, "emit.txt", (run / "emit.txt").read_text()) or "")
+
+
+def test_a_refusal_for_another_emission_does_not_refuse_this_one(tmp_path):
+    """The record is keyed by the emission's digest: an emit.txt written since (by a builder
+    that writes its own, or by hand) is applied, not refused for the old one's reasons."""
+    run, place = _workspace_with(tmp_path)
+    (place.path / "logo.png").write_bytes(b"\0binary")
+    workspace.collect(place, run, ["emit.txt"])
+    assert (run / workspace.REFUSAL).exists()
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint('by hand')\n")
+    assert "emission_refused" not in _materialise(run)
+
+
+def test_the_last_normalisation_is_told_to_the_agent(tmp_path):
+    run, place = _workspace_with(tmp_path)
+    (place.path / "crlf.txt").write_bytes(b"a\r\nb\r\n")
+    workspace.collect(place, run, ["emit.txt"])
+    again = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    assert again.normalised == ("crlf.txt",)
+    from refactory_dsh.agent_delivery import begin
+    told = begin(run, "emit", "Make it.", ["emit.txt"], workspace=again.describe())["prompt"]
+    assert "changed the line endings or the blank lines at the ends of crlf.txt" in told
+    assert "If no output file is declared" not in told, "its answer is its diff, not a returned result"
+
+
+def test_tool_caches_and_a_global_ignore_never_decide_the_change(tmp_path, monkeypatch):
+    ignores = tmp_path / "global-ignore"
+    ignores.write_text("*.new\n")
+    config = tmp_path / "gitconfig"
+    config.write_text(f"[core]\n\texcludesFile = {ignores}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    run, place = _workspace_with(tmp_path)
+    for name in (".hypothesis/examples/x", ".coverage", ".tox/py/x", "sub/.nox/y"):
+        (place.path / name).parent.mkdir(parents=True, exist_ok=True)
+        (place.path / name).write_text("tool cache\n")
+    (place.path / "feature.new").write_text("mine\n")
+    workspace.collect(place, run, ["emit.txt"])
+    assert (run / "emit.txt").read_text() == "===FILE: feature.new===\nmine\n"
+
+
+def test_a_custom_model_without_metering_is_refused_for_its_budget_not_its_workspace(tmp_path):
+    from refactory_dsh.budgets import BudgetExhausted, _UnmeteredModel
+
+    class Budget:
+        def require_usage_capability(self, metered):
+            pass
+
+    with pytest.raises(BudgetExhausted):
+        _UnmeteredModel(object(), Budget()).complete("x", workdir=tmp_path, cwd=tmp_path, env={}, confine=True)
+
+
+def test_a_clone_without_its_own_environment_drops_the_worktrees(tmp_path, monkeypatch):
+    """The DSH process would otherwise carry the run worktree's VIRTUAL_ENV, which the
+    environment overlay names, into a clone that has none."""
+    run, repo, found = _run_with_worktree(tmp_path)
+    _whichcode(Path(found.path), "worktree")
+    place = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={})
+    assert place.env["VIRTUAL_ENV"] is None
+    agent = _agent(tmp_path, "print(os.environ.get('VIRTUAL_ENV', 'none'))\n")
+    assert _client(agent).complete("x", workdir=run, cwd=place.path, env=place.env).strip() == "none"
+    assert _client(agent).complete("x", workdir=run).strip() == str(Path(found.path) / ".venv")
+
+
+def test_openshell_workspaces_are_experimental_and_never_sync_a_wrong_folder(tmp_path, monkeypatch):
+    run, repo, found = _run_with_worktree(tmp_path)
+    route = {"worker_backend": "openshell", "permission_mode": "skip"}
+    with pytest.raises(workspace.WorkspaceError, match="experimental"):
+        workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={}, route=route)
+    monkeypatch.setenv(*workspace.OPENSHELL_OPT_IN)
+    place = workspace.prepare(run, "emit", {"kind": "clone", "collect": "diff"}, facts={}, route=route)
+    empty = tmp_path / "download"
+    empty.mkdir()
+    with pytest.raises(workspace.WorkspaceError, match="not a copy of the workspace"):
+        workspace.sync_back(empty, place.path)
+    assert (place.path / "app.py").exists(), "nothing was deleted"
+    # Its packed copy is a repository of its own: the borrowed objects come with it.
+    workspace.dissociate(place.path)
+    assert not (place.path / ".git" / "objects" / "info" / "alternates").exists()
+    assert git(place.path, "cat-file", "-t", "HEAD") == "commit"
+
+
+@pytest.mark.parametrize("layout", ["copy", "empty"])
+def test_an_openshell_download_that_is_not_the_workspace_is_never_synced(tmp_path, monkeypatch, layout):
+    """The backend's lifecycle, faked at its seams (no SDK or gateway here): a download that
+    holds the workspace's copy comes back; one that does not (an empty or other layout) is
+    reported as none, never handed to the sync as a folder with every file deleted."""
+    import factory.contained.openshell as reference
+    run, place = _workspace_with(tmp_path)
+    for name in ("verify_gateway_provider", "extract_tarball", "start_run", "_terminate_remote"):
+        monkeypatch.setattr(openshell_backend, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(openshell_backend, "connect", lambda gateway: object())
+    monkeypatch.setattr(openshell_backend, "create_sandbox", lambda *args: object())
+    monkeypatch.setattr(reference, "build_default_policy", lambda: None)
+    monkeypatch.setattr(openshell_backend, "build_upload_argv", lambda *args, **kwargs: ["true"])
+    monkeypatch.setattr(openshell_backend, "_poll_run", lambda *args, **kwargs: (0, None))
+
+    def download(plan, dest, *, paths=None):
+        if layout == "copy":
+            shutil.copytree(place.path, Path(dest) / place.path.name)
+        return []
+
+    monkeypatch.setattr(openshell_backend, "download_artifacts", download)
+    context = {**DshModelClient(worker_backend="dsh").context(), "attempts": 1}
+    code, downloaded = openshell_backend.run_workspace_session(
+        place.path, ["true"], context=context, timeout=10, dest=tmp_path / "staging", receipts=run)
+    if layout == "copy":
+        assert (code, downloaded) == (0, tmp_path / "staging" / place.path.name)
+    else:
+        assert downloaded is None and code != 0

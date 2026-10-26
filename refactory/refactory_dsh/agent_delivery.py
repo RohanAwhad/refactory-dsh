@@ -222,8 +222,11 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
         'and adjacent run reports are not completion instructions; inspect them only if this task explicitly needs them. '
         'Perform the checks required by the current task. After delivering the required outputs, return immediately '
         'with a brief completion response; do not execute later workflow stages or wait for a receipt. '
-        'Do not duplicate a file artifact in the final response. If no output file is declared, return the requested result.'
+        'Do not duplicate a file artifact in the final response.'
     )
+    if not (workspace is not None and workspace.get('collect') == 'diff'):
+        # A node whose answer is its workspace's diff declares no output for it to write.
+        instructions += ' If no output file is declared, return the requested result.'
     if set_aside:
         instructions += (
             ' This step\'s previous outputs were moved to the paths listed in set_aside.'
@@ -293,6 +296,10 @@ def _workspace_instructions(workspace: dict[str, Any], writes: list[str]) -> str
     if workspace.get('problems'):
         where += (' Preparing it reported a problem (listed under workspace.problems below); the check'
                   ' runs the same steps, so fix it there if your change caused it.')
+    if workspace.get('normalised'):
+        where += (' Your last answer changed the line endings or the blank lines at the ends of'
+                  f' {", ".join(workspace["normalised"])}: an emission carries each file with LF line'
+                  ' endings and one final newline, and the attempt holds them that way.')
     if workspace.get('collect') == 'diff' and writes:
         taken = (f' When you are done, stop: the workspace\'s diff is your answer. The runtime writes'
                  f' {writes[0]} from it, so do not write {writes[0]} yourself, and leave in the'

@@ -533,7 +533,10 @@ def test_without_a_worktree_a_run_takes_whole_files_only(repo, tmp_path, monkeyp
     ("===DELETE: a.py===\nleftover\n", "a deletion takes none"),
     (f"===EDIT: a.py===\n{repo_change.SEARCH}\nx\n{repo_change.DIVIDER}\ny\n", "missing its"),
     (_edit("a.py", ("\n", "y\n")), "nothing to search for"),
-], ids=["no-blocks", "bad-header", "two-blocks", "delete-with-text", "unclosed-edit", "empty-search"])
+    # A builder that writes its own blocks (create, edit, fast-create) can still send this.
+    ("===EDIT: a.py===\nprint('no pairs')\n", "has text outside its"),
+], ids=["no-blocks", "bad-header", "two-blocks", "delete-with-text", "unclosed-edit", "empty-search",
+        "text-outside-pairs"])
 def test_an_emission_whose_blocks_are_malformed_is_refused_with_the_reason(answer, reason):
     with pytest.raises(worktree.AttemptRefused, match=reason):
         repo_change._emitted(answer, edits=True)

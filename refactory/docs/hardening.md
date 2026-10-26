@@ -63,34 +63,56 @@ an emitted one. create, edit and fast-create keep the emission-only builder.
   verifies that (the clone's change from the new head, less what its preparation
   made, is empty) and only moves its base (`verified`). A head that did not move keeps
   the clone as the agent left it (`kept`), so a refused emission's work is still there
-  to fix; any other head resets the clone to it (`reset`). Installs run again only when
-  the dependency manifests and lockfiles change (`worktree.manifest_key`), setup with
-  them or after a reset, and generate on every dispatch. A step that fails does not stop
-  the node: the agent is told, and the check runs the same steps.
+  to fix; any other head resets the clone to it (`reset`). A file the agent added counts
+  as held when its content and mode are the commit's. Installs run again only when a
+  dependency manifest or lockfile anywhere in the clone changes
+  (`clones.dependency_fingerprint`), setup with them or after a reset, and generate on
+  every dispatch. A step that fails does not stop the node: the agent is told, and the
+  check runs the same steps. A pending merge from delivery is started in the clone, its
+  generated conflicts resolved to main's side as materialise resolves them; a merge the
+  agent finished is kept across a refused round, and one materialise gave up is
+  dropped, so main's changes never come back as the agent's own.
 - **Run.** The model's working directory is the workspace; its receipt and patch stay
   in the run directory (`DshModelClient.complete(cwd=...)`). Its environment is the
   clone's (`worktree.check_environment`): the clone's own `.venv` and
   `node_modules/.bin` first, the run worktree's taken off PATH, and HOME at the
-  clone's `.refactory/home`. Its DSH sandbox policy is `workspace-write` rooted at the
-  workspace, with approval `never` (`workers.permission_patch`), where a DSH runner
-  works here (bubblewrap or Landlock on Linux, Seatbelt on macOS; probed once). Where
-  none does, it keeps today's full access, and the dispatch record and a warning say so.
+  clone's `.refactory/home`, with pnpm's store, uv's cache and the XDG cache inside it
+  (the person's are read-only to it). Its shell is told a DSH home of its own inside the
+  workspace (`workers.write_patch`'s `shell-env` row), and its `BASH_ENV` file unsets the
+  run's variables (`REFACTORY_*`, `SRF_*`, `VENV_BIN`, `PYTHONPATH`) before each command,
+  as the check never has them; the DSH process keeps them for its observer. Its DSH
+  sandbox policy is `workspace-write` rooted at the workspace, with approval `never`
+  (`workers.permission_patch`), where a DSH runner works here (bubblewrap or Landlock on
+  Linux, Seatbelt on macOS; probed once). Where none does, a workspace node on the dsh
+  backend is refused, since its shell would have full access while it is asked to install
+  and run things, unless `REFACTORY_WORKSPACE_SANDBOX=unconfined` chooses that; the
+  dispatch record and a warning then say so. A native backend (codex, Claude Code) runs
+  under its own sandbox and keeps the person's HOME, where its CLI finds its login.
 - **Collect.** `derive_emission` writes whole-file `===FILE:` and `===DELETE:` blocks
   from `git diff --raw --no-renames <base>` and the untracked files, leaving out
   `.refactory/`, the environments and tool caches, and what the preparation made while
   the agent left it as made. A binary file, a symlink, a mode change, a new executable,
   a submodule, a line the emission would read as a block header, or (without a
-  worktree) a deletion is refused, as is a workspace with no change: the refusal is
-  left beside the emission (`.refactory/workspace-refusal.json`, keyed by its digest)
-  and materialise sends it back to the builder like any refused emission. Line endings
-  and end-of-file newlines are normalised by the blocks, with a warning.
+  worktree) a deletion is refused, as is a path an emission header cannot carry (with
+  whitespace, `=`, a quote, a backtick or a backslash), a file over 50 MB, a change over
+  200 MB in all, and a workspace with no change: the refusal is left beside the emission
+  (`.refactory/workspace-refusal.json`, keyed by its digest) and materialise sends it
+  back to the builder like any refused emission. Line endings and end-of-file newlines
+  are normalised by the blocks, with a warning, and the next dispatch tells the agent
+  which files. Only the repository's own ignore rules apply: the clone ignores a
+  person's global ignore file.
 - **Clean-up.** At the run's end, however it ended: the walker and the DSH evaluator
   (the `refactory.run_end` entry point) and a spine run's owner. A workspace a
   dispatch holds is left.
-- **OpenShell.** On the `openshell` worker backend the same workspace is packed
-  (`openshell_backend.pack_workspace`), the agent (Claude Code, the binary the
-  gateway's provider admits) runs inside the sandbox, and the folder comes back
-  (`download_artifacts`) to the same collect step (`workspace.sync_back`).
+- **OpenShell (experimental).** On the `openshell` worker backend the same workspace is
+  packed (`openshell_backend.pack_workspace`, after the clone takes its own copy of the
+  objects it borrowed), the agent (Claude Code, the binary the gateway's provider admits)
+  runs inside the sandbox, and the folder comes back (`download_artifacts`) to the same
+  collect step (`workspace.sync_back`, which refuses a folder that is not the workspace's
+  copy). It has had no live run, so it is refused unless
+  `REFACTORY_OPENSHELL_WORKSPACE=1` opts in. Not yet: packing `.venv` and
+  `node_modules`, the node's model and usage for `claude -p`, and the remote stop's PID
+  path.
 
 ### The builder probe
 

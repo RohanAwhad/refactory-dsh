@@ -62,11 +62,39 @@ ROOT = Path(".refactory") / "workspaces"
 #: ever collected (git is told to ignore it too).
 OWN = ".refactory"
 
-#: Never part of what a workspace delivers, at any depth: the environments an install
-#: makes, and the caches running the project's tools leaves (a builder that runs the
-#: tests in its workspace makes them). With ``OWN`` at the top, these are what `collect`
-#: leaves out.
-EXCLUDED_DIRS = (".venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")
+#: Never part of what a workspace delivers, at any depth, whether or not the repository
+#: ignores them: the environments an install makes, and what running the project's
+#: tools leaves (a builder that runs the tests in its workspace makes them). With
+#: ``OWN`` at the top, these are what `collect` leaves out.
+EXCLUDED_DIRS = (".venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+                 ".hypothesis", ".coverage", ".tox", ".nox")
+
+#: What a path in an emission header may hold (`repo_change.EMISSION_PATH`, which
+#: materialise parses with; a test keeps the two the same): no whitespace, ``=``, quotes or
+#: backticks. Collect refuses another path by name rather than write a header materialise
+#: would refuse whole (`derive_emission`).
+EMISSION_PATH = r"[^\s=`'\"]+"
+
+#: The most one collected file, and all of them together, may hold. A hosting service
+#: refuses a file over 100 MB, and a review cannot read either.
+MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_TOTAL_BYTES = 200 * 1024 * 1024
+
+#: Run-scoped variables a workspace's shell commands never see, as the check never sees
+#: them (#330 E1): the DSH process keeps them, since its observer reads them, and the
+#: shell drops them (`TOOL_ENV`). Patterns, matched against every exported name.
+RUN_VARIABLES = ("REFACTORY_*", "SRF_*", "VENV_BIN", "PYTHONPATH")
+
+#: The file a workspace's shell sources before every command (bash reads ``BASH_ENV`` for
+#: each non-interactive shell, and DSH's bash tool runs ``bash -c``): it unsets the run's
+#: variables, and itself, so a nested shell does not read it again.
+TOOL_ENV = "tool-env.sh"
+
+#: Opt-ins for what a person may choose and refactory does not do by default: a workspace
+#: node on a machine where nothing can confine its shell (``unconfined``), and a workspace
+#: on the experimental OpenShell route (``1``), which has had no live run.
+UNCONFINED_OPT_IN = ("REFACTORY_WORKSPACE_SANDBOX", "unconfined")
+OPENSHELL_OPT_IN = ("REFACTORY_OPENSHELL_WORKSPACE", "1")
 
 #: Where `collect` leaves a refusal for materialise: the emission it wrote could not
 #: carry the workspace's change, and why (`refusal_for`).
@@ -127,6 +155,9 @@ class Workspace:
     #: Files the preparation made or rewrote, by path, with their content's digest: left out
     #: of the emission while the agent leaves them as they were made.
     skip: dict[str, str] = field(default_factory=dict)
+    #: Files whose line endings or end-of-file blank lines the last emission normalised,
+    #: which the agent is told on its next dispatch.
+    normalised: tuple[str, ...] = ()
 
     def describe(self) -> dict[str, Any]:
         """The workspace as the execution contract and the receipt record it."""
@@ -137,6 +168,7 @@ class Workspace:
             **({"synced": self.synced} if self.synced else {}),
             **({"prepared": self.prepared} if self.prepared else {}),
             **({"problems": list(self.problems)} if self.problems else {}),
+            **({"normalised": list(self.normalised)} if self.normalised else {}),
         }
 
 
@@ -219,6 +251,20 @@ def prepare(workdir: Path, node: str, declaration: Any, *, knobs: dict[str, Any]
     workdir = Path(workdir).resolve()
     root = workdir / ROOT / _slug(node)
     root.mkdir(parents=True, exist_ok=True)
+    route = route or {}
+    if route.get("worker_backend") == "openshell" and not _opted_in(OPENSHELL_OPT_IN):
+        raise WorkspaceError(
+            f"agent node {node!r} works in a workspace, and a workspace on the openshell backend is "
+            "experimental: it has had no live run. Set "
+            f"{OPENSHELL_OPT_IN[0]}={OPENSHELL_OPT_IN[1]} to use it anyway, or route the node to dsh")
+    confine, unconfined = confinement(route, runtime_root)
+    if not confine and _needs_confinement(route) and not _opted_in(UNCONFINED_OPT_IN):
+        # Its shell would run with full access to the person's files and DSH home while the
+        # prompt asks it to install and run things: refused, unless the person chose that.
+        raise WorkspaceError(
+            f"agent node {node!r} works in a workspace with a shell, and nothing on this machine "
+            f"can confine it ({unconfined}). Install bubblewrap, or run where Landlock is enabled; "
+            f"or set {UNCONFINED_OPT_IN[0]}={UNCONFINED_OPT_IN[1]} to let it run with full access")
     if declared["kind"] == "scratch":
         workspace = _prepare_scratch(root, node, declared)
     else:
@@ -240,12 +286,63 @@ def prepare(workdir: Path, node: str, declaration: Any, *, knobs: dict[str, Any]
             skip=dict(prepared.get("skip") or {}))
         if workspace.problems:
             _warn(f"preparing agent node {node!r}'s workspace reported: " + "; ".join(workspace.problems))
-    workspace.confine, workspace.unconfined = confinement(route, runtime_root)
+    workspace.confine, workspace.unconfined = confine, unconfined
+    workspace.env["BASH_ENV"] = str(_tool_env(root))
+    previous = _json(root / "collected.json")
+    workspace.normalised = tuple(previous.get("normalised") or ())
     _write_json(root / "dispatch.json", workspace.describe())
     if not workspace.confine:
         _warn(f"agent node {node!r} works in {workspace.path} without DSH's workspace-write policy "
               f"({workspace.unconfined}); its tools keep the access a node has without a workspace")
     return workspace
+
+
+def _opted_in(opt_in: tuple[str, str]) -> bool:
+    return os.environ.get(opt_in[0], "") == opt_in[1]
+
+
+def _needs_confinement(route: dict[str, Any]) -> bool:
+    """Whether refactory sets this node's sandbox policy: the dsh backend in ``skip`` mode.
+
+    ``default`` keeps DSH's own policy (workspace-write at the session's folder), and a
+    native backend (codex, Claude Code) runs under its own settings. A client with no
+    route (a test's scripted model) runs nothing to confine.
+    """
+    return bool(route) and (route.get("worker_backend") or "dsh") == "dsh" and \
+        (route.get("permission_mode") or "skip") == "skip"
+
+
+def _tool_env(root: Path) -> Path:
+    """The ``BASH_ENV`` file that drops the run's variables from the workspace's shell."""
+    patterns = "|".join(RUN_VARIABLES)
+    path = root / TOOL_ENV
+    path.write_text(
+        "# Written by refactory (workspace.py): the run's own variables are not the project's.\n"
+        "for __refactory_name in $(compgen -e); do\n"
+        f"  case \"$__refactory_name\" in {patterns}) unset \"$__refactory_name\" ;; esac\n"
+        "done\n"
+        "unset __refactory_name BASH_ENV\n")
+    return path
+
+
+def tool_dsh_home(cwd: Path) -> Path:
+    """The DSH home a workspace's shell is given (`workers.write_patch`): its own, inside it.
+
+    DSH hands its bash tool the DSH home its process runs with; a command the builder runs
+    there (an installer that registers a profile, say) would then change the person's.
+    """
+    return Path(cwd) / OWN / "dsh-home"
+
+
+def cache_environment(home: Path) -> dict[str, str | None]:
+    """Tool caches inside ``home``, which the agent may write, and none outside it.
+
+    The sandbox lets the agent write only its workspace: pnpm's store, uv's cache and the
+    XDG cache directory that a person's environment or the check's (which names the store
+    the install used) points elsewhere are read-only there, and pnpm and uv then fail.
+    """
+    return {"pnpm_config_store_dir": None, "UV_CACHE_DIR": str(Path(home) / ".cache" / "uv"),
+            "XDG_CACHE_HOME": str(Path(home) / ".cache")}
 
 
 def strip_run_paths(env: dict[str, str], run_worktree: str | Path | None) -> dict[str, str]:
@@ -289,7 +386,7 @@ def _prepare_scratch(root: Path, node: str, declared: dict[str, str]) -> Workspa
     from refactory_dsh.invocations import HOOK_SUPPRESS
 
     run_worktree = _run_worktree(root.parent.parent.parent)
-    env: dict[str, str | None] = {"HOME": str(path), **HOOK_SUPPRESS}
+    env: dict[str, str | None] = {"HOME": str(path), **HOOK_SUPPRESS, **cache_environment(path)}
     if run_worktree:
         env["PATH"] = strip_run_paths(dict(os.environ), run_worktree)["PATH"]
         # The worktree's own virtual environment, which the run's environment overlay
@@ -317,9 +414,8 @@ def confinement(route: dict[str, Any] | None, runtime_root: Path | None = None) 
         return "", f"the {backend} worker backend runs the agent under its own sandbox settings"
     if (route.get("permission_mode") or "skip") != "skip":
         return "", "the route's permission mode is 'default', so DSH's own policy applies"
-    forced = os.environ.get("REFACTORY_WORKSPACE_SANDBOX", "")
-    if forced == "off":
-        return "", "REFACTORY_WORKSPACE_SANDBOX=off"
+    if _opted_in(UNCONFINED_OPT_IN):
+        return "", f"{UNCONFINED_OPT_IN[0]}={UNCONFINED_OPT_IN[1]}"
     if runtime_root is None:
         from refactory_dsh.paths import dsh_root
 
@@ -390,10 +486,23 @@ def ask(workspace: Workspace, client: Any, prompt: str, *, workdir: Path, system
     if system is not None:
         kwargs["system"] = system
     if "env" in parameters:
-        kwargs["env"] = dict(workspace.env)
+        kwargs["env"] = agent_env(workspace, route)
     if "confine" in parameters:
         kwargs["confine"] = bool(workspace.confine)
     return str(client.complete(prompt, **kwargs))
+
+
+def agent_env(workspace: Workspace, route: dict[str, Any]) -> dict[str, str | None]:
+    """What the agent's process environment overrides for ``workspace``.
+
+    A native backend (codex, Claude Code) keeps the person's HOME and cache directory:
+    its CLI finds its login there, and its own sandbox, not DSH's, confines its tools.
+    """
+    env = dict(workspace.env)
+    if (route.get("worker_backend") or "dsh") not in ("dsh", "openshell"):
+        for name in ("HOME", "XDG_CACHE_HOME"):
+            env.pop(name, None)
+    return env
 
 
 #: The agent an OpenShell sandbox runs: Claude Code, the binary the gateway's
@@ -424,6 +533,10 @@ def _complete_in_openshell(workspace: Workspace, client: Any, prompt: str, *, wo
                                     int(context.get("timeout_s") or DEFAULT_TIMEOUT_S))
     staging = workspace.root / "openshell"
     shutil.rmtree(staging, ignore_errors=True)
+    if workspace.kind == "clone":
+        # The clone borrows the target's objects through a path on this machine, which the
+        # sandbox does not have: it gets its own copy of them first.
+        dissociate(workspace.path)
     code, downloaded = openshell_backend.run_workspace_session(
         workspace.path, ["sh", "-c", OPENSHELL_AGENT], context=context, timeout=timeout,
         dest=staging, receipts=Path(workdir))
@@ -435,6 +548,15 @@ def _complete_in_openshell(workspace: Workspace, client: Any, prompt: str, *, wo
     if code != 0:
         raise WorkspaceError(f"agent node {workspace.node!r}: the agent in the OpenShell sandbox exited {code}")
     return response.read_text() if response.is_file() else ""
+
+
+def dissociate(repo: Path) -> None:
+    """Give a clone made with ``--shared`` its own objects, so it is a repository anywhere."""
+    alternates = Path(repo) / ".git" / "objects" / "info" / "alternates"
+    if not alternates.is_file():
+        return
+    _git(Path(repo), "repack", "-a", "-d", "-q")
+    alternates.unlink()
 
 
 def _excluded(relative: Path) -> bool:
@@ -458,6 +580,11 @@ def sync_back(source: Path, workspace: Path) -> list[str]:
     from refactory_dsh.openshell_backend import RUN_ARTIFACTS
 
     source, workspace = Path(source), Path(workspace)
+    # A folder that is not the workspace's copy -- the download's staging directory, an
+    # empty one -- would read as every file deleted: refused before anything is touched.
+    if source.resolve() == workspace.resolve() or not (source / ".git").exists():
+        raise WorkspaceError(f"{source} is not a copy of the workspace {workspace} (it has no .git), so "
+                             "nothing was synced from it")
 
     def files(root: Path) -> dict[Path, Path]:
         found: dict[Path, Path] = {}
@@ -572,9 +699,15 @@ def derive_emission(path: Path, base: str, *, conflicts: tuple[str, ...] = (), d
         index += 2
     untracked = [name for name in _git(path, "ls-files", "--others", "--exclude-standard", "-z", "--",
                                         *_PATHSPECS).split("\0") if name]
+    # In ``base`` but not in the clone's index, and on disk: a file the agent added that a
+    # later commit took (materialise's), so the index never held it. It is a change only
+    # when its content or mode differs from the base's.
+    readded = [name for name in untracked if entries.get(name, ("",))[0] == "D"]
+    unchanged = _same_as(path, base, readded)
     for name in untracked:
-        if entries.get(name, ("",))[0] == "D":
-            # Removed from git's index but still on disk: the file is there, changed or not.
+        if name in unchanged:
+            entries.pop(name, None)
+        elif entries.get(name, ("",))[0] == "D":
             entries[name] = ("M", entries[name][1], "")
         else:
             entries.setdefault(name, ("A", "000000", ""))
@@ -586,6 +719,7 @@ def derive_emission(path: Path, base: str, *, conflicts: tuple[str, ...] = (), d
     blocks: list[str] = []
     refused: list[str] = []
     approximate: list[str] = []
+    total = 0
     for name in sorted(entries):
         status, old_mode, new_mode = entries[name]
         relative = Path(name)
@@ -594,6 +728,10 @@ def derive_emission(path: Path, base: str, *, conflicts: tuple[str, ...] = (), d
         target = path / relative
         present = target.exists() or target.is_symlink()
         if name in skip and skip[name] == (_content_digest(target) if present else "deleted"):
+            continue
+        if not re.fullmatch(EMISSION_PATH, name) or "\\" in name or any(ord(char) < 32 for char in name):
+            refused.append(f"{name!r} has a whitespace, '=', quote, backtick, backslash or control character "
+                           "in its path, which an emission header cannot carry: rename it")
             continue
         if status == "D" or not present:
             if not deletes:
@@ -607,6 +745,12 @@ def derive_emission(path: Path, base: str, *, conflicts: tuple[str, ...] = (), d
         if new_mode == "160000" or old_mode == "160000" or target.is_dir():
             refused.append(f"{name} is a submodule or a directory, not a file")
             continue
+        size = target.stat().st_size
+        if size > MAX_FILE_BYTES:
+            refused.append(f"{name} is {size / 2**20:.0f} MB, over the {MAX_FILE_BYTES // 2**20} MB a collected "
+                           "file may be")
+            continue
+        total += size
         executable = bool(target.stat().st_mode & 0o111)
         was = {"100755": True, "100644": False}.get(old_mode)
         if was is not None and was != executable:
@@ -632,7 +776,32 @@ def derive_emission(path: Path, base: str, *, conflicts: tuple[str, ...] = (), d
         if "\r" in text or text != text.strip("\n") + "\n":
             approximate.append(name)
         blocks.append(f"===FILE: {name}===\n{text.strip(chr(10))}\n")
+    if total > MAX_TOTAL_BYTES:
+        refused.append(f"the change's files add up to {total / 2**20:.0f} MB, over the "
+                       f"{MAX_TOTAL_BYTES // 2**20} MB one emission may carry")
     return "".join(blocks), refused, approximate
+
+
+def _same_as(path: Path, base: str, names: list[str]) -> set[str]:
+    """Which of ``names`` hold, on disk, exactly the content and mode they have in ``base``."""
+    if not names:
+        return set()
+    listing = _git(path, "ls-tree", "-z", base, "--", *names)
+    same: set[str] = set()
+    for entry in listing.split("\0"):
+        if not entry or "\t" not in entry:
+            continue
+        meta, name = entry.split("\t", 1)
+        mode, kind, blob = meta.split(" ")[:3]
+        target = path / name
+        if kind != "blob" or target.is_symlink() or not target.is_file():
+            continue
+        data = target.read_bytes()
+        digest = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+        executable = bool(target.stat().st_mode & 0o111)
+        if digest == blob and (mode == "100755") == executable:
+            same.add(name)
+    return same
 
 
 def collect(workspace: Workspace, workdir: Path, writes: list[str], *,
@@ -678,6 +847,7 @@ def collect(workspace: Workspace, workdir: Path, writes: list[str], *,
         if approximate:
             _warn(f"agent node {workspace.node!r}: these files' line endings or end-of-file newlines are "
                   f"normalised in the emission, as every ===FILE: block's are: {', '.join(approximate)}")
+            # The next dispatch tells the agent (`prepare`, the execution contract).
             summary["normalised"] = approximate
         for name in writes[1:]:
             extra = _path(workdir, name)
@@ -786,6 +956,14 @@ def _remove_tree(path: Path) -> list[str]:
     else:  # pragma: no cover - Python 3.11 names the handler onerror
         shutil.rmtree(path, onerror=record)
     return failures
+
+
+def _json(path: Path) -> dict[str, Any]:
+    try:
+        loaded = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _write_json(path: Path, payload: Any) -> None:

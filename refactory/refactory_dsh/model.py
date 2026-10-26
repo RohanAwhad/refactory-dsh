@@ -619,8 +619,11 @@ class DshModelClient:
         if self._worker_receipt is not None:
             from refactory_dsh.workers import write_patch
             patch = self._worker_receipt.with_suffix(".patch.yml")
+            cwd = getattr(self, "_cwd", None)
+            from refactory_dsh.workspace import tool_dsh_home
             write_patch(patch, self._runtime_root, self.route(), provider_config=self._provider_config,
-                        workspace_root=getattr(self, "_cwd", None) if getattr(self, "_confine", False) else None)
+                        workspace_root=cwd if getattr(self, "_confine", False) else None,
+                        tool_home=tool_dsh_home(cwd) if cwd is not None else None)
             cmd += ["--patch", str(patch)]
         if self._worker_backend == "dsh":
             if self._provider:

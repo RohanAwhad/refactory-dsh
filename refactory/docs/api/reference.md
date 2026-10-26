@@ -873,7 +873,7 @@ Worker routes and durable receipts over DSH's named-provider registry.
 | function | `resolve_route` | `(base: 'dict[str, Any]', *, role: 'str' = 'worker', node: 'str' = '', role_routes: 'dict[str, Any] \| None' = None, node_routes: 'dict[str, Any] \| None' = None) -> 'dict[str, Any]'` |
 | function | `run_graph_command` | `(argv: 'list[str]', *, workdir: 'Path', context: 'dict[str, Any]', timeout: 'float \| None' = None, env: 'dict[str, str] \| None' = None, stop_condition: 'Any \| None' = None, **kwargs: 'Any') -> 'Any'` |
 | function | `validate_route` | `(route: 'dict[str, Any]') -> 'dict[str, Any]'` |
-| function | `write_patch` | `(path: 'Path', runtime_root: 'Path', route: 'dict[str, Any]', provider_config: 'dict[str, Any] \| None' = None, *, workspace_root: 'Path \| None' = None) -> 'None'` |
+| function | `write_patch` | `(path: 'Path', runtime_root: 'Path', route: 'dict[str, Any]', provider_config: 'dict[str, Any] \| None' = None, *, workspace_root: 'Path \| None' = None, tool_home: 'Path \| None' = None) -> 'None'` |
 
 - **`GraphTelemetry`** — One coordinator receipt; node subprocesses own distinct worker receipts.
 - **`account_usage`** — Keep measured DSH calls while exposing incomplete delegated coverage.

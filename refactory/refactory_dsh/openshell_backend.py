@@ -514,9 +514,14 @@ def run_workspace_session(
     if download_artifacts(plan, Path(dest), paths=[plan.project_dir]):
         telemetry.finish('failed', f"the workspace {plan.project_dir} could not be downloaded")
         return exit_code or 1, None
-    downloaded = Path(dest) / workspace.name
+    # Only a folder that is the workspace's own copy (it has the packed .git) comes back;
+    # anything else would read to the sync as every file deleted.
+    downloaded = next((candidate for candidate in (Path(dest) / workspace.name, Path(dest))
+                       if (candidate / '.git').exists()), None)
     telemetry.finish(reason or ('completed' if exit_code == 0 else 'failed'))
-    return exit_code, downloaded if downloaded.is_dir() else Path(dest)
+    if downloaded is None:
+        return exit_code or 1, None
+    return exit_code, downloaded
 
 
 def _poll_run(

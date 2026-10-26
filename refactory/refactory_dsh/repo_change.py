@@ -719,8 +719,8 @@ def refuse_truncated(path: Path, text: str) -> None:
         raise AttemptRefused(
             f"{path} would contain, on line {line}, the read tool's note that it cut text short: "
             f"{match.group(0)!r}. Text copied from that read is incomplete, so the file would be too. Write "
-            "only text that was shown in full; in a worktree, change the file with ===EDIT: blocks that "
-            "leave out the lines you could not read whole.")
+            "only text that was shown in full: copy a file's text from the file itself, or, writing "
+            "===EDIT: blocks, leave out the lines you could not read whole.")
 
 
 def _count_refusal(ctx: Any, refused: Exception) -> dict[str, Any]:

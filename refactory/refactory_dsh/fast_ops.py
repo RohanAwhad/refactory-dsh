@@ -733,7 +733,8 @@ def gate_qa(ctx: Any) -> str:
 
     # Case 1: QA blocking + verifier findings → combine into one repair round
     if findings and verifier_text:
-        findings.append("[verifier] " + verifier_text + "\n\n" + create_ops.VERIFIER_RESPONSE)
+        # Only design_fast has a verifier, and its builder works in a workspace.
+        findings.append("[verifier] " + verifier_text + "\n\n" + create_ops.VERIFIER_RESPONSE_WORKSPACE)
 
     if findings:
         # Classify only refactory's own text; check stderr/stdout is target text

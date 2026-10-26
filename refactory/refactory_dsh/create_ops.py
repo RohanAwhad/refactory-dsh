@@ -2640,10 +2640,17 @@ def classify_finding_sources(entries: list[dict[str, Any]], round_num: int,
 VERIFIER_RESPONSE_FILE = "verifier-response.md"
 
 #: What a builder sent back for a core defect is told about the verifier's findings
-#: that ride along with it.
-VERIFIER_RESPONSE = ("For each verifier finding, answer in your final message, which is saved as "
-                     f"{VERIFIER_RESPONSE_FILE}: the finding, then fixed, or "
+#: that ride along with it, when it writes its own emission (create, edit, fast-create):
+#: its answers go in emit.txt.
+VERIFIER_RESPONSE = ("For each verifier finding, respond in emit.txt under "
+                     "## Verifier findings with the finding, then: fixed, or "
                      "rebutted: <reason> <file:line>")
+
+#: The same, for a builder that works in a workspace (design_fast's), whose emit.txt is
+#: derived from its diff: its answers are its final message, saved as their own file.
+VERIFIER_RESPONSE_WORKSPACE = ("For each verifier finding, answer in your final message, which is saved as "
+                               f"{VERIFIER_RESPONSE_FILE}: the finding, then fixed, or "
+                               "rebutted: <reason> <file:line>")
 
 
 def verifier_rebuttals(ctx: Any) -> list[str]:
