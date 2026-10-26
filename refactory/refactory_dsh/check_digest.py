@@ -370,15 +370,18 @@ def build_probe_command(check_command: str, test_ids: list[str], *, root: 'Path 
     pytest_ids: list[str] = []
     vitest_ids: list[str] = []
     node_ids: list[str] = []
+    vitest_files: list[str] = []
     for tid in test_ids:
         if "::" in tid:
             pytest_ids.append(tid)
         elif " > " in tid:
             vitest_ids.append(tid)
+        elif _SCRIPT_TEST_FILE.search(tid):
+            vitest_files.append(tid)
         else:
             node_ids.append(tid)
     pytest_files = [name for name in whole if name.endswith(".py")]
-    vitest_files = [name for name in whole if _SCRIPT_TEST_FILE.search(name)]
+    vitest_files.extend(name for name in whole if _SCRIPT_TEST_FILE.search(name))
     # An id in a file that runs whole is already run by it.
     pytest_ids = [tid for tid in pytest_ids if tid.split("::")[0] not in pytest_files]
 
