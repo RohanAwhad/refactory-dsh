@@ -1,7 +1,8 @@
 """A stand-in for `gh`, the GitHub CLI, over bare repositories on disk.
 
 Only what delivery asks for (#350): who is logged in, a repository's details, creating
-one, and listing, opening and reading pull requests. Its state lives under
+one, and listing, opening, reading and editing pull requests, and turning them into drafts
+and back. Its state lives under
 ``FAKE_GH_ROOT``: ``<owner>/<name>.git`` is the repository git pushes to (the tests
 point `https://github.com/` there with `url.<base>.insteadOf`), ``<owner>/<name>.json``
 what GitHub says about it (``"drafts": false`` refuses draft pull requests, as GitHub
@@ -138,8 +139,8 @@ def main(args: list[str]) -> None:
         _save(slug, pulls)
         print(f"https://github.com/{slug}/pull/{len(pulls)}")
     elif args[:2] == ["pr", "ready"]:
-        # `gh pr ready --undo <url>` converts an open PR to draft.
         if "--undo" in args:
+            # `gh pr ready --undo <url>` converts an open PR to draft.
             ref = args[2] if len(args) > 2 and not args[2].startswith("-") else args[-1]
             slug, pull = _find(ref, args)
             if not _meta(slug).get("drafts", True):
@@ -153,14 +154,28 @@ def main(args: list[str]) -> None:
             _save(slug, pulls)
             print(f"https://github.com/{slug}/pull/{pull['number']}")
         else:
-            _fail("fake gh does not know this pr ready variant")
+            # `gh pr ready <url>` marks a draft ready for review. Like GitHub, it changes
+            # nothing else: not the title, not the description.
+            ref = args[2] if len(args) > 2 and not args[2].startswith("-") else args[-1]
+            slug, pull = _find(ref, args)
+            pull["draft"] = False
+            pulls = _pulls(slug)
+            for i, p in enumerate(pulls):
+                if p["number"] == pull["number"]:
+                    pulls[i] = pull
+            _save(slug, pulls)
+            print(f"https://github.com/{slug}/pull/{pull['number']}")
     elif args[:2] == ["pr", "edit"]:
-        # `gh pr edit <url> --body-file <path>`
+        # `gh pr edit <url> --body-file <path>` and/or `--title <title>`
         ref = args[2] if len(args) > 2 and not args[2].startswith("-") else ""
         slug, pull = _find(ref, args)
         body_file = _option(args, "--body-file")
+        title = _option(args, "--title")
         if body_file:
             pull["body"] = Path(body_file).read_text()
+        if title:
+            pull["title"] = title
+        if body_file or title:
             pulls = _pulls(slug)
             for i, p in enumerate(pulls):
                 if p["number"] == pull["number"]:

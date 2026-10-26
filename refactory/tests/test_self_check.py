@@ -273,7 +273,7 @@ def test_the_bound_then_the_early_stop_spends_one_attempt(tmp_path, monkeypatch)
 
 def test_the_worst_case_ends_in_the_build_loop_stop_not_the_iteration_limit(tmp_path, monkeypatch):
     """Two refusals before every applied emission, and every applied emission fails its
-    self-check: fix-ups, early stops and refusals all reloop prepare_check, and the run
+    self-check: fix-ups, early stops and refusals all reloop prepare_check, and the build
     still ends in b39b's stop, past the old limit of 8 and under the new one. The pinned
     test's failure is `_Chunks`' answer, and the target is not watched (`_unwatched`): the
     loop is what is under test."""
@@ -286,9 +286,11 @@ def test_the_worst_case_ends_in_the_build_loop_stop_not_the_iteration_limit(tmp_
     model = FakeModel(_answers(*emits))
     run = tmp_path / "run"
     result = _design(run, model, repo, _mode(check_attempts=3, self_check_fixups=2))
-    assert not result.exit_ok
-    assert "BuildLoopStop" in (result.error or "") and "check attempts exhausted" in result.error
-    assert "max_iterations" not in result.error
+    # The check limit stops the build; its attempts applied, so it ends as a draft marked
+    # check failing (b45a), not at a gate's iteration limit.
+    assert result.exit_ok, result.error
+    assert result.facts["draft_delivery"]["reason"] == "check attempts exhausted after 3 check failure(s)"
+    assert result.facts["draft_delivery"]["check_failing"] is True
     assert [entry["outcome"] for entry in _records(run)] == ["fixup", "fixup", "exhausted"] * 3
     # Every emission was a prepare_check reloop but the last: 26 of them, against 45.
     assert _count(model, EMIT) == 27 and DesignMode().build().nodes["prepare_check"].max_iterations == 45
@@ -1354,9 +1356,11 @@ def test_the_worst_case_at_the_knobs_bounds_still_ends_in_the_stop(tmp_path, mon
     model = FakeModel(_answers(*emits))
     run = tmp_path / "run"
     result = _design(run, model, repo, _mode(check_attempts=5, self_check_fixups=5))
-    assert not result.exit_ok
-    assert "BuildLoopStop" in (result.error or "") and "check attempts exhausted" in result.error
-    assert "max_iterations" not in result.error
+    # The check limit stops the build; its attempts applied, so it ends as a draft marked
+    # check failing (b45a), not at a gate's iteration limit.
+    assert result.exit_ok, result.error
+    assert result.facts["draft_delivery"]["reason"] == "check attempts exhausted after 5 check failure(s)"
+    assert result.facts["draft_delivery"]["check_failing"] is True
     assert [entry["outcome"] for entry in _records(run)] == (["fixup"] * 5 + ["exhausted"]) * 5
     assert _count(model, EMIT) == 90
 

@@ -667,8 +667,8 @@ later one before resuming, becomes a gate correction: `pick_gate_corrections` co
 it and `apply_corrections` rewrites `design.md` before the build, on both the walker
 and DSH runtimes. The rewrite covers every part a correction touches, `## Changes` and
 `## Docs` included, because the builder reads the whole document. The pull request
-quotes the corrections, as a block quote, under "Corrections given at approval", after
-"What changed".
+lists the corrections, one short bullet each, under "Corrections given at approval",
+after its Follow-ups.
 
 ### A run with a person at a gate — the command and what it showed
 

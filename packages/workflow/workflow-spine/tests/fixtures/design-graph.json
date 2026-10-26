@@ -279,6 +279,11 @@
     },
     {
       "source": "gate_check",
+      "target": "report",
+      "condition": "draft"
+    },
+    {
+      "source": "gate_check",
       "target": "synthesize_qa",
       "condition": "proceed"
     },
@@ -396,6 +401,11 @@
       "source": "prepare_check",
       "target": "fork_qa",
       "condition": "proceed"
+    },
+    {
+      "source": "prepare_check",
+      "target": "report",
+      "condition": "draft"
     },
     {
       "source": "qa_judge",

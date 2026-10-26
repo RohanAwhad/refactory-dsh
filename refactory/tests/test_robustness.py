@@ -59,6 +59,13 @@ def _make_worktree(repo: Path, run_dir: Path, base: str) -> worktree.Worktree:
     return found
 
 
+def _with_attempt(found: worktree.Worktree) -> worktree.Worktree:
+    """``found`` with one attempt committed on its branch."""
+    import dataclasses
+
+    return dataclasses.replace(found, head=_commit_file(Path(found.path), "attempt.txt", "built\n"))
+
+
 class _Ctx:
     """Minimal RunContext stand-in for unit-level tests."""
 
@@ -993,7 +1000,8 @@ def test_delivery_signal_crash_stops_as_infrastructure(tmp_path):
         "inputs": {"rev": "", "enabled": True, "owner": "owner",
                    "visibility": "public", "refine": ""},
     }
-    found_for_test = worktree.recorded(run_dir)
+    # The run's attempt: delivery refuses a branch that changes nothing.
+    found_for_test = _with_attempt(worktree.recorded(run_dir))
 
     original_merge_target = _del._merge_target
     original_check_merged = _del._check_merged
@@ -1039,7 +1047,8 @@ def test_delivery_abandoned_signal_crash_stops_as_infrastructure(tmp_path):
         "inputs": {"rev": "", "enabled": True, "owner": "owner",
                    "visibility": "public", "refine": ""},
     }
-    found_for_test = worktree.recorded(run_dir)
+    # The run's attempt: delivery refuses a branch that changes nothing.
+    found_for_test = _with_attempt(worktree.recorded(run_dir))
 
     original_merge_target = _del._merge_target
 

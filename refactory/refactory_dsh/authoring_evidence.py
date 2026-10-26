@@ -1491,6 +1491,32 @@ def require_current_evidence(ctx: Any) -> None:
         raise ValueError("evidence is not current: " + "; ".join(problems))
 
 
+def restore_receipts(ctx: Any) -> list[str]:
+    """Put back each receipt the current evidence binds that changed since it was recorded,
+    from the evidence's own copy in its validation history (`record`), when that copy is
+    still the one it hashed. Returns the names put back.
+
+    A draft delivery needs current evidence (`require_current_evidence`) for a commit that
+    is still the one validated, but two things rewrite ``check.txt`` after the evidence was
+    recorded: a refused emission writes its reason there, and a failing check adds its
+    triage. `design_ops._draft_for_stop` puts the receipt back before it decides.
+    """
+    if not ctx.exists(EVIDENCE):
+        return []
+    evidence = ctx.read_json(EVIDENCE, {}) or {}
+    history = ctx.workdir / ".refactory" / "validation-history" / str(evidence.get("id") or "")
+    restored: list[str] = []
+    for name, expected in (evidence.get("receipts") or {}).items():
+        path = ctx.workdir / name
+        if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == expected:
+            continue
+        copy = history / name
+        if copy.is_file() and hashlib.sha256(copy.read_bytes()).hexdigest() == expected:
+            ctx.write_text(name, copy.read_text())
+            restored.append(name)
+    return restored
+
+
 def require_completion(ctx: Any) -> None:
     workers = ("focused_qa",) if "repair_attempts" in ctx.knobs else REVIEWERS[:-1]
     problems = current_problems(ctx, workers) + audit_problems(ctx) + read_correction_audit(ctx)

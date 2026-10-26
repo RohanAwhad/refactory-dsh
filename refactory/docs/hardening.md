@@ -2763,15 +2763,44 @@ A draft delivery opens a pull request with `gh pr create --draft` when the
 
 - `reason` (string): the limit or stop that ended the build (e.g. "review
   reloop limit reached after 3 review cycle(s)").
-- `unresolved` (list of dicts): each item has `text`, `source` (one of
-  `"review"`, `"overwatch"`, `"correction_audit"`, `"delivery"`), and
-  `rounds` (list of int, possibly empty).
+- `unresolved` (list of dicts): each item has `text`, `source` (the judge or
+  gate that named it, or `"delivery"`), and `rounds` (the attempts that named
+  it, possibly empty).
+- `check_failing` (bool) and `check_failure` (string), when the check fails on
+  the draft's head.
 
-Nothing sets this fact yet; a later change (b40b) routes `BuildLoopStop` into
-it. A node that sets `draft_delivery` must declare it in its `produces` (the
+A node that sets `draft_delivery` must declare it in its `produces` (the
 spine refuses an undeclared fact) and write a mapping in the shape above; a
 fact that is not a mapping is read as no draft, with a run warning
 (`delivery.draft_fact`), so report and deliver behave as without it.
+
+### Who sets it (b45a)
+
+Design mode's limit stops, in its own gate functions (`design_ops`), and
+nowhere create, edit or the fast modes run: `create_ops.repair` and
+`repo_change._count_refusal` still raise `BuildLoopStop` there. When the run
+has an applied commit whose check evidence is current, `_draft_for_stop` sets
+the fact and the stop takes its own way to the report:
+
+| Stop | Where | Then |
+|---|---|---|
+| The check fails at its limit, or at the overall attempts limit | `prepare_check`, `gate_check` | `draft`: straight to the report, marked check failing; the QA judge and the overwatch judge only a change whose check passed |
+| The review limit, or the overall attempts limit, at the QA judge | `gate_qa` | `proceed`: on through the correction audit and the overwatch |
+| The same at the overwatch | `gate_overwatch` | `proceed`: to the report; after the QA judge's stop its items join that draft and no attempt is spent |
+| The refusal bound | `design_materialise`, then `prepare_check` | `draft`: to the report, marked check failing when that commit's check failed |
+
+The unresolved items are what each judge left unresolved as of its latest
+verdict (`qa_unresolved`, kept by `gate_qa`, and `overwatch_unresolved`, kept by
+`gate_overwatch`). gate_qa keeps its stop in `qa_draft`, which only it produces, and
+gate_overwatch folds it into `draft_delivery`, so a redo of the overwatch keeps the
+QA judge's draft. A
+refused emission writes its reason to `check.txt`, and a failing check adds its
+triage there after its evidence is recorded; `authoring_evidence.restore_receipts`
+puts the recorded `check.txt` back from the evidence's validation history
+before the draft is decided. A stop with an applied commit and current check
+evidence ends in a draft pull request, and the run ends done; any other stop still
+ends the run with no pull request (a stop whose latest commit has no current
+evidence is dm-272).
 
 ### Why
 
@@ -2799,12 +2828,20 @@ build-loop limit and ended with nothing delivered:
   all, whether or not the `runtime_evidence` fact is set.  (Without the fact,
   `require_completion` is unchanged, including its acceptance of a legacy run
   with neither evidence nor that fact.)
-- `deliver_design` opens the PR with `--draft` and puts a "## Unresolved
-  review findings" section first in its description, listing the reason and
-  each unresolved item.  Every value in the section goes through `_public`
-  (credential values hidden) on one line, as every other field of the
-  description.  Delivering again replaces the section rather than adding a
-  second.
+- `deliver_design` opens the PR with `--draft` and puts the draft's section
+  first in its description, between `<!-- delivery:draft -->` and
+  `<!-- /delivery:draft -->`: "## Check failing" and what the check said when
+  it fails (the title then starts `[check failing] `), then "## Unresolved
+  review findings", listing the reason and each unresolved item.  Every value
+  in the section goes through `_public` (credential values hidden) on one
+  line, as every other field of the description.  Delivering again replaces
+  only what is between the markers (dm-246), so a person's text, prose with
+  no heading included, stays.
+- A later delivery with no draft fact marks a draft that delivery made ready
+  for review (`gh pr ready`), takes the section out, and takes `[draft] ` and
+  `[check failing] ` off the title. A person's own draft is left a draft.
+- Delivery refuses a branch whose head has the same files as its base: a run
+  whose whole change is empty opens no pull request.
 - An open PR for the branch is converted with `gh pr ready --undo`, after the
   push, so a refusal from there on keeps the push and the PR in the record.
   GitHub has no draft PRs for private repositories on some plans: where `gh pr
@@ -2846,6 +2883,18 @@ build-loop limit and ended with nothing delivered:
 - `refactory/tests/test_delivery.py::test_a_draft_whose_pull_request_merged_is_recorded_merged`
 - `refactory/tests/test_delivery.py::test_a_draft_whose_merge_was_abandoned_is_not_succeeded`
 - `refactory/tests/test_delivery.py::test_a_draft_whose_push_is_refused_keeps_the_work_local_as_without_the_fact`
+- b45a, through the real design graph: `test_delivery.py::test_a_review_limit_at_gate_qa_with_a_passing_attempt_delivers_a_draft`,
+  `::test_a_check_that_still_fails_at_its_limit_delivers_a_draft_marked_check_failing`,
+  `::test_a_run_with_no_applied_commit_delivers_nothing`,
+  `::test_the_refusal_bound_after_an_applied_commit_delivers_that_commit_as_a_draft`,
+  `::test_a_review_limit_at_gate_overwatch_delivers_a_draft`,
+  `::test_a_persons_description_survives_two_draft_deliveries`,
+  `::test_a_full_delivery_after_a_draft_makes_it_ready_with_no_section`,
+  `::test_a_run_whose_whole_change_is_empty_opens_no_pull_request`; through the node
+  runner: `test_build_loop_stop.py::test_a_design_check_limit_goes_to_the_report_as_a_draft_on_the_spine`,
+  `::test_the_refusal_bound_after_an_applied_commit_goes_to_the_report_on_the_spine`,
+  `::test_a_review_limit_at_gate_qa_goes_on_as_a_draft_on_the_spine`,
+  `::test_a_review_limit_at_gate_overwatch_goes_to_the_report_as_a_draft_on_the_spine`.
 - `refactory/tests/test_delivery.py::test_a_draft_fact_that_is_not_a_mapping_is_no_draft`
 - `refactory/tests/test_authoring_evidence.py::test_ceo_skip_is_refused_on_the_draft_path`
 - `refactory/tests/test_authoring_evidence.py::test_person_skip_is_accepted_on_the_draft_path`

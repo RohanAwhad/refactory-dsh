@@ -1415,14 +1415,33 @@ def prepare_check(ctx: Any) -> Any:
     them, and a failure goes back to the builder before any review starts. A
     preparation that fails is judged here by the whole check, as it always was, which
     reports it with its triage.
-    """
-    import uuid
 
-    from refactory_dsh import authoring_evidence as evidence
+    A limit that stops the build here -- the check attempts, or all attempts, spent on a
+    failing self-check or preparation -- delivers the attempt as a draft marked check
+    failing (`_draft_for_stop`), and the run goes straight to the report (``draft``).
+    So does the refusal bound, which `design_materialise` has already made a draft.
+    """
+    from refactory_dsh.run import BuildLoopStop
 
     # Nothing a last attempt prepared or decided may stand for this one.
     for name in (CHECK_PREP, CHECK_VERDICT):
         ctx.path(name).unlink(missing_ok=True)
+    if ctx.facts.get("draft_delivery"):
+        return "draft"
+    try:
+        return _prepare_attempt(ctx)
+    except BuildLoopStop as stop:
+        if _draft_for_stop(ctx, stop, check_failing=True) is None:
+            raise
+        return "draft"
+
+
+def _prepare_attempt(ctx: Any) -> Any:
+    """`prepare_check`'s work: prepare the attempt, then self-check it or check it whole."""
+    import uuid
+
+    from refactory_dsh import authoring_evidence as evidence
+
     refused = _refused_verdict(ctx)
     if refused is not None:
         return refused
@@ -1745,8 +1764,11 @@ def gate_check(ctx: Any) -> Any:
 
     A failed check sends the build back with the check's feedback, as before; the
     reviews of that attempt are not read, because the next attempt is reviewed afresh.
-    A check that stopped the run (an unrepairable failure) stops it here. A person's
-    skip of the check proceeds on its skip receipt for this attempt.
+    A check that stopped the run (an unrepairable failure) stops it here. A check that
+    still fails at its limit, or at the overall attempts limit, delivers the attempt as a
+    draft marked check failing (`_draft_for_stop`) and goes straight to the report
+    (``draft``): the QA judge and the overwatch judge only a change whose check passed.
+    A person's skip of the check proceeds on its skip receipt for this attempt.
 
     With no decision for this attempt and command -- the check command was corrected
     after the check ran (`graph-control amend-command` reruns this gate), or the check
@@ -1754,6 +1776,7 @@ def gate_check(ctx: Any) -> Any:
     did, bound to the same attempt, so the reviews beside it stay current.
     """
     from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh.run import BuildLoopStop
 
     attempt = _prepared_attempt(ctx)
     if not attempt:
@@ -1762,13 +1785,13 @@ def gate_check(ctx: Any) -> Any:
     decided = _decided(ctx, attempt)
     if decided:
         if decided.get("error_type"):
-            # The check stopped the run, as it would have before the reviews: a
-            # build-loop limit stays a BuildLoopStop, so the spine records the run failed.
-            from refactory_dsh.run import BuildLoopStop
-
             kind = {"RuntimeError": RuntimeError, "BuildLoopStop": BuildLoopStop}.get(
                 str(decided["error_type"]), ValueError)
-            raise kind(str(decided.get("error") or "the check failed"))
+            stopped = kind(str(decided.get("error") or "the check failed"))
+            if isinstance(stopped, BuildLoopStop) and _draft_for_stop(
+                    ctx, stopped, check_failing=True) is not None:
+                return "draft"
+            raise stopped
         label = str(decided.get("verdict") or "")
         return "proceed" if label == "proceed" else Verdict(label, str(decided.get("reason") or ""))
     validation = (ctx.read_json(evidence.EVIDENCE, {}) if ctx.exists(evidence.EVIDENCE)
@@ -1776,7 +1799,12 @@ def gate_check(ctx: Any) -> Any:
     if (validation.get("status") == "skipped" and validation.get("source") == "person"
             and validation.get("check_attempt") == attempt):
         return "proceed"
-    verdict = check_artifact(ctx, check_attempt=attempt)
+    try:
+        verdict = check_artifact(ctx, check_attempt=attempt)
+    except BuildLoopStop as stop:
+        if _draft_for_stop(ctx, stop, check_failing=True) is None:
+            raise
+        return "draft"
     _record_check_verdict(ctx, attempt, verdict)
     return verdict
 
@@ -2142,14 +2170,153 @@ def _review_questions_advisory(ctx: Any) -> str:
     return advisory_repo_questions(problems) if problems else ""
 
 
-def _send_back(ctx: Any, gate_file: str, fact: str, reason: str) -> Any:
-    """Write why the change goes back, and spend a review attempt on it (`create_ops.repair`),
-    which raises BuildLoopStop at the review limit."""
+#: What the QA judge and its gate, and the overwatch and its gate, left unresolved as of
+#: their latest verdicts, one item per line with the attempts that named it: what a draft
+#: delivery lists when a limit stops the build loop. Two facts, each produced by one gate
+#: only, so a redo of one gate's nodes keeps the other's.
+QA_UNRESOLVED = "qa_unresolved"
+OVERWATCH_UNRESOLVED = "overwatch_unresolved"
+
+#: gate_qa's limit stop, as a draft (`_draft_for_stop`). Only gate_qa produces it, so a
+#: redo of the overwatch keeps it; gate_overwatch folds it into ``draft_delivery``
+#: (`_fold_draft`), which report and deliver read.
+QA_DRAFT = "qa_draft"
+
+
+def _drafted(ctx: Any) -> bool:
+    """Whether a stop already made this run a draft, spending the attempt it stopped on."""
+    return any(isinstance(ctx.facts.get(name), dict) for name in (QA_DRAFT, "draft_delivery"))
+
+
+def _note_unresolved(ctx: Any, fact: str, who: str, lines: list[str]) -> None:
+    """Record ``lines`` in ``fact`` as what ``who`` leaves unresolved on this attempt,
+    replacing what it left on earlier ones; an item it named before too keeps those
+    attempts (``rounds``).
+
+    The attempt is the one the gate judges: the next after those spent, or, once a stop
+    already spent it and made the run a draft (`_draft_for_stop`), the last one spent.
+    """
+    spent = int(ctx.facts.get("attempts_used") or 0)
+    attempt = spent if _drafted(ctx) else spent + 1
+    entries = [entry for entry in (ctx.facts.get(fact) or []) if isinstance(entry, dict)]
+    earlier = {entry.get("text"): entry for entry in entries if entry.get("source") == who}
+    kept = [entry for entry in entries if entry.get("source") != who]
+    for line in dict.fromkeys(lines):
+        rounds = [r for r in earlier.get(line, {}).get("rounds", []) if r != attempt]
+        kept.append({"text": line, "source": who, "rounds": [*rounds, attempt]})
+    ctx.set_fact(fact, kept)
+
+
+def _unresolved(ctx: Any) -> list[dict[str, Any]]:
+    """What the judges leave unresolved now: the QA judge's items, then the overwatch's."""
+    return [dict(entry) for name in (QA_UNRESOLVED, OVERWATCH_UNRESOLVED)
+            for entry in (ctx.facts.get(name) or []) if isinstance(entry, dict)]
+
+
+#: The limits `create_ops.repair` stops on, each followed by ``: <feedback>``.
+_LIMIT_LEAD = _re.compile(r"^(check attempts exhausted|check attempt cap|review reloop limit|"
+                          r"authoring unresolved)\b[^:]*: ")
+
+
+def _one_line(text: Any, limit: int) -> str:
+    """``text`` on one line, at most ``limit`` characters."""
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[:limit - 1].rstrip() + "…"
+
+
+def _draft_for_stop(ctx: Any, stop: Exception, *, check_failing: bool | None = None,
+                    restore: bool = True, into: str = "draft_delivery") -> dict[str, Any] | None:
+    """Make a limit stop of design's build loop a draft delivery (b40b, dm-224), or None.
+
+    The run delivers its latest applied commit as a draft pull request when it has one
+    whose check evidence is current, which is what `report_judged` requires of a draft:
+    the ``draft_delivery`` fact (`delivery.draft_fact`), or the fact ``into`` names, is then
+    set with the stop's reason and what the judges left unresolved (`_unresolved`).
+    ``check_failing`` says whether that
+    commit's check failed; None reads it from the evidence. With ``restore``, a ``check.txt``
+    that a refused emission or the check's own triage rewrote after the evidence was
+    recorded is put back first (`authoring_evidence.restore_receipts`); the caller declares
+    it among its writes. With no applied commit (none materialised, or a run without a
+    worktree), or no current evidence for it, it returns None and the caller raises the
+    stop, which ends the run as before. Design mode only: create, edit and the fast modes
+    keep their stops (`create_ops.repair`).
+    """
+    from refactory_dsh import authoring_evidence as evidence
+
+    commit = str(ctx.facts.get("commit") or "")
+    if not commit or commit == repo_change.NO_WORKTREE or worktree.recorded(ctx.workdir) is None:
+        return None
+    if restore:
+        evidence.restore_receipts(ctx)
+    try:
+        evidence.require_current_evidence(ctx)
+    except ValueError:
+        return None
+    # What the check said, when it failed: the feedback the stop carries, or, when the stop
+    # is not the check's (the refusal bound), the status its evidence recorded.
+    failure: Any = ctx.facts.get("validation") or stop
+    if check_failing is None:
+        status = (ctx.read_json(evidence.EVIDENCE, {}) or {}).get("validation", {}).get("status")
+        check_failing = status not in ("pass", "skipped")
+        failure = f"the check did not pass on this head ({status or 'no result'})"
+    # The limit, without the feedback `create_ops.repair` appends to it: the check's goes
+    # under check_failure and the judges' are the unresolved items.
+    reason = str(stop).split("\n", 1)[0]
+    if _LIMIT_LEAD.match(reason):
+        reason = reason.split(": ", 1)[0]
+    fact: dict[str, Any] = {
+        "reason": _one_line(reason, 300),
+        "unresolved": _unresolved(ctx),
+    }
+    if check_failing:
+        fact["check_failing"] = True
+        fact["check_failure"] = _one_line(failure, 500)
+    ctx.set_fact(into, fact)
+    return fact
+
+
+def _send_back(ctx: Any, gate_file: str, fact: str, reason: str, *,
+               into: str = "draft_delivery") -> Any:
+    """Write why the change goes back, and spend a review attempt on it (`create_ops.repair`).
+
+    At the review limit, or the overall attempts limit, that is a BuildLoopStop; with an
+    applied commit and current check evidence the change goes on as a draft instead
+    (`_draft_for_stop`, into the fact ``into`` names): ``proceed``, so from gate_qa the
+    correction audit and the overwatch still judge it, and from gate_overwatch it goes to
+    the report.
+    """
     from refactory_dsh.create_ops import repair
+    from refactory_dsh.run import BuildLoopStop
 
     ctx.write_text(gate_file, reason + "\n")
     ctx.set_fact(fact, reason)
-    return repair(ctx, [reason], kind="review")
+    try:
+        return repair(ctx, [reason], kind="review")
+    except BuildLoopStop as stop:
+        # The check passed on this commit and nothing rewrote its receipt since.
+        if _draft_for_stop(ctx, stop, check_failing=False, restore=False, into=into) is None:
+            raise
+        ctx.write_text(gate_file, f"draft: {_one_line(stop, 300)}\n{reason}\n")
+        return "proceed"
+
+
+def design_materialise(ctx: Any) -> dict[str, Any]:
+    """Design's materialise (`repo_change.materialise`), whose refusal bound delivers a draft.
+
+    Emissions refused ``refusal_attempts`` times running stop the build. With an applied
+    commit before them, that commit is delivered as a draft (`_draft_for_stop`; marked
+    check failing when its check failed), and `prepare_check` sends the run to the report.
+    Without one the stop ends the run, as it does in create, edit and the fast modes.
+    """
+    from refactory_dsh.run import BuildLoopStop
+
+    try:
+        return repo_change.materialise(ctx)
+    except BuildLoopStop as stop:
+        fact = _draft_for_stop(ctx, stop)
+        if fact is None:
+            raise
+        return {"draft_delivery": fact, "emission_refused": str(stop)}
 
 
 def _read_judge(ctx: Any, name: str, verdicts: tuple[str, ...], *, who: str,
@@ -2204,10 +2371,14 @@ def gate_qa(ctx: Any) -> Any:
     The change goes back to emit only when the judge says ``redo`` and names a must-fix
     item that holds it back (`judges.blocks`: critical or high, or it breaks an ask, a
     correction or the health check). The feedback is the must-fix items, and the round
-    spends a review attempt; at the review limit that is a BuildLoopStop. Otherwise it
-    goes on to the correction audit and the overwatch, and the follow-ups and any
-    remaining must-fix items go to the pull request. A judge file that is missing or is
-    not one JSON verdict is reread once (`_read_judge`); if it is still unreadable the
+    spends a review attempt (`_send_back`). At the review limit, or the overall attempts
+    limit, the change goes on as a draft instead (`QA_DRAFT`, which gate_overwatch folds
+    into ``draft_delivery``), listing those items unresolved (`QA_UNRESOLVED`), with the
+    judge's non-blocking items still recorded as follow-ups: through the correction audit
+    and the overwatch, to the report.
+    Otherwise it goes on to the correction audit and the overwatch, and the follow-ups and
+    any remaining must-fix items go to the pull request. A judge file that is missing or
+    is not one JSON verdict is reread once (`_read_judge`); if it is still unreadable the
     change goes on with a note in the gate's status and the follow-ups, because the
     overwatch still judges it.
 
@@ -2229,9 +2400,10 @@ def gate_qa(ctx: Any) -> Any:
     missing = [name for name, _ in DESIGN_QA_REVIEWS
                if not (ctx.exists(name) and ctx.read_text(name).strip())]
     if stale or missing:
-        reason = "reloop: " + "; ".join(
-            [*stale, *(["a review did not run: " + ", ".join(missing)] if missing else [])])
-        return _send_back(ctx, "reviews/qa-gate.txt", "qa_gate", reason)
+        problems = [*stale, *(["a review did not run: " + ", ".join(missing)] if missing else [])]
+        _note_unresolved(ctx, QA_UNRESOLVED, "QA gate", problems)
+        return _send_back(ctx, "reviews/qa-gate.txt", "qa_gate", "reloop: " + "; ".join(problems),
+                          into=QA_DRAFT)
     judgment, reread, note = _read_judge(ctx, judges.QA_JUDGE, judges.QA_VERDICTS,
                                          who="QA judge", count="qa_judge_rereads",
                                          prompt_fact="qa_judge_reread")
@@ -2244,8 +2416,15 @@ def gate_qa(ctx: Any) -> Any:
         if stop:
             evidence.stop_unrepairable("unavailable", stop)
         if judgment.verdict == "redo" and judgment.blocking:
-            return _send_back(ctx, "reviews/qa-gate.txt", "qa_gate",
-                              "reloop: " + judges.feedback(judgment, "QA judge"))
+            _note_unresolved(ctx, QA_UNRESOLVED, "QA judge",
+                             [judges.must_fix_line(item) for item in judgment.blocking])
+            _note_unresolved(ctx, QA_UNRESOLVED, "QA gate", [])
+            routed = _send_back(ctx, "reviews/qa-gate.txt", "qa_gate",
+                                "reloop: " + judges.feedback(judgment, "QA judge"), into=QA_DRAFT)
+            if isinstance(ctx.facts.get(QA_DRAFT), dict):
+                # On as a draft: the judge's non-blocking items still go to the pull request.
+                record_follow_ups(ctx, "qa", list(judgment.follow_ups))
+            return routed
         # Nothing holds the change back. The items the judge named go to the pull request.
         held = ("the QA judge asked for a redo, but nothing it named is critical or high or "
                 "breaks an ask, a correction or the health check")
@@ -2259,6 +2438,10 @@ def gate_qa(ctx: Any) -> Any:
         note = _quoting(ctx, note + "; the change went on to the overwatch without it",
                         judges.QA_JUDGE)
         follow, summary, dismissed = [note], note, []
+    # Nothing the QA judge named holds the change back any more.
+    _note_unresolved(ctx, QA_UNRESOLVED, "QA judge", [])
+    _note_unresolved(ctx, QA_UNRESOLVED, "QA gate", [])
+    ctx.set_fact(QA_DRAFT, "")
     record_follow_ups(ctx, "qa", follow)
     # The advisory goes last: delivery reads the repository-question advisory to the end.
     notes = "".join(f"{line}\n" for line in (
@@ -2326,19 +2509,54 @@ def audit_corrections(ctx: Any) -> dict[str, Any]:
     return {"correction_audit": summary}
 
 
+def _fold_draft(ctx: Any) -> None:
+    """The run's draft, when a stop made it one, as ``draft_delivery``, listing what the
+    judges leave unresolved now: the overwatch's own stop, or else gate_qa's (`QA_DRAFT`)."""
+    own, qa = ctx.facts.get("draft_delivery"), ctx.facts.get(QA_DRAFT)
+    draft = own if isinstance(own, dict) else qa if isinstance(qa, dict) else None
+    if draft is not None:
+        ctx.set_fact("draft_delivery", {**draft, "unresolved": _unresolved(ctx)})
+
+
+def _overwatch_back(ctx: Any, reason: str) -> Any:
+    """gate_overwatch's send-back (`_send_back`), except on a run the QA judge's limit
+    already made a draft: there the overwatch's items join the draft, and it goes on to
+    the report, spending no attempt the limit no longer allows."""
+    if not isinstance(ctx.facts.get(QA_DRAFT), dict):
+        return _send_back(ctx, "reviews/overwatch-gate.txt", "overwatch_review", reason)
+    ctx.write_text("reviews/overwatch-gate.txt",
+                   f"draft: the overwatch's items join the draft's unresolved findings\n{reason}\n")
+    ctx.set_fact("overwatch_review", reason)
+    return "proceed"
+
+
 def gate_overwatch(ctx: Any) -> Any:
+    """Gate after the overwatch (`_judge_overwatch`). Whatever it routes but a reread, a
+    run the QA judge's limit made a draft goes on as one, with the overwatch's items folded
+    in (`_fold_draft`): kept in gate_qa's own fact, that draft survives a redo of the
+    overwatch's nodes."""
+    routed = _judge_overwatch(ctx)
+    if str(routed) != "reread":
+        _fold_draft(ctx)
+    return routed
+
+
+def _judge_overwatch(ctx: Any) -> Any:
     """Gate after the overwatch: route on ``overwatch-verdict.json``.
 
-    The change goes back to emit, spending a review attempt (a BuildLoopStop at the
-    limit), when the overwatch finds a correction the person gave not met, whatever its
-    verdict, or says ``redo`` and names a must-fix item that holds the change back
-    (`judges.blocks`) or a correction it could not judge. The feedback names each one,
-    with its evidence. Otherwise the change goes to the report, and the follow-ups, any
-    remaining must-fix items and every correction the overwatch did not judge go to the
-    pull request, named. The correction audit never refuses by itself: it was the
-    overwatch's evidence. A verdict file that is missing or is not one JSON verdict is
-    reread once (`_read_judge`); if it is still unreadable the change goes on with a
-    note, because sending the builder back cannot repair a judge's file.
+    The change goes back to emit, spending a review attempt (`_send_back`), when the
+    overwatch finds a correction the person gave not met, whatever its verdict, or says
+    ``redo`` and names a must-fix item that holds the change back (`judges.blocks`) or a
+    correction it could not judge. The feedback names each one, with its evidence. At the
+    review limit, or the overall attempts limit, the change goes to the report as a draft
+    instead, listing them unresolved; on a run the QA judge's limit already made a draft,
+    they join that draft, and no attempt is spent (`_overwatch_back`). Otherwise the change
+    goes to the report, and the follow-ups, any remaining must-fix items and every
+    correction the overwatch did not judge go to the pull request, named. The correction
+    audit never refuses by itself: it was the overwatch's evidence. A verdict file that is
+    missing or is not one JSON verdict is reread once (`_read_judge`); if it is still
+    unreadable the change goes on with a note, because sending the builder back cannot
+    repair a judge's file.
     """
     from refactory_dsh import authoring_evidence as evidence
     from refactory_dsh import judges
@@ -2346,8 +2564,9 @@ def gate_overwatch(ctx: Any) -> Any:
 
     stale = evidence.current_problems(ctx, ("overwatch",))
     if stale:
-        return _send_back(ctx, "reviews/overwatch-gate.txt", "overwatch_review",
-                          "reloop: evidence problems: " + "; ".join(stale))
+        _note_unresolved(ctx, OVERWATCH_UNRESOLVED, "overwatch gate", stale)
+        return _overwatch_back(ctx, "reloop: evidence problems: " + "; ".join(stale))
+    _note_unresolved(ctx, OVERWATCH_UNRESOLVED, "overwatch gate", [])
     judgment, reread, note = _read_judge(ctx, judges.OVERWATCH_VERDICT, judges.OVERWATCH_VERDICTS,
                                          who="overwatch", count="overwatch_rereads",
                                          prompt_fact="overwatch_reread")
@@ -2359,6 +2578,7 @@ def gate_overwatch(ctx: Any) -> Any:
     if judgment is None:
         note = _quoting(ctx, note + "; acceptance was not judged, so check each ask and "
                         "correction by hand", judges.OVERWATCH_VERDICT)
+        _note_unresolved(ctx, OVERWATCH_UNRESOLVED, "overwatch", [])
         record_follow_ups(ctx, "overwatch", [note])
         ctx.write_text("reviews/overwatch-gate.txt", f"proceed: {note}\n" + advisory)
         ctx.set_fact("overwatch_review", "(the overwatch's verdict could not be read)")
@@ -2369,12 +2589,17 @@ def gate_overwatch(ctx: Any) -> Any:
     if stop:
         evidence.stop_unrepairable("unavailable", stop)
     if judgment.verdict == "redo" and (judgment.blocking or judgment.unmet or judgment.unjudged):
-        return _send_back(ctx, "reviews/overwatch-gate.txt", "overwatch_review",
-                          "reloop: " + judges.feedback(judgment, "overwatch"))
+        _note_unresolved(ctx, OVERWATCH_UNRESOLVED, "overwatch", [
+            *(judges.must_fix_line(item) for item in judgment.blocking),
+            *(f"correction {judges.correction_line(item)}"
+              for item in (*judgment.unmet, *judgment.unjudged))])
+        return _overwatch_back(ctx, "reloop: " + judges.feedback(judgment, "overwatch"))
     if judgment.unmet:
         # A pass that leaves a correction the person gave unmet does not ship.
-        return _send_back(ctx, "reviews/overwatch-gate.txt", "overwatch_review",
-                          "reloop: " + judges.feedback(judgment, "overwatch", passed=True))
+        _note_unresolved(ctx, OVERWATCH_UNRESOLVED, "overwatch",
+                         [f"correction {judges.correction_line(item)}" for item in judgment.unmet])
+        return _overwatch_back(ctx, "reloop: " + judges.feedback(judgment, "overwatch", passed=True))
+    _note_unresolved(ctx, OVERWATCH_UNRESOLVED, "overwatch", [])
     held = ("the overwatch asked for a redo, but nothing it named is critical or high or "
             "breaks an ask, a correction or the health check")
     suffix = f" ({held})" if judgment.verdict == "redo" else " (the overwatch passed with this listed as must-fix)"
