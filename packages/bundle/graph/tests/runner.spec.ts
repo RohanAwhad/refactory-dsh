@@ -52,6 +52,8 @@ interface Harness {
   out: () => string
   err: () => string
   createOptions: Array<{ provider?: string; model?: string }>
+  /** How often the runner asked the profile for its default model: never (dm-258). */
+  selectionReads: () => number
   setupCalls: number
   followups: string[]
 }
@@ -138,8 +140,11 @@ async function bench(options: {
   let setupCalls = 0
   const ctx = new Context()
   if (options.omit !== 'loader') ctx.provide('loader', { await: async () => {} })
+  let selectionReads = 0
   if (options.omit !== 'agentDefaultModel') {
-    ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'deepseek', model: 'flash' }) })
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => { selectionReads += 1; return { provider: 'profile-default', model: 'profile-model' } },
+    })
   }
   if (options.omit !== 'agents') {
     ctx.provide('agents', {
@@ -171,7 +176,7 @@ async function bench(options: {
   applyRunner(ctx, io)
   // `apply` runs the runner without awaiting it; let the microtask queue drain.
   for (let tick = 0; tick < 30; tick += 1) await new Promise(resolve => setImmediate(resolve))
-  return { exits, out: () => out, err: () => err, createOptions, setupCalls, followups }
+  return { exits, out: () => out, err: () => err, createOptions, selectionReads: () => selectionReads, setupCalls, followups }
 }
 
 describe('graph runner', () => {
@@ -314,6 +319,26 @@ describe('graph runner', () => {
   it('routes the agent at the provider and model the run named', async () => {
     const harness = await bench({ provider: 'deepseek', model: 'flash' })
     expect(harness.createOptions).toEqual([{ provider: 'deepseek', model: 'flash' }])
+    expect(harness.selectionReads()).toBe(0)
+  })
+
+  // dm-258: the graph profile's own default is how a terminal run reached a provider
+  // nobody chose. A launch that names no route is refused, never completed from it.
+  for (const route of [{ provider: '', model: '' }, { provider: 'deepseek', model: '' }, { provider: '', model: 'flash' }]) {
+    it(`refuses a run that names ${route.provider || 'no provider'} and ${route.model || 'no model'}, before any agent exists`, async () => {
+      const harness = await bench(route)
+      expect(harness.exits).toEqual([1])
+      expect(harness.err()).toContain('No model chosen: pick one in Settings → Models or with `refactory model set')
+      expect(harness.createOptions).toEqual([])
+      expect(harness.selectionReads()).toBe(0)
+      expect(harness.out()).toBe('')
+    })
+  }
+
+  it('runs without the profile default model service at all', async () => {
+    const harness = await bench({ omit: 'agentDefaultModel', provider: 'deepseek', model: 'flash' })
+    expect(harness.exits).toEqual([0])
+    expect(harness.createOptions).toEqual([{ provider: 'deepseek', model: 'flash' }])
   })
 
   it('reports an agent turn that failed, and still reports the run', async () => {
@@ -332,7 +357,7 @@ describe('graph runner', () => {
     expect(harness.err()).toContain('plain failure')
   })
 
-  for (const omit of ['agents', 'sessions', 'agentDefaultModel', 'graphStartup'] as const) {
+  for (const omit of ['agents', 'sessions', 'graphStartup'] as const) {
     it(`does nothing when the ${omit} service is absent`, async () => {
       const harness = await bench({ omit })
       expect(harness.exits).toEqual([])

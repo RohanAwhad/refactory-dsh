@@ -23,7 +23,10 @@ def test_a_test_gets_an_empty_dsh_home_of_its_own():
     home = Path(os.environ["DSH_HOME"])
     assert str(home.resolve()) not in conftest._REAL_DSH_HOMES
     assert os.environ["REFACTORY_MODEL_DSH_HOME"] == str(home)
-    assert home.is_dir() and not any(home.iterdir())
+    # Empty but for the one model choice a sealed home holds, so a test can start a run (dm-258).
+    assert home.is_dir()
+    assert [str(path.relative_to(home)) for path in home.rglob("*") if path.is_file()] == [
+        "profiles/refactory/cordis.patch.yml"]
 
 
 def test_the_persons_dsh_home_is_among_the_sealed_homes():

@@ -97,8 +97,6 @@ def test_core_only_environment():
             'model_context': {
                 'worker_backend': 'dsh',
                 'runtime_root': str(run_dir),
-                'provider': 'test',
-                'model': 'test',
             },
             'post_checks': [],
         }
@@ -164,8 +162,6 @@ def test_product_registered_environment():
             'model_context': {
                 'worker_backend': 'dsh',
                 'runtime_root': str(run_dir),
-                'provider': 'test',
-                'model': 'test',
             },
             'post_checks': [],
         }
@@ -239,8 +235,6 @@ def test_worker_import_sequence_has_overlay():
             'model_context': {
                 'worker_backend': 'dsh',
                 'runtime_root': str(run_dir),
-                'provider': 'test',
-                'model': 'test',
             },
             'post_checks': [],
         }

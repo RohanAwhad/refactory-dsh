@@ -203,13 +203,13 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 | `refactory help [--topic <topic>]` | the operating guide, and the current mode and operation schemas. |
 | `refactory docs [--page <page>]` | search and read the documentation shipped with this checkout. |
 | `refactory workers` | the coding-agent worker configuration and the capabilities each backend reports. |
-| `refactory runtime` | the resolved runtime and model route a run would use. |
+| `refactory runtime` | the resolved runtime and model route a run would use, and where it came from: a flag, the project file, the environment, the stored choice, or a node or role route. |
 | `refactory projects [--json]` | the projects Design runs work on, with each run's branch and how it ended. |
 | `refactory projects prune [<name>] [--succeeded]` | remove the worktrees and branches that ended runs no longer need; `--succeeded` also removes succeeded runs' worktrees, keeping their branches. |
 | `refactory profile-save --name <name> --spec <JSON>` | save an immutable configuration version. |
 | `refactory graph-control [--node <id>]` | control a graph run through the spine: pause, resume, stop, acknowledge, amend-command, or withdraw a control. |
-| `refactory model set --provider <route> --model <id>` | save the model choice that every run uses as its default; overridable by `--provider`/`--model` on any command. |
-| `refactory model show` | show the currently stored model choice as JSON. |
+| `refactory model set --provider <route> --model <id>` | store the model every run uses, where Settings → Models keeps it (only that entry changes); `--provider`/`--model` on a command override it for that run. |
+| `refactory model show` | print the stored model choice and its file as JSON; exits 1 when none is chosen. |
 | `refactory ui --port <n> --no-open` | start the [browser GUI](interfaces.md) without opening a browser. |
 
 

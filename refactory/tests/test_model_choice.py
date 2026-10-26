@@ -1,664 +1,684 @@
-"""One model choice for every run (dm-258).
+"""One model choice for every run, at the boundary that matters: what each DSH process gets (dm-258).
 
-Tests that the stored model choice propagates to every DSH process, that runs
-refuse before any model call when no choice exists, that CLI flags override the
-stored choice, that migration from an existing refactory profile works, and that
-the walker and evaluator get the same route as the spine.
-
-Integration tests use DSH_CLI pointing at a fake dsh script that records its
-arguments, so we test at the real boundary: the argv every DSH process gets.
+A terminal run used to read the `graph` and `headless` profiles' own default, so with a
+DeepSeek key stored it sent a person's code to DeepSeek although they had chosen another
+provider in the GUI. These tests point ``DSH_CLI`` at a fake dsh that records the argv and
+environment of every DSH process a run starts and answers like a scripted model, and check
+that every one of them is handed the stored choice, that no entry point starts one without
+a choice, and the visible first-run choice that replaces a bare refusal.
 """
+
 from __future__ import annotations
 
 import json
 import os
-import stat
-import subprocess
 import sys
-import textwrap
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from refactory_dsh.dsh_profile import (
-    GUI_PROFILE,
-    NO_MODEL_CHOICE_MESSAGE,
-    KNOWN_PROVIDERS,
-    _parse_agent_default_model,
-    _update_agent_default_model,
-    first_run_choice,
-    model_choice_write,
-    stored_model_choice,
-)
-from refactory_dsh.model import DshModelClient, ModelChoiceError, MODEL_CHOICE_REFUSAL, require_model_choice
+from refactory_dsh import cli, console, dsh_profile, interactive, workers
+from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
+from tests_support import PLACEHOLDER_KEY, TEST_MODEL_CHOICE, store_model_choice
+
+MESSAGE = dsh_profile.NO_MODEL_CHOICE_MESSAGE
+MODE = "choicepack/ask"
+
+_PACKAGE_INIT = '''\
+"""Two agent nodes in a row: the smallest graph whose run starts a CEO and two workers."""
+from refactory_dsh.nn import Package
+
+from .mode import Ask
+
+PACKAGE = Package(name="choicepack", description="ask a model twice", modes=(Ask,), ops=())
+'''
+
+_PACKAGE_MODE = '''\
+"""Draft a line, then polish it."""
+from refactory_dsh import nn
 
 
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch, tmp_path):
-    """Ensure a clean environment for each test."""
-    for key in (
-        "REFACTORY_WORKER_CONTEXT",
-        "REFACTORY_WORKER_BACKEND",
-        "REFACTORY_MODEL_ID",
-        "REFACTORY_MODEL_PROVIDER",
-        "REFACTORY_MODEL_EFFORT",
-        "DSH_HOME",
-        "DEEPSEEK_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    # Point DSH_HOME to a temp directory.
-    monkeypatch.setenv("DSH_HOME", str(tmp_path / "dsh_home"))
+class Ask(nn.Mode):
+    name = "ask"
+    description = "draft a line, then polish it"
+
+    @classmethod
+    def declare(cls):
+        return {"lines": nn.Knob(1, "int", lo=1, hi=3, description="how many lines to draft")}
+
+    def build(self):
+        graph = nn.Graph()
+        graph.add(nn.Node("draft", "agent", prompt_template="Write {{lines}} line(s) of verse.",
+                          knobs=("lines",), writes=("draft.md",), produces=("draft",)))
+        graph.add(nn.Node("polish", "agent", prompt_template="Polish the verse in draft.md.",
+                          reads=("draft.md",), writes=("final.md",), produces=("final",)))
+        graph.connect("draft", "polish")
+        return graph
+
+    def score(self, run):
+        return float(bool(run.facts.get("final")))
+'''
+
+#: The fake dsh. As the graph runner (`--profile graph`) it drains the lowered graph the
+#: way an automatic run does, running each agent node's dispatch command; as a worker
+#: (`--profile headless`) it answers like a scripted model and, as the observer does,
+#: writes the route it was started on into the worker's receipt. Every invocation is
+#: recorded, argv and model environment, before anything else.
+_FAKE_DSH = r'''
+import json, os, subprocess, sys
+from pathlib import Path
+
+argv = sys.argv[1:]
 
 
-def _write_patch(home: Path, provider: str = "", model: str = "") -> Path:
-    """Write a cordis.patch.yml with an agent-default-model entry."""
-    profile_dir = home / "profiles" / GUI_PROFILE
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    patch = profile_dir / "cordis.patch.yml"
-    content = textwrap.dedent(f"""\
-        - id: agent-default-model
-          name: '@deepseek-ai/dsh-agent-default-model'
-          config:
-            provider: {provider}
-            model: {model}
-    """)
-    patch.write_text(content, encoding="utf-8")
-    return patch
+def option(name):
+    return argv[argv.index(name) + 1] if name in argv else None
 
 
-def _make_fake_dsh(tmp_path: Path) -> Path:
-    """Create a fake dsh script that records its argv and exits 0."""
-    fake_dsh = tmp_path / "fake_dsh.sh"
-    log_dir = tmp_path / "dsh_calls"
-    log_dir.mkdir(exist_ok=True)
-    fake_dsh.write_text(textwrap.dedent(f"""\
-        #!/bin/bash
-        # Record all arguments to a unique log file.
-        LOG_DIR="{log_dir}"
-        CALL_NUM=$(ls "$LOG_DIR" 2>/dev/null | wc -l)
-        echo "$@" > "$LOG_DIR/call_$CALL_NUM.txt"
-        # Also save as JSON array for easier parsing.
-        python3 -c "import json,sys; json.dump(sys.argv[1:], open('$LOG_DIR/call_$CALL_NUM.json','w'))" "$@"
-        # Echo a minimal response so DSH looks like it ran.
-        echo "fake dsh response"
-        exit 0
-    """), encoding="utf-8")
-    fake_dsh.chmod(fake_dsh.stat().st_mode | stat.S_IEXEC)
-    return fake_dsh
+record = {"argv": argv, "profile": option("--profile"), "provider": option("--provider"),
+          "model": option("--model"),
+          "env": {key: value for key, value in os.environ.items()
+                  if key.startswith(("REFACTORY_MODEL", "DSH_HOME"))}}
+with open(os.environ["FAKE_DSH_LOG"], "a") as log:
+    log.write(json.dumps(record) + "\n")
+
+if record["profile"] == "headless":
+    sys.stdin.read()
+    receipt = os.environ.get("REFACTORY_WORKER_RECEIPT")
+    if receipt:
+        data = json.loads(Path(receipt).read_text())
+        data["actual_route"] = {"worker_backend": "dsh", "provider": record["provider"] or "",
+                                "model": record["model"] or ""}
+        Path(receipt).write_text(json.dumps(data, indent=2) + "\n")
+    print("A scripted line of verse.")
+    sys.exit(0)
+
+graphs, name, workdir = Path(option("--graphs")), option("--mode"), Path(option("--workdir"))
+graph = json.loads((graphs / (name + ".graph.json")).read_text())
+following = {}
+for edge in graph["edges"]:
+    following.setdefault(edge["source"], []).append(edge["target"])
+env = {**os.environ, "REFACTORY_KNOBS": option("--knobs") or "{}", "REFACTORY_WORKDIR": str(workdir)}
+queue, seen = [graph["start_node"]], set()
+while queue:  # each node once, in graph order: enough to dispatch every worker
+    node = queue.pop(0)
+    if node in seen:
+        continue
+    seen.add(node)
+    command = graph["nodes"][node].get("dispatch_command")
+    if command:
+        if subprocess.run(command, shell=True, cwd=workdir, env=env).returncode:
+            sys.exit(1)
+    queue += following.get(node, [])
+(workdir / ".refactory").mkdir(exist_ok=True)
+(workdir / ".refactory" / "spine-status.json").write_text(json.dumps({"status": "done"}))
+print(json.dumps({"ok": True, "status": "done"}))
+'''
 
 
-def _get_dsh_calls(tmp_path: Path) -> list[list[str]]:
-    """Read recorded DSH calls."""
-    log_dir = tmp_path / "dsh_calls"
-    calls = []
-    if log_dir.exists():
-        for f in sorted(log_dir.glob("call_*.json")):
-            try:
-                calls.append(json.loads(f.read_text()))
-            except (json.JSONDecodeError, OSError):
-                pass
-    return calls
+class FakeDsh:
+    def __init__(self, root: Path) -> None:
+        self.log = root / "calls.jsonl"
+        script = root / "fake_dsh.py"
+        script.write_text(_FAKE_DSH)
+        self.cli = root / "dsh"
+        self.cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+        self.cli.chmod(0o755)
+
+    def calls(self) -> list[dict]:
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text().splitlines() if line.strip()]
+
+    def routes(self) -> list[tuple[str | None, str | None, str | None]]:
+        return [(call["profile"], call["provider"], call["model"]) for call in self.calls()]
 
 
-# ── test_migration_from_existing_refactory_profile ──
+@pytest.fixture
+def project(tmp_path, monkeypatch) -> Path:
+    root = tmp_path / "project"
+    package = root / ".factory" / "packages" / "choicepack"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(_PACKAGE_INIT)
+    (package / "mode.py").write_text(_PACKAGE_MODE)
+    monkeypatch.setenv("REFACTORY_PROJECT", str(root))
+    return root
 
 
-def test_migration_from_existing_refactory_profile(tmp_path):
-    """An existing GUI choice (the refactory profile's agent-default-model) is
-    read directly — zero-action migration for GUI users."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="migrated-p", model="migrated-m")
-    choice = stored_model_choice(home=home)
-    assert choice == {"provider": "migrated-p", "model": "migrated-m"}
-
-    # Remove the entry — should return empty.
-    patch = home / "profiles" / GUI_PROFILE / "cordis.patch.yml"
-    patch.write_text("- id: other-entry\n  name: something\n", encoding="utf-8")
-    choice = stored_model_choice(home=home)
-    assert choice == {"provider": "", "model": ""}
-
-    # No file → empty.
-    patch.unlink()
-    choice = stored_model_choice(home=home)
-    assert choice == {"provider": "", "model": ""}
+@pytest.fixture
+def fake_dsh(tmp_path, monkeypatch, project, graph_profile_home) -> FakeDsh:
+    """Every DSH process goes to the fake; the build check is not what is under test."""
+    fake = FakeDsh(tmp_path)
+    monkeypatch.setenv("DSH_CLI", str(fake.cli))
+    monkeypatch.setenv("FAKE_DSH_LOG", str(fake.log))
+    for name in ("REFACTORY_WORKER_CONTEXT", "REFACTORY_MODEL_PROVIDER", "REFACTORY_MODEL_ID",
+                 "REFACTORY_WORKER_BACKEND"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(interactive, "require_build", lambda **kwargs: None)
+    monkeypatch.setattr("refactory_dsh.paths.require_build", lambda *args, **kwargs: None)
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.require_build", lambda *args, **kwargs: None)
+    return fake
 
 
-# ── test_refactory_model_set_and_show ──
+def keys(home: Path, keyed: dict[str, str], unkeyed: tuple[str, ...] = (), *, deepseek: bool = False,
+         harness_default: str = "") -> None:
+    """The headless profile install writes, routing these providers, with their keys stored.
+
+    ``keyed`` maps a provider route to its default model (the first its route lists);
+    ``deepseek`` stores DeepSeek's own key; ``harness_default`` sets the profile's own
+    `agent-default-model`, the default the bug used. Values are placeholders.
+    """
+    profile = home / "profiles" / "headless"
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / "package.json").write_text(json.dumps({
+        "name": "dsh-profile-headless", "private": True, "dependencies": {},
+        "dsh": {"profile": {"bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"]}},
+    }))
+    (profile / "cordis.yml").write_text("[]\n")
+    rows = ["- id: llm-pi-ai", "  name: '@deepseek-ai/dsh-llm-pi-ai'", "  config:", "    providers:"]
+    for name, model in keyed.items():
+        rows += [f"      {name}:", "        baseURL: http://127.0.0.1:9",
+                 f"        apiKeyEnv: KEY_{name.upper().replace('-', '_')}",
+                 "        models:", f"          - id: {model}"]
+    for name in unkeyed:
+        rows += [f"      {name}:", "        baseURL: http://127.0.0.1:9",
+                 f"        apiKeyEnv: KEY_{name.upper().replace('-', '_')}"]
+    if harness_default:
+        provider, model = harness_default.split("/")
+        rows += ["- id: agent-default-model", "  name: '@deepseek-ai/dsh-agent-default-model'",
+                 "  config:", f"    provider: {provider}", f"    model: {model}"]
+    (profile / "cordis.patch.yml").write_text("\n".join(rows) + "\n")
+    refs = {f"KEY_{name.upper().replace('-', '_')}": PLACEHOLDER_KEY for name in keyed}
+    if deepseek:
+        refs["DEEPSEEK_API_KEY"] = PLACEHOLDER_KEY
+    store = home / ".credentials.yaml"
+    store.write_text("version: 1\nrefs:\n" + "".join(f"  {ref}: {value}\n" for ref, value in refs.items()))
+    store.chmod(0o600)
 
 
-def test_refactory_model_set_and_show(tmp_path):
-    """model_choice_write and stored_model_choice round-trip correctly."""
-    home = tmp_path / "dsh_home"
-    model_choice_write("test-p", "test-m", home=home)
-    choice = stored_model_choice(home=home)
-    assert choice == {"provider": "test-p", "model": "test-m"}
-
-    # Overwrite.
-    model_choice_write("new-p", "new-m", home=home)
-    choice = stored_model_choice(home=home)
-    assert choice == {"provider": "new-p", "model": "new-m"}
+def _workers(run: Path) -> list[dict]:
+    receipts = [json.loads(path.read_text()) for path in (run / ".refactory" / "workers").glob("*.json")]
+    return [receipt for receipt in receipts if receipt.get("role") != "coordinator"]
 
 
-# ── test_patch_file_with_js_tag_preserved ──
+# ── correction 4: the argv every DSH process gets ─────────────────────────────
 
 
-def test_patch_file_with_js_tag_preserved(tmp_path):
-    """A patch file with a !!js entry and another section keeps both
-    byte-identical after model_choice_write."""
-    home = tmp_path / "dsh_home"
-    profile_dir = home / "profiles" / GUI_PROFILE
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    patch = profile_dir / "cordis.patch.yml"
-    original = textwrap.dedent("""\
-        - id: some-plugin
-          name: '@deepseek-ai/dsh-some-plugin'
-          config: !!js |
-            function() { return 42; }
-        - id: agent-default-model
-          name: '@deepseek-ai/dsh-agent-default-model'
-          config:
-            provider: old-provider
-            model: old-model
-        - id: another-section
-          name: '@deepseek-ai/dsh-another'
-          config:
-            setting: value
-    """)
-    patch.write_text(original, encoding="utf-8")
+def test_a_terminal_run_hands_the_stored_choice_to_the_ceo_and_every_worker(tmp_path, fake_dsh, capsys):
+    home = Path(os.environ["DSH_HOME"])
+    store_model_choice(home, "chosen-prov", "chosen-model")
+    # The trap the bug fell into: DeepSeek as the headless profile's own default.
+    keys(home, {}, harness_default="deepseek-official/deepseek-flash")
+    run = tmp_path / "run"
 
-    model_choice_write("new-provider", "new-model", home=home)
-    updated = patch.read_text(encoding="utf-8")
+    assert cli.main(["ceo", MODE, "--workdir", str(run), "--headless"]) == 0, capsys.readouterr().err
 
-    # The !!js entry must be byte-identical.
-    assert "!!js |" in updated
-    assert "function() { return 42; }" in updated
-    # The other section must be byte-identical.
-    assert "another-section" in updated
-    assert "setting: value" in updated
-    # The model choice must be updated.
-    choice = stored_model_choice(home=home)
-    assert choice == {"provider": "new-provider", "model": "new-model"}
-    # Verify other entries are unchanged by extracting them.
-    lines = updated.splitlines()
-    js_found = False
-    another_found = False
-    for line in lines:
-        if "!!js" in line:
-            js_found = True
-        if "another-section" in line:
-            another_found = True
-    assert js_found
-    assert another_found
+    assert fake_dsh.routes() == [("graph", "chosen-prov", "chosen-model"),
+                                 ("headless", "chosen-prov", "chosen-model"),
+                                 ("headless", "chosen-prov", "chosen-model")]
+    observed = [(receipt["node_id"], receipt["actual_route"]["provider"], receipt["actual_route"]["model"])
+                for receipt in _workers(run)]
+    assert sorted(observed) == [("draft", "chosen-prov", "chosen-model"), ("polish", "chosen-prov", "chosen-model")]
+    saved = json.loads((run / ".refactory" / "run-config.json").read_text())["model_context"]
+    assert (saved["provider"], saved["model"]) == ("chosen-prov", "chosen-model")
 
 
-# ── test_yaml_indentation_correct ──
+def test_a_deepseek_key_never_routes_a_run_that_chose_another_provider(tmp_path, fake_dsh, capsys):
+    home = Path(os.environ["DSH_HOME"])
+    store_model_choice(home, "chosen-prov", "chosen-model")
+    keys(home, {"chosen-prov": "chosen-model"}, deepseek=True, harness_default="deepseek-official/deepseek-flash")
+    run = tmp_path / "run"
+
+    assert cli.main(["ceo", MODE, "--workdir", str(run), "--headless"]) == 0, capsys.readouterr().err
+
+    calls = fake_dsh.calls()
+    assert len(calls) == 3
+    named = [(call["provider"], call["model"], call["env"].get("REFACTORY_MODEL_PROVIDER", ""),
+              call["env"].get("REFACTORY_MODEL_ID", "")) for call in calls]
+    assert not [route for route in named if "deepseek" in json.dumps(route)], named
+    assert {(call["provider"], call["model"]) for call in calls} == {("chosen-prov", "chosen-model")}
 
 
-def test_yaml_indentation_correct(tmp_path):
-    """model_choice_write produces valid YAML indentation: config at 2 spaces,
-    provider/model at 4 spaces, so they are siblings of 'name:' not nested
-    inside it."""
-    home = tmp_path / "dsh_home"
-    model_choice_write("test-p", "test-m", home=home)
-    patch = home / "profiles" / GUI_PROFILE / "cordis.patch.yml"
-    text = patch.read_text(encoding="utf-8")
-    # config: must be at 2-space indent (sibling of name:), not 4-space
-    assert "  config:\n" in text
-    # provider/model at 4-space indent under config:
-    assert "    provider: test-p\n" in text
-    assert "    model: test-m\n" in text
-    # Must NOT have config at 4-space indent
-    assert "    config:\n" not in text
-    # Verify it's parseable as valid YAML
-    import yaml
-    parsed = yaml.safe_load(text)
-    assert isinstance(parsed, list)
-    found = False
-    for entry in parsed:
-        if entry.get("id") == "agent-default-model":
-            found = True
-            assert entry["config"]["provider"] == "test-p"
-            assert entry["config"]["model"] == "test-m"
-    assert found, "agent-default-model entry not found in parsed YAML"
+def test_flags_override_the_choice_and_route_maps_still_apply(tmp_path, fake_dsh, capsys):
+    run = tmp_path / "run"
+    code = interactive.main([MODE, "--workdir", str(run), "--headless",
+                             "--provider", "flag-prov", "--model", "flag-model",
+                             "--node-routes", json.dumps({"polish": {"model": "polish-model"}}),
+                             "--role-routes", json.dumps({"ceo": {"effort": "high"}})])
+    assert code == 0, capsys.readouterr().err
+    assert fake_dsh.routes()[0] == ("graph", "flag-prov", "flag-model")
+    observed = {receipt["node_id"]: (receipt["actual_route"]["provider"], receipt["actual_route"]["model"])
+                for receipt in _workers(run)}
+    assert observed == {"draft": ("flag-prov", "flag-model"), "polish": ("flag-prov", "polish-model")}
+    efforts = {receipt["node_id"]: receipt["requested_route"]["effort"] for receipt in _workers(run)}
+    assert efforts == {"draft": "high", "polish": "high"}
 
 
-# ── test_stored_choice_reaches_terminal_ceo_workers ──
+_NO_CHOICE_ENTRY_POINTS = {
+    "ceo": ["ceo", MODE, "--headless"],
+    "create": ["ceo", "a counter that counts", "--mode", "create", "--single", "--name", "counted", "--headless"],
+    "edit": ["ceo", "make it terser", "--mode", "edit", "--revise", MODE, "--name", "terser", "--headless"],
+    "optimize": ["optimize", MODE, "--evaluator", "dsh", "--max-evaluations", "1"],
+    "package smoke": ["package", "smoke", MODE, "--model"],
+}
 
 
-def test_stored_choice_reaches_terminal_ceo_workers(tmp_path, monkeypatch):
-    """A stored model choice propagates to every DshModelClient and its children."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="stored-p", model="stored-m")
-    monkeypatch.setenv("DSH_HOME", str(home))
-
-    # Build a client without explicit provider/model — it should read the stored choice.
-    client = DshModelClient()
-    assert client._provider == "stored-p"
-    assert client._model == "stored-m"
-
-    # A child client (as used for nodes) should also have the stored choice.
-    child = client.for_node("emit")
-    assert child._provider == "stored-p"
-    assert child._model == "stored-m"
-
-    # The context carries the stored choice.
-    ctx = client.context()
-    assert ctx["provider"] == "stored-p"
-    assert ctx["model"] == "stored-m"
+@pytest.mark.parametrize("entry", sorted(_NO_CHOICE_ENTRY_POINTS))
+def test_with_no_choice_every_entry_point_refuses_before_any_dsh_process(entry, tmp_path, fake_dsh, no_model_choice,
+                                                                      capsys, monkeypatch):
+    keys(no_model_choice, {}, ("fakeprov",), harness_default="deepseek-official/deepseek-flash")
+    monkeypatch.chdir(tmp_path)
+    argv = list(_NO_CHOICE_ENTRY_POINTS[entry])
+    if entry == "optimize":
+        argv += ["--runs-root", str(tmp_path / "search")]
+    assert cli.main(argv) == 1
+    assert f"refactory: {MESSAGE}" in capsys.readouterr().err
+    assert fake_dsh.calls() == []
+    assert dsh_profile.stored_model_choice() == {"provider": "", "model": ""}
 
 
-# ── test_stored_choice_reaches_dsh_argv ──
+def test_with_no_choice_the_gui_open_refuses_before_anything_is_written(tmp_path, fake_dsh, no_model_choice, capsys):
+    keys(no_model_choice, {}, ("fakeprov",))
+    run = tmp_path / "gui-run"
+    assert console.main(["open", MODE, "--workdir", str(run)]) == 1
+    assert json.loads(capsys.readouterr().out) == {"error": MESSAGE}
+    assert not run.exists()
+    assert fake_dsh.calls() == []
 
 
-def test_stored_choice_reaches_dsh_argv(tmp_path, monkeypatch):
-    """With DSH_CLI pointing at a fake dsh: a DshModelClient passes --provider
-    and --model to its subprocess, verifying the stored choice reaches the DSH
-    process argv boundary."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="test-prov", model="test-mod")
-    monkeypatch.setenv("DSH_HOME", str(home))
-
-    fake_dsh = _make_fake_dsh(tmp_path)
-    client = DshModelClient(dsh_cli=str(fake_dsh))
-    assert client._provider == "test-prov"
-    assert client._model == "test-mod"
-
-    # Call _complete to verify the stored choice is passed as --provider/--model
-    # to the DSH subprocess.
-    try:
-        client._complete("test prompt", workdir=tmp_path / "scratch")
-    except Exception:
-        pass  # The fake dsh may not produce valid output format
-
-    calls = _get_dsh_calls(tmp_path)
-    assert len(calls) >= 1, "fake dsh was never called"
-    # Verify --provider and --model appear in the argv.
-    argv_str = " ".join(calls[0])
-    assert "--provider" in argv_str
-    assert "test-prov" in argv_str
-    assert "--model" in argv_str
-    assert "test-mod" in argv_str
+def test_the_gui_open_lowers_every_worker_onto_the_stored_choice(tmp_path, fake_dsh, capsys):
+    store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
+    run = tmp_path / "gui-run"
+    assert console.main(["open", MODE, "--workdir", str(run)]) == 0, capsys.readouterr().out
+    saved = json.loads((run / ".refactory" / "run-config.json").read_text())["model_context"]
+    assert (saved["provider"], saved["model"]) == ("chosen-prov", "chosen-model")
+    specs = [json.loads(path.read_text()) for path in (run / ".refactory" / "worker-specs").glob("*.json")]
+    assert sorted((spec["node_id"], spec["model_context"]["provider"], spec["model_context"]["model"])
+                  for spec in specs) == [("draft", "chosen-prov", "chosen-model"),
+                                         ("polish", "chosen-prov", "chosen-model")]
 
 
-# ── test_no_choice_refuses_before_model_call ──
+@pytest.mark.parametrize("evaluator", ["walker", "dsh"])
+def test_both_evaluators_of_an_optimize_run_get_the_same_route_as_the_spine(evaluator, tmp_path, fake_dsh, capsys,
+                                                                              monkeypatch):
+    store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
+    monkeypatch.chdir(tmp_path)
+    cli.main(["optimize", MODE, "--evaluator", evaluator, "--optimizer", "random", "--preset", "knob_only",
+              "--epochs", "1", "--batch-size", "1", "--max-evaluations", "1", "--seed", "1",
+              "--runs-root", str(tmp_path / "search")])
+    routes = fake_dsh.routes()
+    assert routes, capsys.readouterr().err
+    assert {(provider, model) for _profile, provider, model in routes} == {("chosen-prov", "chosen-model")}
+    if evaluator == "dsh":
+        assert "graph" in [profile for profile, _provider, _model in routes]
 
 
-def test_no_choice_refuses_before_model_call(tmp_path, monkeypatch):
-    """No stored choice and no flag: require_model_choice raises ModelChoiceError."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    # Ensure no stored choice exists (no patch file).
-    client = DshModelClient()
-    assert client._provider == ""
-    assert client._model == ""
+# ── correction 7: a visible first-run choice instead of a bare refusal ─────────
+
+
+def test_one_keyed_provider_is_used_saved_and_said_once(tmp_path, fake_dsh, no_model_choice, capsys):
+    keys(no_model_choice, {"fakeprov": "fake-model"}, ("otherprov",), harness_default="deepseek-official/deepseek-flash")
+    line = "Using fakeprov/fake-model, the only provider with a key; change it with `refactory model set`"
+
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "first"), "--headless"]) == 0
+    assert line in capsys.readouterr().err
+    assert dsh_profile.stored_model_choice() == {"provider": "fakeprov", "model": "fake-model"}
+    assert set(fake_dsh.routes()) == {("graph", "fakeprov", "fake-model"), ("headless", "fakeprov", "fake-model")}
+
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "second"), "--headless"]) == 0
+    assert "Using " not in capsys.readouterr().err
+    assert len(fake_dsh.calls()) == 6
+    assert {(provider, model) for _profile, provider, model in fake_dsh.routes()} == {("fakeprov", "fake-model")}
+
+
+def test_two_keyed_providers_refuse_a_headless_run_and_list_them(tmp_path, fake_dsh, no_model_choice, capsys):
+    keys(no_model_choice, {"fakeprov": "fake-model"}, deepseek=True)
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "run"), "--headless"]) == 1
+    said = capsys.readouterr().err
+    assert "several providers have a key: deepseek-official, fakeprov" in said
+    assert "refactory model set --provider <provider> --model <model>" in said
+    assert fake_dsh.calls() == []
+    assert dsh_profile.stored_model_choice() == {"provider": "", "model": ""}
+
+
+class _Terminal:
+    """A stdin a person is typing at: a terminal, with one answer ready."""
+
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+
+    def isatty(self) -> bool:
+        return True
+
+    def readline(self) -> str:
+        return self.answer + "\n"
+
+
+def test_two_keyed_providers_at_a_terminal_ask_once_and_keep_the_answer(tmp_path, fake_dsh, no_model_choice, capsys,
+                                                                         monkeypatch):
+    keys(no_model_choice, {"fakeprov": "fake-model"}, deepseek=True)
+    monkeypatch.setattr(sys, "stdin", _Terminal("fakeprov"))
+    assert interactive.main([MODE, "--workdir", str(tmp_path / "run")]) == 0
+    said = capsys.readouterr()
+    assert "deepseek-official" in said.err and "fakeprov (fake-model)" in said.err
+    assert "Using fakeprov/fake-model; change it with `refactory model set`" in said.err
+    assert dsh_profile.stored_model_choice() == {"provider": "fakeprov", "model": "fake-model"}
+    assert {(provider, model) for _profile, provider, model in fake_dsh.routes()} == {("fakeprov", "fake-model")}
+    assert fake_dsh.routes()[0][0] == "graph" and "--chat" in fake_dsh.calls()[0]["argv"]
+
+
+def test_no_keyed_provider_refuses_with_the_instruction(tmp_path, fake_dsh, no_model_choice, capsys):
+    keys(no_model_choice, {}, ("fakeprov", "otherprov"), harness_default="deepseek-official/deepseek-flash")
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "run"), "--headless"]) == 1
+    assert capsys.readouterr().err.strip().endswith(MESSAGE)
+    assert fake_dsh.calls() == []
+
+
+def test_a_stored_choice_is_never_replaced_by_a_keyed_provider(tmp_path, fake_dsh, capsys):
+    home = Path(os.environ["DSH_HOME"])
+    stored = store_model_choice(home, "chosen-prov", "chosen-model")
+    before = stored.read_bytes()
+    keys(home, {"fakeprov": "fake-model"})
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "run"), "--headless"]) == 0
+    assert "Using " not in capsys.readouterr().err
+    assert stored.read_bytes() == before
+    assert {(provider, model) for _profile, provider, model in fake_dsh.routes()} == {("chosen-prov", "chosen-model")}
+
+
+# ── migration: a GUI choice is the stored choice, in place ─────────────────────
+
+_GUI_PATCH = '''\
+# Your profile's own patch, layered over its bundles (entry overrides,
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    theme: dark
+- id: steer-fields
+  name: "@deepseek-ai/dsh-graph"
+  config: !!js |
+    ({ fields: ["intent", "verdict"] })
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      anthropic:
+        apiKeyEnv: ANTHROPIC_API_KEY
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: anthropic
+    model: claude-opus-4-6
+'''
+
+
+def test_a_choice_made_in_the_gui_is_used_by_a_terminal_run_as_it_is(tmp_path, fake_dsh, capsys):
+    path = dsh_profile.model_choice_path()
+    path.write_text(_GUI_PATCH)
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "run"), "--headless"]) == 0
+    assert {(provider, model) for _profile, provider, model in fake_dsh.routes()} == {("anthropic", "claude-opus-4-6")}
+    assert path.read_text() == _GUI_PATCH
+    assert "Using " not in capsys.readouterr().err
+
+
+# ── correction 1: `refactory model set` edits its own entry and nothing else ───
+
+
+def test_model_set_keeps_every_other_byte_and_reads_back(capsys):
+    path = dsh_profile.model_choice_path()
+    path.write_text(_GUI_PATCH)
+    assert cli.main(["model", "set", "--provider", "deepseek-official", "--model", "@cf/deepseek:v4"]) == 0
+    after = path.read_text()
+    assert after == _GUI_PATCH.replace("provider: anthropic\n    model: claude-opus-4-6",
+                                       'provider: deepseek-official\n    model: "@cf/deepseek:v4"')
+    assert dsh_profile.stored_model_choice() == {"provider": "deepseek-official", "model": "@cf/deepseek:v4"}
+    capsys.readouterr()
+    assert cli.main(["model", "show"]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert (shown["provider"], shown["model"], shown["stored_in"]) == ("deepseek-official", "@cf/deepseek:v4", str(path))
+
+
+def test_model_set_adds_its_entry_to_a_patch_without_one_and_to_a_fresh_profile(capsys):
+    path = dsh_profile.model_choice_path()
+    path.write_text(_GUI_PATCH.split("- id: agent-default-model")[0])
+    assert cli.main(["model", "set", "--provider", "p1", "--model", "m1"]) == 0
+    assert path.read_text().startswith(_GUI_PATCH.split("- id: agent-default-model")[0])
+    assert dsh_profile.stored_model_choice() == {"provider": "p1", "model": "m1"}
+    path.unlink()
+    assert cli.main(["model", "set", "--provider", "p2", "--model", "m2"]) == 0
+    assert dsh_profile.stored_model_choice() == {"provider": "p2", "model": "m2"}
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_model_set_writes_by_rename_and_a_failed_write_leaves_the_file(monkeypatch, capsys):
+    path = dsh_profile.model_choice_path()
+    path.write_text(_GUI_PATCH)
+    inode = path.stat().st_ino
+    assert cli.main(["model", "set", "--provider", "p1", "--model", "m1"]) == 0
+    assert path.stat().st_ino != inode
+    before = path.read_bytes()
+
+    def refuse(source, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    assert cli.main(["model", "set", "--provider", "p2", "--model", "m2"]) == 1
+    assert "disk full" in capsys.readouterr().err
+    assert path.read_bytes() == before
+    assert [entry.name for entry in path.parent.iterdir()] == [path.name]
+
+
+def test_model_set_leaves_a_file_it_cannot_read_alone(capsys):
+    path = dsh_profile.model_choice_path()
+    path.write_text("theme: dark\n")
+    assert cli.main(["model", "set", "--provider", "p1", "--model", "m1"]) == 1
+    assert "left alone" in capsys.readouterr().err
+    assert path.read_text() == "theme: dark\n"
+
+
+def test_model_show_without_a_choice_says_how_to_choose(no_model_choice, capsys):
+    assert cli.main(["model", "show"]) == 1
+    assert MESSAGE in capsys.readouterr().err
+
+
+# ── correction 3: an ordinary exception, so library code never exits ──────────
+
+
+def test_the_refusal_is_an_ordinary_exception_raised_before_any_dsh_process(tmp_path, fake_dsh, no_model_choice):
+    assert not issubclass(ModelChoiceError, SystemExit) and issubclass(ModelChoiceError, Exception)
+    client = DshModelClient(routes_resolved=True, worker_backend="dsh", dsh_cli=str(fake_dsh.cli), attempts=1)
     with pytest.raises(ModelChoiceError, match="No model chosen"):
-        require_model_choice(client)
+        client.complete("hello", workdir=tmp_path)
+    with pytest.raises(ModelChoiceError, match="names provider half-prov but no model"):
+        require_model_choice(DshModelClient(routes_resolved=True, provider="half-prov"))
+    assert fake_dsh.calls() == []
 
+
+# ── correction 5: doctor checks the chosen provider, never the profile's ───────
+
+
+def _doctor(capsys) -> tuple[int, dict[str, str]]:
+    """Doctor's exit code and its two model rows, each as ``MARK  name  detail``."""
+    from argparse import Namespace
+
+    code = cli.cmd_doctor(Namespace(provider="", model="", run=None))
+    rows = {}
+    for line in capsys.readouterr().out.splitlines():
+        stripped = line.strip()
+        for name in ("run model", "sandbox model configuration"):
+            if stripped[4:].strip().startswith(name):
+                rows[name] = stripped
+    return code, rows
+
+
+def test_doctor_checks_the_stored_choice_not_the_headless_default(monkeypatch, capsys):
+    monkeypatch.delenv("DSH_CLI", raising=False)
+    home = Path(os.environ["DSH_HOME"])
+    keys(home, {"fakeprov": "fake-model"}, ("otherprov",), harness_default="fakeprov/fake-model")
+    store_model_choice(home, "otherprov", "other-model")
+    _code, rows = _doctor(capsys)
+    assert rows["run model"].startswith("ok") and "otherprov/other-model (stored choice)" in rows["run model"]
+    assert rows["sandbox model configuration"].startswith("MISS")
+    assert "KEY_OTHERPROV is not configured for otherprov" in rows["sandbox model configuration"]
+
+
+def test_doctor_without_a_choice_says_what_the_first_run_will_do(monkeypatch, capsys, no_model_choice):
+    monkeypatch.delenv("DSH_CLI", raising=False)
+    keys(no_model_choice, {"fakeprov": "fake-model"}, ("otherprov",), harness_default="otherprov/other-model")
+    _code, rows = _doctor(capsys)
+    assert rows["run model"].startswith("WARN")
+    assert "the first run will use fakeprov/fake-model" in rows["run model"]
+    assert rows["sandbox model configuration"].startswith("ok")
+    assert "fakeprov/fake-model: configured" in rows["sandbox model configuration"]
+    assert dsh_profile.stored_model_choice() == {"provider": "", "model": ""}
+
+    keys(no_model_choice, {}, ("fakeprov",), harness_default="fakeprov/fake-model")
+    code, rows = _doctor(capsys)
+    assert code == 1 and rows["run model"].startswith("MISS") and MESSAGE in rows["run model"]
+    assert "sandbox model configuration" not in rows
+
+
+# ── correction 6: `refactory runtime` says where the route came from ───────────
+
 
-# ── test_no_choice_safety_net_in_complete ──
+def _runtime(capsys, *args: str) -> dict:
+    assert console.main(["runtime", *args]) == 0
+    return json.loads(capsys.readouterr().out)["model_route"]
+
+
+def test_runtime_names_the_source_of_the_route(project, capsys, monkeypatch, no_model_choice):
+    for name in ("REFACTORY_MODEL_PROVIDER", "REFACTORY_MODEL_ID", "REFACTORY_WORKER_CONTEXT"):
+        monkeypatch.delenv(name, raising=False)
+    project_flag = ["--project", str(project)]
+    route = _runtime(capsys, *project_flag)
+    assert (route["provider"], route["model"], route["source"]) == ("", "", {"provider": "none", "model": "none"})
+
+    store_model_choice(no_model_choice, "chosen-prov", "chosen-model")
+    route = _runtime(capsys, *project_flag)
+    assert (route["provider"], route["source"]["provider"]) == ("chosen-prov", "stored choice")
+    assert route["stored_choice"] == {"provider": "chosen-prov", "model": "chosen-model"}
+
+    route = _runtime(capsys, *project_flag, "--provider", "flag-prov", "--model", "flag-model")
+    assert (route["provider"], route["model"]) == ("flag-prov", "flag-model")
+    assert route["source"] == {"provider": "flag", "model": "flag"}
+
+    (project / "refactory.workers.json").write_text(json.dumps({
+        "model": "project-model",
+        "node_routes": {"polish": {"model": "node-model"}},
+        "role_routes": {"reviewer": {"provider": "role-prov", "model": "role-model"}},
+    }))
+    route = _runtime(capsys, *project_flag)
+    assert route["source"] == {"provider": "stored choice", "model": "project file"}
+    assert route["overrides"] == [
+        {"applies_to": "node polish", "source": "node route", "model": "node-model"},
+        {"applies_to": "role reviewer", "source": "role route", "provider": "role-prov", "model": "role-model"},
+    ]
+
+
+# ── the OpenShell backend: out of the one choice's scope, never silent ─────────
 
-
-def test_no_choice_safety_net_in_run_completion(tmp_path, monkeypatch):
-    """The safety net in _run_completion() raises ModelChoiceError when no
-    model choice exists, preventing any DSH process from starting.  The check
-    lives in _run_completion rather than _complete so that tests which
-    monkeypatch _run_completion bypass it — they never reach a real subprocess."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    fake_dsh = _make_fake_dsh(tmp_path)
-    client = DshModelClient(dsh_cli=str(fake_dsh))
-    assert client._provider == ""
-    assert client._model == ""
-    with pytest.raises(ModelChoiceError, match="No model chosen"):
-        client.complete("test prompt", workdir=tmp_path / "scratch")
-    # The fake dsh must NOT have been called.
-    calls = _get_dsh_calls(tmp_path)
-    assert len(calls) == 0, "fake dsh was called despite no model choice"
-
-
-# ── test_entry_point_interactive_refuses ──
-
-
-def test_entry_point_interactive_main_refuses(tmp_path, monkeypatch, capsys):
-    """interactive.main() returns 1 when no choice exists and no
-    provider/model given — proving the refusal is wired into the CLI
-    entry point.  The check is in main(), not run(), so library callers
-    and tests that call run() directly with mocked runtimes proceed."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    from refactory_dsh import interactive
-
-    code = interactive.main([
-        "default_pack/design",
-        "--headless",
-        "--workdir", str(tmp_path / "run"),
-    ])
-    assert code == 1
-    assert "No model chosen" in capsys.readouterr().err
-
-
-# ── test_entry_point_create_refuses ──
-
-
-def test_entry_point_create_refuses(tmp_path, monkeypatch):
-    """create.main() returns 1 when no model choice exists."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    from refactory_dsh import create
-
-    code = create.main([
-        "--name", "test-pkg",
-        "--brief", "test brief",
-        "--workdir", str(tmp_path / "create_run"),
-    ])
-    assert code == 1
-
-
-# ── test_entry_point_edit_refuses ──
-
-
-def test_entry_point_edit_refuses(tmp_path, monkeypatch):
-    """edit.main() returns 1 when no model choice exists."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    from refactory_dsh import edit
-
-    code = edit.main([
-        "--name", "test-pkg",
-        "--brief", "test edit",
-        "--mode", "some/mode",
-        "--workdir", str(tmp_path / "edit_run"),
-    ])
-    assert code == 1
-
-
-# ── test_cli_flags_override_stored_choice ──
-
-
-def test_cli_flags_override_stored_choice(tmp_path, monkeypatch):
-    """Explicit --provider/--model override the stored choice."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="stored-p", model="stored-m")
-    monkeypatch.setenv("DSH_HOME", str(home))
-
-    client = DshModelClient(provider="explicit-p", model="explicit-m")
-    assert client._provider == "explicit-p"
-    assert client._model == "explicit-m"
-
-    # require_model_choice should NOT raise.
-    require_model_choice(client)
-
-
-# ── test_stored_key_for_other_provider_never_used ──
-
-
-def test_stored_key_for_other_provider_never_used(tmp_path, monkeypatch):
-    """A stored choice with provider='chosen-provider' is used, not DeepSeek."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="chosen-provider", model="chosen-model")
-    monkeypatch.setenv("DSH_HOME", str(home))
-    # Simulate a DeepSeek key being present.
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-key")
-
-    client = DshModelClient()
-    assert client._provider == "chosen-provider"
-    assert client._model == "chosen-model"
-    # No DeepSeek provider appears in the route.
-    assert "deepseek" not in client._provider.lower()
-
-
-def test_stored_key_for_other_provider_never_in_dsh_argv(tmp_path, monkeypatch):
-    """With DSH_CLI pointing at a fake dsh: a stored choice with
-    provider='chosen-provider' means no DSH process gets DeepSeek in argv."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="chosen-provider", model="chosen-model")
-    monkeypatch.setenv("DSH_HOME", str(home))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-key")
-
-    fake_dsh = _make_fake_dsh(tmp_path)
-    client = DshModelClient(dsh_cli=str(fake_dsh))
-    try:
-        client._complete("test prompt", workdir=tmp_path / "scratch")
-    except Exception:
-        pass
-
-    calls = _get_dsh_calls(tmp_path)
-    for call in calls:
-        argv_str = " ".join(call)
-        assert "deepseek" not in argv_str.lower(), (
-            f"DeepSeek appeared in DSH argv despite chosen-provider being set: {call}"
-        )
-
-
-# ── test_walker_and_evaluator_get_same_route ──
-
-
-def test_walker_and_evaluator_get_same_route(tmp_path, monkeypatch):
-    """Both runtimes resolve through the same stored choice."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="test-p", model="test-m")
-    monkeypatch.setenv("DSH_HOME", str(home))
-
-    # Spine client.
-    client = DshModelClient()
-    assert client.route()["provider"] == "test-p"
-    assert client.route()["model"] == "test-m"
-
-    # A child context should carry the same route.
-    child_ctx = client.context()
-    child = DshModelClient(**child_ctx)
-    assert child.route()["provider"] == "test-p"
-    assert child.route()["model"] == "test-m"
-
-
-# ── test_runtime_provenance ──
-
-
-def test_runtime_provenance(tmp_path, monkeypatch):
-    """runtime_context includes model_choice with provenance."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="stored-p", model="stored-m")
-    monkeypatch.setenv("DSH_HOME", str(home))
-
-    from refactory_dsh.console import runtime_context
-    # Need a project dir for runtime_context.
-    project = tmp_path / "project"
-    project.mkdir()
-
-    result = runtime_context(project)
-    assert "model_choice" in result
-    assert result["model_choice"]["provider"] == "stored-p"
-    assert result["model_choice"]["model"] == "stored-m"
-    assert result["model_choice"]["provenance"] == "stored choice"
-
-
-def test_runtime_provenance_flag(tmp_path, monkeypatch):
-    """runtime_context reports 'flag' provenance when --provider is given,
-    and shows the effective (flag) provider, not the stored choice."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="stored-p", model="stored-m")
-    monkeypatch.setenv("DSH_HOME", str(home))
-
-    from refactory_dsh.console import runtime_context
-    project = tmp_path / "project"
-    project.mkdir()
-
-    result = runtime_context(project, provider="flag-p")
-    assert result["model_choice"]["provenance"] == "flag"
-    assert result["model_choice"]["provider"] == "flag-p"
-
-
-# ── test_first_run_one_key ──
-
-
-def test_first_run_one_key(tmp_path, monkeypatch):
-    """One keyed provider: use and save it, print a line."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-key")
-    # No stored choice.
-    choice = first_run_choice(home=home)
-    assert choice["provider"] == "deepseek-official"
-    assert choice["model"] == KNOWN_PROVIDERS["deepseek-official"]
-    # Verify saved.
-    stored = stored_model_choice(home=home)
-    assert stored["provider"] == "deepseek-official"
-    # Second call reads saved choice with no new write.
-    choice2 = first_run_choice(home=home)
-    assert choice2 == stored
-
-
-# ── test_first_run_multiple_keys_headless ──
-
-
-def test_first_run_multiple_keys_headless(tmp_path, monkeypatch):
-    """Multiple keyed providers headless: refuse listing both."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-key")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key")
-    with pytest.raises(ModelChoiceError, match="Multiple providers have keys"):
-        first_run_choice(home=home, interactive=False)
-
-
-# ── test_first_run_multiple_keys_terminal ──
-
-
-def test_first_run_multiple_keys_terminal(tmp_path, monkeypatch):
-    """Multiple keyed providers at a terminal: the answer is saved and used."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-key")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key")
-    # Simulate choosing "1" (deepseek-official).
-    monkeypatch.setattr("builtins.input", lambda _: "1")
-    choice = first_run_choice(home=home, interactive=True)
-    assert choice["provider"] == "deepseek-official"
-    stored = stored_model_choice(home=home)
-    assert stored["provider"] == "deepseek-official"
-
-
-# ── test_first_run_no_keys ──
-
-
-def test_first_run_no_keys(tmp_path, monkeypatch):
-    """No provider keys: refuse with the instruction message."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    with pytest.raises(ModelChoiceError, match="No model chosen"):
-        first_run_choice(home=home)
-
-
-# ── test_first_run_stored_choice_not_overridden ──
-
-
-def test_first_run_stored_choice_not_overridden(tmp_path, monkeypatch):
-    """A stored choice plus a second provider's key: the stored choice is used."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="stored-p", model="stored-m")
-    monkeypatch.setenv("DSH_HOME", str(home))
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key")
-    choice = first_run_choice(home=home)
-    assert choice["provider"] == "stored-p"
-    assert choice["model"] == "stored-m"
-
-
-# ── test_model_choice_error_is_not_system_exit ──
-
-
-def test_model_choice_error_is_not_system_exit():
-    """ModelChoiceError is an ordinary exception, not SystemExit."""
-    assert not issubclass(ModelChoiceError, SystemExit)
-    assert issubclass(ModelChoiceError, Exception)
-
-
-# ── test_worker_config_uses_stored_choice ──
-
-
-def test_worker_config_uses_stored_choice(tmp_path, monkeypatch):
-    """worker_config.resolve uses the stored choice as the base default."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="wc-provider", model="wc-model")
-    monkeypatch.setenv("DSH_HOME", str(home))
-
-    from refactory_dsh.worker_config import resolve
-
-    project = tmp_path / "project"
-    project.mkdir()
-    result = resolve(project)
-    assert result["settings"]["provider"] == "wc-provider"
-    assert result["settings"]["model"] == "wc-model"
-
-
-# ── test_node_routes_and_role_routes_still_apply ──
-
-
-def test_node_routes_and_role_routes_still_apply(tmp_path, monkeypatch):
-    """node_routes and role_routes apply their overrides on top of the stored choice."""
-    home = tmp_path / "dsh_home"
-    _write_patch(home, provider="stored-p", model="stored-m")
-    monkeypatch.setenv("DSH_HOME", str(home))
-
-    client = DshModelClient(
-        node_routes={"emit": {"model": "override-model"}},
-        role_routes={"worker": {"provider": "role-p"}},
-    )
-    # The base client has the stored choice.
-    assert client._provider == "stored-p"
-    assert client._model == "stored-m"
-
-    # Node override applies.
-    emit_client = client.for_node("emit")
-    assert emit_client._model == "override-model"
-
-    # Role route applies for other nodes.
-    review_client = client.for_node("review")
-    assert review_client._provider == "role-p"
-
-
-# ── test_first_run_choice_wired_in_interactive_run ──
-
-
-def test_first_run_choice_wired_in_interactive_run(tmp_path, monkeypatch):
-    """When no stored choice exists and one provider has a key,
-    first_run_choice() auto-detects and saves, proving the wiring works."""
-    home = tmp_path / "dsh_home"
-    monkeypatch.setenv("DSH_HOME", str(home))
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-key")
-
-    # first_run_choice should auto-detect and save.
-    first_run_choice(home=home)
-    stored = stored_model_choice(home=home)
-    assert stored["provider"] == "deepseek-official"
-
-
-# ── test_update_agent_default_model_indentation ──
-
-
-def test_update_agent_default_model_indentation():
-    """_update_agent_default_model produces 2-space indent for config (sibling
-    of name), not 4-space (which would nest it under name)."""
-    result = _update_agent_default_model("", "test-p", "test-m")
-    # config: must be at 2-space indent
-    assert "  config:\n" in result
-    assert "    provider: test-p\n" in result
-    assert "    model: test-m\n" in result
-    # Must NOT have 4-space config
-    assert "    config:\n" not in result
-
-    # Test with existing content.
-    original = textwrap.dedent("""\
-        - id: agent-default-model
-          name: '@deepseek-ai/dsh-agent-default-model'
-          config:
-            provider: old-p
-            model: old-m
-    """)
-    result = _update_agent_default_model(original, "new-p", "new-m")
-    assert "  config:\n" in result
-    assert "    provider: new-p\n" in result
-    assert "    model: new-m\n" in result
-    assert "    config:\n" not in result
+
+def test_an_openshell_run_takes_no_route_from_the_choice_and_says_whose_model_it_uses(tmp_path, fake_dsh, project,
+                                                                                     capsys, monkeypatch):
+    """Its graph runs in the sandbox, whose only inference is the gateway's verified claude-code provider."""
+    from refactory_dsh import openshell_backend
+
+    store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
+    (project / "refactory.workers.json").write_text(json.dumps({"worker_backend": "openshell"}))
+    handed: list[tuple[list[str], dict]] = []
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(openshell_backend, "run_in_openshell",
+                        lambda argv, *, context, **kwargs: handed.append((argv, context)) or _Done())
+    run = tmp_path / "run"
+    assert interactive.main([MODE, "--workdir", str(run), "--headless"]) == 0
+    assert interactive.OPENSHELL_MODEL_NOTE in capsys.readouterr().err
+    [(argv, context)] = handed
+    assert "--provider" not in argv and "--model" not in argv
+    assert context["worker_backend"] == "openshell" and not context["provider"]
+    assert "chosen-prov" not in json.dumps(handed)
+    assert fake_dsh.calls() == []
+    # The backend takes no provider of its own either, so nothing can name one.
+    with pytest.raises(ValueError, match="does not support provider"):
+        workers.validate_route({"worker_backend": "openshell", "provider": "chosen-prov"})
+
+
+def test_an_openshell_run_is_not_refused_or_asked_for_a_choice(tmp_path, fake_dsh, project, no_model_choice,
+                                                               monkeypatch, capsys):
+    from refactory_dsh import openshell_backend
+
+    keys(no_model_choice, {"fakeprov": "fake-model"})
+    (project / "refactory.workers.json").write_text(json.dumps({"worker_backend": "openshell"}))
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(openshell_backend, "run_in_openshell", lambda argv, **kwargs: _Done())
+    assert interactive.main([MODE, "--workdir", str(tmp_path / "run"), "--headless"]) == 0
+    assert "Using " not in capsys.readouterr().err
+    assert dsh_profile.stored_model_choice() == {"provider": "", "model": ""}
+
+
+# ── the paths below the entry points ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize("module, argv", [
+    ("create", ["--name", "counted", "--brief", "a counter"]),
+    ("edit", ["--mode", MODE, "--name", "terser", "--brief", "make it terser"]),
+    ("design", ["--name", "tool", "--brief", "a tool", "--check", "true"]),
+])
+def test_with_no_choice_the_walker_authoring_commands_refuse(module, argv, tmp_path, fake_dsh, no_model_choice,
+                                                             capsys, monkeypatch):
+    import importlib
+
+    keys(no_model_choice, {}, ("fakeprov",))
+    monkeypatch.chdir(tmp_path)
+    assert importlib.import_module(f"refactory_dsh.{module}").main(argv) == 1
+    assert f"refactory: {MESSAGE}" in capsys.readouterr().err
+    assert fake_dsh.calls() == []
+
+
+def test_a_headless_run_of_deterministic_nodes_needs_no_choice(tmp_path, fake_dsh, no_model_choice, capsys):
+    """The README's first steps call no model, so they are not asked for one."""
+    keys(no_model_choice, {"fakeprov": "fake-model"})
+    assert cli.main(["ceo", "counting_pack/fixed_step", "--workdir", str(tmp_path / "run"), "--headless"]) == 0
+    assert fake_dsh.routes() == [("graph", None, None)]
+    assert "Using " not in capsys.readouterr().err
+    assert dsh_profile.stored_model_choice() == {"provider": "", "model": ""}
+
+
+def test_a_dsh_evaluator_without_a_client_runs_its_ceo_on_the_stored_choice(tmp_path, fake_dsh):
+    from refactory_dsh import registry
+    from refactory_dsh.evaluators import DshEvaluator
+
+    store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
+    mode = registry.resolve(Path(os.environ["REFACTORY_PROJECT"]), MODE)[1]()
+    DshEvaluator(timeout_s=60).evaluate(mode, mode.state_dict(), tmp_path / "candidate")
+    assert fake_dsh.routes()[0] == ("graph", "chosen-prov", "chosen-model")
+
+
+def test_a_route_map_back_to_dsh_starts_from_the_stored_choice():
+    client = DshModelClient(routes_resolved=True, worker_backend="codex", model="codex-model",
+                            node_routes={"draft": {"worker_backend": "dsh"}})
+    route = client.for_node("draft").route()
+    assert (route["worker_backend"], route["provider"], route["model"]) == (
+        "dsh", TEST_MODEL_CHOICE["provider"], TEST_MODEL_CHOICE["model"])
+
+
+def test_the_readiness_probe_never_reports_a_profile_default(tmp_path, monkeypatch, no_model_choice):
+    """With no route named, the probe says so; it does not read the headless profile's default."""
+    monkeypatch.delenv("DSH_CLI", raising=False)
+    keys(no_model_choice, {"fakeprov": "fake-model"}, harness_default="fakeprov/fake-model")
+    probed = DshModelClient(routes_resolved=True).readiness(workdir=tmp_path, require_ready=False)
+    assert (probed["status"], probed["reason"]) == ("diagnostic-unavailable", "no-model-chosen")
+    assert "fakeprov" not in json.dumps(probed)
+
+
+def test_the_first_run_choice_returns_a_stored_choice_untouched(no_model_choice):
+    stored = store_model_choice(no_model_choice, "chosen-prov", "chosen-model")
+    before = stored.read_bytes()
+    keys(no_model_choice, {"fakeprov": "fake-model"})
+    assert dsh_profile.first_run_choice() == {"provider": "chosen-prov", "model": "chosen-model"}
+    assert stored.read_bytes() == before

@@ -150,8 +150,6 @@ def test_main_forwards_headless_to_the_run(monkeypatch):
     """The switch reaches the run, and its absence means live."""
     seen: list[dict] = []
     monkeypatch.setattr(interactive, "run", lambda *a, **k: seen.append(k) or 0)
-    # Bypass first-run model choice detection so the test reaches run().
-    monkeypatch.setattr(dsh_profile, "first_run_choice", lambda **kw: {"provider": "test", "model": "test"})
     assert interactive.main([WITH_A_GATE, "--headless"]) == 0
     assert seen[-1]["headless"] is True
     assert interactive.main([WITH_A_GATE]) == 0

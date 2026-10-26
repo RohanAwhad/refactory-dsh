@@ -35,6 +35,7 @@ from refactory_dsh.adopt import AdoptionError
 from refactory_dsh.control import search_finished, search_owner, search_phase
 from refactory_dsh.history import find_runs
 from refactory_dsh.loop import Loop, LoopConfig, LoopError
+from refactory_dsh.model import ModelChoiceError
 from refactory_dsh.nn import PackageError
 from refactory_dsh.paths import project_root
 from refactory_dsh.steering import SteeringError
@@ -1268,8 +1269,8 @@ def _parser() -> argparse.ArgumentParser:
     add = with_common
 
     runtime = add(sub.add_parser("runtime", help="nonsecret nested model context and configured readiness; no model request"))
-    runtime.add_argument("--provider", default="", help="provider route to inspect (default: DSH settings)")
-    runtime.add_argument("--model", default="", help="model selection to inspect (default: DSH settings)")
+    runtime.add_argument("--provider", default="", help="provider route to inspect (default: the stored model choice)")
+    runtime.add_argument("--model", default="", help="model to inspect (default: the stored model choice)")
 
     help_parser = add(sub.add_parser("help", help="live capability schemas, interfaces and CEO operating guide"))
     help_parser.add_argument("--topic", default="", help="operation or mode ID; omit for the live index")
@@ -1684,6 +1685,59 @@ def _root_for(args: argparse.Namespace, project: Path) -> Path:
     return found.pop()
 
 
+#: Where a route came from, in the words `refactory runtime` uses (dm-258).
+ROUTE_SOURCES = {
+    "explicit-launch": "flag",
+    "selected-profile": "saved profile",
+    "project-file": "project file",
+    "environment": "environment",
+    "stored-choice": "stored choice",
+    "inherited-context": "inherited run context",
+    "default": "none",
+}
+
+
+def model_route(project: Path, *, provider: str = "", model: str = "") -> dict[str, Any]:
+    """The model a run in ``project`` would use, and where each part of it came from.
+
+    The run's route comes from a flag, the environment, the project file or the stored
+    choice, in that order; ``node_routes`` and ``role_routes`` then override it for the
+    nodes and roles they name. Nothing here falls back to a DSH profile's default: a
+    route nobody chose says ``none``.
+    """
+    from refactory_dsh.dsh_profile import stored_model_choice
+    from refactory_dsh.worker_config import resolve
+
+    selected = resolve(project, {key: value for key, value in (("provider", provider), ("model", model)) if value})
+    settings, fields = selected["settings"], selected["provenance"]["fields"]
+
+    def source(field: str) -> str:
+        raw = str(fields.get(field) or "default")
+        return ROUTE_SOURCES.get(raw.split(":", 1)[0], raw)
+
+    overrides = [
+        {"applies_to": f"{kind} {name}", "source": f"{kind} route",
+         **{key: value for key, value in (route or {}).items() if key in ("worker_backend", "provider", "model")}}
+        for kind, routes in (("node", settings.get("node_routes")), ("role", settings.get("role_routes")))
+        for name, route in sorted((routes or {}).items())
+        if isinstance(route, dict) and any(key in route for key in ("worker_backend", "provider", "model"))
+    ]
+    if settings["worker_backend"] == "openshell":
+        # Out of the one choice's scope: the sandbox's only inference path (dm-258).
+        sources = {"provider": "openshell gateway (claude-code provider)",
+                   "model": "openshell gateway (claude-code provider)"}
+    else:
+        sources = {"provider": source("provider"), "model": source("model")}
+    return {
+        "worker_backend": settings["worker_backend"],
+        "provider": settings["provider"],
+        "model": settings["model"],
+        "source": sources,
+        "stored_choice": stored_model_choice(),
+        "overrides": overrides,
+    }
+
+
 def runtime_context(project: Path, *, provider: str = "", model: str = "") -> dict[str, Any]:
     """Describe the existing nested model configuration without a model request.
 
@@ -1691,57 +1745,47 @@ def runtime_context(project: Path, *, provider: str = "", model: str = "") -> di
     detailed credential reference, parser errors, and launch environment do not.
     """
     from tempfile import TemporaryDirectory
+    from refactory_dsh.dsh_profile import NO_MODEL_CHOICE_MESSAGE
     from refactory_dsh.model import DshModelClient
     from refactory_dsh.sandbox import model_readiness
 
-    client = DshModelClient(provider=provider, model=model)
+    route = model_route(project, provider=provider, model=model)
+    chosen = route["worker_backend"] != "dsh" or bool(route["provider"] and route["model"])
+    client = DshModelClient(routes_resolved=True, worker_backend=route["worker_backend"],
+                            provider=route["provider"], model=route["model"])
     context = client.context()
-    try:
-        with TemporaryDirectory(prefix="refactory-runtime-") as work:
-            result = model_readiness(Path(work), model_context=context, require_ready=False)
-    except Exception:
-        # A failed inspector is not proof of a bad key. Never relay arbitrary
-        # exception text from a custom runtime or secret-bearing configuration.
-        result = {"ready": None, "status": "diagnostic-unavailable"}
+    if not chosen:
+        # Nothing to inspect: a run here would be refused before any model call.
+        result: dict[str, Any] = {"ready": False, "status": "no-model-chosen"}
+    else:
+        try:
+            with TemporaryDirectory(prefix="refactory-runtime-") as work:
+                result = model_readiness(Path(work), model_context=context, require_ready=False)
+        except Exception:
+            # A failed inspector is not proof of a bad key. Never relay arbitrary
+            # exception text from a custom runtime or secret-bearing configuration.
+            result = {"ready": None, "status": "diagnostic-unavailable"}
     messages = {
         "configured": "Local credential configuration is present. Authentication, quota, and network access have not been tested.",
         "missing-credential": "Nested model credentials are missing. Save the provider key through Settings → Models in the DSH home shown before authoring.",
         "invalid-configuration": "Local model configuration is invalid. Inspect refactory doctor and the selected DSH profile/settings before authoring.",
         "native-auth-unverified": "Provider-native authentication has not been verified. Normal execution performs its own checks.",
         "diagnostic-unavailable": "This runtime could not be inspected. Readiness is unverified; normal execution performs its own checks.",
+        "no-model-chosen": NO_MODEL_CHOICE_MESSAGE,
     }
     status = result.get("status")
     if status not in messages:
         status = "diagnostic-unavailable"
     credential = result.get("credential")
     from refactory_dsh.worker_config import effective
-    from refactory_dsh.dsh_profile import stored_model_choice
-    _stored = stored_model_choice()
-    # Determine provenance of the model route and show effective values.
-    if provider:
-        _provenance = "flag"
-        _eff_provider = provider
-        _eff_model = model or context.get("model", "")
-    elif _stored.get("provider") and context.get("provider") == _stored["provider"]:
-        _provenance = "stored choice"
-        _eff_provider = _stored.get("provider", "")
-        _eff_model = _stored.get("model", "")
-    else:
-        _provenance = "runtime default"
-        _eff_provider = context.get("provider", "")
-        _eff_model = context.get("model", "")
     return {
         "worker_configuration": effective(project),
-        "model_choice": {
-            "provider": _eff_provider,
-            "model": _eff_model,
-            "provenance": _provenance,
-        },
+        "model_route": route,
         "project": str(project.resolve()),
         "dsh_home": context["dsh_home"],
         "nested": {
-            "provider": result.get("provider") or context["provider"] or "(runtime default)",
-            "model": result.get("model") or context["model"] or "(runtime default)",
+            "provider": route["provider"] or "(none chosen)",
+            "model": route["model"] or "(none chosen)",
             "ready": result.get("ready") if status != "diagnostic-unavailable" else None,
             "status": status,
             "credential_configured": credential.get("configured") if isinstance(credential, dict) else None,
@@ -1956,14 +2000,6 @@ def main(argv: list[str] | None = None) -> int:
             mc = {key: getattr(args, key) for key in ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes", "provider_config") if getattr(args, key)}
             if model_timeout_s is not None:
                 mc["timeout_s"] = model_timeout_s
-            # First-run auto-detection for GUI open path.
-            if not mc.get("provider") and not mc.get("model"):
-                from refactory_dsh.dsh_profile import first_run_choice
-                from refactory_dsh.model import ModelChoiceError as _MCE
-                try:
-                    first_run_choice(interactive=False)
-                except _MCE:
-                    pass  # The refusal check in _open_mode will raise
             payload = _open_mode(
                 args.mode,
                 project=project,
@@ -2059,12 +2095,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, ConsoleError, LoopError, PackageError, AdoptionError, SteeringError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stdout)
         return 2
-    except Exception as _mce:
-        # ModelChoiceError propagates from _open_mode or forwarded commands.
-        if type(_mce).__name__ == 'ModelChoiceError':
-            print(json.dumps({"error": str(_mce)}), file=sys.stdout)
-            return 1
-        raise
+    except ModelChoiceError as error:  # a run with no model to use (dm-258)
+        print(json.dumps({"error": str(error)}), file=sys.stdout)
+        return 1
     if isinstance(payload, dict) and payload.get("ok") is False:
         # The forwarded call failed and said why; the caller gets the reason at the top
         # level as well, because that is where every console consumer looks for it.

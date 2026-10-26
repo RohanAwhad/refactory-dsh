@@ -73,9 +73,9 @@ export interface GraphStartupValues {
   taskName: string
   /** The eval budget, passed to the ops as SRF_BUDGET. */
   budget: number
-  /** The CEO model route, for the runner's agent creation (absent = runtime default). */
+  /** The CEO model route, for the runner's agent creation; a CEO launch without one is refused (dm-258). */
   provider: string | undefined
-  /** The CEO model id override, when the user named one. */
+  /** The CEO model id; required with the provider, never taken from the profile's default. */
   model: string | undefined
   /** The directory of the Python that has refactory_dsh installed. */
   pythonBin: string
@@ -109,8 +109,8 @@ function graphCommand(): Command {
     .requiredOption('-m, --mode <mode>', 'the SRF mode (e.g. gepa, best_of_n)')
     .requiredOption('-t, --task <task>', 'the SRF task (e.g. circle_packing)')
     .option('-b, --budget <n>', 'eval budget', '10')
-    .option('-p, --provider <provider>', 'provider route for the CEO model (default: the runtime default)')
-    .option('--model <model>', 'model id for the CEO (defaults to the provider route default)')
+    .option('-p, --provider <provider>', 'provider route for the CEO model (refactory passes the run\'s route; a CEO run without one is refused)')
+    .option('--model <model>', 'model id for the CEO (required with --provider; never the profile default)')
     .option('--graphs <dir>', 'directory of <mode>.graph.json', DEFAULT_GRAPHS_DIR)
     .option('--workdir <dir>', 'working directory for the run')
     .option('--python-bin <dir>', 'directory of the python with srf+factory installed', DEFAULT_VENV_BIN)
@@ -206,8 +206,8 @@ export function apply(ctx: Context): void {
       ...(process.env.REFACTORY_BUDGET_LEDGER ? { REFACTORY_BUDGET_LEDGER: process.env.REFACTORY_BUDGET_LEDGER } : {}),
       // Nonsecret context for nested model calls after command/sandbox scrubbing.
       REFACTORY_MODEL_DSH_HOME: resolve((process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')).replace(/^~(?=[/\\]|$)/, homedir())),
-      ...(options.provider !== undefined ? { REFACTORY_MODEL_PROVIDER: String(options.provider) } : {}),
-      ...(options.model !== undefined ? { REFACTORY_MODEL_ID: String(options.model) } : {}),
+      REFACTORY_MODEL_PROVIDER: String(options.provider ?? ''),
+      REFACTORY_MODEL_ID: String(options.model ?? ''),
       // The node commands run *in the work directory*, so `Path.cwd()` inside one of
       // them is the run, not the checkout. The project — where `.factory/packages`
       // and the packages of modes live — has to be said out loud, and this is where

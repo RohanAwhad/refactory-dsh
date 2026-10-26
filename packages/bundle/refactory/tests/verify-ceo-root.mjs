@@ -533,10 +533,13 @@ try {
     edges: [],
   }))
   const graphSubagents = join(home, 'graph-subagents.jsonl')
+  // The graph runner takes its CEO's route only from the command line, as refactory
+  // passes it, never from the profile's default (dm-258).
   const graphRun = run(dsh, [
     '--profile', cli, '--patch', scriptedModelPatch(home, cli, graphSubagents), 'run',
     '--mode', 'acceptance', '--task', 'subagent-tools', '--graphs', graphs,
     '--workdir', join(home, 'graph-run'), '--python-bin', join(REPO, '.venv', 'bin'),
+    '--provider', 'scripted', '--model', 'scripted',
   ], { env: { ...process.env, DSH_HOME: home }, cwd: tmpdir(), input: '', timeout: 120_000 })
   const graphRecords = await subagentRecords(graphSubagents, 0)
   const ceoCatalogs = graphRecords.filter(record => record.ceo !== undefined).map(record => record.ceo)

@@ -382,18 +382,20 @@ def render_catalogue(project: Path) -> str:
     return "\n".join(lines) + "\n" if lines else "no packages installed\n"
 
 
-def smoke(project: Path, identifier: str, *, model: bool = False) -> dict[str, Any]:
+def smoke(project: Path, identifier: str, *, model: bool = False, client: Any = None) -> dict[str, Any]:
     """Run one mode once, so a package can be checked rather than merely imported.
 
     ``model`` supplies a model client to the run: a mode with an `agent` node cannot be
-    scored without one, and most modes have one.
+    scored without one, and most modes have one. ``client`` is that client, when the
+    caller already settled its route; otherwise one is built on the stored choice.
     """
     import tempfile
 
     package, mode_class = resolve(Path(project), identifier)
     mode = mode_class()
-    client = None
-    if model:
+    if not model:
+        client = None
+    elif client is None:
         from refactory_dsh.model import DshModelClient
 
         client = DshModelClient()
@@ -760,7 +762,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.verb == "smoke":
             if not args.target:
                 return fail("'smoke' needs a <package>/<name> mode")
-            result = smoke(project, args.target, model=bool(args.model))
+            client = None
+            if args.model:
+                from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
+
+                try:
+                    # The smoke's agent nodes call a model: settle its route first (dm-258).
+                    client = require_model_choice(DshModelClient(), interactive=sys.stdin.isatty())
+                except ModelChoiceError as exc:
+                    print(f"refactory: {exc}", file=sys.stderr)
+                    return 1
+            result = smoke(project, args.target, model=bool(args.model), client=client)
             print(json.dumps(result, indent=2, default=str))
             return 0 if result["exit_ok"] else 1
         if args.verb == "add":

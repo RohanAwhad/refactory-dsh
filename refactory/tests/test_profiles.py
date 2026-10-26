@@ -15,6 +15,7 @@ from test_loop import _BoundedInt, _patch_mode
 from test_loop_holdout import _run, Probe
 
 
+@pytest.mark.usefixtures("no_model_choice")
 @pytest.mark.parametrize("backend", ["dsh", "codex", "claude_code"])
 def test_runtime_default_placeholders_never_become_resolved_routes(monkeypatch, tmp_path, backend):
     from refactory_dsh.model import DshModelClient
@@ -27,14 +28,23 @@ def test_runtime_default_placeholders_never_become_resolved_routes(monkeypatch, 
     assert identity["route"]["provider"] == ""
 
 
-def test_runtime_identity_preserves_explicit_route_and_reads_concrete_defaults(monkeypatch, tmp_path):
+def test_runtime_identity_preserves_explicit_route_and_never_reads_a_profile_default(monkeypatch, tmp_path, no_model_choice):
+    """dm-258: the route a probe reports is the profile default; the identity never takes it."""
+    from refactory_dsh import dsh_profile
     from refactory_dsh.model import DshModelClient
+    from tests_support import store_model_choice
     monkeypatch.setattr(DshModelClient, "readiness", lambda *args, **kwargs: {
         "status": "configured", "provider": "configured-provider", "model": "configured-model",
     })
     identity = profiles.runtime_identity(profiles.defaults(), tmp_path, uses_models=True)
+    assert identity["status"] == "runtime_defaults_unresolved"
+    assert (identity["route"]["provider"], identity["route"]["model"]) == ("", "")
+    # With a choice stored, the unset route is that choice, still not the probe's.
+    store_model_choice(no_model_choice, "chosen-provider", "chosen-model")
+    assert dsh_profile.stored_model_choice()["provider"] == "chosen-provider"
+    identity = profiles.runtime_identity(profiles.defaults(), tmp_path, uses_models=True)
     assert identity["status"] == "configured_unverified"
-    assert identity["route"]["model"] == "configured-model"
+    assert (identity["route"]["provider"], identity["route"]["model"]) == ("chosen-provider", "chosen-model")
     monkeypatch.setattr(DshModelClient, "readiness", lambda *args, **kwargs: {
         "status": "diagnostic-unavailable", "provider": "(runtime default)", "model": "(runtime default)",
     })

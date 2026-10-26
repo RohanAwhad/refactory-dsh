@@ -45,13 +45,13 @@ The pinned harness (0.2.0-rc.2) keeps settings in each profile's own patch, not 
             contextWindow: 262144
 ```
 
-Keys are read from the environment (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, …, including a `.env` at the checkout root) or from the managed store at `$DSH_HOME/.credentials.yaml` that the Models page writes. An `llm-deepseek` row (`name: '@deepseek-ai/dsh-llm-deepseek-api-key'`) overrides the direct DeepSeek route the same way: `models:`, `baseURL:`, `apiKeyEnv:`, `thinking:`, `reasoningEffort:`. `uv run refactory doctor` reports whether the key the `headless` route names is configured.
+Keys are read from the environment (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, …, including a `.env` at the checkout root) or from the managed store at `$DSH_HOME/.credentials.yaml` that the Models page writes. An `llm-deepseek` row (`name: '@deepseek-ai/dsh-llm-deepseek-api-key'`) overrides the direct DeepSeek route the same way: `models:`, `baseURL:`, `apiKeyEnv:`, `thinking:`, `reasoningEffort:`. `uv run refactory doctor` reports whether the key of the chosen provider's `headless` route is configured.
 
 A local OpenAI-compatible server works through the same route, and still needs *a* key — pi-ai's OpenAI protocol asks for one, so name a dummy variable and export any value (`apiKeyEnv: LOCAL_TEST_KEY`, then `LOCAL_TEST_KEY=dummy`), or set an `Authorization` header.
 
 ## Choose a model for a run
 
-The stored model choice (`refactory model set` or Settings → Models) is used by every run that names no explicit `--provider`/`--model`. Runs without a configured model are refused before any model call.
+Every run uses the stored model choice unless it says otherwise. Above it, unchanged: `--provider` and `--model` on the command line, then the project's `refactory.workers.json` and the environment, then `node_routes`, which override `role_routes`, which override the run's route. Refactory hands the result to every DSH process it starts — the CEO and each worker — as `--provider` and `--model`, and never consults a DSH profile's own default.
 
 ```bash
 uv run refactory ceo counting_pack/fixed_step --model deepseek-v4-pro
@@ -61,17 +61,30 @@ uv run refactory optimize circle_packing/adaptive --provider deepseek-official -
 
 `--model` names the id and `--provider` the route; both override the stored choice for that run only, and neither writes anything back. A route that does not exist is a loud failure (`NO_ADAPTER: no adapter registered for provider …`), not a quiet return to the default. The same two flags exist one level down, on `dsh --profile headless|graph`, which is what `refactory` calls.
 
+### First run
+
+A run that has no stored choice, and no flag or route that names a model, never falls back to a profile's default or to whichever provider has a key. It asks the credential store which providers have a key — whether one is set, never its value — and:
+
+- **one provider has a key:** the run uses that provider with the first model its route lists, stores it as the choice, and says so once: `Using <provider>/<model>, the only provider with a key; change it with refactory model set`. Later runs read the stored choice and say nothing.
+- **several have keys:** at a terminal it lists them and asks once, then stores the answer; a headless run (and the GUI) is refused with the list and the command to choose.
+- **none has a key:** the run is refused: `No model chosen: pick one in Settings → Models or with refactory model set --provider <provider> --model <model>`.
+
+A stored choice is never replaced this way. A run of deterministic nodes only, headless, needs no model and is not asked. `uv run refactory doctor` shows which of these a first run would take.
+
 ## Model selection across execution paths
 
 | Path | Where its model comes from |
 |---|---|
-| Terminal `ceo` | The stored model choice (Settings → Models or `refactory model set`), overridable by `--provider`/`--model` |
-| Python Create/Edit/Design agent nodes | The supplied `DshModelClient`; its route starts from the stored choice and is carried to supported nested validation |
-| Optimization with the default `walker` evaluator | The supplied model client serves the reasoning proposer and evaluated agent nodes; its route starts from the stored choice |
-| Optimization with the separate `dsh` evaluator | The supplied client context is forwarded; explicit agent workers are dispatched through the same node bridge and route as the walker |
-| GUI CEO and children | The stored model choice (written by Settings → Models); the owning session and worker configuration |
+| Terminal `ceo` (CEO and workers) | `--provider`/`--model`, else the project file or environment, else the stored choice; route maps apply per node. Both the CEO and every worker get it as `--provider`/`--model` |
+| Python Create/Edit/Design agent nodes | The supplied `DshModelClient`, resolved the same way; carried to supported nested validation |
+| Optimization with the default `walker` evaluator | The search's model client, resolved the same way, serves the reasoning proposer and evaluated agent nodes |
+| Optimization with the separate `dsh` evaluator | The same client context is forwarded to the CEO and to workers dispatched through the same node bridge and route as the walker |
+| GUI CEO and children | The session's model (Settings → Models, the same stored choice, unless the session picked another), passed to the run's workers as its route |
+| `package smoke --model`, `doctor` | The stored choice, or `--provider`/`--model` |
+| `--worker-backend codex` / `claude_code` | Workers keep their product's own model settings; a local CEO still runs on the stored choice |
+| `openshell` worker backend | Out of the stored choice's scope: the run's graph runs in the sandbox, whose only inference path is the OpenShell gateway's verified `claude-code` provider. No route is passed in; a gateway without that provider is refused at dispatch, and a CEO launched with no route is refused rather than given a default |
 
-`refactory runtime` inspects configuration; `.refactory/workers/*.json` receipts establish the selected backend, observed runtime route, version and usage. Requested settings are separate from observed settings. Explicit `node_routes` override `role_routes`, which override the run settings; empty fields use the runtime defaults. Switching backend clears inherited provider/model/effort unless the override supplies them. A provider route declared in one DSH profile's settings is invisible to the nested headless runtime a DSH worker runs; declare such routes for workers with [`provider_config`](worker-routing.md) in `refactory.workers.json`.
+`refactory runtime` shows the route a run here would use and where each part came from (`model_route`: `flag`, `project file`, `environment`, `stored choice`, or `none`, plus each `node route` and `role route`); `.refactory/workers/*.json` receipts establish the selected backend, observed runtime route, version and usage. Requested settings are separate from observed settings. Explicit `node_routes` override `role_routes`, which override the run settings; an empty DSH route takes the stored choice. Switching backend clears inherited provider/model/effort unless the override supplies them. A provider route declared in one DSH profile's settings is invisible to the nested headless runtime a DSH worker runs; declare such routes for workers with [`provider_config`](worker-routing.md) in `refactory.workers.json`.
 
 A random seed does not make model outputs deterministic. Changing provider/model can change tool use, latency, cost and output quality; support for a protocol is not a performance guarantee.
 

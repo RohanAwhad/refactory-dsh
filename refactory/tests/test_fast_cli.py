@@ -24,9 +24,6 @@ def test_fast_check_and_timeout_reach_the_declared_run(monkeypatch, mode, extra)
         return 0
 
     monkeypatch.setattr(interactive, "run", prepared)
-    # Bypass first-run model choice detection so the test reaches run().
-    from refactory_dsh import dsh_profile
-    monkeypatch.setattr(dsh_profile, "first_run_choice", lambda **kw: {"provider": "test", "model": "test"})
     assert cli.main([
         "ceo", "a small change", "--mode", mode, *extra,
         "--check", "python -c 'assert 1 + 1 == 2'", "--timeout", "60",

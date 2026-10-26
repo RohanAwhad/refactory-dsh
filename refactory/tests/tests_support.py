@@ -51,6 +51,29 @@ def _link_bundle(home: Path, name: str, bundle: str, target: Path) -> None:
 #: credential, and it must never reach any output.
 PLACEHOLDER_KEY = "placeholder-not-a-real-key"
 
+#: The run model a sealed test's DSH home holds (dm-258), as a person who chose one in
+#: Settings → Models has it. A fake: no test reaches a provider with it.
+TEST_MODEL_CHOICE = {"provider": "fakeprov", "model": "fake-model"}
+
+
+def store_model_choice(home: Path, provider: str = TEST_MODEL_CHOICE["provider"],
+                       model: str = TEST_MODEL_CHOICE["model"]) -> Path:
+    """Write the one model choice where Settings → Models keeps it, as that page writes it.
+
+    Plain text rather than `dsh_profile.model_choice_write`, so the tests of that writer
+    do not depend on it for their own setup.
+    """
+    path = home / "profiles" / dsh_profile.GUI_PROFILE / "cordis.patch.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "- id: agent-default-model\n"
+        "  name: \"@deepseek-ai/dsh-agent-default-model\"\n"
+        "  config:\n"
+        f"    provider: {provider}\n"
+        f"    model: {model}\n"
+    )
+    return path
+
 
 def model_home_with_a_key(home: Path, *, provider: str = "fakeprov", model: str = "fake-model",
                           base_url: str = "http://127.0.0.1:9") -> Path:
@@ -59,9 +82,11 @@ def model_home_with_a_key(home: Path, *, provider: str = "fakeprov", model: str 
     The profile is the shape install writes for `headless` (DSH's own bundles, no
     refactory layer), with the routes in its patch, which is where the pinned harness
     keeps what Settings -> Models saves. The store is the managed credential document.
-    ``provider``/``model`` (by default `fakeprov/fake-model`) is the default route, at
+    ``provider``/``model`` (by default `fakeprov/fake-model`) is the route the person
+    chose (the stored choice, dm-258) and the headless profile's own default, at
     ``base_url``, and has its key; `otherprov` has none.
     """
+    store_model_choice(home, provider, model)
     profile = home / "profiles" / "headless"
     profile.mkdir(parents=True, exist_ok=True)
     (profile / "package.json").write_text(json.dumps({

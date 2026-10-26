@@ -84,7 +84,7 @@ uv run refactory doctor
 uv run refactory runtime
 ```
 
-Doctor checks local configuration, not authentication or quota. Runtime shows the nested defaults. Select a configured model in chat; CLI runs choose their model with `--provider` and `--model`, or from the runtime configuration that `uv run refactory runtime` shows.
+Doctor checks the chosen provider's local configuration, not authentication or quota. Choosing a model in **Settings → Models** (or with `uv run refactory model set --provider <provider> --model <model>`) is the one choice every run uses, GUI and terminal alike; a run with none is refused, or on a first run uses the only provider with a key and says so ([First run](models.md#first-run)). CLI runs choose their model with `--provider` and `--model` for one run instead; `uv run refactory runtime` shows the route a run would use and where it came from.
 
 New coding workers default to **Skip permission checks**, including full native sandbox bypass for DSH/Codex. Their tools can access what your OS account can access. To retain backend checks, choose **Native permission policy** in the Modes panel or pass `--permission-mode default` in the CLI. Existing saved profiles and runs preserve their policy. [Worker permissions](models.md#model-provider-versus-coding-agent)
 

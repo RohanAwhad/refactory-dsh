@@ -222,13 +222,15 @@ def main(argv: list[str] | None = None) -> int:
     from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
     from refactory_dsh.paths import project_root
 
-    # First-run auto-detection before DshModelClient() reads the stored choice.
-    if not args.provider and not args.model:
-        from refactory_dsh.dsh_profile import first_run_choice
-        try:
-            first_run_choice(interactive=False)
-        except ModelChoiceError:
-            pass  # require_model_choice below will raise with the refusal message
+    try:
+        # Every agent node calls a model, so the route is settled before anything runs (dm-258).
+        client = require_model_choice(DshModelClient(
+            project=None if args.resume else project_root(),
+            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
+        ), interactive=sys.stdin.isatty())
+    except ModelChoiceError as exc:
+        print(f"refactory: {exc}", file=sys.stderr)
+        return 1
 
     if args.resume:
         workdir = Path(args.resume)
@@ -240,15 +242,6 @@ def main(argv: list[str] | None = None) -> int:
                 fast = run_config.get('fast', fast)
             except (json.JSONDecodeError, OSError):
                 pass
-        client = DshModelClient(
-            project=None,
-            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
-        )
-        try:
-            require_model_choice(client)
-        except ModelChoiceError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
         from refactory_dsh.run_ownership import ownership
 
         try:
@@ -276,15 +269,6 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2, default=str))
         return 0 if run.exit_ok else 2
 
-    _edit_client = DshModelClient(
-        project=None if args.resume else project_root(),
-        timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
-    )
-    try:
-        require_model_choice(_edit_client)
-    except ModelChoiceError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
     try:
         result = edit(
             EditConfig(
@@ -301,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                 fast=args.fast, repair_attempts=args.repair_attempts, check=args.check,
                 resource_limits=arguments(args),
             ),
-            client=_edit_client,
+            client=client,
             enable_recovery=True,
         )
     except CreateError as exc:

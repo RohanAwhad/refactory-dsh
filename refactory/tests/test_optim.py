@@ -496,7 +496,7 @@ def test_stdin_prompt_reaches_the_child_process_whole(tmp_path):
     """))
 
     large = "\u00e9" * (200 * 1024)  # 200 KiB of non-ASCII
-    client = DshModelClient(timeout_s=10, attempts=1, provider="test", model="test")
+    client = DshModelClient(timeout_s=10, attempts=1)
     result = client._run_completion(
         [sys.executable, str(script)], tmp_path, task=large,
     )

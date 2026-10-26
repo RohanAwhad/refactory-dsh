@@ -68,18 +68,20 @@ def resolve(project: Path, overrides: dict[str, Any] | None = None, *,
         inherited = json.loads(os.environ.get("REFACTORY_WORKER_CONTEXT") or "{}")
     if not isinstance(inherited, dict):
         raise ValueError("REFACTORY_WORKER_CONTEXT must contain an object")
-    # When no inherited context is present, use the stored model choice as base.
-    _base_provider = ""
-    _base_model = ""
+    # The one model choice is the bottom layer (dm-258): what a run uses when no flag,
+    # environment variable, project file or route map names a model. An inherited
+    # context was resolved once already, with the choice in it, and is not re-read.
+    stored = {"provider": "", "model": ""}
     if not inherited:
         from refactory_dsh.dsh_profile import stored_model_choice
-        _stored = stored_model_choice()
-        _base_provider = _stored.get("provider", "")
-        _base_model = _stored.get("model", "")
-    route: dict[str, Any] = {"worker_backend": "dsh", "provider": _base_provider, "model": _base_model,
+
+        stored = stored_model_choice()
+    route: dict[str, Any] = {"worker_backend": "dsh", "provider": stored["provider"], "model": stored["model"],
                             "effort": "", "permission_mode": "skip"}
     maps: dict[str, Any] = {"role_routes": {}, "node_routes": {}, "provider_config": {}}
     sources = {key: "default" for key in FIELDS}
+    if stored["provider"]:
+        sources["provider"] = sources["model"] = "stored-choice"
     layers: list[tuple[str, dict[str, Any]]] = []
     file_info: dict[str, Any] = {"path": str(project / FILENAME), "loaded": False}
     if inherited:
@@ -123,7 +125,7 @@ def resolve(project: Path, overrides: dict[str, Any] | None = None, *,
     settings = {**route, **maps}
     validate(settings)
     return {"settings": settings, "provenance": {"project": str(project), "file": file_info,
-             "fields": sources, "precedence": "node > role > run; explicit launch/profile > project > environment > defaults; inherited/saved contexts bypass project files"}}
+             "fields": sources, "precedence": "node > role > run; explicit launch/profile > project > environment > the stored model choice; inherited/saved contexts bypass project files"}}
 
 
 def effective(project: Path) -> dict[str, Any]:
