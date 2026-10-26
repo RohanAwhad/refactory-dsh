@@ -332,14 +332,36 @@ export const designGraph: ShapeEntry = {
   gatesWithReloop: ['gate_research', 'gate_pitfalls', 'gate_design_review', 'gate_strategy', 'prepare_check', 'gate_check', 'gate_qa', 'gate_overwatch'],
   // A full design: the perspectives step runs. No reviewer sits between the design and
   // the person's gate at either scale.
-  fixedVerdicts: { route_strategy: 'proceed' }, large: true,
+  fixedVerdicts: { route_strategy: 'proceed', route_refine_design: 'proceed' }, large: true,
 }
 
 /** The same graph for a scoped change, which skips the perspectives step. */
 export const designGraphScoped: ShapeEntry = {
   ...designGraph,
   name: 'designGraphScoped',
-  fixedVerdicts: { route_strategy: 'scoped' },
+  fixedVerdicts: { route_strategy: 'scoped', route_refine_design: 'proceed' },
+}
+
+/** A light refine: skips research and strategy, goes straight to design_doc.
+ *  gate_strategy is not relooped here, because the redo invariant cannot hold
+ *  for its reloop: the only way into synthesize_strategy on the light route is
+ *  the person's reloop, and a redo (which never reloops) of prepare rightly
+ *  takes the light route again and leaves the plan to the person. The reloop is
+ *  driven through the ordering invariants by designGraphRefineLightRelooped. */
+export const designGraphRefineLight: ShapeEntry = {
+  ...designGraph,
+  name: 'designGraphRefineLight',
+  gatesWithReloop: ['gate_design_review', 'prepare_check', 'gate_check', 'gate_qa', 'gate_overwatch'],
+  fixedVerdicts: { route_refine_design: 'light', route_strategy: 'proceed' },
+}
+
+/** The light refine with the person relooping once at gate_strategy as well. Not
+ *  in `shapes`, which also checks the redo invariant (see designGraphRefineLight):
+ *  graph-set.spec drives it through the ordering invariants on its own. */
+export const designGraphRefineLightRelooped: ShapeEntry = {
+  ...designGraphRefineLight,
+  name: 'designGraphRefineLightRelooped',
+  gatesWithReloop: [...designGraphRefineLight.gatesWithReloop, 'gate_strategy'],
 }
 
 // ─── Shape 13: crossContainerReloop (constructor-refused) ────────
@@ -389,4 +411,5 @@ export const shapes: ShapeEntry[] = [
   alternativeEnds_halt,
   designGraph,
   designGraphScoped,
+  designGraphRefineLight,
 ]
