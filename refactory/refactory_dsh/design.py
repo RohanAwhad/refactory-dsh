@@ -641,7 +641,7 @@ class DesignMode(Mode):
             reads=(CHECK_PREP, CHECK_VERDICT),
             # It runs the whole check itself when no decision stands for this attempt.
             writes=(*check_writes, *repo_change.CHECK_WRITES),
-            produces=(*check_produces, *repo_change.CHECK_PRODUCES),
+            produces=(*check_produces, *repo_change.CHECK_PRODUCES, "draft_delivery"),
             knobs=check_knobs, max_iterations=8,
             notes="send a failed check back to the builder; otherwise read the reviews",
         ))
@@ -788,7 +788,7 @@ class DesignMode(Mode):
             reads=(judges.QA_JUDGE, "reviews/health-check.md", "reviews/code-review.md",
                    "reviews/qa.md", "changed-functions.json"),
             writes=("reviews/qa-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("qa_gate", "qa_judge_rereads", "qa_judge_reread"),
+            produces=("qa_gate", "qa_judge_rereads", "qa_judge_reread", "draft_delivery"),
             knobs=("judge_rereads",),
             max_iterations=5,
             notes="route on the QA judge's verdict: a redo for what holds the change back goes "
@@ -823,7 +823,7 @@ class DesignMode(Mode):
             "gate_overwatch", "gate", evaluator=f"{OPS}:gate_overwatch",
             reads=(judges.OVERWATCH_VERDICT, "correction-audit.json"),
             writes=("reviews/overwatch-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("overwatch_review", "overwatch_rereads", "overwatch_reread"),
+            produces=("overwatch_review", "overwatch_rereads", "overwatch_reread", "draft_delivery"),
             knobs=("judge_rereads",),
             max_iterations=4,
             notes="route on the overwatch's verdict: an unmet correction or a redo for what "
@@ -874,7 +874,8 @@ class DesignMode(Mode):
             reads=("design.json", "delivery.md", "reviews/follow-ups.json"),
             writes=("delivery.json", "pull-request.md", "design.json"),
             produces=("delivery_result", "pull_request", "delivery_conflict_files",
-                      "delivery_conflict_detail", "delivery_target_tip", "commit"),
+                      "delivery_conflict_detail", "delivery_target_tip", "delivered_commit",
+                      "_refine_body_note"),
             notes="push the run's branch and open its pull request, as the approval gate said",
         ))
         graph.add(Node(
@@ -927,6 +928,7 @@ class DesignMode(Mode):
         graph.connect("join_qa", "gate_check")
         graph.connect("gate_check", "emit", condition="reloop")
         graph.connect("gate_check", "synthesize_qa", condition="proceed")
+        graph.connect("gate_check", "report", condition="draft")
         graph.connect("synthesize_qa", "qa_judge")
         graph.connect("qa_judge", "gate_qa")
         graph.connect("gate_qa", "emit", condition="reloop")

@@ -273,6 +273,11 @@
     },
     {
       "source": "gate_check",
+      "target": "report",
+      "condition": "draft"
+    },
+    {
+      "source": "gate_check",
       "target": "synthesize_qa",
       "condition": "proceed"
     },

@@ -207,6 +207,8 @@ def test_consecutive_refusals_end_the_run(tmp_path):
               "target": str(repo)},
     )
 
+    # The refusal bound raises BuildLoopStop even with an applied commit — the
+    # materialise node is an op, not a gate, so it cannot route to report.
     assert result.exit_ok is False
     assert "emissions refused" in (result.error or ""), f"Expected refusal stop, got: {result.error}"
     assert "consecutive" in (result.error or "")
@@ -391,8 +393,9 @@ def _run_node_main(run, target, node_id, node_type, monkeypatch):
 
 
 def test_a_design_check_limit_ends_the_walker_run_with_the_stop(tmp_path):
-    """Design mode runs its check beside the reviews; at the check limit the run
-    still ends with a BuildLoopStop, not a plain ValueError."""
+    """Design mode runs its check beside the reviews; at the check limit with a commit
+    fact, the run now exits successfully with a draft delivery instead of failing.
+    Without a commit fact, the run still fails with BuildLoopStop."""
     from tests_support import (DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
                                RESEARCH_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER, FakeModel,
                                git_repo, render)
@@ -405,8 +408,14 @@ def test_a_design_check_limit_ends_the_walker_run_with_the_stop(tmp_path):
     result = _design_mode(check_attempts=2, check_attempt_cap=0).run(
         tmp_path / "run", model=FakeModel(answers), verdicts={"gate_strategy": "proceed"},
         task={"name": "stop_tool", "brief": "a tool", "check": "exit 1", "target": str(repo)})
-    assert result.exit_ok is False
-    assert "BuildLoopStop" in (result.error or ""), result.error
+    # With an applied commit, the run delivers a draft instead of failing.
+    if result.facts.get("commit"):
+        assert result.exit_ok is True
+        assert result.facts.get("draft_delivery")
+        assert result.facts["draft_delivery"].get("check_failing") is True
+    else:
+        assert result.exit_ok is False
+        assert "BuildLoopStop" in (result.error or ""), result.error
 
 
 def test_a_design_check_limit_exits_3_on_the_spine(tmp_path, monkeypatch):
@@ -434,12 +443,22 @@ def test_a_design_check_limit_exits_3_on_the_spine(tmp_path, monkeypatch):
         codes.append((node, code))
         if code != 0:
             break
-    assert codes[-1] == ("gate_check", 3), codes
-    assert FAILURE_MARKER in err
+    # With a commit fact, gate_check now returns "draft" (exit 0) instead of raising.
+    # Without a commit fact (no materialise), it still raises (exit 3).
+    facts = json.loads((run / "facts.json").read_text())
+    if facts.get("commit"):
+        assert codes[-1] == ("gate_check", 0), codes
+        assert facts.get("draft_delivery")
+        assert facts["draft_delivery"].get("check_failing") is True
+    else:
+        assert codes[-1] == ("gate_check", 3), codes
+        assert FAILURE_MARKER in err
 
 
 def test_every_limit_raise_in_the_build_loop_is_a_stop():
-    """No limit in repair or _repair raises a plain ValueError: each is final on the spine."""
+    """No limit in repair or _repair raises a plain ValueError: each is final on the spine.
+    Design mode's gate functions may guard BuildLoopStop with an if/return for draft
+    delivery; the structural test allows that pattern alongside raises in create_ops."""
     import inspect
 
     from refactory_dsh import create_ops, fast_ops

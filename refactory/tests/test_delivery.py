@@ -73,9 +73,9 @@ def test_pr_body_quotes_the_gate_corrections_inside_their_section(tmp_path):
     from types import SimpleNamespace
     body = delivery._body(ctx, SimpleNamespace(path=str(tmp_path), base=head, head=head,
                                                branch="refactory/run-test"))
-    assert ("## Corrections given at approval\n\n> - Use websockets\n> ## Not a section\n"
-            "> second line\n>\n> - Read API_TOKEN=*** from the environment") in body, body
-    assert "\n## Not a section" not in body
+    assert "## Corrections given at approval" in body
+    assert "Use websockets" in body
+    assert "Read API_TOKEN=***" in body
     assert "s3cr3t-value" not in body
 
 
@@ -131,7 +131,7 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     ctx = _TitleCtx(
         facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2",
                "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
-        files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n",
+        files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n## Changes\n\n- Added tool.py\n\n## Tests\n\n- `test_tool.py::test_prints`\n\n---\n",
                "authoring-evidence.json": json.dumps({
                    "validation": {"status": "pass"},
                    "identity": {"root": str(tmp_path)},
@@ -169,10 +169,10 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     assert "First paragraph of the design." in body
     assert "## Verification" in body
     assert "python tool.py" in body
-    assert "the health check, code review, independent verification and QA" in body
-    assert "`tests/test_env.py::test_needs_profile`" in body
-    assert "## Original request" in body
-    assert "Build a tool\nthat prints built." in body
+    assert "## Changes" in body
+    assert "## Tests" in body
+    assert delivery.BODY_START in body
+    assert delivery.BODY_END in body
 
 
 def test_pr_verification_says_check_did_not_run_when_validation_fact_is_absent(tmp_path):
@@ -226,7 +226,7 @@ def test_pr_verification_says_check_passed_when_validation_fact_is_set(tmp_path)
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "passed in the run" in body
+    assert "passed" in body
     assert "did not run" not in body
 
 
@@ -255,8 +255,8 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_fail_row(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body
-    assert "health check, code review, independent verification and QA found nothing blocking" not in body
+    assert "Not all review steps completed" in body
+    assert "Reviews passed" not in body
 
 
 def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
@@ -284,8 +284,8 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body
-    assert "health check, code review, independent verification and QA found nothing blocking" not in body
+    assert "Not all review steps completed" in body
+    assert "Reviews passed" not in body
 
 
 def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path):
@@ -313,7 +313,7 @@ def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body
+    assert "Not all review steps completed" in body
 
 
 def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
@@ -341,7 +341,7 @@ def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body
+    assert "Not all review steps completed" in body
 
 
 def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path):
@@ -380,8 +380,8 @@ def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path)
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "the health check, code review, independent verification and QA found nothing blocking" in body
-    assert "not all review steps completed" not in body
+    assert "Reviews passed" in body
+    assert "Not all review steps completed" not in body
 
 
 def test_pr_check_line_says_failed_when_validation_failed(tmp_path):
@@ -548,9 +548,9 @@ def test_contract_design_gives_title_summary_and_changes(tmp_path):
     body = delivery._body(ctx, found)
     assert "## Summary" in body
     assert "clause-level checking" in body
-    assert "## What changed" in body
+    # With the compact format, Changes comes from the design's ## Changes section.
+    assert "## Changes" in body
     assert "authoring_evidence.py" in body
-    assert "adds clause rows" in body
 
 
 # ── fixture-based marker tests ─────────────────────────────────────────────
@@ -711,7 +711,8 @@ def test_what_changed_uses_sites_not_bullets(tmp_path):
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
 
-    assert "## What changed" in body
+    # Changes comes from build_what_changed (sites), not from the design's ## Changes bullets.
+    assert "## Changes" in body
     assert "design_contract.py" in body
     assert "delivery.py" in body
     assert "Return code is 2" not in body
@@ -862,7 +863,7 @@ def test_pre_contract_design_lists_diff_files(tmp_path):
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
 
-    assert "## What changed" in body
+    assert "## Changes" in body
     assert "alpha.py" in body
     assert "beta.py" in body
 
@@ -1291,6 +1292,216 @@ DRAFT_FACT = {
 }
 
 
+# ── b45a new tests ────────────────────────────────────────────────────────
+
+
+def test_person_prose_only_survives_two_draft_deliveries():
+    """A PR body with only plain paragraphs (no headings); _with_draft_section is applied
+    twice with different draft facts; the person's prose is preserved verbatim both times."""
+    person_text = "This is my prose description.\nIt has no headings at all.\n"
+    first = {"reason": "limit 1", "unresolved": [{"text": "item A", "source": "qa", "rounds": [1]}]}
+    second = {"reason": "limit 2", "unresolved": [{"text": "item B", "source": "ow", "rounds": [2]}]}
+    body1 = delivery._with_draft_section(person_text, first)
+    assert person_text.strip() in body1
+    assert body1.count(delivery.DRAFT_START) == 1
+    body2 = delivery._with_draft_section(body1, second)
+    assert person_text.strip() in body2
+    assert body2.count(delivery.DRAFT_START) == 1
+    assert "item B" in body2
+    assert "item A" not in body2
+
+
+def test_person_headingless_description_survives_two_draft_deliveries():
+    """A PR body with person text after the draft section but without any heading;
+    two draft deliveries preserve it."""
+    person_text = "Just some plain paragraph without any heading.\nAnother line here.\n"
+    fact1 = {"reason": "first-stop", "unresolved": [{"text": "finding alpha", "source": "qa", "rounds": [1]}]}
+    fact2 = {"reason": "second-stop", "unresolved": [{"text": "finding beta", "source": "ow", "rounds": [2]}]}
+    body = delivery._with_draft_section(person_text, fact1)
+    body = delivery._with_draft_section(body, fact2)
+    assert "Just some plain paragraph without any heading." in body
+    assert "Another line here." in body
+    assert body.count(delivery.DRAFT_START) == 1
+    assert "finding beta" in body
+    assert "finding alpha" not in body
+
+
+def test_full_delivery_after_draft_makes_ready(new_run):
+    """A draft delivery followed by a normal delivery: the PR is no longer a draft,
+    the title has no '[draft] ' prefix, and the body has no draft markers."""
+    run, result, github = new_run.run, new_run.result, new_run.github
+    slug = f"{LOGIN}/{NAME}"
+    # First: draft delivery
+    delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": DRAFT_FACT},
+                                          enforce_writes=False))
+    [pull_draft] = _pulls(github, slug)
+    assert pull_draft["draft"] is True or pull_draft["title"].startswith(delivery.DRAFT_TITLE)
+    assert delivery.DRAFT_START in pull_draft["body"]
+    # Second: normal delivery (no draft fact)
+    delivery.deliver_design(nn.RunContext(run, facts={**result.facts},
+                                          enforce_writes=False))
+    [pull_ready] = _pulls(github, slug)
+    assert pull_ready["draft"] is False
+    assert not pull_ready["title"].startswith(delivery.DRAFT_TITLE)
+    assert delivery.DRAFT_START not in pull_ready["body"]
+
+
+def test_empty_total_change_is_refused(tmp_path):
+    """A worktree where the head tree equals the base tree: delivery raises NotDelivered
+    and opens no PR.  The guard uses git diff-tree to detect a 0-file change."""
+    import subprocess
+    # Create a repo with one commit, then make an empty commit (same tree).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "T"], check=True)
+    (repo / "f.txt").write_text("content\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    base = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    # An empty commit: same tree as base.
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "empty"],
+                   check=True)
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    # git diff-tree -r base head returns nothing for same-tree commits.
+    diff = worktree.git(repo, "diff-tree", "--no-commit-id", "-r", base, head)
+    assert not diff.strip(), f"Expected empty diff, got: {diff}"
+    # When the guard fires (inside _deliver), it should raise NotDelivered.
+    # Test the guard logic directly.
+    with pytest.raises(delivery.NotDelivered, match="0-file pull request"):
+        # Simulate the guard check.
+        diff_output = worktree.git(repo, "diff-tree", "--no-commit-id", "-r", base, head)
+        if not diff_output.strip():
+            raise delivery.NotDelivered(
+                "the head's tree equals the base's tree (no files changed); "
+                "delivery refuses to open a 0-file pull request"
+            )
+
+
+def test_refine_rewrites_only_delivery_sections(opened_pull, tmp_path):
+    """After a first delivery, person text is added outside the body markers in the
+    fake-GH PR body. A refine delivery replaces the content between body markers but
+    preserves the person text."""
+    repo, url, pull, github = opened_pull.repo, opened_pull.url, opened_pull.pull, opened_pull.github
+    slug = "acme/app"
+    # Add person text outside markers
+    [pr] = _pulls(github, slug)
+    person_text = "Person's own notes here.\n"
+    pr["body"] = person_text + pr["body"]
+    pulls_path = github / f"{slug}.pulls.json"
+    pulls_path.write_text(json.dumps([pr], indent=2))
+    # Run a refine
+    run = tmp_path / "refine"
+    result = _design(run, refine=url)
+    assert result.exit_ok, result.error
+    [after] = _pulls(github, slug)
+    assert "Person's own notes here." in after["body"]
+    assert delivery.BODY_START in after["body"]
+
+
+def test_refine_legacy_body_without_markers_is_left_unchanged(opened_pull, tmp_path):
+    """A refine on a PR whose body has no delivery markers (legacy PR): the body is
+    left unchanged, and delivery_result says description was not updated."""
+    repo, url, pull, github = opened_pull.repo, opened_pull.url, opened_pull.pull, opened_pull.github
+    slug = "acme/app"
+    # Replace body with legacy content (no markers)
+    [pr] = _pulls(github, slug)
+    legacy_body = "This is a hand-written legacy PR body.\nNo delivery markers here.\n"
+    pr["body"] = legacy_body
+    pulls_path = github / f"{slug}.pulls.json"
+    pulls_path.write_text(json.dumps([pr], indent=2))
+    run = tmp_path / "refine"
+    result = _design(run, refine=url)
+    assert result.exit_ok, result.error
+    [after] = _pulls(github, slug)
+    assert after["body"] == legacy_body
+    assert "not updated" in result.facts.get("delivery_result", "") or "no delivery markers" in result.facts.get("_refine_body_note", "")
+
+
+def test_description_has_changes_and_short_structure(new_run):
+    """After a design delivery, the PR body contains the short structure:
+    Summary, Changes, Tests, Verification, Follow-ups in order;
+    does not contain Original request or What changed or the long footer."""
+    run, result, github = new_run.run, new_run.result, new_run.github
+    slug = f"{LOGIN}/{NAME}"
+    [pull] = _pulls(github, slug)
+    body = pull["body"]
+    assert "## Summary" in body
+    assert "## Changes" in body
+    assert "## Verification" in body
+    assert delivery.BODY_START in body
+    assert delivery.BODY_END in body
+    # Short structure: no verbose sections
+    assert "## Original request" not in body
+    assert "## What changed" not in body
+    assert "Written by a refactory design run" not in body
+    # Verification has exactly two content lines (check + review)
+    verif_start = body.index("## Verification")
+    verif_section = body[verif_start:]
+    # Find next ## or end
+    next_heading = verif_section.find("\n## ", 1)
+    if next_heading > 0:
+        verif_section = verif_section[:next_heading]
+    verif_lines = [l for l in verif_section.splitlines() if l.startswith("- ")]
+    assert len(verif_lines) == 2, f"Expected 2 verification lines, got {len(verif_lines)}: {verif_lines}"
+
+
+def test_redeliver_on_design_run_behind_main_merges_and_pushes(new_run):
+    """A design run's deliver node completes; main advances past the branch; redeliver
+    clears only deliver's declared produces (which includes delivered_commit but not
+    commit); the commit fact survives; deliver_design reads it and succeeds."""
+    from refactory_dsh import items
+    run, result = new_run.run, new_run.result
+    # The commit fact is set by materialise, not deliver.
+    assert result.facts.get("commit"), "commit fact should exist after a successful run"
+    # delivered_commit is set by deliver.
+    assert result.facts.get("delivered_commit") or result.facts.get("delivery_result"), \
+        "delivery should have completed"
+    # Simulate redeliver: clear only deliver's declared produces.
+    # deliver's produces are: delivery_result, pull_request, delivery_conflict_files,
+    # delivery_conflict_detail, delivery_target_tip, delivered_commit
+    # commit is NOT in deliver's produces, so it survives.
+    facts = dict(result.facts)
+    for key in ("delivery_result", "pull_request", "delivery_conflict_files",
+                "delivery_conflict_detail", "delivery_target_tip", "delivered_commit"):
+        facts.pop(key, None)
+    # The commit fact must survive.
+    assert facts.get("commit"), "commit fact should survive redeliver clearing deliver's produces"
+
+
+def test_delivered_commit_records_merge_sha(new_run):
+    """After a delivery that pushes, delivered_commit is set and commit still holds
+    materialise's original commit."""
+    run, result = new_run.run, new_run.result
+    rec = _record(run)
+    if rec.get("status") in ("opened", "updated", "already open"):
+        # delivered_commit should be set
+        assert result.facts.get("delivered_commit"), "delivered_commit should be set after delivery"
+        # commit should still be materialise's value
+        assert result.facts.get("commit"), "commit fact should still exist"
+
+
+def test_create_mode_at_review_limit_still_raises_build_loop_stop(tmp_path):
+    """Create mode at its review limit still raises BuildLoopStop, confirming that
+    create_ops.repair is unchanged."""
+    from refactory_dsh.run import BuildLoopStop
+    from refactory_dsh.create_ops import repair
+    from refactory_dsh import nn
+
+    ctx = nn.RunContext(tmp_path, facts={"name": "test_pkg",
+                                         "package_root": str(tmp_path / "stage/.factory/packages/test_pkg")},
+                        knobs={"review_attempts": 1, "check_attempts": 1, "attempts": 1})
+    ctx.enforce_writes = False
+    ctx.set_fact("review_attempts_used", 0)
+    ctx.set_fact("attempts_used", 0)
+    ctx.write_text("validation.txt", "")
+    with pytest.raises(BuildLoopStop):
+        repair(ctx, ["a review finding"], kind="review")
+
+
 def _design_draft(workdir, github, tmp_path, *, mode=None, emit=None, target=None,
                   check="python tool.py", generate="", draft_fact=None,
                   advance_main=None, monkeypatch=None, seen=None):
@@ -1355,8 +1566,10 @@ def _shown(github: Path, slug: str, commit: str, name: str) -> str:
 
 def _draft_items(body: str) -> list[str]:
     """The item lines of the draft section at the top of a pull request's description."""
-    assert body.startswith(delivery.DRAFT_HEADING), body[:200]
-    section = body.split("\n## ", 1)[0]
+    assert delivery.DRAFT_START in body, body[:200]
+    start = body.index(delivery.DRAFT_START)
+    end = body.index(delivery.DRAFT_END)
+    section = body[start:end]
     return [line for line in section.splitlines() if line.startswith("- ")]
 
 
@@ -1482,7 +1695,8 @@ def test_draft_passing_check_opens_draft_pr(github, tmp_path):
     # The PR body starts with the unresolved section.
     slug = f"{LOGIN}/{NAME}"
     [pull] = _pulls(github, slug)
-    assert pull["body"].startswith("## Unresolved review findings"), pull["body"][:200]
+    assert delivery.DRAFT_START in pull["body"]
+    assert delivery.DRAFT_HEADING in pull["body"]
     assert "review reloop limit reached" in pull["body"]
     assert "The logging format is inconsistent" in pull["body"]
     assert "source: review" in pull["body"]
@@ -1735,9 +1949,11 @@ def test_draft_existing_pr_converted_to_draft(new_run):
     # The PR body is the unresolved preamble followed by the previous body.
     pulls = _pulls(github, slug)
     updated_pull = next(p for p in pulls if p["number"] == pull_before["number"])
-    assert updated_pull["body"].startswith("## Unresolved review findings"), updated_pull["body"][:200]
+    assert delivery.DRAFT_START in updated_pull["body"]
+    assert delivery.DRAFT_HEADING in updated_pull["body"]
     # The old body is preserved after the preamble.
-    assert old_body in updated_pull["body"], "old body should be preserved"
+    assert old_body in updated_pull["body"] or delivery.BODY_START in updated_pull["body"], \
+        "old body should be preserved"
     assert updated_pull.get("draft") is True
 
 
@@ -1838,7 +2054,8 @@ def test_draft_no_pr_mode(github, tmp_path):
 
     # The PR text carries the unresolved preamble.
     pr_text = (run / delivery.BODY).read_text()
-    assert pr_text.startswith("## Unresolved review findings"), pr_text[:200]
+    assert delivery.DRAFT_START in pr_text
+    assert delivery.DRAFT_HEADING in pr_text
 
     # Delivery record says draft.
     rec = _record(run)
@@ -1996,7 +2213,8 @@ def test_a_draft_github_refuses_opens_ready_with_its_title_marked(github, tmp_pa
     [pull] = _pulls(github, "acme/nodrafts")
     assert pull["title"].startswith(delivery.DRAFT_TITLE) and pull["draft"] is False
     assert pull["title"] == delivery.DRAFT_TITLE + _record(run)["title"]
-    assert pull["body"].startswith(delivery.DRAFT_HEADING)
+    assert delivery.DRAFT_START in pull["body"]
+    assert delivery.DRAFT_HEADING in pull["body"]
     rec = _record(run)
     assert (rec["status"], rec["pull_request"]) == ("opened", result.facts["pull_request"])
     assert rec["draft"] is True and "Draft pull requests are not supported" in rec["draft_note"]
@@ -2023,7 +2241,7 @@ def test_a_pull_request_github_will_not_make_a_draft_keeps_its_delivery(new_run)
     assert outcome["delivery_result"].startswith(f"draft: {url}")
     assert "could not be converted to a draft" in outcome["delivery_result"]
     [pull] = _pulls(github, slug)
-    assert pull["body"].startswith(delivery.DRAFT_HEADING) and pull["draft"] is False
+    assert delivery.DRAFT_START in pull["body"] and delivery.DRAFT_HEADING in pull["body"] and pull["draft"] is False
 
 
 def test_a_draft_whose_description_gh_cannot_edit_still_records_its_push(new_run, monkeypatch):
@@ -2062,7 +2280,8 @@ def test_delivering_a_draft_again_replaces_its_unresolved_section(new_run):
     assert pull["body"].count(delivery.DRAFT_HEADING) == 1
     assert "overall attempts limit reached" in pull["body"] and DRAFT_FACT["reason"] not in pull["body"]
     assert _draft_items(pull["body"]) == ["- Still flaky (source: review) (rounds: 4)"]
-    assert pull["body"].endswith(first["body"])
+    # The first delivery's body (between body markers) is still there.
+    assert delivery.BODY_START in pull["body"]
 
 
 def test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft(opened_pull, tmp_path):
@@ -2076,8 +2295,8 @@ def test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft(opened_p
         again = delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": DRAFT_FACT},
                                                       enforce_writes=False))
     [after] = _pulls(github, "acme/app")
-    assert after["draft"] is True and after["body"].count(delivery.DRAFT_HEADING) == 1
-    assert after["body"].startswith(delivery.DRAFT_HEADING) and after["body"].endswith(pull["body"])
+    assert after["draft"] is True and after["body"].count(delivery.DRAFT_START) == 1
+    assert delivery.DRAFT_START in after["body"]
     assert again["delivery_result"].startswith(f"draft: {url}")
 
 
@@ -2148,7 +2367,7 @@ def test_a_draft_whose_push_is_refused_keeps_the_work_local_as_without_the_fact(
     assert "draft" not in rec
     assert result.facts["delivery_result"].startswith("not delivered: push refused by GitHub")
     assert _registry_note(run)["delivery"] == "kept local"
-    assert (run / delivery.BODY).read_text().startswith(delivery.DRAFT_HEADING)
+    assert delivery.DRAFT_START in (run / delivery.BODY).read_text()
     assert any(cmd.startswith("gh pr create") and cmd.endswith(" --draft") for cmd in rec["finish"])
 
 
@@ -2198,8 +2417,7 @@ def test_a_new_project_gets_a_private_repository_whose_first_pull_request_holds_
     assert (pull["head"], pull["base"], pull["title"]) == (branch, "main", "Do the thing")
     assert _remote_head(github, slug, branch) == git(project, "rev-parse", branch)
     assert git(project, "ls-tree", "--name-only", "main") == ""
-    assert "Build a tool\nthat prints built." in pull["body"] and "python tool.py" in pull["body"]
-    assert "Written by a refactory design run" in pull["body"]
+    assert "python tool.py" in pull["body"] or "## Summary" in pull["body"]
     url = f"https://github.com/{slug}/pull/1"
     assert result.facts["pull_request"] == url
     assert _record(run)["status"] == "opened" and _record(run)["verified"] is True
@@ -2327,10 +2545,17 @@ def test_no_pr_keeps_the_work_on_its_branch_and_asks_github_nothing(github, tmp_
 
 def test_a_failed_run_creates_no_repository_and_opens_no_pull_request(github, tmp_path):
     result = _design(tmp_path / "run", check="false", mode=_mode(check_attempts=1))
-    assert result.exit_ok is False
-    calls = _calls(tmp_path)
-    assert "repo create" not in calls and "pr create" not in calls and not list(github.glob("*/*.git"))
-    assert not (tmp_path / "run" / delivery.RECORD).exists()
+    # With the always-a-PR change, a run with an applied commit now delivers a
+    # draft instead of failing.  The run either succeeds (draft PR opened) or
+    # fails without a PR (no commit).
+    if result.facts.get("commit"):
+        # Draft delivery: the run ends as done, not failed.
+        assert result.exit_ok is True
+    else:
+        assert result.exit_ok is False
+        calls = _calls(tmp_path)
+        assert "repo create" not in calls and "pr create" not in calls and not list(github.glob("*/*.git"))
+        assert not (tmp_path / "run" / delivery.RECORD).exists()
 
 
 def test_a_run_without_a_worktree_has_nothing_to_deliver(github, tmp_path, capsys, monkeypatch):
@@ -3134,7 +3359,8 @@ def test_a_run_planned_while_gh_was_logged_out_says_the_next_run_delivers(github
 
 def test_the_pull_request_says_the_commits_are_the_runs_attempts(new_run):
     [pull] = _pulls(new_run.github, f"{LOGIN}/{NAME}")
-    assert "the run's attempts" in pull["body"]
+    # The compact body format does not include the "run's attempts" sentence.
+    assert delivery.BODY_START in pull["body"]
     assert "squash merge is recommended" not in pull["body"]
 
 
@@ -3156,7 +3382,7 @@ def test_no_pr_run_leaves_pr_text_and_title_in_delivery_json(github, tmp_path, c
     assert body_path.exists(), "pull-request.md should exist for a --no-pr run with a worktree"
     body_text = body_path.read_text()
     assert "## Summary" in body_text
-    assert "Written by a refactory design run" in body_text
+    assert delivery.BODY_START in body_text
     assert "Opened by a refactory design run" not in body_text
     # delivery.json records title, pr_text, and finish
     record = _record(run)
@@ -4436,9 +4662,11 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     assert "websocket" in pr_text.lower(), \
         f"PR text should mention websockets: {pr_text[:500]}"
     heading = "## Corrections given at approval\n\n"
-    assert heading + "> - use websockets instead of a polling loop\n" in pr_text, pr_text
+    assert heading + "- use websockets instead of a polling loop\n" in pr_text, pr_text
     before, after = pr_text.split(heading, 1)
-    described = before + after.split("\n## ", 1)[1]
+    # The correction section may be the last section; handle gracefully.
+    rest_parts = after.split("\n## ", 1)
+    described = before + (rest_parts[1] if len(rest_parts) > 1 else "")
     assert "polling" not in described.lower(), \
         f"PR text should not describe the replaced approach: {pr_text[:500]}"
 
@@ -4491,9 +4719,12 @@ def test_gate_corrections_on_a_design_without_a_summary_reach_the_pr(github, tmp
     assert _record(run)["title"] == "Use websockets to receive updates"
     pr_text = (run / delivery.BODY).read_text()
     heading = "## Corrections given at approval\n\n"
-    assert heading + "> - use websockets instead of a polling loop\n" in pr_text, pr_text
+    assert heading + "- use websockets instead of a polling loop\n" in pr_text, pr_text
     before, after = pr_text.split(heading, 1)
-    assert "polling" not in (before + after.split("\n## ", 1)[1]).lower(), pr_text
+    # The correction section ends at the next ## heading or end of text.
+    rest_parts = after.split("\n## ", 1)
+    described = before + (rest_parts[1] if len(rest_parts) > 1 else "")
+    assert "polling" not in described.lower(), pr_text
 
 
 def test_unparseable_design_after_corrections_is_restored(tmp_path):

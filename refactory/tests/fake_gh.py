@@ -138,8 +138,8 @@ def main(args: list[str]) -> None:
         _save(slug, pulls)
         print(f"https://github.com/{slug}/pull/{len(pulls)}")
     elif args[:2] == ["pr", "ready"]:
-        # `gh pr ready --undo <url>` converts an open PR to draft.
         if "--undo" in args:
+            # `gh pr ready --undo <url>` converts an open PR to draft.
             ref = args[2] if len(args) > 2 and not args[2].startswith("-") else args[-1]
             slug, pull = _find(ref, args)
             if not _meta(slug).get("drafts", True):
@@ -153,14 +153,31 @@ def main(args: list[str]) -> None:
             _save(slug, pulls)
             print(f"https://github.com/{slug}/pull/{pull['number']}")
         else:
-            _fail("fake gh does not know this pr ready variant")
+            # `gh pr ready <url>` marks a draft PR as ready for review.
+            ref = args[2] if len(args) > 2 and not args[2].startswith("-") else args[-1]
+            slug, pull = _find(ref, args)
+            pull["draft"] = False
+            # Strip "[draft] " prefix from title if present.
+            from refactory_dsh.delivery import DRAFT_TITLE
+            if pull["title"].startswith(DRAFT_TITLE):
+                pull["title"] = pull["title"][len(DRAFT_TITLE):]
+            pulls = _pulls(slug)
+            for i, p in enumerate(pulls):
+                if p["number"] == pull["number"]:
+                    pulls[i] = pull
+            _save(slug, pulls)
+            print(f"https://github.com/{slug}/pull/{pull['number']}")
     elif args[:2] == ["pr", "edit"]:
-        # `gh pr edit <url> --body-file <path>`
+        # `gh pr edit <url> --body-file <path>` and/or `--title <title>`
         ref = args[2] if len(args) > 2 and not args[2].startswith("-") else ""
         slug, pull = _find(ref, args)
         body_file = _option(args, "--body-file")
+        title = _option(args, "--title")
         if body_file:
             pull["body"] = Path(body_file).read_text()
+        if title:
+            pull["title"] = title
+        if body_file or title:
             pulls = _pulls(slug)
             for i, p in enumerate(pulls):
                 if p["number"] == pull["number"]:
