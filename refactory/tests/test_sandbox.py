@@ -473,6 +473,8 @@ def test_smoke_can_supply_a_model_client(tmp_path, monkeypatch):
     # The generated client is handed the trusted parent's routing context, so the
     # sandboxed package never reads a credential out of its own environment.
     assert "model=DshModelClient(**" in seen["code"]
+    assert "result = evaluate_on_dsh(" in seen["code"]
+    assert "mode.evaluate(" not in seen["code"]
 
     sandbox.smoke("circle_packing/adaptive", tmp_path / "w2", project=Path("."))
     assert "DshModelClient" not in seen["code"]
