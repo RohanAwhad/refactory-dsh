@@ -1350,7 +1350,9 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
     first = list(earlier[-1].get("failing_ids", [])) if _fixups_used(ctx) and earlier else []
     selection = test_selection.select(touched, root, prev_record, check_command=command,
                                       first=first,
-                                      costs=test_selection.costs_from_record(earlier, root))
+                                      costs=test_selection.costs_from_record(earlier, root),
+                                      bounds=test_selection.lower_bounds(earlier),
+                                      alone=test_selection.run_alone(earlier))
     prepass = targeted_prepass(
         prev_record, command,
         lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False,
@@ -1358,6 +1360,7 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
         check_timeout, root=found.path if found is not None else None,
         selection=selection.tests,
         self_check_timeout_s=int(ctx.knob("self_check_timeout_s", 300)),
+        alone=selection.alone,
     )
     failing, inherited, base = (list(prepass.failing_ids), [], "")
     if failing:

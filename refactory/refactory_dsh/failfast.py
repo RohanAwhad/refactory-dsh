@@ -83,17 +83,27 @@ def _runner_of(name: str) -> str:
     return "pytest" if "::" in name or name.endswith(".py") else "other"
 
 
-def _chunks(selection: list[str]) -> list[list[str]]:
+def _chunks(selection: list[str], alone: list[str] = ()) -> list[list[str]]:
     """The selection in order, cut into about `SELF_CHECK_CHUNKS` chunks of one runner each,
     none of more than `SELF_CHECK_CHUNK_FILES` tests.
 
     The targeted command keeps the check's ``&&`` between steps, so a chunk that held
-    two runners' tests would not run the second runner's once the first failed.
+    two runners' tests would not run the second runner's once the first failed. A file
+    of ``alone`` (`test_selection.run_alone`) shares its chunk with no other file.
     """
+    from refactory_dsh.test_selection import _file_of
+
     size = min(SELF_CHECK_CHUNK_FILES, max(1, math.ceil(len(selection) / SELF_CHECK_CHUNKS)))
+    single = set(alone)
+
+    def own(name: str) -> str | None:
+        """``name``'s file when that file runs alone, else None: a chunk holds one value."""
+        return _file_of(name) if _file_of(name) in single else None
+
     chunks: list[list[str]] = []
     for name in selection:
-        if chunks and len(chunks[-1]) < size and _runner_of(chunks[-1][-1]) == _runner_of(name):
+        if (chunks and len(chunks[-1]) < size and _runner_of(chunks[-1][-1]) == _runner_of(name)
+                and own(chunks[-1][-1]) == own(name)):
             chunks[-1].append(name)
         else:
             chunks.append([name])
@@ -140,22 +150,22 @@ def _parse_junitxml(path: str) -> list[dict[str, Any]] | None:
         return None
     durations: list[dict[str, Any]] = []
     for case in tree.getroot().iter("testcase"):
-        classname = case.get("classname", "")
         name = case.get("name", "")
         seconds = float(case.get("time", 0))
-        # Map classname (module path with dots) back to a file path.
-        # For class-based tests, classname is "pkg.module.ClassName";
-        # we need "pkg/module.py", not "pkg/module/ClassName.py".
-        parts = classname.split(".")
-        mod_parts: list[str] = []
-        for part in parts:
-            if part and part[0].isupper():
-                break
-            mod_parts.append(part)
-        fpath = "/".join(mod_parts) + ".py" if mod_parts else classname.replace(".", "/") + ".py"
+        fpath = _junit_file(case.get("classname", ""))
         test_id = f"{fpath}::{name}" if name else fpath
         durations.append({"test_id": test_id, "seconds": seconds})
     return durations if durations else None
+
+
+def _junit_file(classname: str) -> str:
+    """The test file a junit ``classname`` (``pkg.tests.test_x``, or ``pkg.tests.test_x.Class``
+    for a test in a class) stands for: the dotted path without its trailing class names, so
+    a capitalised package directory stays (``src/MyPkg/tests/test_x.py``, not ``src.py``)."""
+    parts = classname.split(".")
+    while len(parts) > 1 and parts[-1][:1].isupper():
+        parts.pop()
+    return "/".join(parts) + ".py"
 
 
 def _output(result: Any) -> str:
@@ -204,6 +214,7 @@ def _self_check(
     run_check_fn: Callable[[str, float], Any],
     limit_s: float,
     root: str | None,
+    alone: list[str] = (),
 ) -> PrepassResult:
     """Run ``selection`` in chunks until the limit is spent; report what failed.
 
@@ -228,7 +239,7 @@ def _self_check(
     failed_outputs: list[str] = []
     timings: list[dict[str, Any]] = []
     last = None
-    queue = _chunks(selection)
+    queue = _chunks(selection, alone)
     number = 0
     while queue:
         chunk = queue.pop(0)
@@ -433,6 +444,7 @@ def targeted_prepass(
     root: str | None = None,
     selection: list[str] | None = None,
     self_check_timeout_s: float | None = None,
+    alone: list[str] = (),
 ) -> PrepassResult:
     """Run previously-failing tests first and stop early while one still fails.
 
@@ -459,13 +471,16 @@ def targeted_prepass(
         ``focused_check``), it is the dm-128 pre-pass, unchanged.
     self_check_timeout_s:
         The self-check's own time limit (its knob), used with ``selection``.
+    alone:
+        The selection's files that run one per chunk (`test_selection.run_alone`).
     """
     if selection is not None:
         if not selection:
             return _skip()
         limit = self_check_limit(300 if self_check_timeout_s is None else self_check_timeout_s,
                                  check_timeout_s)
-        return _self_check(selection, prev_record, check_command, run_check_fn, limit, root)
+        return _self_check(selection, prev_record, check_command, run_check_fn, limit, root,
+                           alone)
 
     # 1. Skip when previous record is not a failure.
     if prev_record.get("status") != "fail":

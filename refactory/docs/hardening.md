@@ -2104,11 +2104,13 @@ The engine reads the repository's own imports; it names no test or file.
   resolves to the submodule), and the structural tests when a source changed but no
   hub did: **cheapest first**, so a slow file at the limit does not hide cheap ones
   behind it. A file's cost is the seconds an earlier self-check of the run timed it
-  at (per-file cost from the chunk's per-test durations via ``--junitxml``, written
-  outside the worktree and appended only for single-pytest-invocation chunks; falling
-  back to the chunk's total elapsed time only for single-file chunks without per-test
-  data; multi-file chunks without durations leave each file's existing estimate
-  unchanged), else its size, put in seconds at the rate the timed files ran.
+  at, else its size, put in seconds at the rate the finished files ran. A chunk run
+  by a single pytest command gets `--junitxml` (a file outside the worktree, removed
+  after), and a file costs the sum of its tests' seconds there. Without per-test
+  seconds only a chunk of one file times that file; a chunk of several times none of
+  them. A time is a lower bound when the chunk was stopped at the limit or ran only
+  some of the file's tests, by id: a finished time beats it, a higher bound replaces
+  it, and it never puts a file's cost below its size estimate.
 
 Only tests the check's pytest steps collect are selected (their path arguments),
 and the hubs are counted among them. A TypeScript runner gets only the spec files
@@ -2130,9 +2132,13 @@ keeps the check's `&&` between steps, so a failing vitest step would otherwise
 stop the Python files beside it. The limit is `min(self_check_timeout_s, check_timeout_s // 3)` (300 s
 with the lab's 1,800 s check). No chunk starts once the limit is spent; a chunk
 still running at the limit is stopped and does not count toward the self-check's
-pass/fail decision, because a killed runner names no failure, but its elapsed time
-is recorded as a lower bound for cost estimation — the bound can only raise an
-estimate, never lower one. Every finished chunk's failures do count. A chunk that reports
+pass/fail decision, because a killed runner names no failure; every finished chunk's
+failures do count. A killed runner writes no per-test seconds either, so a stopped
+chunk's elapsed time is a lower bound only when it held one file. The files of a
+stopped chunk therefore run one per chunk on the run's later self-checks, until a
+chunk finishes each (`test_selection.run_alone`): each gets a time or a lower bound
+of its own, and a file that has only a bound cannot take other files down with it
+when the limit stops it again (dm-247). A chunk that reports
 nothing (no failure named, its environment failed) ran nothing that counts, so its
 tests are recorded as not run. A module that does not import is that file's
 failure (pytest's `ERROR <file>` line); pytest then stops before the chunk's other
@@ -2201,7 +2207,8 @@ directory: the attempt, the commit, the fix-ups before it, the selection and how
 it was made, what ran and what was cut, the commands, the limit, the duration,
 the outcome (`pass`, `fixup`, `exhausted`, `inherited`, `inconclusive`,
 `nothing selected`, `empty_diff_fixup`), the failing ids, the ones inherited and
-what the base said.
+what the base said. Each chunk's timing carries its tests' seconds when it has them,
+and `how_selected.alone` names the files run one per chunk.
 It also prints one `refactory: self-check …` line, as a gate logs. `refactory
 status` shows a fix-up through the lines it already prints: the gate's reloop
 reason and `validation`.

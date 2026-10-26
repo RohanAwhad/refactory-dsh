@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import io
 import json
+import shlex
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -780,46 +782,42 @@ def test_costs_from_record_does_not_split_by_size_and_handles_timed_out(tmp_path
 
 
 def test_a_missing_test_id_is_dropped_and_the_rest_of_the_chunk_runs(tmp_path, monkeypatch):
-    """When pytest exits 4 because of a not-found id (whose path ``_NOT_FOUND`` strips to
-    ``tests/…``), the chunk's ``refactory/tests/…`` names are suffix-matched, and a
-    missing parametrized id without its ``[…]`` covers the chunk's bracketed ids.
-    The remaining test runs and its real failure is reported."""
+    """pytest exits 4 on an id that is not there and runs nothing else in the command. The
+    chunk's missing id is dropped and the rest of the chunk runs again: the rerun's failure
+    is reported, its tests count as run, and a note says so. pytest names the missing id
+    from the path's ``tests/…`` and without its ``[…]``, so the chunk's
+    ``refactory/tests/…::test_gone[2.5]`` is matched by path suffix and bracket prefix."""
     repo = _target(tmp_path / "repo", {
         "tool.py": "VERSION = 1\n",
         "refactory/__init__.py": "",
         "refactory/tests/__init__.py": "",
-        "refactory/tests/test_real.py": (
-            "import sys, os\n"
-            "sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))\n"
-            "import tool\n\n\ndef test_real():\n    assert tool.VERSION == 1\n"
-        ),
+        "refactory/tests/test_other.py": "def test_here():\n    pass\n",
+        "refactory/tests/test_real.py": "import tool\n\n\ndef test_real():\n    assert tool.VERSION == 1\n",
+        **{f"refactory/tests/test_f{n}.py": f"def test_f{n}():\n    pass\n" for n in range(5)},
     })
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500053")
     _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
-
-    # Inject chunk ids under refactory/tests/ paths, including a missing parametrized id.
+    gone, real = "refactory/tests/test_other.py::test_gone[2.5]", "refactory/tests/test_real.py"
+    others = [f"refactory/tests/test_f{n}.py" for n in range(5)]
     real_select = test_selection.select
 
-    def patched_select(*args, **kwargs):
-        sel = real_select(*args, **kwargs)
-        sel.tests = [
-            "refactory/tests/test_real.py::test_gone[2.5]",
-            "refactory/tests/test_real.py",
-        ]
-        sel.first = ["refactory/tests/test_real.py::test_gone[2.5]"]
-        return sel
+    def seven_tests(*args, **kwargs):
+        selection = real_select(*args, **kwargs)
+        selection.tests = [gone, real, *others]
+        return selection
 
-    monkeypatch.setattr(test_selection, "select", patched_select)
+    monkeypatch.setattr(test_selection, "select", seven_tests)
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err
     [record] = _records(run)
-    # The not-found id was dropped; the real test ran and its failure was found.
-    assert "dropped not-found ids" in " ".join(record["notes"])
-    assert record["failing_ids"] == ["refactory/tests/test_real.py::test_real"]
-    assert "refactory/tests/test_real.py" in record["ran"]
-    # Exactly one "dropped" note per chunk event.
-    drop_notes = [n for n in record["notes"] if "dropped not-found ids" in n]
-    assert len(drop_notes) == 1
+    # Seven tests make chunks of two: the missing id and test_real.py share the first, which
+    # runs again without the id.
+    assert record["commands"][:2] == [f"python -m pytest -q {real} {shlex.quote(gone)}",
+                                      f"python -m pytest -q {real}"]
+    assert record["failing_ids"] == [f"{real}::test_real"]
+    assert real in record["ran"] and gone not in record["ran"] and set(others) <= set(record["ran"])
+    assert [note for note in record["notes"] if "not-found" in note] == [
+        "chunk 1: dropped not-found ids ['tests/test_other.py::test_gone'], reran the rest"]
 
 
 def test_fixup_first_ids_do_not_duplicate_with_engine_or_touched_tier(tmp_path):
@@ -898,7 +896,8 @@ def test_N12_base_prepared_flag_after_base_worktree_removed_triggers_repreparati
         tmp_path, monkeypatch):
     """When the base worktree directory is removed after preparation, the base is
     re-prepared on the next comparison.  Kills mutant N12: dropping ``_at(...)`` at
-    base_check.py skips re-preparation and crashes on the missing worktree.
+    base_check.py skips re-preparation, runs the test in an empty directory, and the
+    base is unavailable, so the base's own failure would go back as the change's.
 
     The second emission introduces a new module and test so ``missing`` is non-empty:
     the ``if missing:`` block at base_check.py is entered and ``_at`` is checked."""
@@ -914,13 +913,14 @@ def test_N12_base_prepared_flag_after_base_worktree_removed_triggers_repreparati
     _emit(run, BREAKS, monkeypatch)
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0 and "self-check fix-up 1 of 2" in out, err
-    # Find and remove the base worktree.
+    # Remove the base worktree, as the check's base run does after a crash; the targeted
+    # cache still says the base was prepared.
     found = worktree.recorded(run)
-    base_path = base_check._base_worktree_path(
-        Path(found.target), Path(found.path).name.removeprefix("run-"))
-    if base_path.exists():
-        import shutil
-        shutil.rmtree(base_path)
+    run_id = Path(found.path).name.removeprefix("run-")
+    base_path = base_check._base_worktree_path(Path(found.target), run_id)
+    assert base_check._at(base_path, found.base)
+    base_check.remove_base_worktree(Path(found.target), run_id)
+    assert not base_path.exists()
     # Second emission: changes both tool.py and extra.py, bringing test_extra into
     # the selection; its test id has not been learned on the base, so ``missing`` is
     # non-empty and the ``if missing:`` block is entered.
@@ -930,9 +930,13 @@ def test_N12_base_prepared_flag_after_base_worktree_removed_triggers_repreparati
     assert code == 0, err
     records = _records(run)
     assert len(records) == 2
-    # The second self-check completed (re-preparation worked).
-    assert records[1]["outcome"] in ("fixup", "exhausted", "pass", "inconclusive",
-                                     "inherited", "nothing selected")
+    # The base was prepared again at its commit, the new test ran there, and the base's
+    # failure is recognised as inherited, not sent back.
+    assert base_check._at(base_path, found.base)
+    assert records[1]["base"] == "compared with a run of 1 test(s) on the base"
+    assert records[1]["inherited_filtered"] == ["tests/test_env.py::test_env"]
+    assert records[1]["outcome"] == "fixup"
+    assert "tests/test_extra.py::test_extra" in records[1]["failing_ids"]
 
 
 def test_N17_collection_error_file_ids_in_base_guardedness_classification(tmp_path):
@@ -972,8 +976,8 @@ def test_N17_collection_error_file_ids_in_base_guardedness_classification(tmp_pa
 
 
 def test_timed_costs_order_the_rest(tmp_path):
-    """A file an earlier self-check timed costs what it took; untimed files cost their size.
-    A single-id chunk's duration with ``durations`` is a lower bound."""
+    """A file an earlier self-check timed costs what it took; untimed files cost their size;
+    a chunk that did not count times nothing."""
     repo = _target(tmp_path / "repo", {
         "m1.py": "X = 1\n", "m2.py": "X = 1\n",
         "tests/test_big_fast.py": "import m1\n" + "# padding\n" * 300 + "\n\ndef test_a():\n    pass\n",
@@ -982,22 +986,31 @@ def test_timed_costs_order_the_rest(tmp_path):
     files = test_selection.repository_files(repo)
     by_size = test_selection.select(["m1.py", "m2.py"], repo, {}, check_command=CHECK, files=files)
     assert by_size.tests == ["tests/test_small_slow.py", "tests/test_big_fast.py"]
-    # The single-id chunk has durations: it is a lower bound for the file's cost.
     earlier = [{"timings": [{"tests": ["tests/test_small_slow.py"], "s": 30.0, "counted": True,
                              "durations": [{"test_id": "tests/test_small_slow.py::test_b",
                                             "seconds": 30.0}]},
-                            {"tests": ["tests/test_big_fast.py::test_a"], "s": 0.5,
-                             "counted": True,
-                             "durations": [{"test_id": "tests/test_big_fast.py::test_a",
-                                            "seconds": 0.5}]},
+                            {"tests": ["tests/test_big_fast.py"], "s": 0.5, "counted": True},
                             {"tests": ["tests/test_big_fast.py"], "s": 99.0, "counted": False}]}]
     costs = test_selection.costs_from_record(earlier, repo)
-    # The single-id chunk's 0.5 s is a lower bound; the whole-file entry is uncounted.
-    assert costs["tests/test_small_slow.py"] == 30.0
-    assert costs["tests/test_big_fast.py"] == 0.5
+    assert costs == {"tests/test_small_slow.py": 30.0, "tests/test_big_fast.py": 0.5}
     timed = test_selection.select(["m1.py", "m2.py"], repo, {}, check_command=CHECK, files=files,
                                   costs=costs)
     assert timed.tests == ["tests/test_big_fast.py", "tests/test_small_slow.py"]
+
+
+def test_a_chunk_that_ran_only_some_ids_of_a_file_is_a_lower_bound_for_it(tmp_path):
+    """A not-found rerun or a check of several steps writes no per-test seconds: a chunk of
+    one file that ran only some of its tests by id says how long those took, not the file,
+    so it is a lower bound, as it is with per-test seconds."""
+    some = {"tests": ["tests/test_b.py::test_x"], "s": 0.4, "counted": True}
+    stopped = {"tests": ["tests/test_b.py"], "s": 50.0, "counted": True, "timed_out": True}
+    timed = {"tests": ["tests/test_b.py::test_x"], "s": 0.4, "counted": True,
+             "durations": [{"test_id": "tests/test_b.py::test_x", "seconds": 0.3}]}
+    for chunk in (some, timed):
+        assert test_selection.lower_bounds([{"timings": [chunk]}]) == ["tests/test_b.py"]
+        # A later, higher bound raises it; a finished time would not be.
+        assert test_selection.costs_from_record([{"timings": [chunk, stopped]}], tmp_path) == {
+            "tests/test_b.py": 50.0}
 
 
 def test_the_full_check_still_runs_and_binds_after_a_self_check_cut_at_the_limit(tmp_path):
@@ -1397,154 +1410,191 @@ def test_whole_test_files_go_to_their_own_runner_only():
         f"pnpm test {spec} -t case", None)
 
 
-def test_replay_measure5_structural_cuts_no_more_than_main():
-    """Replaying self-checks 2 and 3 of the measure5-structural run with per-file
-    costs cuts no more files than main's recorded 2 and 4.  Reverting to chunk-level
-    timing makes it fail (> 2 cuts on SC2), confirming the per-file timing is load-bearing.
+def test_replay_measure5_structural_cuts_no_more_than_main(tmp_path, monkeypatch):
+    """measure5-structural's self-checks 1-3 (dm-247), replayed through this branch's own
+    selection, chunking and record: main cut 3, 2 and 4 files there; here self-check 2
+    cuts at most 2 and self-check 3 at most 4.
 
-    Data is from the committed fixture at ``refactory/tests/fixtures/measure5_replay.json``,
-    derived from the real self-check record and per-file durations from a junit run."""
-    FIXTURE = Path(__file__).parent / "fixtures" / "measure5_replay.json"
-    fixture = json.loads(FIXTURE.read_text())
-    limit = fixture["limit_s"]
-    file_durations = fixture["file_durations"]
-    records = fixture["records"]
+    The fixture holds the run's records and what `test_selection.select` reads of the tree
+    at each commit: select runs on a stand-in tree (each test file at its size) with the
+    fixture's imports, and its tiers must be the run's. Each chunk takes a + b times its
+    tests' junit seconds, fitted on self-check 1's recorded chunks, on `_Clocked`'s clock.
+    Self-check 1 has no earlier timing, so it must come out as the run had it: the same
+    selection, cut at the same chunk."""
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "measure5_replay.json").read_text())
+    records, check = fixture["records"], fixture["check"]
+    seconds = {**fixture["file_durations"], **fixture["id_durations"]}
+    # What select reads of a test file's imports: its hubs and changed modules, and how
+    # many it imports in all (the others stand in as modules no other file imports).
+    imports = {test: {*modules, *(f"{test}#{n}" for n in range(count - len(modules)))}
+               for test, (count, modules) in fixture["imports"].items()}
+    xs = [sum(seconds[name] for name in chunk["tests"]) for chunk in records[0]["timings"]]
+    ys = [chunk["s"] for chunk in records[0]["timings"]]
+    mean_x, mean_y = sum(xs) / len(xs), sum(ys) / len(ys)
+    b = (sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+         / sum((x - mean_x) ** 2 for x in xs))
+    runner = _Clocked(seconds.__getitem__, monkeypatch, startup=mean_y - b * mean_x, scale=b)
+    earlier: list[dict] = []
+    selections, cuts = [], []
+    for number, record in enumerate(records):
+        root = tmp_path / f"tree{number}"
+        for test, size in {**fixture["sizes"], **record["sizes"]}.items():
+            (root / test).parent.mkdir(parents=True, exist_ok=True)
+            (root / test).write_text("#" * (size - 1) + "\n")
+        last = record["how_selected"]["last_failures"]
+        prev = ({"status": "fail", "runners": [{"failures": [{"test_id": test_id} for test_id in last]}]}
+                if last else {})
+        selection = test_selection.select(
+            record["touched"], root, prev, check_command=check, imports=imports,
+            first=record["how_selected"]["first"],
+            costs=test_selection.costs_from_record(earlier, root),
+            bounds=test_selection.lower_bounds(earlier), alone=test_selection.run_alone(earlier))
+        for tier in ("first", "engine", "hubs_changed", "touched_tests", "last_failures"):
+            assert getattr(selection, tier) == record["how_selected"][tier], tier
+        prepass = failfast.targeted_prepass(
+            prev, check, runner, 1800, root=str(root), selection=selection.tests,
+            self_check_timeout_s=fixture["limit_s"], alone=selection.alone)
+        earlier.append({"timings": prepass.timings})
+        selections.append(selection.tests)
+        cuts.append(prepass.cut_ids)
+    assert selections[0] == records[0]["selection"] and cuts[0] == records[0]["cut"]
+    assert len(cuts[1]) <= 2, cuts[1]
+    assert len(cuts[2]) <= 4, cuts[2]
 
-    def _add_durations(entry):
-        """Add per-test durations from the fixture's file_durations to each timing chunk."""
-        modified = dict(entry)
-        new_timings = []
-        for chunk in entry.get("timings", []):
-            new_chunk = dict(chunk)
-            durations = []
-            for test_name in chunk["tests"]:
-                f = test_name.split("::")[0]
-                s = file_durations.get(f, 0.5)
-                durations.append({"test_id": test_name, "seconds": s})
-            new_chunk["durations"] = durations
-            new_timings.append(new_chunk)
-        modified["timings"] = new_timings
-        return modified
 
-    def _simulate(selection, earlier, file_durations_map):
-        """Simulate chunking and compute cuts, using calibrated chunk times."""
-        # Calibrate on earlier entries: chunk_time ≈ a + b * sum(file_durations)
-        xs, ys = [], []
-        for entry in earlier:
-            for t in entry.get("timings", []):
-                x = sum(file_durations_map.get(n.split("::")[0], 0.5)
-                        for n in t["tests"])
-                xs.append(x)
-                ys.append(t["s"])
-        n = len(xs)
-        if n > 1:
-            mx, my = sum(xs) / n, sum(ys) / n
-            denom = sum((x - mx) ** 2 for x in xs)
-            b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / denom if denom else 1.0
-            a = my - b * mx
-        else:
-            a, b = 0.5, 1.0
+class _Clocked:
+    """A runner whose chunks take scripted seconds on a fake clock, as the sandbox runs them.
 
-        t = 0.0
-        cut = []
-        chunks = failfast._chunks(selection)
-        for i, ch in enumerate(chunks):
-            remaining = limit - t
-            if remaining < 1:
-                for c in chunks[i:]:
-                    cut += c
-                break
-            d = max(0.3, a + b * sum(file_durations_map.get(n.split("::")[0], 0.5)
-                                     for n in ch))
-            if d > remaining:
-                for c in chunks[i:]:
-                    cut += c
-                break
-            t += d
-        return cut
+    A chunk takes ``startup`` plus ``scale`` times its tests' seconds. One that needs longer
+    than it is given is stopped there and, its runner killed, writes no junit; one that
+    finishes writes ``scale`` times each test's seconds to the self-check's ``--junitxml``.
+    """
 
-    # SC1 with per-file durations
-    sc1 = _add_durations(records[0])
-    # Add the stopped chunk as a timed_out entry (it was cut, not in timings)
-    stopped = records[0]["cut"]
-    if stopped:
-        remaining_s = round(limit - sum(t["s"] for t in sc1["timings"]), 1)
-        stopped_durations = [{"test_id": name, "seconds": file_durations.get(
-            name.split("::")[0], 0.5)} for name in stopped]
-        sc1["timings"].append({"tests": stopped, "s": remaining_s,
-                                "timed_out": True, "counted": True,
-                                "durations": stopped_durations})
+    def __init__(self, seconds, monkeypatch, *, startup: float = 0.0, scale: float = 1.0):
+        self.seconds, self.startup, self.scale = seconds, startup, scale
+        self.now = 0.0
+        monkeypatch.setattr(failfast, "time", SimpleNamespace(monotonic=lambda: self.now))
 
-    # Per-file costs from SC1
-    costs_perfile = test_selection.costs_from_record([sc1], Path("/tmp"))
+    def __call__(self, command: str, timeout: float):
+        from refactory_dsh.sandbox import SandboxResult
 
-    # SC2 (record index 1): use the recorded selection (it came from select() with
-    # the right inputs); the rest tier's order depends on costs.
-    sc2_selection = records[1]["selection"]
-    cut_sc2 = _simulate(sc2_selection, [sc1], file_durations)
-    assert len(cut_sc2) <= 2, (
-        f"SC2 cuts {len(cut_sc2)} files ({[c.split('/')[-1] for c in cut_sc2]}), "
-        f"expected <= 2 (main cut {len(records[1]['cut'])})")
+        words = shlex.split(command)
+        names = [word for word in words if word.endswith(".py") or ".py::" in word]
+        junit = next((word.split("=", 1)[1] for word in words if word.startswith("--junitxml=")),
+                     None)
+        took = self.startup + self.scale * sum(self.seconds(name) for name in names)
+        if took > timeout:
+            self.now += timeout
+            return SandboxResult(ok=False, returncode=-9, timed_out=True, elapsed_s=timeout)
+        self.now += took
+        if junit:
+            Path(junit).write_text("<testsuite>" + "".join(
+                f'<testcase classname="{name.split("::")[0][:-3].replace("/", ".")}" '
+                f'name="{name.split("::")[1] if "::" in name else "test_all"}" '
+                f'time="{self.scale * self.seconds(name):.3f}"/>' for name in names) + "</testsuite>")
+        return SandboxResult(ok=True, returncode=0, stdout=f"{len(names)} passed", elapsed_s=took)
 
-    # SC3 (record index 2): costs from SC1 + SC2
-    sc2 = _add_durations(records[1])
-    costs_perfile2 = test_selection.costs_from_record([sc1, sc2], Path("/tmp"))
-    sc3_selection = records[2]["selection"]
-    cut_sc3 = _simulate(sc3_selection, [sc1, sc2], file_durations)
-    assert len(cut_sc3) <= 4, (
-        f"SC3 cuts {len(cut_sc3)} files ({[c.split('/')[-1] for c in cut_sc3]}), "
-        f"expected <= 4 (main cut {len(records[2]['cut'])})")
 
-    # Reverting to chunk-level timing: build costs by assigning each chunk's
-    # total elapsed time to every file in the chunk (the old behaviour that
-    # priced sub-second files at 75.9 s).  Then re-sort SC2's rest tier by
-    # those costs and simulate: the wrong ordering must cause > 2 cuts.
-    costs_chunklevel: dict[str, float] = {}
-    for t in records[0].get("timings", []):
-        if not t.get("counted"):
-            continue
-        for name in t["tests"]:
-            f = name.split("::")[0]
-            costs_chunklevel[f] = t["s"]  # always overwrites (old behaviour)
-    if stopped:
-        remaining_s2 = round(limit - sum(t["s"] for t in records[0]["timings"]), 1)
-        for name in stopped:
-            f = name.split("::")[0]
-            costs_chunklevel[f] = remaining_s2
+def test_a_small_slow_file_stopped_beside_another_runs_alone_then_after_the_cheap_files(
+        tmp_path, monkeypatch):
+    """dm-247: a chunk stopped at the limit writes no junit, so a small but slow file stopped
+    beside another has no time of its own and would run first again, cutting everything
+    behind it. The stopped chunk's files run one per chunk on the next self-check, where the
+    slow file gets a lower bound of its own; the self-check after that runs it after the
+    cheap files, so it is the only file cut. It still runs alone there: it has only a bound.
 
-    # Verify that chunk-level costs inflated sub-second files.
-    assert costs_chunklevel.get("refactory/tests/test_executor.py", 0) > 50, (
-        "chunk-level costs should inflate test_executor.py to ~75 s")
+    test_a_slow.py takes 60 s against a 20 s limit; every other file takes 0.5 s."""
+    # Each test imports a module of its own, so no module is a hub; the change touches them all.
+    sizes = {"a_slow": 0, "t1": 300, "t2": 300, **{c: 10 * n for n, c in enumerate("bcdef", start=4)}}
+    files = {**{f"m_{name}.py": "X = 1\n" for name in sizes},
+             **{f"tests/test_{name}.py": f"import m_{name}\n{'#' * size}\n\n\ndef test_{name}():\n"
+                                         f"    assert m_{name}\n" for name, size in sizes.items()}}
+    repo = _target(tmp_path / "repo", files)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500070", self_check_timeout_s=20)
+    runner = _Clocked(lambda name: 60.0 if "test_a_slow" in name else 0.5, monkeypatch)
+    real = repo_change.run_check
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, command, timeout, **kwargs: (
+        runner(command, timeout) if "pytest" in command else real(ctx, command, timeout, **kwargs)))
+    asked = []
+    real_select = test_selection.select
 
-    # Re-sort SC2's importers+structural tier by chunk-level costs.
-    hs = records[1]["how_selected"]
-    rest_files = list(dict.fromkeys(hs.get("importers", []) + hs.get("structural", [])))
-    rate = (sum(costs_chunklevel[f] for f in rest_files if f in costs_chunklevel)
-            / max(1, sum(test_selection._size(Path("/tmp"), f) for f in rest_files
-                         if f in costs_chunklevel)))
-    rest_cost = {f: costs_chunklevel.get(f, test_selection._size(Path("/tmp"), f) * rate)
-                 for f in rest_files}
-    rest_sorted = sorted(rest_files, key=lambda f: (rest_cost[f], f))
-    # Rebuild the full selection with the chunk-level ordering.
-    ordered: list[str] = list(dict.fromkeys(hs.get("first", [])))
-    whole: set[str] = {name for name in ordered if "::" not in name}
-    for name in hs.get("engine", []) + hs.get("touched_tests", []):
-        if name not in whole:
-            whole.add(name)
-            ordered.append(name)
-    for test_id in hs.get("last_failures", []):
-        f = test_id.split("::")[0]
-        if f not in whole and test_id not in ordered:
-            ordered.append(test_id)
-            if test_id == f:
-                whole.add(test_id)
-    for name in rest_sorted:
-        if name not in whole:
-            whole.add(name)
-            ordered.append(name)
-    cut_sc2_chunklevel = _simulate(ordered, [sc1], file_durations)
-    assert len(cut_sc2_chunklevel) > 2, (
-        f"chunk-level timing should cause > 2 cuts on SC2, got {len(cut_sc2_chunklevel)}")
+    def select(*args, **kwargs):
+        asked.append(kwargs)
+        return real_select(*args, **kwargs)
+
+    monkeypatch.setattr(test_selection, "select", select)
+    for n in (2, 3, 4):  # three attempts, each touching two cheap tests and changing every module
+        _emit(run, render({**{f"m_{name}.py": f"X = {n}\n" for name in sizes},
+                           **{f"tests/test_{t}.py": files[f"tests/test_{t}.py"] + f"# {n}\n"
+                              for t in ("t1", "t2")}}), monkeypatch)
+        code, out, err = _prepare(run, monkeypatch)
+        assert code == 0 and out.strip() == "proceed", err
+    first, second, third = _records(run)
+    slow, beside = "tests/test_a_slow.py", "tests/test_b.py"
+    cheap = [f"tests/test_{c}.py" for c in "cdef"]
+    # 1: the slow file is the smallest, so it runs first of the rest, beside test_b.py. Their
+    # chunk is stopped: no junit, so no time for either file.
+    assert first["selection"] == ["tests/test_t1.py", "tests/test_t2.py", slow, beside, *cheap]
+    assert [chunk["tests"] for chunk in first["timings"] if chunk.get("timed_out")] == [[slow, beside]]
+    assert first["cut"] == [slow, beside, *cheap]
+    assert test_selection.lower_bounds([first]) == []
+    # 2: the two run one per chunk. The slow one, still first, is stopped alone: a bound.
+    assert second["how_selected"]["alone"] == [slow, beside] and second["selection"] == first["selection"]
+    assert [chunk["tests"] for chunk in second["timings"] if chunk.get("timed_out")] == [[slow]]
+    assert test_selection.lower_bounds([first, second]) == [slow]
+    # 3: it runs after the cheap files, alone, and only it is cut.
+    assert third["selection"] == ["tests/test_t1.py", "tests/test_t2.py", beside, *cheap, slow]
+    assert third["how_selected"]["alone"] == [slow, beside]
+    assert third["cut"] == [slow] and third["ran"] == third["selection"][:-1]
+    # prepare_check hands select what the run's record says: its bounds and its lone files.
+    assert [(kwargs["bounds"], kwargs["alone"]) for kwargs in asked] == [
+        ([], []), ([], [slow, beside]), ([slow], [slow, beside])]
+
+
+def test_run_alone_holds_a_stopped_chunks_files_until_a_chunk_finishes_each():
+    x, y, z = "tests/test_x.py", "tests/test_y.py", "tests/test_z.py"
+    stopped = {"timings": [{"tests": [x, y], "s": 9.0, "timed_out": True, "counted": True}]}
+    assert test_selection.run_alone([stopped]) == [x, y]
+    # A finished time frees y; x, stopped again alone, has only a bound and stays.
+    second = {"timings": [{"tests": [y], "s": 1.0, "counted": True},
+                          {"tests": [x], "s": 5.0, "timed_out": True, "counted": True}]}
+    assert test_selection.run_alone([stopped, second]) == [x]
+    # Some of x's tests by id are no time for x, and a chunk that did not count says nothing.
+    by_id = {"timings": [{"tests": [f"{x}::test_a"], "s": 0.5, "counted": True},
+                         {"tests": [x], "s": 0.5, "counted": False}]}
+    assert test_selection.run_alone([stopped, second, by_id]) == [x]
+    # Per-test seconds for x, run whole beside another file, are.
+    together = {"timings": [{"tests": [x, z], "s": 2.0, "counted": True, "durations": [
+        {"test_id": f"{x}::test_a", "seconds": 1.0}, {"test_id": f"{z}::test_b", "seconds": 0.5}]}]}
+    assert test_selection.run_alone([stopped, second, by_id, together]) == []
+    # A file stopped alone runs alone next time too.
+    assert test_selection.run_alone([{"timings": [
+        {"tests": [z], "s": 3.0, "timed_out": True, "counted": True}]}]) == [z]
+
+
+def test_a_file_that_runs_alone_shares_its_chunk_with_no_other_file():
+    names = [f"tests/test_{n}.py" for n in range(10)]
+    selection = [*names[:3], f"{names[3]}::test_a", f"{names[3]}::test_b", *names[4:]]
+    chunks = failfast._chunks(selection, alone=[names[3], names[6]])
+    assert chunks == [names[:2], [names[2]], [f"{names[3]}::test_a", f"{names[3]}::test_b"],
+                      names[4:6], [names[6]], names[7:9], [names[9]]]
+    assert failfast._chunks(selection) == [selection[n:n + 2] for n in range(0, 11, 2)]
+
+
+def test_a_lower_bound_never_lowers_a_size_estimate_and_sets_no_rate(tmp_path):
+    """A file stopped near the limit has a small bound: it costs its size estimate when that
+    is higher. A bound is no rate a file ran at, so a small file's 30 s bound does not make
+    every untimed file dear."""
+    repo = _target(tmp_path / "repo", {
+        "tests/test_done.py": "#" * 999 + "\n", "tests/test_big.py": "#" * 999 + "\n",
+        "tests/test_tiny_slow.py": "#" * 9 + "\n", "tests/test_untimed.py": "#" * 999 + "\n"})
+    tests = ["tests/test_done.py", "tests/test_big.py", "tests/test_tiny_slow.py",
+             "tests/test_untimed.py"]
+    known = {"tests/test_done.py": 1.0, "tests/test_big.py": 0.2, "tests/test_tiny_slow.py": 30.0}
+    costs = test_selection.estimated_costs(tests, repo, known,
+                                           ["tests/test_big.py", "tests/test_tiny_slow.py"])
+    assert costs == pytest.approx({"tests/test_done.py": 1.0, "tests/test_big.py": 1.0,
+                                   "tests/test_tiny_slow.py": 30.0, "tests/test_untimed.py": 1.0})
 
 
 def test_costs_from_record_multi_file_chunk_without_durations_keeps_estimates(tmp_path):
@@ -1609,15 +1659,48 @@ def test_costs_from_record_lower_bound_never_overwrites_finished_time(tmp_path):
     assert costs_c["tests/test_x.py"] == 10.0
 
 
-def test_junitxml_not_left_in_worktree(tmp_path, monkeypatch):
-    """After a self-check that runs pytest chunks, no junitxml file is left in the worktree."""
+def test_a_real_pytest_chunk_records_its_tests_seconds_from_junit_outside_the_worktree(
+        tmp_path, monkeypatch):
+    """The self-check adds ``--junitxml`` to a chunk's pytest command, so the record holds
+    each test's seconds. The file is written outside the worktree, never inside it even for
+    a moment, and removed afterwards. A check of several steps gets no ``--junitxml``: it
+    would reach the last step, which need not be pytest."""
+    from refactory_dsh.sandbox import SandboxResult
+
     repo = _target(tmp_path / "repo", PINNED)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500060")
+    sent = []
+    real = repo_change.run_check
+
+    def recording(ctx, command, timeout, **kwargs):
+        sent.append(command)
+        return real(ctx, command, timeout, **kwargs)
+
+    monkeypatch.setattr(repo_change, "run_check", recording)
     _emit(run, render({"tool.py": "VERSION = 1\nNAME = 'tool'\n"}), monkeypatch)
-    _prepare(run, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and out.strip() == "proceed", err
+    [record] = _records(run)
+    [timing] = record["timings"]
+    assert [entry["test_id"] for entry in timing["durations"]] == [PIN]
+    assert timing["durations"][0]["seconds"] >= 0
+    [command] = [command for command in sent if "pytest" in command]
+    assert command.startswith(record["commands"][0] + " --junitxml=")
+    junit = Path(command.split("--junitxml=", 1)[1])
     found = worktree.recorded(run)
-    status = git(Path(found.path), "status", "--porcelain")
-    assert not status.strip(), f"worktree not clean after self-check: {status}"
+    assert junit.is_absolute() and not junit.exists()
+    assert not junit.resolve().is_relative_to(Path(found.path).resolve())
+    assert not git(Path(found.path), "status", "--porcelain").strip()
+
+    several = []
+
+    def run_fn(command, timeout):
+        several.append(command)
+        return SandboxResult(ok=True, returncode=0, stdout="1 passed", elapsed_s=0.1)
+
+    failfast.targeted_prepass({}, "python -m pytest -q tests && python tools/lint.py", run_fn, 180,
+                              root=str(repo), selection=["tests/test_pin.py"], self_check_timeout_s=60)
+    assert several == ["python -m pytest -q tests/test_pin.py && python tools/lint.py"]
 
 
 def test_two_consecutive_empty_diff_fixups_with_fixups_1_exhausts(tmp_path, monkeypatch):
@@ -1684,44 +1767,19 @@ def test_parse_junitxml_handles_class_based_tests(tmp_path):
     assert not wrong_paths, f"Class name leaked into test_id: {wrong_paths}"
 
 
-def test_not_found_rerun_failures_are_recorded_and_tests_marked_ran(tmp_path, monkeypatch):
-    """After a not-found retry, the rerun's failing test is in failing_ids, its test ids
-    are in ran, and exactly one 'dropped' note per chunk event."""
-    repo = _target(tmp_path / "repo", {
-        "tool.py": "VERSION = 1\n",
-        "refactory/__init__.py": "",
-        "refactory/tests/__init__.py": "",
-        "refactory/tests/test_real.py": (
-            "import sys, os\n"
-            "sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))\n"
-            "import tool\n\n\ndef test_real():\n    assert tool.VERSION == 1\n"
-        ),
-    })
-    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500062")
-    _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
-
-    real_select = test_selection.select
-
-    def patched_select(*args, **kwargs):
-        sel = real_select(*args, **kwargs)
-        sel.tests = [
-            "refactory/tests/test_real.py::test_gone[2.5]",
-            "refactory/tests/test_real.py",
-        ]
-        sel.first = ["refactory/tests/test_real.py::test_gone[2.5]"]
-        return sel
-
-    monkeypatch.setattr(test_selection, "select", patched_select)
-    code, out, err = _prepare(run, monkeypatch)
-    assert code == 0, err
-    [record] = _records(run)
-    # (1) The rerun's failing test is in failing_ids.
-    assert "refactory/tests/test_real.py::test_real" in record["failing_ids"]
-    # (2) The rerun's test ids are in ran.
-    assert "refactory/tests/test_real.py" in record["ran"]
-    # (3) Exactly one "dropped" note.
-    drop_notes = [n for n in record["notes"] if "dropped not-found ids" in n]
-    assert len(drop_notes) == 1
+def test_parse_junitxml_keeps_a_capitalised_package_directory(tmp_path):
+    """Only trailing class names leave the path, so a capitalised package directory stays
+    (``src/MyPkg/tests/test_x.py``, not ``src.py``)."""
+    xml_path = tmp_path / "junit.xml"
+    xml_path.write_text(
+        '<testsuite>'
+        '<testcase classname="src.MyPkg.tests.test_x" name="test_a" time="1.5"/>'
+        '<testcase classname="src.MyPkg.tests.test_x.TestK.TestInner" name="test_b" time="2"/>'
+        '<testcase classname="tests.test_y" name="test_c" time="3"/>'
+        '</testsuite>')
+    ids = [entry["test_id"] for entry in failfast._parse_junitxml(str(xml_path))]
+    assert ids == ["src/MyPkg/tests/test_x.py::test_a", "src/MyPkg/tests/test_x.py::test_b",
+                   "tests/test_y.py::test_c"]
 
 
 def test_empty_diff_check_skipped_when_head_equals_base(tmp_path, monkeypatch):
