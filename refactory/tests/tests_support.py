@@ -52,13 +52,15 @@ def _link_bundle(home: Path, name: str, bundle: str, target: Path) -> None:
 PLACEHOLDER_KEY = "placeholder-not-a-real-key"
 
 
-def model_home_with_a_key(home: Path) -> Path:
+def model_home_with_a_key(home: Path, *, provider: str = "fakeprov", model: str = "fake-model",
+                          base_url: str = "http://127.0.0.1:9") -> Path:
     """A DSH home whose headless profile routes two providers: one with a stored key, one without.
 
     The profile is the shape install writes for `headless` (DSH's own bundles, no
     refactory layer), with the routes in its patch, which is where the pinned harness
     keeps what Settings -> Models saves. The store is the managed credential document.
-    `fakeprov/fake-model` is the default route and has its key; `otherprov` has none.
+    ``provider``/``model`` (by default `fakeprov/fake-model`) is the default route, at
+    ``base_url``, and has its key; `otherprov` has none.
     """
     profile = home / "profiles" / "headless"
     profile.mkdir(parents=True, exist_ok=True)
@@ -72,8 +74,8 @@ def model_home_with_a_key(home: Path) -> Path:
         "  name: '@deepseek-ai/dsh-llm-pi-ai'\n"
         "  config:\n"
         "    providers:\n"
-        "      fakeprov:\n"
-        "        baseURL: http://127.0.0.1:9\n"
+        f"      {provider}:\n"
+        f"        baseURL: {base_url}\n"
         "        apiKeyEnv: REFACTORY_TEST_KEY_SET\n"
         "      otherprov:\n"
         "        baseURL: http://127.0.0.1:9\n"
@@ -81,8 +83,8 @@ def model_home_with_a_key(home: Path) -> Path:
         "- id: agent-default-model\n"
         "  name: '@deepseek-ai/dsh-agent-default-model'\n"
         "  config:\n"
-        "    provider: fakeprov\n"
-        "    model: fake-model\n"
+        f"    provider: {provider}\n"
+        f"    model: {model}\n"
     )
     store = home / ".credentials.yaml"
     store.write_text(f"version: 1\nrefs:\n  REFACTORY_TEST_KEY_SET: {PLACEHOLDER_KEY}\n")

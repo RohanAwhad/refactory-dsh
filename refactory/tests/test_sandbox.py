@@ -277,8 +277,8 @@ def test_a_check_reads_no_input(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "linux", reason="only Linux can set an address-space cap")
 def test_generated_code_keeps_its_memory_cap(tmp_path):
-    """Lifting the cap on check commands leaves the one on snippets: a smoke without a model,
-    verification and readiness. A smoke with a model has none (dm-256, below)."""
+    """Lifting the cap on check commands leaves both caps on snippets run through
+    `run_sandboxed`, as verification and readiness are. A smoke's caps are below (dm-256)."""
     result = sandbox.run_sandboxed(
         "import json, resource; print(json.dumps({'cap': resource.getrlimit(resource.RLIMIT_AS)[0]}))",
         workdir=tmp_path / "run",
@@ -310,58 +310,107 @@ def test_a_sandboxed_smoke_scores_a_real_mode(tmp_path):
     assert result.payload["score"] == 3.0
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="only Linux enforces an address-space cap")
-def test_a_smoke_with_a_model_starts_its_worker_without_the_memory_cap(tmp_path):
-    """dm-256: create's smoke of any mode with an agent node failed on Linux.
+# ── a smoke's memory caps (dm-256) ─────────────────────────────────────────
+#
+# A smoke with a model starts a DSH worker, which is Node, whose WebAssembly reserves
+# far more address space than it uses: under the snippet's 2 GB address-space cap it
+# died at load ("WebAssembly.instantiate(): Out of memory"), so create's smoke failed on
+# Linux for every mode with an agent node. Such a smoke drops only the address-space
+# cap; the heap cap stays, so the mode's own code is still bounded.
 
-    The smoke's model call starts a DSH worker, which is Node, and its first request
-    instantiates WebAssembly (fetch's HTTP parser). Under the snippet's 2 GB address-space
-    cap that fails with "WebAssembly.instantiate(): Out of memory". The worker here is a
-    stand-in that makes the same kind of request, to a server in this process, through
-    the same `sandbox.smoke` call create makes; no model is called.
-    """
+
+def _stage_finishing_with(tmp_path: Path, lines: str) -> None:
+    """The counter package, whose `finish` op first runs ``lines``."""
+    files = dict(GOOD)
+    files["ops.py"] = GOOD["ops.py"].replace("def finish(ctx):\n", "def finish(ctx):\n" + lines)
+    _stage(tmp_path, files)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux enforces these caps")
+@pytest.mark.parametrize("model", [False, True])
+def test_a_smoke_keeps_the_heap_cap_and_drops_the_address_space_cap_only_for_a_model(tmp_path, model):
+    import resource
+
+    from refactory_dsh.model import DshModelClient
+
+    # Written beside the run directory, which holds only what the graph declares.
+    _stage_finishing_with(tmp_path, (
+        "    import json, resource\n"
+        "    (ctx.workdir.parent / 'limits.json').write_text(json.dumps({"
+        "'as': resource.getrlimit(resource.RLIMIT_AS)[0], 'data': resource.getrlimit(resource.RLIMIT_DATA)[0]}))\n"
+    ))
+    context = DshModelClient(attempts=1).context() if model else None
+    result = sandbox.smoke(f"{NAME}/counter", tmp_path / "run", project=tmp_path, model=model,
+                           model_context=context)
+    assert result.ok and result.payload.get("exit_ok"), result.stdout + result.stderr
+    limits = json.loads((tmp_path / "limits.json").read_text())
+    cap = sandbox.DEFAULT_MEMORY_MB * 1024 * 1024
+    assert limits == {"as": resource.RLIM_INFINITY if model else cap, "data": cap}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux enforces these caps")
+def test_a_smoke_with_a_model_still_stops_a_heap_bomb(tmp_path):
+    """The mode's own code in a model smoke cannot take more than the heap cap."""
+    from refactory_dsh.model import DshModelClient
+
+    _stage_finishing_with(tmp_path, (
+        "    try:\n"
+        f"        bytearray({sandbox.DEFAULT_MEMORY_MB + 512} * 1024 * 1024)\n"
+        "    except MemoryError:\n"
+        "        raise RuntimeError('the heap cap stopped the allocation')\n"
+    ))
+    result = sandbox.smoke(f"{NAME}/counter", tmp_path / "run", project=tmp_path, model=True,
+                           model_context=DshModelClient(attempts=1).context())
+    assert result.payload.get("exit_ok") is False, result.stdout + result.stderr
+    assert "the heap cap stopped the allocation" in str(result.payload.get("error")), result.payload
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux enforces these caps")
+def test_a_smoke_with_a_model_starts_its_dsh_worker(tmp_path):
+    """The real DSH worker, started by the same `sandbox.smoke` call create makes, reaches
+    its model endpoint: here a stand-in on this machine that refuses every request, so no
+    model is called. Under the address-space cap it died at load and sent nothing."""
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     from refactory_dsh.model import DshModelClient
-    from refactory_dsh.paths import node_bin
+    from tests_support import model_home_with_a_key
 
-    class Answer(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            self.send_response(200)
+    requests: list[str] = []
+
+    class Refuse(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            requests.append(self.path)
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
             self.end_headers()
-            self.wfile.write(b"ok")
+            self.wfile.write(json.dumps({"type": "error", "error": {
+                "type": "invalid_request_error", "message": "stand-in endpoint"}}).encode())
 
         def log_message(self, *_args: object) -> None:
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Refuse)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        request = tmp_path / "worker.mjs"
-        request.write_text(
-            f"const reply = await fetch('http://127.0.0.1:{server.server_address[1]}/')\n"
-            "console.log('fetched', reply.status)\n"
-        )
-        worker = tmp_path / "dsh"
-        worker.write_text(f'#!/bin/sh\nexec {shlex.quote(node_bin())} {shlex.quote(str(request))}\n')
-        worker.chmod(0o755)
-        files = dict(GOOD)
-        files["ops.py"] = GOOD["ops.py"].replace(
-            "def finish(ctx):\n",
-            "def finish(ctx):\n"
-            "    if ctx.model.complete('reach the model', workdir=ctx.workdir).strip() != 'fetched 200':\n"
-            "        raise RuntimeError('the worker did not reach its model')\n",
-        )
-        _stage(tmp_path, files)
-        context = DshModelClient(dsh_cli=str(worker), attempts=1, timeout_s=60).context()
+        home = model_home_with_a_key(tmp_path / "dsh", provider="anthropic", model="claude-opus-4-6",
+                                     base_url=f"http://127.0.0.1:{server.server_address[1]}")
+        _stage_finishing_with(tmp_path, (
+            "    try:\n"
+            "        ctx.model.complete('reach the model', workdir=ctx.workdir)\n"
+            "    except RuntimeError as error:\n"
+            "        if 'stand-in endpoint' not in str(error):\n"
+            "            raise\n"
+        ))
+        context = DshModelClient(dsh_home=home, attempts=1, timeout_s=120).context()
         result = sandbox.smoke(f"{NAME}/counter", tmp_path / "run", project=tmp_path, model=True,
-                               model_context=context, timeout_s=120)
+                               model_context=context, timeout_s=300)
     finally:
         server.shutdown()
     assert "Out of memory" not in result.stdout + result.stderr, result.stdout + result.stderr
     assert result.ok and result.payload.get("exit_ok"), result.stdout + result.stderr
-    assert result.payload["score"] == 3.0
+    assert requests, "the worker never reached its model endpoint"
 
 
 # ── promotion ──────────────────────────────────────────────────────────────
