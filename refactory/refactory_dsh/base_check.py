@@ -1302,6 +1302,8 @@ def vitest_name_pattern(name: str) -> str:
 #: Vitest's own summary of what it ran, ``Tests  1 passed | 2 skipped (3)``; pytest's is
 #: `_PYTEST_SUMMARY`.
 _VITEST_SUMMARY = re.compile(r"^\s*Tests\s+(.+)$", re.MULTILINE)
+#: A vitest file that failed to load, so none of its tests ran: ``FAIL  a.test.ts [ a.test.ts ]``.
+_VITEST_UNLOADED = re.compile(r"^\s*FAIL\s+(\S+)\s+\[\s*\1\s*\]", re.MULTILINE)
 _RAN = re.compile(r"\b\d+ (?:passed|failed|errors?|xfailed|xpassed)\b")
 
 
@@ -1870,6 +1872,8 @@ def compute_site_reverts(
                 result, detail = NOT_RUN, f"the test was killed by signal {-rc}"
             else:
                 coll_files, has_unlocatable = _parse_collection_errors(test_output)
+                # A spec the revert stopped from loading is a collection error, not "no tests".
+                coll_files |= set(_VITEST_UNLOADED.findall(strip_ansi(test_output)))
                 test_path_for_coll = test_name.split("::")[0] if "::" in test_name else test_name
                 # pytest names the module by its absolute path, the citation by a
                 # path relative to the worktree.

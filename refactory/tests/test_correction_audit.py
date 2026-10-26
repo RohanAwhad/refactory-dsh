@@ -1315,7 +1315,8 @@ def test_a_cited_test_name_reaches_its_runner_whole_and_runs_nothing_else(tmp_pa
     selected nothing, which exited 0 and read as a test that still passes, and a `(`
     stopped vitest at startup, which read as a catch. Unquoted, the shell cut the name at
     ` > ` into a stray file and ran what followed a `;`. A run that passed or failed no
-    test is measured as running none, never as a pass or a catch."""
+    test is measured as running none, never as a pass or a catch, and a spec the revert
+    stopped from loading is a collection error, not one that ran no tests."""
     from refactory_dsh import base_check
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -1333,7 +1334,10 @@ def test_a_cited_test_name_reaches_its_runner_whole_and_runs_nothing_else(tmp_pa
     git(repo, "commit", "-q", "-m", "base")
     base = git(repo, "rev-parse", "HEAD")
     git(repo, "checkout", "-q", "-b", "run-branch")
-    (repo / "src" / "hmr.ts").write_text("export const enabled = false\n")
+    (repo / "src" / "hmr.ts").write_text("export const enabled = false\n\n\nexport function helper() { return 1 }\n")
+    (repo / "src" / "load.test.ts").write_text(
+        "import { expect, it } from 'vitest'\nimport * as hmr from './hmr'\n"
+        "const one = (hmr as any).helper()\nit('loads', () => { expect(one).toBe(1) })\n")
     (repo / "src" / "hmr.test.ts").write_text(
         "import { describe, expect, it } from 'vitest'\nimport { enabled } from './hmr'\n"
         "describe('client-hmr composition', () => {\n"
@@ -1357,10 +1361,13 @@ def test_a_cited_test_name_reaches_its_runner_whole_and_runs_nothing_else(tmp_pa
         "src/hmr.test.ts::stays off (no reload); touch pwned": "fail",
         "src/hmr.test.ts::client-hmr composition > is not there": "no_tests",
         "src/gone.test.ts::client-hmr composition > is disabled after composition": "no_tests",
+        "src/load.test.ts::loads": "collection_error",
         "test_m.py::test_f[a b]": "fail",
         "test_m.py::test_skipped": "no_tests",
     }
-    pairs = [("m.py:2" if name.startswith("test_m") else "src/hmr.ts:1", name, "local") for name in cited]
+    sites = {"test_m": "m.py:2", "src/load": "src/hmr.ts:4"}
+    pairs = [(next((site for prefix, site in sites.items() if name.startswith(prefix)), "src/hmr.ts:1"), name, "local")
+             for name in cited]
     results = base_check.compute_site_reverts(ctx, pairs)["pairs"]
     assert {entry["test"]: entry["result"] for entry in results} == cited, results
     stray = [line for line in git(repo, "status", "--porcelain", "--untracked-files=all").splitlines()
