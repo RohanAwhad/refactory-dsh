@@ -39,9 +39,18 @@ async function readNote(rl: ReturnType<typeof createInterface>): Promise<string>
   }
 }
 
-/** Ask one question on the terminal and return the chosen option label, plus an optional note. */
-async function askTerminal(question: { id: string; question: string; options?: Array<{ label: string }> }): Promise<{ selected: string; custom: string }> {
+/**
+ * Ask one question on the terminal and return the chosen option label, plus an optional note.
+ * The question's detail -- design mode's card, the CEO's observations -- is printed first,
+ * paragraphs kept: the spine keeps the question itself to the one-line ask.
+ */
+async function askTerminal(
+  question: { id: string; question: string; detail?: string; options?: Array<{ label: string }> },
+): Promise<{ selected: string; custom: string }> {
   const options = question.options ?? []
+  if (question.detail !== undefined && question.detail.trim() !== '') {
+    process.stdout.write(`\n${question.detail.trim()}\n`)
+  }
   process.stdout.write(`\n[gate ${question.id}] ${question.question}\n`)
   options.forEach((option, index) => {
     process.stdout.write(`  ${index + 1}. ${option.label}\n`)

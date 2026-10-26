@@ -82,6 +82,30 @@ describe('graph terminal answerer', () => {
     }
   })
 
+  it('prints the question\'s detail, paragraphs kept, before the gate line and its options', async () => {
+    // The spine sends design mode's card and the CEO's observations as the detail, and
+    // keeps the question to the one-line ask (dm-163).
+    const terminal = fakeTerminal()
+    try {
+      const { ctx, dispose } = await bench()
+      const detail = 'Design: The tool prints the name.\n\nPitfalls: 1\n- PIT-001 (high): addressed\n\n'
+        + '--- CEO observations (not requirements) ---\nthe brief asks for a flag'
+      const asking = ctx.userQuestions.ask({ questions: [{ ...QUESTION, detail }] })
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('1\n')
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('\n')
+      expect((await asking).answers).toEqual([{ id: 'approve', selected: ['proceed'] }])
+      const shown = terminal.written.join('')
+      expect(shown).toContain(detail)
+      expect(shown.indexOf(detail)).toBeLessThan(shown.indexOf('[gate approve] the person approves the draft'))
+      expect(shown.indexOf('[gate approve]')).toBeLessThan(shown.indexOf('1. proceed'))
+      await dispose()
+    } finally {
+      terminal.restore()
+    }
+  })
+
   it('delegates when stdin is not a terminal, so the spine refuses', async () => {
     const { ctx, dispose } = await bench()
     await expect(ctx.userQuestions.ask({ questions: [QUESTION] }))

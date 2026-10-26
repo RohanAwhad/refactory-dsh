@@ -498,7 +498,9 @@ function Steering({
               <p className={css.statusLine} data-refactory-gate-prompt>
                 {t('steering.gate', { gate: gate.id })}
               </p>
-              {gate.prompt !== '' && <p className={css.note}>{gate.prompt}</p>}
+              {gate.prompt !== '' && (
+                <p className={`${css.note} ${css.gatePrompt}`} data-refactory-gate-note>{gate.prompt}</p>
+              )}
               <div className={css.gestures}>
                 {gate.verdicts.map(option => (
                   <button

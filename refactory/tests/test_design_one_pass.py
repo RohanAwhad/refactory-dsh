@@ -345,3 +345,24 @@ def test_create_research_gate_is_unchanged(tmp_path):
     assert "the plan has 1 direction(s); three to five are required" in verdict.reason
     with pytest.raises(ValueError, match="the research is still not usable after 2 attempt"):
         create_ops.gate_research(ctx)
+
+
+def test_only_design_modes_builder_checks_each_correction_fails_without_its_change():
+    """Every extra build round the QA judge caused was a gate correction no test exercised,
+    or a fix whose test still passed with the fix reverted (approved 2026-10-26). Design
+    mode's builder is told to probe each test with its change undone; no other mode is."""
+    from refactory_dsh.design import EMIT_CHECKLIST
+    from test_lowering_smoke import _mode_classes
+
+    emit = DesignMode().build().nodes["emit"].prompt_template
+    assert EMIT_CHECKLIST in emit and emit.index("{{probe_instruction}}") < emit.index(EMIT_CHECKLIST)
+    for line in ("each correction made at the design gate and each ask in the brief",
+                 "undo that change in your draft emit.txt and probe the same test again: it must fail",
+                 "A correction counts as met only if a test fails without it",
+                 "calls the helper under test", "a verdict list nothing consumes",
+                 "results the test built by hand"):
+        assert line in EMIT_CHECKLIST, line
+    others = {key: cls().build().nodes.get("emit") for key, cls in _mode_classes() if cls is not DesignMode}
+    assert "default_pack-design_fast" in others
+    assert [key for key, node in others.items()
+            if node is not None and "## Before you answer" in node.prompt_template] == []

@@ -76,7 +76,9 @@ QA_PROMPT = (
 
 #: What design_fast's QA is told about the change it reviews: in a worktree, the branch's
 #: diff, and the command that runs a check in the worktree's own environment.
-ARTIFACT_QA = "\nThe change: {{change}}\n"
+ARTIFACT_QA = ("\nThe change: {{change}}\n"
+               "test-guardedness.json in the run directory, when there is one, says which new "
+               "tests fail without the change.\n")
 
 
 def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
@@ -119,9 +121,11 @@ def _qa_nodes(graph: Graph, *, artifact: bool, design: bool = False) -> None:
         + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS
     )
 
+    # Not test-guardedness.json: only a worktree run writes it, and a declared input must
+    # exist before the worker is dispatched, so a worktree-off run would stop here (dm-152).
+    # ARTIFACT_QA points to it when it is there.
     focused_qa_reads = (
         ("brief.json", "focused-check.json", "authoring-evidence.json")
-        + (("test-guardedness.json",) if artifact else ())
         + (("changed-functions.json",) if design else ())
     )
 
