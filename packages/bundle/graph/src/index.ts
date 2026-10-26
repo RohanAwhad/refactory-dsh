@@ -306,6 +306,11 @@ async function run(ctx: Context, io: Io): Promise<void> {
   const selection = defaultModel.currentSelection()
   const provider = startup.provider || selection.provider
   const model = startup.model || selection.model
+  if (!provider && !model) {
+    io.stderr.write('dsh: No model chosen: pick one in Settings → Models or with `refactory model set --provider <provider> --model <model>`.\n')
+    io.exit(1)
+    return
+  }
   const { agent } = await agents.create({
     sessionId: brandString<SessionId>(`session-${randomUUID()}`),
     meta: { cwd: startup.workdir },

@@ -12,11 +12,19 @@ export function apply(ctx) {
   })
   void (async () => {
     await ctx.get('loader')?.await()
+    const startup = ctx.get('headlessStartup')
     const selection = ctx.get('agentDefaultModel').currentSelection()
+    const provider = startup.provider || selection.provider
+    const model = startup.model || selection.model
+    if (!provider && !model) {
+      process.stderr.write('dsh: No model chosen: pick one in Settings → Models or with `refactory model set --provider <provider> --model <model>`.\n')
+      ctx.get('appExit')(1)
+      return
+    }
     const handle = await ctx.get('agents').create({
       sessionId: `refactory-parent-${randomUUID()}`,
       meta: { cwd: process.cwd() },
-      agentOptions: { provider: selection.provider, model: selection.model },
+      agentOptions: { provider, model },
     })
     try {
       owned = await ctx.get('subagents').start('refactory-worker', {

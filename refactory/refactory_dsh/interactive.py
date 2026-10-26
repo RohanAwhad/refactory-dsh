@@ -634,6 +634,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validation-reserve-tokens", type=int, default=0)
     args = parser.parse_args(argv)
 
+    from refactory_dsh.model import ModelChoiceError
     workdir = Path(args.workdir) if args.workdir else None
     try:
         code = run(
@@ -656,6 +657,9 @@ def main(argv: list[str] | None = None) -> int:
                              "validation_reserve_tokens": args.validation_reserve_tokens}
             if args.max_elapsed_s is not None or args.max_tokens is not None else None,
         )
+    except ModelChoiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     except Exception as exc:  # a failed run must be a message, not a traceback
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 2

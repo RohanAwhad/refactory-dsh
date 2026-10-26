@@ -30,6 +30,36 @@ from typing import Any, Callable
 from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, dsh_root, node_bin, venv_bin
 import importlib.metadata
 
+#: The refusal message for a run with no model choice.
+MODEL_CHOICE_REFUSAL = (
+    "No model chosen: pick one in Settings → Models or with "
+    "`refactory model set --provider <provider> --model <model>`."
+)
+
+
+class ModelChoiceError(Exception):
+    """Raised when no model choice exists and no flag is given.
+
+    An ordinary exception, not a subclass of SystemExit.  Each command-line
+    entry point catches it, prints the message and exits 1, so library code
+    (the walker, the outer loop) never kills its process from deep inside.
+    """
+
+    def __init__(self, message: str = MODEL_CHOICE_REFUSAL) -> None:
+        super().__init__(message)
+
+
+def require_model_choice(client: "DshModelClient") -> None:
+    """Raise ModelChoiceError when a DSH client has no provider or model.
+
+    Called only at launch-time entry points, not in authoring-time callers
+    such as ``profiles.save``, ``profiles.resolve`` or ``console.runtime_context``.
+    Safe to call with non-DshModelClient objects (e.g. a test's FakeModel).
+    """
+    wb = getattr(client, '_worker_backend', None)
+    if wb == "dsh" and not getattr(client, '_provider', '') and not getattr(client, '_model', ''):
+        raise ModelChoiceError()
+
 from refactory_dsh.invocations import HOOK_SUPPRESS, WORKTREE_RECORD
 from refactory_dsh.owned_process import SHUTDOWN_GRACE_S, shutdown, _termination_as_exit
 
@@ -266,6 +296,16 @@ class DshModelClient:
         self._dsh_cli = (dsh_cli if dsh_cli is not None else os.environ.get("DSH_CLI", "")).strip()
         self._model = model or (os.environ.get("REFACTORY_MODEL_ID", "") if self._worker_backend == "dsh" and not routes_resolved else "")
         self._provider = provider or (os.environ.get("REFACTORY_MODEL_PROVIDER", "") if self._worker_backend == "dsh" and not routes_resolved else "")
+        # When no provider/model came from any source and we have a project or
+        # are the zero-arg construction (used by DshEvaluator), read the stored
+        # choice so every runtime resolves the same default.
+        if self._worker_backend == "dsh" and not self._provider and not self._model and not routes_resolved:
+            from refactory_dsh.dsh_profile import stored_model_choice
+            _choice = stored_model_choice()
+            if _choice["provider"]:
+                self._provider = _choice["provider"]
+            if _choice["model"]:
+                self._model = _choice["model"]
         # Resolve before containment rewrites HOME. This is a location, never a key.
         from refactory_dsh.dsh_profile import model_home
         self._dsh_home = model_home(dsh_home)

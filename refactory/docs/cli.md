@@ -208,6 +208,8 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 | `refactory projects prune [<name>] [--succeeded]` | remove the worktrees and branches that ended runs no longer need; `--succeeded` also removes succeeded runs' worktrees, keeping their branches. |
 | `refactory profile-save --name <name> --spec <JSON>` | save an immutable configuration version. |
 | `refactory graph-control [--node <id>]` | control a graph run through the spine: pause, resume, stop, acknowledge, amend-command, or withdraw a control. |
+| `refactory model set --provider <route> --model <id>` | save the model choice that every run uses as its default; overridable by `--provider`/`--model` on any command. |
+| `refactory model show` | show the currently stored model choice as JSON. |
 | `refactory ui --port <n> --no-open` | start the [browser GUI](interfaces.md) without opening a browser. |
 
 

@@ -67,7 +67,15 @@ def resolve(project: Path, overrides: dict[str, Any] | None = None, *,
         inherited = json.loads(os.environ.get("REFACTORY_WORKER_CONTEXT") or "{}")
     if not isinstance(inherited, dict):
         raise ValueError("REFACTORY_WORKER_CONTEXT must contain an object")
-    route: dict[str, Any] = {"worker_backend": "dsh", "provider": "", "model": "",
+    # When no inherited context is present, use the stored model choice as base.
+    _base_provider = ""
+    _base_model = ""
+    if not inherited:
+        from refactory_dsh.dsh_profile import stored_model_choice
+        _stored = stored_model_choice()
+        _base_provider = _stored.get("provider", "")
+        _base_model = _stored.get("model", "")
+    route: dict[str, Any] = {"worker_backend": "dsh", "provider": _base_provider, "model": _base_model,
                             "effort": "", "permission_mode": "skip"}
     maps: dict[str, Any] = {"role_routes": {}, "node_routes": {}, "provider_config": {}}
     sources = {key: "default" for key in FIELDS}

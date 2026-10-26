@@ -99,7 +99,7 @@ existing `web` profile stays unchanged.
 
 Open the exact URL printed by the server, select the checkout as your workspace, then create a session. Open the right sidebar's **Modes** tab; no introductory chat message is required.
 
-Before model-backed work, save a provider key in **Settings → Models**. Nested workers and validation use the managed credential store; a checkout `.env` or exported key alone is insufficient for those scrubbed processes. `uv run refactory doctor` checks configuration, not authentication or quota. [Model setup →](refactory/docs/models.md)
+Before model-backed work, save a provider key in **Settings → Models** or run `uv run refactory model set --provider <provider> --model <model>`. Nested workers and validation use the managed credential store; a checkout `.env` or exported key alone is insufficient for those scrubbed processes. `uv run refactory doctor` checks configuration, not authentication or quota. [Model setup →](refactory/docs/models.md)
 
 Try this in GUI chat:
 
@@ -145,7 +145,7 @@ During a search you can add instructions, keep or reject candidate branches, pau
 
 ## Models and coding workers
 
-DSH remains the default worker runtime, composed with Cordis. Its providers include DeepSeek, OpenAI and Anthropic. A DSH worker using an OpenAI model is still a DSH worker. Both evaluators carry the selected routing context; per-node overrides take precedence over per-role and run settings. Inspect actual execution receipts, not just the configured selection. [Routing and worker guide →](refactory/docs/models.md)
+DSH remains the default worker runtime, composed with Cordis. Its providers include DeepSeek, OpenAI and Anthropic. Runs without a configured model are refused before any model call. A DSH worker using an OpenAI model is still a DSH worker. Both evaluators carry the selected routing context; per-node overrides take precedence over per-role and run settings. Inspect actual execution receipts, not just the configured selection. [Routing and worker guide →](refactory/docs/models.md)
 
 Codex and Claude Code are explicit, optional worker backends through the installed DSH provider registry. They retain native authentication and product settings; unsupported capabilities fail before dispatch. External token-limited runs are refused because complete nested accounting is not established. Refactory still owns graph order, validation and gates.
 

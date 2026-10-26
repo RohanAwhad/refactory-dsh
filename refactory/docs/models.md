@@ -12,7 +12,13 @@ The adapter's catalogue is **advisory**: it is what pickers offer, not what the 
 
 ## In the terminal
 
-The same file, by hand:
+Set the model for all runs:
+
+```bash
+uv run refactory model set --provider deepseek-official --model deepseek-v4-pro
+```
+
+Or the same file, by hand:
 
 ```yaml
 # ~/.dsh/settings.yaml
@@ -44,23 +50,25 @@ A local OpenAI-compatible server works through the same route, and still needs *
 
 ## Choose a model for a run
 
+The stored model choice (`refactory model set` or Settings → Models) is used by every run that names no explicit `--provider`/`--model`. Runs without a configured model are refused before any model call.
+
 ```bash
 uv run refactory ceo counting_pack/fixed_step --model deepseek-v4-pro
 uv run refactory ceo "an idea" --mode create --single --model deepseek-v4-pro
 uv run refactory optimize circle_packing/adaptive --provider deepseek-official --model deepseek-v4-pro
 ```
 
-`--model` names the id and `--provider` the route; both fall back to `agent-default-model` in your settings, and neither writes anything back, so choosing a model for one run does not change the next. A route that does not exist is a loud failure (`NO_ADAPTER: no adapter registered for provider …`), not a quiet return to the default. The same two flags exist one level down, on `dsh --profile headless|graph`, which is what `refactory` calls.
+`--model` names the id and `--provider` the route; both override the stored choice for that run only, and neither writes anything back. A route that does not exist is a loud failure (`NO_ADAPTER: no adapter registered for provider …`), not a quiet return to the default. The same two flags exist one level down, on `dsh --profile headless|graph`, which is what `refactory` calls.
 
 ## Model selection across execution paths
 
 | Path | Where its model comes from |
 |---|---|
-| Terminal `ceo` | The selected graph-runtime provider/model, or saved defaults |
-| Python Create/Edit/Design agent nodes | The supplied `DshModelClient`; its route/context is carried to supported nested validation |
-| Optimization with the default `walker` evaluator | The supplied model client serves the reasoning proposer and evaluated agent nodes |
+| Terminal `ceo` | The stored model choice (Settings → Models or `refactory model set`), overridable by `--provider`/`--model` |
+| Python Create/Edit/Design agent nodes | The supplied `DshModelClient`; its route starts from the stored choice and is carried to supported nested validation |
+| Optimization with the default `walker` evaluator | The supplied model client serves the reasoning proposer and evaluated agent nodes; its route starts from the stored choice |
 | Optimization with the separate `dsh` evaluator | The supplied client context is forwarded; explicit agent workers are dispatched through the same node bridge and route as the walker |
-| GUI CEO and children | The owning session and worker configuration; inspect actual child execution when validating a route |
+| GUI CEO and children | The stored model choice (written by Settings → Models); the owning session and worker configuration |
 
 `refactory runtime` inspects configuration; `.refactory/workers/*.json` receipts establish the selected backend, observed runtime route, version and usage. Requested settings are separate from observed settings. Explicit `node_routes` override `role_routes`, which override the run settings; empty fields use the runtime defaults. Switching backend clears inherited provider/model/effort unless the override supplies them. A provider route declared in one DSH profile's settings is invisible to the nested headless runtime a DSH worker runs; declare such routes for workers with [`provider_config`](worker-routing.md) in `refactory.workers.json`.
 

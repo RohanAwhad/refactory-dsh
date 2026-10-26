@@ -631,6 +631,30 @@
       "purpose": "Manage installed mode packages through registry subcommands; read their help before mutations.",
       "reviewed_schema": "be7bcd90aa83a34d63c41828e491c54b431cab1fdcea3ce59520246693aebaf0"
     },
+    "cli:model": {
+      "doc": "refactory/docs/models.md",
+      "examples": [
+        {
+          "arguments": {
+            "model_action": "set"
+          },
+          "explanation": "Save a model choice that every run uses as its default: `refactory model set --provider deepseek-official --model deepseek-v4-pro`. Overridable by --provider/--model on any command."
+        },
+        {
+          "arguments": {
+            "model_action": "show"
+          },
+          "explanation": "Show the currently stored model choice as JSON."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI route.",
+        "cli": "refactory model {set --provider <p> --model <m>, show}",
+        "panel": "Unavailable as a dedicated panel control; use Settings → Models."
+      },
+      "purpose": "Manage the stored model choice: the one source of truth for which provider and model every refactory run uses by default. Set writes the choice; show reads it.",
+      "reviewed_schema": "c76bbbf3535bfe0dbff407a37485161e03e495443fac3cf4e950a740e74d8e8e"
+    },
     "cli:pin": {
       "doc": "refactory/docs/cli.md",
       "examples": [

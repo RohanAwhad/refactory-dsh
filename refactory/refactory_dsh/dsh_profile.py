@@ -33,6 +33,8 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
+import re
+
 from refactory_dsh.paths import REPO_ROOT, dsh_root
 
 #: The profile the DSH evaluator, the equivalence tests and a manual mode run use.
@@ -756,12 +758,275 @@ def require(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str 
         raise ProfileError(problem)
 
 
+# ── model choice: one source of truth ──────────────────────────────────────
+
+#: The refusal message printed when no model choice exists and no flag is given.
+NO_MODEL_CHOICE_MESSAGE = (
+    "No model chosen: pick one in Settings → Models or with "
+    "`refactory model set --provider <provider> --model <model>`."
+)
+
+#: Known providers and their default models.
+KNOWN_PROVIDERS: dict[str, str] = {
+    "deepseek-official": "deepseek-v4-flash",
+    "openai": "gpt-4.1",
+    "anthropic": "claude-sonnet-4-5",
+}
+
+
+def stored_model_choice(home: str | Path | None = None) -> dict[str, str]:
+    """Read the agent-default-model entry from the refactory profile's cordis.patch.yml.
+
+    Returns ``{"provider": "...", "model": "..."}`` or empty strings when absent.
+    Reading tolerates unknown YAML tags (e.g. ``!!js``) without destroying them.
+    """
+    patch = dsh_home(home) / "profiles" / GUI_PROFILE / "cordis.patch.yml"
+    if not patch.exists():
+        return {"provider": "", "model": ""}
+    try:
+        text = patch.read_text(encoding="utf-8")
+    except OSError:
+        return {"provider": "", "model": ""}
+    return _parse_agent_default_model(text)
+
+
+def _parse_agent_default_model(text: str) -> dict[str, str]:
+    """Extract provider and model from the agent-default-model entry.
+
+    Uses line-level parsing rather than a full YAML load so that ``!!js`` tags
+    and other entries are never disturbed.
+    """
+    provider = ""
+    model = ""
+    in_agent_default = False
+    in_config = False
+    indent_level = -1
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        current_indent = len(line) - len(stripped)
+        # Detect the start of the agent-default-model entry.
+        if re.match(r'^-\s+id:\s*agent-default-model\b', stripped):
+            in_agent_default = True
+            indent_level = current_indent
+            continue
+        # A new list item at the same or lesser indent ends our entry.
+        if in_agent_default and stripped.startswith('-') and current_indent <= indent_level:
+            break
+        if not in_agent_default:
+            continue
+        if re.match(r'config:', stripped):
+            in_config = True
+            continue
+        if in_config:
+            m = re.match(r'provider:\s*(.+)', stripped)
+            if m:
+                provider = m.group(1).strip().strip('"').strip("'")
+                continue
+            m = re.match(r'model:\s*(.+)', stripped)
+            if m:
+                model = m.group(1).strip().strip('"').strip("'")
+                continue
+    return {"provider": provider, "model": model}
+
+
+def model_choice_write(provider: str, model: str, home: str | Path | None = None) -> None:
+    """Write only the agent-default-model entry, leaving every other byte unchanged.
+
+    Does NOT load the whole file with PyYAML and dump it back: the refactory and
+    graph patch files each contain a ``!!js`` tag, which a plain YAML round trip
+    fails on or destroys. Atomic via temp file + rename.
+    """
+    patch_dir = dsh_home(home) / "profiles" / GUI_PROFILE
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    patch = patch_dir / "cordis.patch.yml"
+    if patch.exists():
+        try:
+            original = patch.read_text(encoding="utf-8")
+        except OSError:
+            original = ""
+    else:
+        original = ""
+    updated = _update_agent_default_model(original, provider, model)
+    # Atomic write: temp file in the same directory, then rename.
+    fd = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=str(patch_dir),
+        prefix=".cordis.patch.", suffix=".tmp", delete=False,
+    )
+    try:
+        fd.write(updated)
+        fd.flush()
+        os.fsync(fd.fileno())
+        fd.close()
+        os.replace(fd.name, str(patch))
+    except BaseException:
+        fd.close()
+        try:
+            os.unlink(fd.name)
+        except OSError:
+            pass
+        raise
+
+
+def _update_agent_default_model(text: str, provider: str, model: str) -> str:
+    """Replace or append the agent-default-model entry's config block."""
+    new_config = f"    config:\n      provider: {provider}\n      model: {model}\n"
+    lines = text.splitlines(keepends=True)
+    result: list[str] = []
+    i = 0
+    found = False
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+        if re.match(r'^-\s+id:\s*agent-default-model\b', stripped):
+            found = True
+            entry_indent = len(line) - len(stripped)
+            result.append(line)
+            i += 1
+            # Skip the existing name/config/etc lines of this entry.
+            in_config = False
+            while i < len(lines):
+                next_line = lines[i]
+                next_stripped = next_line.lstrip()
+                next_indent = len(next_line) - len(next_stripped)
+                # A new list item at the same or lesser indent ends this entry.
+                if next_stripped.startswith('-') and next_indent <= entry_indent:
+                    break
+                if re.match(r'config:', next_stripped):
+                    in_config = True
+                    i += 1
+                    # Skip config sub-keys.
+                    while i < len(lines):
+                        cfg_line = lines[i]
+                        cfg_stripped = cfg_line.lstrip()
+                        cfg_indent = len(cfg_line) - len(cfg_stripped)
+                        if cfg_stripped.startswith('-') and cfg_indent <= entry_indent:
+                            break
+                        if cfg_indent <= next_indent and cfg_stripped and not re.match(r'(provider|model):', cfg_stripped):
+                            break
+                        i += 1
+                    continue
+                # Keep non-config lines (e.g. name:).
+                if not re.match(r'(provider|model):', next_stripped):
+                    result.append(next_line)
+                i += 1
+            # Append the new config block.
+            result.append(new_config)
+            continue
+        result.append(line)
+        i += 1
+    if not found:
+        # Append a new entry.
+        entry = (
+            f"- id: agent-default-model\n"
+            f"  name: '@deepseek-ai/dsh-agent-default-model'\n"
+            f"{new_config}"
+        )
+        if text and not text.endswith("\n"):
+            result.append("\n")
+        result.append(entry)
+    joined = "".join(result)
+    if joined and not joined.endswith("\n"):
+        joined += "\n"
+    return joined
+
+
+def _credential_store_providers(home: str | Path | None = None) -> list[str]:
+    """Return provider names that have a configured key in the credential store.
+
+    Never reads the key value itself. Uses the model_readiness.mjs approach:
+    check the credentials YAML for apiKeyEnv references that resolve.
+    Falls back to checking known environment variables and the credentials YAML.
+    """
+    resolved_home = dsh_home(home)
+    creds_file = resolved_home / ".credentials.yaml"
+    providers_with_keys: list[str] = []
+    # Check known provider environment variables.
+    env_map = {
+        "deepseek-official": "DEEPSEEK_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+    }
+    for prov, env_var in env_map.items():
+        if os.environ.get(env_var):
+            providers_with_keys.append(prov)
+    # Also check the managed credential store.
+    if creds_file.exists():
+        try:
+            creds_text = creds_file.read_text(encoding="utf-8")
+            for prov, env_var in env_map.items():
+                if prov not in providers_with_keys and env_var in creds_text:
+                    providers_with_keys.append(prov)
+        except OSError:
+            pass
+    return sorted(set(providers_with_keys))
+
+
+def first_run_choice(home: str | Path | None = None, interactive: bool = False) -> dict[str, str]:
+    """When no stored choice exists, auto-detect from the credential store.
+
+    - One keyed provider: use and save it, print a line.
+    - Multiple keyed providers at a terminal: prompt; headless: refuse.
+    - No keys: refuse.
+
+    A stored choice is never overridden.
+    Returns ``{"provider": "...", "model": "..."}`` or raises ModelChoiceError.
+    """
+    from refactory_dsh.model import ModelChoiceError
+
+    existing = stored_model_choice(home)
+    if existing["provider"] or existing["model"]:
+        return existing
+    keyed = _credential_store_providers(home)
+    if not keyed:
+        raise ModelChoiceError(NO_MODEL_CHOICE_MESSAGE)
+    if len(keyed) == 1:
+        provider = keyed[0]
+        model = KNOWN_PROVIDERS.get(provider, "")
+        model_choice_write(provider, model, home=home)
+        print(
+            f"Using {provider}/{model}, the only provider with a key; "
+            f"change it with `refactory model set`",
+            file=sys.stderr,
+        )
+        return {"provider": provider, "model": model}
+    if interactive:
+        print("Multiple providers have keys. Choose one:", file=sys.stderr)
+        for idx, prov in enumerate(keyed, 1):
+            default_model = KNOWN_PROVIDERS.get(prov, "")
+            print(f"  {idx}. {prov} (default model: {default_model})", file=sys.stderr)
+        while True:
+            try:
+                answer = input(f"Enter 1-{len(keyed)}: ").strip()
+                choice_idx = int(answer) - 1
+                if 0 <= choice_idx < len(keyed):
+                    break
+            except (ValueError, EOFError, KeyboardInterrupt):
+                pass
+            print(f"Please enter a number between 1 and {len(keyed)}.", file=sys.stderr)
+        provider = keyed[choice_idx]
+        model = KNOWN_PROVIDERS.get(provider, "")
+        model_choice_write(provider, model, home=home)
+        print(
+            f"Using {provider}/{model}; change it with `refactory model set`",
+            file=sys.stderr,
+        )
+        return {"provider": provider, "model": model}
+    # Headless with multiple keys: refuse.
+    providers_str = ", ".join(keyed)
+    raise ModelChoiceError(
+        f"Multiple providers have keys ({providers_str}) but no model is chosen. "
+        f"Pick one with `refactory model set --provider <provider> --model <model>`."
+    )
+
+
 __all__ = [
     "GRAPH_BUNDLE",
     "GRAPH_PROFILE",
     "GUI_PROFILE",
+    "KNOWN_PROVIDERS",
     "LAYERS",
     "MARTTY_PROFILE",
+    "NO_MODEL_CHOICE_MESSAGE",
     "PRESETS_BUNDLE",
     "ProfileError",
     "ProvisionStep",
@@ -780,12 +1045,14 @@ __all__ = [
     "declared_bundles",
     "declared_bundles_in",
     "dsh_home",
+    "first_run_choice",
     "model_home",
     "init_command",
     "is_ready",
     "layer_bundle",
     "migration_command",
     "missing_bundles",
+    "model_choice_write",
     "profile_dir",
     "provision_plan",
     "readiness_gaps",
@@ -796,5 +1063,6 @@ __all__ = [
     "retired_bundles",
     "retired_reason",
     "stale_mutations",
+    "stored_model_choice",
     "target",
 ]

@@ -1710,8 +1710,22 @@ def runtime_context(project: Path, *, provider: str = "", model: str = "") -> di
         status = "diagnostic-unavailable"
     credential = result.get("credential")
     from refactory_dsh.worker_config import effective
+    from refactory_dsh.dsh_profile import stored_model_choice
+    _stored = stored_model_choice()
+    # Determine provenance of the model route.
+    if provider:
+        _provenance = "flag"
+    elif _stored.get("provider") and context.get("provider") == _stored["provider"]:
+        _provenance = "stored choice"
+    else:
+        _provenance = "runtime default"
     return {
         "worker_configuration": effective(project),
+        "model_choice": {
+            "provider": _stored.get("provider", ""),
+            "model": _stored.get("model", ""),
+            "provenance": _provenance,
+        },
         "project": str(project.resolve()),
         "dsh_home": context["dsh_home"],
         "nested": {

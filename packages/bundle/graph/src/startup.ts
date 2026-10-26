@@ -206,8 +206,8 @@ export function apply(ctx: Context): void {
       ...(process.env.REFACTORY_BUDGET_LEDGER ? { REFACTORY_BUDGET_LEDGER: process.env.REFACTORY_BUDGET_LEDGER } : {}),
       // Nonsecret context for nested model calls after command/sandbox scrubbing.
       REFACTORY_MODEL_DSH_HOME: resolve((process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')).replace(/^~(?=[/\\]|$)/, homedir())),
-      REFACTORY_MODEL_PROVIDER: String(options.provider ?? ''),
-      REFACTORY_MODEL_ID: String(options.model ?? ''),
+      ...(options.provider !== undefined ? { REFACTORY_MODEL_PROVIDER: String(options.provider) } : {}),
+      ...(options.model !== undefined ? { REFACTORY_MODEL_ID: String(options.model) } : {}),
       // The node commands run *in the work directory*, so `Path.cwd()` inside one of
       // them is the run, not the checkout. The project — where `.factory/packages`
       // and the packages of modes live — has to be said out loud, and this is where

@@ -5107,6 +5107,56 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 }
 ```
 
+## cli:model
+
+Manage the stored model choice: the one source of truth for which provider and model every refactory run uses by default. Set writes the choice; show reads it.
+
+Documentation: [refactory/docs/models.md](../../../refactory/docs/models.md)
+
+```json
+{
+  "description": "manage the stored model choice",
+  "doc": "refactory/docs/models.md",
+  "examples": [
+    {
+      "arguments": {
+        "model_action": "set"
+      },
+      "explanation": "Save a model choice that every run uses as its default: `refactory model set --provider deepseek-official --model deepseek-v4-pro`. Overridable by --provider/--model on any command."
+    },
+    {
+      "arguments": {
+        "model_action": "show"
+      },
+      "explanation": "Show the currently stored model choice as JSON."
+    }
+  ],
+  "interfaces": {
+    "chat": "Unavailable as a direct chat mutation; use the documented CLI route.",
+    "cli": "refactory model {set --provider <p> --model <m>, show}",
+    "panel": "Unavailable as a dedicated panel control; use Settings \u2192 Models."
+  },
+  "parameters": {
+    "model_action": {
+      "default": null,
+      "description": "",
+      "enum": [
+        "set",
+        "show"
+      ],
+      "flags": [],
+      "nargs": "A...",
+      "position": 0,
+      "positional": true,
+      "required": false,
+      "type": "string"
+    }
+  },
+  "purpose": "Manage the stored model choice: the one source of truth for which provider and model every refactory run uses by default. Set writes the choice; show reads it.",
+  "reviewed_schema": "c76bbbf3535bfe0dbff407a37485161e03e495443fac3cf4e950a740e74d8e8e"
+}
+```
+
 ## cli:optimize
 
 Search a scored mode through the terminal with profile/project defaults and explicit overrides; resume retains the saved run identity.

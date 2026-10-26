@@ -468,6 +468,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except Exception as exc:
         checks.append(("packages of modes", False, str(exc)))
 
+    # Show the stored model choice.
+    try:
+        from refactory_dsh.dsh_profile import stored_model_choice
+        _stored = stored_model_choice()
+        if _stored["provider"] or _stored["model"]:
+            checks.append(("stored model choice", True,
+                           f"{_stored['provider']}/{_stored['model']}"))
+        else:
+            checks.append(("stored model choice", None,
+                           "no model chosen; pick one in Settings → Models or `refactory model set`"))
+    except Exception as exc:
+        checks.append(("stored model choice", None, str(exc)))
+
     try:
         from tempfile import TemporaryDirectory
         from refactory_dsh.model import DshModelClient
@@ -690,6 +703,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="the registry verb; its own arguments pass through",
     )
 
+    # ── model management ──
+    model_group = sub.add_parser("model", help="manage the stored model choice")
+    model_sub = model_group.add_subparsers(dest="model_action")
+    model_set = model_sub.add_parser("set", help="set the stored model choice")
+    model_set.add_argument("--provider", required=True, help="provider route name")
+    model_set.add_argument("--model", required=True, help="model id")
+    model_sub.add_parser("show", help="show the stored model choice")
+
     ui = sub.add_parser("ui", help="the Web GUI (the tool, the panel, the conversation)")
     ui.add_argument("--port", type=int, default=0, help="default: the launcher's own")
     ui.add_argument("--no-open", action="store_true", help="do not open a browser")
@@ -791,11 +812,33 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ui(args)
     if args.verb == "doctor":
         return cmd_doctor(args)
+    if args.verb == "model":
+        return _cmd_model(args)
     if args.verb == "pin":
         return _cmd_pin(args)
     if args.verb == "package":  # handled before argparse; kept for completeness
         return _forward("refactory_dsh.registry", [])
     parser.error(f"unknown verb {args.verb!r}")  # pragma: no cover - argparse rejects first
+    return 2
+
+
+def _cmd_model(args: argparse.Namespace) -> int:
+    """Manage the stored model choice."""
+    from refactory_dsh.dsh_profile import stored_model_choice, model_choice_write
+
+    action = getattr(args, "model_action", None)
+    if action == "set":
+        model_choice_write(args.provider, args.model)
+        print(f"Model choice saved: {args.provider}/{args.model}")
+        return 0
+    if action == "show":
+        choice = stored_model_choice()
+        if not choice["provider"] and not choice["model"]:
+            print("No model choice stored.", file=sys.stderr)
+            return 1
+        print(json.dumps(choice, indent=2))
+        return 0
+    print("usage: refactory model {set,show}", file=sys.stderr)
     return 2
 
 
