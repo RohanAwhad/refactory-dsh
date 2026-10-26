@@ -650,6 +650,14 @@ def smoke(
 
     forwarded = toolchain.tool_env(identifier.split("/", 1)[0], project)
     kwargs.setdefault("timeout_s", DEFAULT_MODEL_SMOKE_TIMEOUT_S if model else DEFAULT_TIMEOUT_S)
+    if model:
+        # A model call starts a DSH worker, which is Node, and its first request
+        # instantiates WebAssembly (fetch's HTTP parser) that reserves far more address
+        # space than it uses. Under the snippet's address-space cap that fails with
+        # "WebAssembly.instantiate(): Out of memory" on Linux, so a smoke with a model
+        # is bounded by its time instead, as `run_command` is for the same reason
+        # (#325, dm-256). A smoke without a model keeps the cap.
+        kwargs.setdefault("memory_mb", 0)
     if context.get("budget_ledger"):
         from refactory_dsh.budgets import RunBudget
 

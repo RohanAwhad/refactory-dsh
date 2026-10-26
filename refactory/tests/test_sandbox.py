@@ -277,7 +277,8 @@ def test_a_check_reads_no_input(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "linux", reason="only Linux can set an address-space cap")
 def test_generated_code_keeps_its_memory_cap(tmp_path):
-    """Lifting the cap on check commands leaves the one on snippets: smoke, verification and readiness."""
+    """Lifting the cap on check commands leaves the one on snippets: a smoke without a model,
+    verification and readiness. A smoke with a model has none (dm-256, below)."""
     result = sandbox.run_sandboxed(
         "import json, resource; print(json.dumps({'cap': resource.getrlimit(resource.RLIMIT_AS)[0]}))",
         workdir=tmp_path / "run",
@@ -306,6 +307,60 @@ def test_a_sandboxed_smoke_scores_a_real_mode(tmp_path):
     _stage(tmp_path, GOOD)
     result = sandbox.smoke(f"{NAME}/counter", tmp_path / "run", project=tmp_path)
     assert result.ok, result.stderr
+    assert result.payload["score"] == 3.0
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux enforces an address-space cap")
+def test_a_smoke_with_a_model_starts_its_worker_without_the_memory_cap(tmp_path):
+    """dm-256: create's smoke of any mode with an agent node failed on Linux.
+
+    The smoke's model call starts a DSH worker, which is Node, and its first request
+    instantiates WebAssembly (fetch's HTTP parser). Under the snippet's 2 GB address-space
+    cap that fails with "WebAssembly.instantiate(): Out of memory". The worker here is a
+    stand-in that makes the same kind of request, to a server in this process, through
+    the same `sandbox.smoke` call create makes; no model is called.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from refactory_dsh.model import DshModelClient
+    from refactory_dsh.paths import node_bin
+
+    class Answer(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        request = tmp_path / "worker.mjs"
+        request.write_text(
+            f"const reply = await fetch('http://127.0.0.1:{server.server_address[1]}/')\n"
+            "console.log('fetched', reply.status)\n"
+        )
+        worker = tmp_path / "dsh"
+        worker.write_text(f'#!/bin/sh\nexec {shlex.quote(node_bin())} {shlex.quote(str(request))}\n')
+        worker.chmod(0o755)
+        files = dict(GOOD)
+        files["ops.py"] = GOOD["ops.py"].replace(
+            "def finish(ctx):\n",
+            "def finish(ctx):\n"
+            "    if ctx.model.complete('reach the model', workdir=ctx.workdir).strip() != 'fetched 200':\n"
+            "        raise RuntimeError('the worker did not reach its model')\n",
+        )
+        _stage(tmp_path, files)
+        context = DshModelClient(dsh_cli=str(worker), attempts=1, timeout_s=60).context()
+        result = sandbox.smoke(f"{NAME}/counter", tmp_path / "run", project=tmp_path, model=True,
+                               model_context=context, timeout_s=120)
+    finally:
+        server.shutdown()
+    assert "Out of memory" not in result.stdout + result.stderr, result.stdout + result.stderr
+    assert result.ok and result.payload.get("exit_ok"), result.stdout + result.stderr
     assert result.payload["score"] == 3.0
 
 
