@@ -122,8 +122,13 @@ def test_a_structural_candidate_wins_the_running_example(tmp_path):
 
 
 def test_every_evaluated_candidate_validated_first(tmp_path):
-    """The example's central guarantee: nothing invalid ever costs a run."""
-    loop = Loop(TARGET, _config(tmp_path / "runs"), project=Path("."))
+    """The example's central guarantee: nothing invalid ever costs a run.
+
+    The steps are driven by hand, so no epoch is opened and only the evaluation
+    bound ends the loop: 12 evaluations already include proposals that validation
+    must refuse.
+    """
+    loop = Loop(TARGET, _config(tmp_path / "runs", max_evaluations=12), project=Path("."))
     loop.init()
     while True:
         evaluated = loop.forward()

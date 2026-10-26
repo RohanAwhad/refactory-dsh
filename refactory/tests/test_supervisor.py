@@ -980,15 +980,32 @@ def test_dm94_resume_through_interactive_run(tmp_path):
 # ── dm-93: real run_owned stops a lingering child ──────────────────────────
 
 
-def test_real_run_owned_stops_lingering_child(tmp_path):
+class _ShortWaitPopen(subprocess.Popen):
+    """A real Popen whose waits are capped at half a second.
+
+    ``_communicate_with_stop`` polls every second and gives a lingering child five
+    seconds after its stdin closes, both as literals. Capping the waits keeps the
+    process, the signals and the reaping real while the test takes about a second
+    and a half instead of six and a half.
+    """
+
+    def wait(self, timeout=None):  # type: ignore[no-untyped-def]
+        return super().wait(None if timeout is None else min(timeout, 0.5))
+
+
+def test_real_run_owned_stops_lingering_child(tmp_path, monkeypatch):
     """A real child process writes terminal status and keeps running;
     run_owned with stop_condition ends it via the stop-condition mechanism.
 
-    Uses the real run_owned function with a real subprocess — no mocks on
-    the subprocess layer.  The stop condition reads a status file the child
-    writes and returns True when it says 'failed'.
+    Uses the real run_owned function with a real subprocess, really stopped by
+    ``shutdown``; only the waits between its steps are shortened (``_ShortWaitPopen``).
+    The stop condition reads a status file the child writes and returns True when
+    it says 'failed'.
     """
+    from refactory_dsh import owned_process
     from refactory_dsh.owned_process import run_owned
+
+    monkeypatch.setattr(owned_process.subprocess, "Popen", _ShortWaitPopen)
 
     status_file = tmp_path / 'status.json'
 
