@@ -3155,7 +3155,7 @@ def test_without_gh_login_the_run_succeeds_and_says_its_work_stays_local(github,
     result = _design(run)
     assert result.exit_ok, result.error
     err = capsys.readouterr().err
-    assert "run warning: no pull request was opened: gh is not logged in" in err
+    assert "run warning: no pull request was opened: GitHub CLI is not logged in" in err
     assert _record(run)["status"] == "kept local"
     assert "repo create" not in _calls(tmp_path) and not list(github.glob("*/*.git"))
 
@@ -4016,6 +4016,80 @@ def test_a_repository_with_the_name_that_this_project_never_set_out_to_create_is
     assert "already exists" in (tmp_path / "two" / delivery.PLAN).read_text() and _pulls(github, f"{LOGIN}/{NAME}") == []
 
 
+def test_a_logged_out_gh_is_named_asks_github_nothing_and_leaves_commands_that_publish(github, tmp_path):
+    """dm-260: delivery without a gh login blamed GitHub's rate limit, and named the address.
+
+    A logged-out gh 2.99 still sends `gh api user` to GitHub, which answered from a
+    shared address with "API rate limit exceeded for <address>"; that went into the plan,
+    the record and the warning, and `finish` was empty although the new project's files
+    were only on the run's branch. Now gh's own `auth status` is asked first, nothing
+    reaches GitHub, and `finish` holds the commands that publish the work, which run here
+    once gh is logged in.
+    """
+    (github / "login").unlink()
+    (github / "rate-limited").write_text("")
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    plan_text = (run / delivery.PLAN).read_text()
+    assert "GitHub CLI is not logged in" in plan_text
+    assert "api user" not in _calls(tmp_path), "nothing is asked of GitHub without a login"
+    said = plan_text + json.dumps(_record(run)) + result.facts["delivery_result"]
+    assert "rate limit" not in said and "203.0.113.7" not in said
+    record = _record(run)
+    target = (projects_dir() / NAME).resolve()
+    assert record["finish"][0] == "gh auth login"
+    assert record["finish"][1] == f"gh repo create {NAME} --private --source {target} --remote origin"
+    assert f"the work is on branch {record['branch']} of {target}" in result.facts["delivery_result"]
+
+    (github / "login").write_text(LOGIN + "\n")
+    shell = {**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+             "FAKE_GH_ROOT": str(github), "GIT_TERMINAL_PROMPT": "0"}
+    for command in record["finish"][1:]:
+        subprocess.run(command, shell=True, check=True, capture_output=True, env=shell)
+    slug = f"{LOGIN}/{NAME}"
+    [pull] = _pulls(github, slug)
+    assert (pull["head"], pull["base"], pull["title"]) == (record["branch"], "main", record["title"])
+    assert _remote_head(github, slug, record["branch"]) == record["head"]
+    assert git(github / f"{slug}.git", "ls-tree", "main") == "", "main is the project's empty first commit"
+
+
+def test_a_repository_with_no_github_remote_is_left_the_local_merge(github, tmp_path):
+    """dm-260: a run on a repository that has no GitHub remote cannot be published, so its
+    `finish` is the merge that brings the run's branch into the person's checkout."""
+    repo = git_repo(tmp_path / "repo")
+    run = tmp_path / "run"
+    result = _design(run, target=str(repo))
+    assert result.exit_ok, result.error
+    record = _record(run)
+    assert record["finish"] == [f"git -C {repo.resolve()} merge {record['branch']}"]
+    assert f"the work is on branch {record['branch']} of {repo}" in result.facts["delivery_result"]
+    subprocess.run(record["finish"][0], shell=True, check=True, capture_output=True)
+    assert (repo / "tool.py").read_text() == "print('built')\n"
+
+
+def test_gh_is_asked_for_its_login_without_gh_host(github, tmp_path):
+    """dm-260: delivery runs gh with GH_HOST set, and with it a logged-out gh 2.99's `auth
+    status` reports a phantom token rather than "not logged in". So the login is asked
+    without GH_HOST, and a logged-out gh is named without anything being sent to GitHub."""
+    (github / "login").unlink()
+    planned = delivery.plan(tmp_path / "new", base="", branch="refactory/run-x")
+    assert planned["why"] == delivery.LOGGED_OUT and planned.get("logged_out") is True
+    assert "auth status" in _calls(tmp_path) and "api user" not in _calls(tmp_path)
+
+
+def test_what_github_says_reaches_no_record_with_an_address(tmp_path, monkeypatch):
+    """dm-260: a refusal from GitHub can name the address a request came from. Every reason
+    delivery records hides it, while a version or a time in the same text stays as it was."""
+    stub(tmp_path / "bin", "gh", 'echo "gh: API rate limit exceeded for 203.0.113.7 and 2001:db8::7, '
+                                 'gh 2.99.0 at 13:55:01 (HTTP 403)" >&2; exit 1')
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    planned = delivery.plan(tmp_path / "new", base="", branch="refactory/run-x")
+    assert planned["action"] == "none"
+    assert "203.0.113.7" not in json.dumps(planned) and "2001:db8::7" not in json.dumps(planned)
+    assert "rate limit exceeded for [address hidden] and [address hidden], gh 2.99.0 at 13:55:01" in planned["why"]
+
+
 def test_a_run_planned_while_gh_was_logged_out_says_the_next_run_delivers(github, tmp_path):
     (github / "login").unlink()
     run = tmp_path / "run"
@@ -4291,12 +4365,13 @@ def test_no_github_remote_says_so_plainly(github, tmp_path, capsys):
     assert (run / delivery.BODY).exists()
     record = _record(run)
     assert record.get("title")
-    # No commands because there's no remote
-    assert record.get("finish") == []
-    # delivery_result mentions no GitHub repository
+    # A new project has no repository yet: the commands create it, as delivery would (dm-260).
+    assert record["finish"][0].startswith(f"gh repo create {NAME} --private --source ")
+    # delivery_result mentions no GitHub repository, and where the work is
     dr = result.facts["delivery_result"]
     assert "no GitHub repository" in dr
     assert "pull request text is at" in dr
+    assert f"the work is on branch {record['branch']} of " in dr
 
 
 # ── merge-before-deliver (dm-76) ───────────────────────────────────────────

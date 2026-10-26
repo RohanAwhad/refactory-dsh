@@ -24,7 +24,6 @@ try {
   const { isJsExpr } = await load('@deepseek-ai/cordis-plugin-loader', createRequire(installed.resolve('@deepseek-ai/dsh-app-boot/package.json')))
   const { default: Credentials } = await load('@deepseek-ai/dsh-credentials-local')
   const { credentialRef } = await load('@deepseek-ai/dsh-credentials', createRequire(base.resolve('@deepseek-ai/dsh-credentials-local/package.json')))
-  const { default: Settings } = await load('@deepseek-ai/dsh-settings-file')
   const { default: DefaultModel } = await load('@deepseek-ai/dsh-agent-default-model')
   const home = resolveDshHome()
   stage = 'headless profile configuration'
@@ -56,24 +55,24 @@ try {
   }
   stage = 'managed credential store'
   await mount(Credentials, { ...config('credentials', '@deepseek-ai/dsh-credentials-local'), watch: false })
+  // The pinned harness (0.2.0-rc.2) keeps model settings in the profile's own entries:
+  // the Models page writes them into the profile patch, and the separate settings
+  // document of earlier releases is imported once and retired. So each value is the
+  // composed entry's config, read through that plugin's own Config schema for its
+  // defaults, exactly as the plugin itself reads it.
   stage = 'model settings'
-  await mount(Settings, { ...config('settings', '@deepseek-ai/dsh-settings-file'), watch: false })
   await mount(DefaultModel, config('agent-default-model', '@deepseek-ai/dsh-agent-default-model'))
   const selection = ctx.agentDefaultModel.currentSelection()
   provider = requestedProvider || selection.provider
   model = requestedModel || selection.model
+  const read = value => (typeof value?.get === 'function' ? value.get() : value)
   let connection
   if (provider === 'deepseek-official') {
-    const { Config } = await load('@deepseek-ai/dsh-llm-deepseek')
-    connection = ctx.settings.register('llm-deepseek', Config, {
-      base: config('llm-deepseek', '@deepseek-ai/dsh-llm-deepseek'),
-    }).get()
+    const { Config } = await load('@deepseek-ai/dsh-llm-deepseek-api-key')
+    connection = { apiKeyEnv: read(Config(config('llm-deepseek', '@deepseek-ai/dsh-llm-deepseek-api-key')).apiKeyEnv) }
   } else {
     const { Config } = await load('@deepseek-ai/dsh-llm-pi-ai')
-    const settings = ctx.settings.register('llm-pi-ai', Config, {
-      base: config('llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai'),
-    }).get()
-    connection = settings.providers?.[provider]
+    connection = read(Config(config('llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai')).providers)?.[provider]
     if (!connection) throw new DiagnosticUnavailable('provider-inspection-unavailable')
   }
   const ref = connection.apiKeyEnv

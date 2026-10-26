@@ -15,6 +15,10 @@ from tests_support import FakeModel, create_script, good_files, render
 from test_fast_modes import PLAN, QA_PASS
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 @pytest.mark.parametrize("cls", [CreateMode, EditMode, CreateFastMode, EditFastMode])
 def test_canonical_execution_repairs_before_any_review(tmp_path, monkeypatch, cls):
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))

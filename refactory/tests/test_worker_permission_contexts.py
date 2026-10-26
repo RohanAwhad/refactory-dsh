@@ -16,6 +16,10 @@ from refactory_dsh.model import DshModelClient
 PROJECT = Path(__file__).resolve().parents[2]
 
 
+#: The graph runtime starts from the `graph` profile: the test's own, linked to this checkout (dm-267).
+pytestmark = pytest.mark.usefixtures("graph_profile_home")
+
+
 @pytest.mark.parametrize('permission', ['skip', 'default'])
 def test_dsh_worker_and_coordinator_overlay_do_not_change_child_environment(tmp_path, monkeypatch, permission):
     monkeypatch.delenv('REFACTORY_WORKER_CONTEXT', raising=False)

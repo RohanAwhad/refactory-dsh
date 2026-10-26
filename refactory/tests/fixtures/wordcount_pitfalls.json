@@ -1,0 +1,37 @@
+[
+  {
+    "id": "PIT-001",
+    "risk": "high",
+    "category": "shared_state",
+    "evidence": "brief.json",
+    "prescription": "The check command is `python wordcount.py sample.txt`. wordcount.py must read the file path from sys.argv[1] and open it relative to the current working directory. sample.txt must be in the same directory as wordcount.py so this invocation succeeds. The design must place both files at the repository root and never assume an absolute path."
+  },
+  {
+    "id": "PIT-002",
+    "risk": "high",
+    "category": "scope_boundaries",
+    "evidence": "research-plan.json",
+    "prescription": "Using splitlines() for line counting gives a different result than wc -l (splitlines counts visual lines, wc -l counts newline characters). A design that uses splitlines() will produce counts that disagree with wc, making independent verification fail. The design must use content.count('\\n') for line counting to match wc -l semantics."
+  },
+  {
+    "id": "PIT-003",
+    "risk": "high",
+    "category": "shared_state",
+    "evidence": "research-plan.json",
+    "prescription": "sample.txt must end with a trailing newline. If it does not: (1) count('\\n') will undercount by one compared to visual lines, (2) many editors and git will warn about a missing final newline, and (3) the expected counts in the research (7 lines, 23 words, 126 chars) will be wrong. The design must ensure sample.txt is POSIX-terminated (ends with \\n) and that the stated expected counts are verified against the actual file content."
+  },
+  {
+    "id": "PIT-004",
+    "risk": "medium",
+    "category": "scope_boundaries",
+    "evidence": "research-plan.json",
+    "prescription": "len(content) counts Unicode code points (wc -m), not bytes (wc -c). For ASCII-only content these are identical, but if sample.txt contains any multi-byte UTF-8 characters the character count will diverge from byte count. The design must keep sample.txt strictly ASCII-only so that character and byte counts agree and verification against wc is unambiguous."
+  },
+  {
+    "id": "PIT-005",
+    "risk": "medium",
+    "category": "scope_boundaries",
+    "evidence": "absent: tests/test_*.py",
+    "prescription": "There are no existing tests, conventions files, or CI configuration in this empty repository. The design must not assume any test framework or linting infrastructure exists. The check command (`python wordcount.py sample.txt`) is the sole verification mechanism; wordcount.py must exit 0 on success and produce correct output on stdout to pass."
+  }
+]

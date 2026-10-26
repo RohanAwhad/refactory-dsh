@@ -407,10 +407,10 @@ or empty, at most `design_review_attempts` times (default 1). Everything else is
 **advisory** and shown on the approval gate's card: unverified claims first, then the
 claims check's notes, then a missing `## Summary` or `## Tests`, a citation past the end
 of its file, a quotation the brief does not contain (or differs from only in
-punctuation), rule-site marker and title formatting, and — when the design has an
-`## Anti-patterns to avoid` section — a high-risk pitfall it does not answer (without
-that section, one line naming the high-risk pitfalls left unchecked). An optional
-section a design leaves out is not checked. Research and perspective findings
+punctuation), rule-site marker and title formatting, and a high-risk pitfall the
+design never mentions. The pitfalls are quoted, not judged: the card lists each one
+with up to two of the design lines that cite it, under their headings, or "not
+mentioned" (dm-262). An optional section a design leaves out is not checked. Research and perspective findings
 the design does not cite are recorded in the `finding_coverage` fact and not listed at
 all. When its rewrite is spent the gate proceeds to `gate_strategy` with the gap shown —
 it never reads a review and never fails the run. In design mode the research and
@@ -427,7 +427,9 @@ empty reason otherwise. After `gate_research` proceeds, `classify_scale` reads e
 direction's `footprint` object from `research-plan.json` and applies a three-part
 rule: the change is scoped only when it touches at most two existing functions, adds
 nothing new, and changes no shared engine. Anything else is full; so is a direction
-with no footprint key, or an entry without file:line evidence. The brief is never
+with no footprint key, or an entry without file:line evidence. In a new or empty
+project (a checkout with no tracked file) everything is new: it is scoped when it adds
+at most three new items and changes no shared engine, and full otherwise. The brief is never
 read by the classifier. The `research_scope_reason` fact records why the run was
 classed as it was, and the approval card's scale line shows it ("Scale: scoped —
 <reason>"). A scoped change gets at most five pitfalls, and one step is left out:

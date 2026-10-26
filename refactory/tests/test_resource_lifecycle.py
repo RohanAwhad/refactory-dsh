@@ -14,6 +14,10 @@ from refactory_dsh.fast import CreateFastMode, DesignFastMode
 PROJECT = Path(__file__).resolve().parents[2]
 
 
+#: The graph runtime starts from the `graph` profile: the test's own, linked to this checkout (dm-267).
+pytestmark = pytest.mark.usefixtures("graph_profile_home")
+
+
 def test_fresh_invocation_archives_old_budget_and_workers(tmp_path):
     run = tmp_path / "run"
     interactive.prepare("review_pack/review", workdir=run, project=PROJECT, resource_limits={"max_elapsed_s": 60})

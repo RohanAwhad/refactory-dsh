@@ -38,6 +38,10 @@ EMIT_MARK = "Write the artifact `"
 HEALTH, CODE, QA = "health: ran it, it prints built", "code review: matches the design", "qa: ok"
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def _round(emission: str, *, reviews: tuple[str, str, str] = (HEALTH, CODE, QA),
            verifier: str = VERIFICATION_ANSWER, judge: str | list[str] | None = None,
            overwatch: str | list[str] | None = None) -> list[str]:

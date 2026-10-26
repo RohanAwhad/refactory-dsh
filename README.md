@@ -57,6 +57,7 @@ Keep the winner as a new package:
 
 ```bash
 uv run refactory adopt --run .factory/loop/first-search --as first_tuned
+uv run refactory package verify first_tuned
 uv run refactory package smoke first_tuned/adaptive
 ```
 
@@ -84,32 +85,32 @@ If a run stops with `Workflow engine build is out of date … Run pnpm run build
 | `status`, `candidate`, `steer`, `adopt` for inspection and control | Run once, live graph/worker activity, questions and candidate comparison |
 
 ```bash
-uv run refactory ui --port 3081
+uv run refactory ui --port 3081 --no-open
 ```
 
 For all native web presets plus CEO and the Refactory Modes panel:
 
 ```bash
-./refactory-dsh --additive --port 3081
+./refactory-dsh --additive --port 3081 --no-open
 ```
 
 This creates and reuses `refactory-web`, declaring the web and Refactory bundles
 in `$DSH_HOME/profiles/refactory-web/package.json`. CEO is the default, and the
 existing `web` profile stays unchanged.
 
-Open the exact URL printed by the server, select the checkout as your workspace, then create a session. Open the right sidebar's **Modes** tab; no introductory chat message is required.
+Open the exact URL the server prints, token and all (`http://127.0.0.1:3081/?token=…`); `--no-open` only stops it from opening a browser itself. Select the checkout as your workspace, then create a session. Open the right sidebar's **Modes** tab; no introductory chat message is required.
 
-Before model-backed work, save a provider key in **Settings → Models** or run `uv run refactory model set --provider <provider> --model <model>`. Nested workers and validation use the managed credential store; a checkout `.env` or exported key alone is insufficient for those scrubbed processes. `uv run refactory doctor` checks configuration, not authentication or quota. [Model setup →](refactory/docs/models.md)
+Before model-backed work, save a provider key in **Settings → Models** and choose the model there, or run `uv run refactory model set --provider <provider> --model <model>`. That one choice is the model every run uses, in the GUI and the terminal alike; `--provider` and `--model` override it for one run, and a run with no choice is refused before any model call rather than falling back to a profile's default. `uv run refactory runtime` shows the route and where it came from. Nested workers and validation use the managed credential store; a checkout `.env` or exported key alone is insufficient for those scrubbed processes. `uv run refactory doctor` checks the chosen provider's configuration, not authentication or quota. [Model setup →](refactory/docs/models.md)
 
 Try this in GUI chat:
 
-> Open counting_pack/fixed_step with target=20 and step=2. Drive it one node at a time and show me the recorded result.
+> Open counting_pack/fixed_step with target=8 and step=2. Drive it one node at a time and show me the recorded result.
 
 Or from the terminal:
 
 ```bash
 uv run refactory ceo counting_pack/fixed_step \
-  --knob target=20 --knob step=2 --intent "Count to twenty and explain the recorded result."
+  --knob target=8 --knob step=2 --intent "Count to eight and explain the recorded result."
 ```
 
 Chat supports Create, Edit and Design. The Modes panel's **Start** button launches optimization of a scored mode; **Run once** executes any enabled mode, including full and fast authoring modes. Attach a run to follow durable activity, worker receipts and pending questions. [Interface guide →](refactory/docs/interfaces.md)
@@ -121,9 +122,9 @@ Chat supports Create, Edit and Design. The Modes panel's **Start** button launch
 | Create a single-run harness | `uv run refactory ceo "Draft and check a project README from a supplied brief" --mode create --name readme_pack --single` |
 | Create a harness for a class of inputs | Use `--task module:TaskClass` instead of `--single`; see [Tasks and datasets](refactory/docs/datasets.md) |
 | Revise a mode | `uv run refactory ceo "Improve the search strategy" --mode edit --revise circle_packing/adaptive --name revised_pack` |
-| Build a checked artifact | `uv run refactory ceo "Build wordcount.py and a sample.txt; verify line, word and character counts" --mode design --name wordcount --check "python wordcount.py sample.txt"` |
+| Build a checked artifact | `uv run refactory ceo "Build wordcount.py, which prints a file's line, word and character counts as wc -l -w -m counts them, as three numbers separated by spaces, and a plain-ASCII sample.txt" --mode design --name wordcount --check 'test "$(python wordcount.py sample.txt)" = "$(wc -l -w -m < sample.txt \| xargs)"'` |
 
-These commands call a model and can take substantial time. The current full authoring modes include research and reviews; you approve the strategy/design before implementation. Generated packages live in `.factory/packages/`. A Design run works on its own branch in a git worktree: of the repository you name with `--target`, or of a new project in `~/refactory-projects/`. Exact paths and validation outcomes are recorded in the run.
+These commands call a model and can take substantial time. The current full authoring modes include research and reviews; you approve the strategy/design before implementation. Generated packages live in `.factory/packages/`. A Design run works on its own branch in a git worktree: of the repository you name with `--target`, or of a new project in `~/refactory-projects/`. Exact paths and validation outcomes are recorded in the run. The wordcount check compares the counts with `wc`, so it fails when they are wrong, not only when the script crashes. Delivering the pull request needs `gh` logged in (`gh auth login`); without it the files stay on the run's branch, which the run names, and `delivery.json` lists the commands that publish them.
 
 For a small, focused task, choose `create_fast`, `edit_fast` or `design_fast`. Create plans a minimal reusable graph, then runs one coder and one QA agent sequentially; structural admission and canonical smoke remain required. Design uses the same three sequential roles for a small checked change, made where Design makes one: on the run's own branch, in a worktree of the repository or of a new project. Edit goes directly to one coder and one QA agent while preserving the source contract and optional score comparison. These graphs omit research and reviewer fan-out and allow one repair by default. All three fast paths completed their bounded CLI and native GUI checks, including real structural repairs and independent artifact checks; fast Design's worktree paths, so far, on the CLI only. Prior failures are retained. See [fast modes and shared budgets](refactory/docs/budgets-fast-modes.md).
 

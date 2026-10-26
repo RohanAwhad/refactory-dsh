@@ -25,7 +25,7 @@ from refactory_dsh.nn.knob import Knob, KnobError
 from refactory_dsh.nn.validate import validate_state, Issue
 from refactory_dsh.readable import format_status
 from refactory_dsh.paths import REPO_ROOT
-from tests_support import _link_bundle, _profile
+from tests_support import PLACEHOLDER_KEY, _link_bundle, _profile, model_home_with_a_key
 
 
 def _run(*argv: str, timeout: int = 300) -> subprocess.CompletedProcess[str]:
@@ -404,6 +404,67 @@ def test_doctor_ok_row_names_the_checkout_the_bundle_comes_from(
     graph_line = next(line for line in output.splitlines() if "DSH profile 'graph'" in line)
     assert "ok" in graph_line
     assert str(bundle_target) in output
+
+
+def test_doctor_confirms_a_configured_key_and_names_a_missing_one(tmp_path, monkeypatch, capsys):
+    """dm-257: doctor (and create/edit's credential check) could never confirm a key.
+
+    The readiness probe imported a settings package the pinned harness (0.2.0-rc.2) does
+    not ship, so every install reported "diagnostic-unavailable". It now reads the
+    routes from the headless profile's entries and asks the managed store whether the
+    referenced key is set, never for its value. The home and its store are fakes.
+    """
+    from argparse import Namespace
+
+    from refactory_dsh.cli import cmd_doctor
+
+    home = model_home_with_a_key(tmp_path / "dsh")
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
+    monkeypatch.delenv("DSH_CLI", raising=False)
+
+    def row(output: str) -> str:
+        return next(line for line in output.splitlines() if "sandbox model configuration" in line)
+
+    cmd_doctor(Namespace(provider="", model="", run=None))
+    configured = capsys.readouterr().out
+    assert row(configured).split()[0] == "ok", row(configured)
+    assert "fakeprov/fake-model: configured" in row(configured)
+
+    cmd_doctor(Namespace(provider="otherprov", model="other-model", run=None))
+    missing = capsys.readouterr().out
+    assert row(missing).split()[0] == "MISS", row(missing)
+    assert "REFACTORY_TEST_KEY_UNSET is not configured for otherprov" in row(missing)
+
+    # DeepSeek's own route is a different plugin, whose key reference has a default.
+    cmd_doctor(Namespace(provider="deepseek-official", model="deepseek-flash", run=None))
+    deepseek = capsys.readouterr().out
+    assert row(deepseek).split()[0] == "MISS", row(deepseek)
+    assert "DEEPSEEK_API_KEY is not configured for deepseek-official" in row(deepseek)
+    assert PLACEHOLDER_KEY not in configured + missing + deepseek
+
+
+def test_doctor_asks_for_the_python_the_project_declares(monkeypatch, capsys):
+    """dm-266: doctor wanted Python 3.12 while pyproject.toml declared 3.11, so a 3.11 install
+    that `uv sync` accepted failed doctor. Both now name the version the code needs."""
+    import tomllib
+    from argparse import Namespace
+
+    from refactory_dsh.cli import cmd_doctor
+
+    declared = {
+        tomllib.loads((root / "pyproject.toml").read_text())["project"]["requires-python"]
+        for root in (REPO_ROOT, REPO_ROOT / "refactory")
+    }
+    assert declared == {">=3.11"}, declared
+    monkeypatch.setattr(
+        "refactory_dsh.sandbox.model_readiness",
+        lambda *a, **kw: {"provider": "test", "model": "test", "status": "configured"},
+    )
+    cmd_doctor(Namespace(provider="", model="", run=None))
+    rows = [line.split(None, 1)[1] for line in capsys.readouterr().out.splitlines()
+            if line.strip().startswith(("ok", "MISS", "WARN"))]
+    assert any(row.startswith("python >= 3.11 ") for row in rows), rows
 
 
 def test_require_build_passes_when_spine_lib_exists(tmp_path):

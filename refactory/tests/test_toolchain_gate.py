@@ -75,7 +75,9 @@ def _marked_tools() -> set[str]:
 def test_every_declared_tool_is_represented_in_the_gated_set():
     """A gate that covers two of the three tools passes for the wrong reason."""
     tools = _marked_tools()
-    assert {"lean", "mathlib", "sympy", "model-credential"} <= tools, (
+    # The model-credential tests run against a fake configured home now (dm-257), so no
+    # test waits on this machine's own credential.
+    assert {"lean", "mathlib", "sympy"} <= tools, (
         f"the gate has no test for some tool it is supposed to cover: {sorted(tools)}"
     )
 

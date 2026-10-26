@@ -75,14 +75,23 @@ def render(record: dict[str, Any], *, verbose: bool = False) -> str | None:
             line += f" · {float(record['duration_s']):.1f}s"
         return line
     if step == "optimizer":
+        # Each count says what it counts: this epoch's proposals, each either accepted
+        # for evaluation or refused, so the first is the sum of the other two (dm-265).
         line = (
-            f"epoch {epoch} · proposals {record.get('proposed', 0)} · "
-            f"accepted {record.get('accepted', 0)} · refused {record.get('refused', 0)}"
+            f"epoch {epoch} · proposals {record.get('proposed', 0)} this epoch: "
+            f"accepted {record.get('accepted', 0)} for evaluation, "
+            f"refused {record.get('refused', 0)}"
         )
+        epoch_codes = record.get("epoch_refusal_codes")
         codes = record.get("refusal_codes")
-        if isinstance(codes, dict) and codes:
+        if isinstance(epoch_codes, dict):
+            if epoch_codes:
+                line += " (" + ", ".join(f"{code} {count}" for code, count
+                                         in sorted(epoch_codes.items())) + ")"
+        elif isinstance(codes, dict) and codes:
+            # A record from before the epoch's own codes were kept: the run's tally.
             shown = ", ".join(f"{code} {count}" for code, count in sorted(codes.items()))
-            line += f" ({shown})"
+            line += f" (run so far: {shown})"
         return line
     if step == "scheduler":
         return (

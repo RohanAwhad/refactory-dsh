@@ -309,11 +309,14 @@ def node_row(node: Node, depth: int, detail: str = "") -> str:
         trail.append(f"writes {code(writes)}")
     if produces:
         trail.append(f"produces {code(produces)}")
+    # Built apart: a quote escaped inside a nested f-string needs Python 3.12, and the
+    # project supports 3.11.
+    trailing = f"<div class='phase-trail'>{' '.join(trail)}</div>" if trail else ""
     return (
         f'<li class="phase" style="--depth:{depth}">'
         f'<div class="phase-head">{kind_chip(node.kind)}<span class="phase-id">{esc(node.id)}</span>'
         f'<span class="phase-detail">{detail}</span></div>'
-        f'{f"<div class=\'phase-trail\'>{chr(32).join(trail)}</div>" if trail else ""}'
+        f'{trailing}'
         "</li>"
     )
 
@@ -357,8 +360,9 @@ def render_kinds() -> str:
 
 def render_named(rows: list[tuple[str, str]], first: str, second: str) -> str:
     """A two-column table of names and their own descriptions."""
+    missing = "<span class='muted'>—</span>"
     body = "".join(
-        f"<tr><td><code>{esc(name)}</code></td><td>{esc(description) or '<span class=\'muted\'>—</span>'}</td></tr>"
+        f"<tr><td><code>{esc(name)}</code></td><td>{esc(description) or missing}</td></tr>"
         for name, description in rows
     )
     return f"<table><thead><tr><th>{esc(first)}</th><th>{esc(second)}</th></tr></thead><tbody>{body}</tbody></table>"

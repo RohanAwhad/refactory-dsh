@@ -1,0 +1,37 @@
+[
+  {
+    "id": "PIT-001",
+    "risk": "high",
+    "category": "shared_state",
+    "evidence": "refactory/refactory_dsh/graph_control.py:323",
+    "prescription": "The comment at graph_control.py:323-324 states 'Do NOT rewrite spine-checkpoint.json or spine-status.json: the spine is their only writer (#410).' The dm-244 fix (stop on a paused ownerless run) must write spine-status.json and spine-checkpoint.json directly from Python to record the stopped status. The design must reconcile this with the #410 invariant. Note that run_state.py:120-147 (promote_unretried_failure) already breaks this convention — it writes both files from Python — establishing a precedent. The design must follow the same atomic-write pattern (write .tmp, rename) and must only write when the owner is verified dead, exactly as promote_unretried_failure does. A concurrent owner start (recovery.start racing with the stop write) must not corrupt state."
+  },
+  {
+    "id": "PIT-002",
+    "risk": "high",
+    "category": "pinning_tests",
+    "evidence": "refactory/tests/test_graph_control.py:238",
+    "prescription": "The acknowledge status guard at test_graph_control.py:180-256 (test_acknowledge_executing_checkpoint) asserts that acknowledge works for 'executing' status. The guard logic at graph_control.py:238 rejects anything not in ('executing', 'failed'). Widening acknowledge to accept 'paused' status must NOT weaken the guard for all statuses — it must add 'paused' as a third accepted value only when owner and supervisor are dead. The test must be kept passing; a new test for the paused case must be added."
+  },
+  {
+    "id": "PIT-003",
+    "risk": "high",
+    "category": "callers",
+    "evidence": "packages/workflow/workflow-spine/src/spine.ts:1295",
+    "prescription": "The isPaused() guard on planRedo (spine.ts:1295) also protects skip (spine.ts:1092) and expand (spine.ts:1007). Removing the guard from planRedo for dm-227 must NOT remove it from skip() or expand() — those guards protect different invariants (skip must not silently discard armed pause boundaries at spine.ts:1108-1109; expand should not dispatch new work into a paused boundary). The fix must be surgically scoped to planRedo and redo only, leaving the skip and expand guards in place."
+  },
+  {
+    "id": "PIT-004",
+    "risk": "high",
+    "category": "shared_state",
+    "evidence": "packages/workflow/workflow-spine/src/index.ts:1219-1220",
+    "prescription": "The revision hash is SHA-256 of the entire spine-checkpoint.json file bytes (index.ts:1219-1220 and graph_control.py:35). Changing the revision computation to exclude runtime metadata (owner_pid, file_fingerprints, status) affects ALL revision checks — not just the dm-252 rerun flow. The preview action (graph_control.py:69), the redeliver action (graph_control.py:592), and the non-deferred rerun check in applyControls (index.ts:1220) all use this same revision. A design that changes what the hash covers must verify that security-critical revision checks (preventing replaying a control against a structurally different graph) remain sound. Graph-structural fields (state, graph, source_graph, redo_plans) must still be covered."
+  },
+  {
+    "id": "PIT-005",
+    "risk": "medium",
+    "category": "scope_boundaries",
+    "evidence": "packages/workflow/workflow-spine/src/index.ts:1183-1186",
+    "prescription": "The dm-231 targeted pause fix changes applyControls' pause branch from 'pause all cursor nodes' to 'pause only request.target'. When request.target is empty or undefined (a pause with no --node), the current all-cursor-nodes behavior must be preserved — this is the existing untargeted pause that live runs use today. The fix must fall back to the current behavior when target is absent, not break untargeted pause. Additionally, the fix must handle the case where target names a node not in the current graph (unknown node) and where target names an already-completed node (unreachable)."
+  }
+]

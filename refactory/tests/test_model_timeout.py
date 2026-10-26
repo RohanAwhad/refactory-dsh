@@ -143,6 +143,7 @@ def test_worker_specs_carry_timeout_s(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("graph_profile_home")
 def test_resume_with_model_timeout_is_refused(tmp_path, monkeypatch):
     """run() with resume=True and model_timeout_s=300 raises ValueError.
 

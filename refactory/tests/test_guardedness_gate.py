@@ -12,6 +12,10 @@ from refactory_dsh.design_ops import enforce_guardedness
 from refactory_dsh.nn import Verdict
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 class FakeCtx:
     """Minimal context for enforce_guardedness tests."""
     def __init__(self, files=None, facts=None, workdir=None):

@@ -11,6 +11,10 @@ from refactory_dsh.worker_node import execute
 from tests_support import FakeModel
 
 
+#: Design's prepare checks the model credential (dm-257): the test's own home has a placeholder key.
+pytestmark = pytest.mark.usefixtures("configured_model_home")
+
+
 @pytest.mark.parametrize('mode_class,node_id', [
     (CreateFastMode, 'strategy'), (CreateFastMode, 'emit'),
     (EditFastMode, 'emit'), (DesignFastMode, 'strategy'), (DesignFastMode, 'emit')])

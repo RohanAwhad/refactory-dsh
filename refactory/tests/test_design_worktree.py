@@ -39,6 +39,10 @@ NAME = "worktree_tool"
 # ── graph edges for audit reloop and refused emission ──────────────────────
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def test_gate_overwatch_has_no_audit_edge_in_design_graph():
     """Design mode's gate_overwatch routes on the overwatch's verdict only: the evidence
     map's problems are the overwatch's evidence (design_ops.audit_corrections), not a
