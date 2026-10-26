@@ -144,7 +144,15 @@ def _parse_junitxml(path: str) -> list[dict[str, Any]] | None:
         name = case.get("name", "")
         seconds = float(case.get("time", 0))
         # Map classname (module path with dots) back to a file path.
-        fpath = classname.replace(".", "/") + ".py"
+        # For class-based tests, classname is "pkg.module.ClassName";
+        # we need "pkg/module.py", not "pkg/module/ClassName.py".
+        parts = classname.split(".")
+        mod_parts: list[str] = []
+        for part in parts:
+            if part and part[0].isupper():
+                break
+            mod_parts.append(part)
+        fpath = "/".join(mod_parts) + ".py" if mod_parts else classname.replace(".", "/") + ".py"
         test_id = f"{fpath}::{name}" if name else fpath
         durations.append({"test_id": test_id, "seconds": seconds})
     return durations if durations else None

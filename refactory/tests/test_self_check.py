@@ -907,7 +907,7 @@ def test_N12_base_prepared_flag_after_base_worktree_removed_triggers_repreparati
     repo = _target(tmp_path / "repo", {
         **PINNED, "tests/test_env.py": ALWAYS_FAILS,
         "extra.py": "E = 1\n",
-        "tests/test_extra.py": "import extra\n\n\ndef test_extra():\n    assert not extra.E\n",
+        "tests/test_extra.py": "import extra\n\n\ndef test_extra():\n    assert extra.E\n",
     })
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500055")
     # First emission: only changes tool.py; test_extra.py is not selected.
@@ -1621,37 +1621,67 @@ def test_junitxml_not_left_in_worktree(tmp_path, monkeypatch):
 
 
 def test_two_consecutive_empty_diff_fixups_with_fixups_1_exhausts(tmp_path, monkeypatch):
-    """An empty-diff fixup counts on the attempt and the run; with ``self_check_fixups=2``
-    the sequence fixup → empty_diff_fixup → exhausted verifies that lines 1293 and 1294
-    of design_ops.py count correctly.  Remove line 1293 and the third self-check's
-    ``used`` is 1, not 2, so it fixups again instead of exhausting."""
+    """Two emptied attempts in a row with ``self_check_fixups=1`` must end exhausted.
+
+    The first emission changes ``generated.txt``; generate puts it back →
+    ``empty_diff_fixup`` (count goes 0→1).  The second emission does the same;
+    generate restores it again, but now count=1 ≥ allowed=1 → ``exhausted``.
+
+    Remove line 1293 (``ctx.set_fact("self_check_fixup_count", used + 1)``)
+    and the second empty-diff sees used=0 < allowed=1 → fixups again instead
+    of exhausting → test fails."""
     repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
-    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500061", self_check_fixups=2)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500061", self_check_fixups=1)
     facts = _facts(run)
     (run / "facts.json").write_text(json.dumps({**facts, "generate": "python gen.py"}))
 
-    # First emission: breaks the pin → self-check fixup. count=1, total=1.
-    _emit(run, BREAKS, monkeypatch)
-    code, out, err = _prepare(run, monkeypatch)
-    assert code == 0 and "self-check fix-up 1 of 2" in out, err
-
-    # Second emission: UNDOES, which generate empties → empty_diff_fixup. count=2, total=2.
-    _emit(run, UNDOES, monkeypatch)
+    # First emission: changes generated.txt; generate puts it back → empty_diff_fixup.
+    _emit(run, render({"generated.txt": "version 99\n"}), monkeypatch)
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err
     records = _records(run)
     assert records[-1]["outcome"] == "empty_diff_fixup"
-    assert _facts(run)["self_check_fixup_count"] == 2
-    assert _facts(run)["total_self_check_fixups_used"] == 2
+    assert _facts(run)["self_check_fixup_count"] == 1
+    assert _facts(run)["total_self_check_fixups_used"] == 1
 
-    # Third emission: BREAKS again. The amendment changes the tree (not empty diff),
-    # so the self-check runs and finds the pin failure. used=2 >= allowed=2 → exhausted.
-    _emit(run, BREAKS, monkeypatch)
+    # Second emission: same change; generate restores again → exhausted.
+    _emit(run, render({"generated.txt": "version 99\n"}), monkeypatch)
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err
     records = _records(run)
     assert records[-1]["outcome"] == "exhausted"
-    assert _facts(run)["attempts_used"] == 1
+
+
+def test_parse_junitxml_handles_class_based_tests(tmp_path):
+    """``_parse_junitxml`` correctly maps class-based test classnames to file paths.
+
+    For ``tests.test_failfast.TestNotFoundIds::test_method``, the classname is
+    ``tests.test_failfast.TestNotFoundIds``; the file path must be
+    ``tests/test_failfast.py``, not ``tests/test_failfast/TestNotFoundIds.py``."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<testsuite name="pytest">
+  <testcase classname="tests.test_failfast.TestNotFoundIds" name="test_dropped" time="0.123"/>
+  <testcase classname="tests.test_failfast.TestNotFoundIds" name="test_suffix" time="0.456"/>
+  <testcase classname="tests.test_failfast" name="test_module_level" time="0.789"/>
+</testsuite>
+"""
+    xml_path = tmp_path / "junit.xml"
+    xml_path.write_text(xml_content)
+    durations = failfast._parse_junitxml(str(xml_path))
+    assert durations is not None
+    by_id = {d["test_id"]: d["seconds"] for d in durations}
+    # Class-based tests: classname "tests.test_failfast.TestNotFoundIds" → file "tests/test_failfast.py"
+    assert "tests/test_failfast.py::test_dropped" in by_id
+    assert "tests/test_failfast.py::test_suffix" in by_id
+    assert by_id["tests/test_failfast.py::test_dropped"] == pytest.approx(0.123)
+    assert by_id["tests/test_failfast.py::test_suffix"] == pytest.approx(0.456)
+    # Module-level test: classname "tests.test_failfast" → file "tests/test_failfast.py"
+    assert "tests/test_failfast.py::test_module_level" in by_id
+    assert by_id["tests/test_failfast.py::test_module_level"] == pytest.approx(0.789)
+    # Verify NO wrong path like "tests/test_failfast/TestNotFoundIds.py"
+    wrong_paths = [d["test_id"] for d in durations if "TestNotFoundIds" in d["test_id"]]
+    assert not wrong_paths, f"Class name leaked into test_id: {wrong_paths}"
 
 
 def test_not_found_rerun_failures_are_recorded_and_tests_marked_ran(tmp_path, monkeypatch):
@@ -1695,16 +1725,25 @@ def test_not_found_rerun_failures_are_recorded_and_tests_marked_ran(tmp_path, mo
 
 
 def test_empty_diff_check_skipped_when_head_equals_base(tmp_path, monkeypatch):
-    """When head == base (no emission committed yet), the empty-diff check is skipped:
-    no ``empty_diff_fixup`` or ``exhausted`` outcome, no crash on ~1 of a root commit."""
+    """When head == base (no emission committed), the empty-diff check is skipped.
+
+    The base has a parent with the same tree (via ``--allow-empty``).  Without
+    the ``found.head != found.base`` guard, ``tree(head) == tree(head~1)``
+    would falsely trigger ``empty_diff_fixup``.  With the guard, head == base
+    so the comparison is skipped and the normal flow (``nothing selected``)
+    proceeds.  Removing the guard fails this test."""
     repo = _target(tmp_path / "repo", PINNED)
+    # Add an empty commit so tree(HEAD) == tree(HEAD~1).
+    git(repo, "commit", "--allow-empty", "-m", "empty")
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500063")
-    # Make the facts look like an emission happened but don't actually commit.
-    # head == base because no attempt was committed.
     found = worktree.recorded(run)
     assert found.head == found.base  # no emission committed
-    # Now run prepare_check: should not crash or produce empty_diff_fixup.
-    _emit(run, render({"tool.py": "VERSION = 1\nNAME = 'tool'\n"}), monkeypatch)
+    # Set "commit" fact so prepare_attempt's _restored_attempt does not crash.
+    facts = _facts(run)
+    facts["commit"] = found.head
+    (run / "facts.json").write_text(json.dumps(facts))
+    # Call prepare_check without emitting: prepare_attempt returns []
+    # (nothing to prepare), code falls through to the empty-diff check.
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err
     records = _records(run)
@@ -1738,8 +1777,14 @@ def test_rerun_with_zero_remaining_records_lower_bound(tmp_path, monkeypatch):
 
 def test_rerun_handles_module_import_error(tmp_path, monkeypatch):
     """When the rerun's output contains ``_INTERRUPTED``, broken modules are in ran
-    and remaining tests are re-queued."""
+    and remaining tests are re-queued.  Exercises the rerun-specific _INTERRUPTED
+    check at failfast.py lines 321-332 (not the normal chunk path at line 350)."""
     from refactory_dsh.sandbox import SandboxResult
+
+    # Force all items into one chunk so the exit-4 chunk has remaining items
+    # for a rerun (with SELF_CHECK_CHUNKS=6 and 3 items, chunk_size=1 puts each
+    # item in its own chunk, and the exit-4 chunk has no remaining items).
+    monkeypatch.setattr(failfast, "SELF_CHECK_CHUNKS", 1)
 
     exit4_output = "ERROR: not found: /abs/path/tests/test_x.py::test_gone\n"
     exit4 = SandboxResult(ok=False, returncode=4, stdout=exit4_output, stderr="",
@@ -1768,7 +1813,7 @@ def test_rerun_handles_module_import_error(tmp_path, monkeypatch):
         selection=["tests/test_x.py::test_gone", "tests/test_y.py", "tests/test_z.py"],
         self_check_timeout_s=300,
     )
-    # test_y.py did not import; it should be in ran.
+    # test_y.py did not import; it should be in ran (from the rerun _INTERRUPTED path).
     assert "tests/test_y.py" in prepass.ran_ids
     # test_z.py should have been re-queued and run.
     assert "tests/test_z.py" in prepass.ran_ids
