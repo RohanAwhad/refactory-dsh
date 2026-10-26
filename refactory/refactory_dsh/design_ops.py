@@ -484,6 +484,7 @@ def gate_design_review(ctx: Any) -> str:
         ctx.set_fact("design_review_blocking", "")
         ctx.set_fact("design_review_findings", "(none: nothing blocks the build)" + coverage_block)
         ctx.set_fact("design_review_status", design_review_status(ctx.facts))
+        ctx.set_fact("design_card", design_card(ctx.facts, design_text))
         return "proceed"
 
     report = "\n".join(f"- {p}" for p in problems)
@@ -503,6 +504,7 @@ def gate_design_review(ctx: Any) -> str:
     ctx.set_fact("design_review_feedback", report)
     ctx.set_fact("design_review_findings", report + coverage_block)
     ctx.set_fact("design_review_status", design_review_status(ctx.facts))
+    ctx.set_fact("design_card", design_card(ctx.facts, design_text))
     return "proceed"
 
 
@@ -712,6 +714,50 @@ def design_review_status(facts: dict) -> str:
         lines.append(f"Other advisories: {len(advisories)}")
         lines.extend(advisories)
     return "\n".join(lines)
+
+
+def design_card(facts: dict, design_text: str = "") -> str:
+    """The approval gate's card, as plain text for a person who reads no markdown (dm-163).
+
+    '' while `design_review_status` is. Then, in order: ``Design: <the first sentences
+    of design.md's Summary>``; the review status (`design_review_status`: the headline,
+    ``PASS, nothing blocks the build`` or what is unresolved, the scale, then the
+    advisories, unverified claims first); then ``Pitfalls: N`` with one
+    ``- PIT-001 (high): addressed`` line each, or the one line saying why they were not
+    checked. Everything the card listed under its old markdown heading is here, once.
+
+    Each item and the ``- `` lines under it are one paragraph, set apart by a blank line,
+    so the question card, which renders it as text, keeps the lines apart.
+    """
+    status = design_review_status(facts)
+    if not status:
+        return ""
+    from refactory_dsh import design_contract
+
+    lines: list[str] = []
+    summary = " ".join(design_contract.parse(design_text).summary.split()) if design_text else ""
+    if summary:
+        shown = " ".join(_re.split(r"(?<=[.!?])\s+", summary)[:2])
+        lines.append(f"Design: {shown if len(shown) <= 400 else shown[:399] + '…'}")
+    head, *rest = status.splitlines()
+    lines.append(f"{head}, nothing blocks the build" if head == "Design review: PASS" else head)
+    lines.extend(rest)
+    coverage = str(facts.get("pitfall_coverage") or "").strip()
+    if coverage:
+        first, *entries = coverage.splitlines()
+        if first.strip() == "Pitfall coverage:":
+            entries = [entry.strip() for entry in entries if entry.strip()]
+            lines.append(f"Pitfalls: {len(entries)}")
+            lines.extend(f"- {entry}" for entry in entries)
+        else:
+            lines.append(f"Pitfalls: {coverage}")
+    paragraphs: list[list[str]] = []
+    for line in lines:
+        if line.startswith("- ") and paragraphs:
+            paragraphs[-1].append(line)
+        else:
+            paragraphs.append([line])
+    return "\n\n".join("\n".join(paragraph) for paragraph in paragraphs)
 
 
 def _quote_words(text: str) -> str:
@@ -1265,6 +1311,49 @@ def prepare_check(ctx: Any) -> Any:
         _record_prepared(ctx, attempt, None)
         _record_check_verdict(ctx, attempt, verdict)
         return verdict
+    # BUG-4: detect empty-diff attempts (generate put back everything).
+    found = worktree.recorded(ctx.workdir)
+    if found is not None and found.head != found.base:
+        try:
+            head_tree = worktree.git(Path(found.path), "rev-parse", f"{found.head}^{{tree}}")
+            parent_tree = worktree.git(Path(found.path), "rev-parse", f"{found.head}~1^{{tree}}")
+        except ValueError:
+            head_tree, parent_tree = "", "x"  # cannot compare; skip
+        if head_tree.strip() == parent_tree.strip():
+            used = _fixups_used(ctx)
+            allowed = int(ctx.knob("self_check_fixups", 2))
+            run_used = int(ctx.facts.get("total_self_check_fixups_used") or 0)
+            run_cap = allowed * int(ctx.knob("check_attempts", 3))
+            entry = {
+                "attempt": int(ctx.facts.get("attempts_used", 0)) + 1,
+                "commit": str(ctx.facts.get("commit") or ""),
+                "fixups_before": used,
+                "selection": [], "how_selected": {},
+                "ran": [], "cut": [], "commands": [],
+                "notes": ["the attempt's tree equals its first parent's"],
+                "limit_s": 0, "duration_s": 0, "timings": [],
+                "failing_ids": [], "inherited_filtered": [], "base": "",
+            }
+            if used < allowed and run_used < run_cap:
+                detail = ("generate put back everything this attempt changed; "
+                          "the attempt's tree equals its parent's")
+                ctx.write_text("check.txt", detail + "\n")
+                ctx.set_fact("validation", detail)
+                ctx.set_fact("self_check_fixup_count", used + 1)
+                ctx.set_fact("total_self_check_fixups_used", run_used + 1)
+                _record_self_check(ctx, {**entry, "outcome": "empty_diff_fixup"})
+                return Verdict("reloop", detail)
+            why = (f"{used} of {allowed} fix-ups used on this attempt" if used >= allowed
+                   else f"{run_used} of {run_cap} fix-ups used on this run")
+            _record_self_check(ctx, {**entry, "outcome": "exhausted", "why": why})
+            _end_fixups(ctx)
+            from refactory_dsh.failfast import PrepassResult
+            empty_prepass = PrepassResult(
+                ran=False, early_stop=False, targeted_command=None,
+                check_mode="full", result=None, digest_text="", runners=[], raw_tail="")
+            empty_prepass.digest_text = (
+                f"generate put back everything this attempt changed (empty diff); {why}")
+            return _early_stop(ctx, empty_prepass, prev_record, saved_base_unavailable)
     return _self_check(ctx, command, check_timeout, prev_record, saved_base_unavailable, attempt)
 
 
@@ -1307,7 +1396,9 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
     first = list(earlier[-1].get("failing_ids", [])) if _fixups_used(ctx) and earlier else []
     selection = test_selection.select(touched, root, prev_record, check_command=command,
                                       first=first,
-                                      costs=test_selection.costs_from_record(earlier, root))
+                                      costs=test_selection.costs_from_record(earlier, root),
+                                      bounds=test_selection.lower_bounds(earlier),
+                                      alone=test_selection.run_alone(earlier))
     prepass = targeted_prepass(
         prev_record, command,
         lambda cmd, timeout: repo_change.run_check(ctx, cmd, timeout, triage_prep=False,
@@ -1315,6 +1406,7 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
         check_timeout, root=found.path if found is not None else None,
         selection=selection.tests,
         self_check_timeout_s=int(ctx.knob("self_check_timeout_s", 300)),
+        alone=selection.alone,
     )
     failing, inherited, base = (list(prepass.failing_ids), [], "")
     if failing:

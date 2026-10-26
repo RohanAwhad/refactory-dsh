@@ -883,7 +883,7 @@ behaviour exactly.
 
 ### Entry-point groups
 
-Four groups register product behaviour that core discovers at call time:
+These groups register product behaviour that core discovers at call time:
 
 | Group | pyproject.toml key | Discoverer | Degradation | Stale-install guard |
 |---|---|---|---|---|
@@ -891,10 +891,13 @@ Four groups register product behaviour that core discovers at call time:
 | `refactory.worktree_state` | `worktree = "…worktree:_worktree_state_bridge"` | `agent_delivery.get_worktree_state()` | `None` → recorded returns None, skip shared_changed | Yes — `RuntimeError` when worktree record exists at workdir |
 | `refactory.delivery_identity` | `authoring = "…authoring_evidence:delivery_identity"` | `agent_delivery.get_delivery_identity()` | `None` + not reviewer or no EVIDENCE → skip enrichment | Conditional — `RuntimeError` when node in REVIEWERS AND EVIDENCE file exists |
 | `refactory.owner_module` | `interactive = "refactory_dsh.interactive"` | `supervisor._build_owner_argv()` | `None` → record start failure, supervisor exits cleanly | No — used only as fallback for old runs without `owner_argv` |
+| `refactory.run_end` | `warm_clones = "…builder_probe:sweep_warm_clones"` | `nn.executor._run_end_cleanup()`, at the end of the walker's `execute` and of `dsh_runtime.evaluate_on_dsh` | none registered → no run-end cleanup; every registered cleanup runs, and one that fails is logged, never raised | No — a stale install leaves a builder probe's warm clone on disk after the run |
 
 Each discoverer follows the same pattern: a module-level sentinel, at-most-one
 `entry_points()` lookup, cache, and `None`. The stale-install guard fails
 loudly when the entry point is missing but the run's state requires it.
+`refactory.run_end` is the exception: `_run_end_cleanup` reads the group on
+every call (under a millisecond, once per run) and runs every entry in it.
 
 ### Process traces
 

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -531,9 +532,11 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree, list[str]]
 
     _isolate_hooks(target, base_path)
 
-    # Prepare the environment (installs)
+    # Prepare the environment (installs). A lockfile the install writes stays in the base
+    # worktree, uncommitted: the base is a fixed commit, and an amend would also point
+    # the run's worktree record at the base (dm-188).
     budget = getattr(ctx, "budget", None)
-    _, problems, _ = worktree.ensure_environment(base_found, ctx.workdir, budget)
+    _, problems, _ = worktree.ensure_environment(base_found, ctx.workdir, budget, commit_lockfiles=False)
     if problems:
         unavailable = [p for p in problems if "UNAVAILABLE:" in p]
         if unavailable:
@@ -1237,7 +1240,8 @@ def compute_test_guardedness(
             if f.startswith(tf + "::") or f.startswith(tf + " > ")
         )
         has_collection_error = tf in collection_errors or any(
-            e.startswith(tf) for e in collection_errors
+            e.startswith(tf) or e.endswith("/" + tf)
+            for e in collection_errors
         )
         if has_collection_error and not tests_in_file:
             # The test cannot be collected or imported on the base (correction 4):
@@ -1283,6 +1287,40 @@ def compute_test_guardedness(
 
 
 # ── site-revert check ────────────────────────────────────────────────────
+
+
+def vitest_name_pattern(name: str) -> str:
+    """A cited vitest name as `vitest -t` matches it (dm-193).
+
+    A citation names a test as vitest reports it, ``describe > test``, but ``-t`` is a
+    regular expression matched against the names joined by a space: ``describe test``. So
+    the separator becomes a space, and the name is escaped, so a ``(`` in it is a
+    character and not a group vitest refuses at startup.
+    """
+    return re.sub(r"[.*+?^${}()|[\]\\/]", r"\\\g<0>", name.replace(" > ", " "))
+
+
+#: Vitest's own summary of what it ran, ``Tests  1 passed | 2 skipped (3)``; pytest's is
+#: `_PYTEST_SUMMARY`.
+_VITEST_SUMMARY = re.compile(r"^\s*Tests\s+(.+)$", re.MULTILINE)
+#: A vitest file that failed to load, so none of its tests ran: ``FAIL  a.test.ts [ a.test.ts ]``.
+_VITEST_UNLOADED = re.compile(r"^\s*FAIL\s+(\S+)\s+\[\s*\1\s*\]", re.MULTILINE)
+_RAN = re.compile(r"\b\d+ (?:passed|failed|errors?|xfailed|xpassed)\b")
+
+
+def _nothing_ran(output: str, *, vitest: bool) -> bool:
+    """Whether the run passed or failed no test: every selected test skipped, or none collected.
+
+    Vitest exits 0 when ``-t`` selects nothing, which would read as a test that still
+    passes with the site reverted; it prints no ``Tests`` line at all when it never got
+    to collect (dm-193). A pytest summary of only skipped tests is the same.
+    """
+    text = strip_ansi(output)
+    if vitest:
+        summary = _VITEST_SUMMARY.findall(text)
+        return not summary or not _RAN.search(summary[-1])
+    summary = _PYTEST_SUMMARY.findall(text)
+    return bool(summary) and not _RAN.search(summary[-1])
 
 
 def _is_test_file(path: str) -> bool:
@@ -1793,22 +1831,25 @@ def compute_site_reverts(
 
         detail = ""
         try:
-            # Pick runner and build command
+            # Pick runner and build command. Each argument is quoted: a vitest name
+            # such as `suite > test` would otherwise redirect into a stray file in the
+            # worktree and select the wrong tests (dm-193).
             test_path = test_name.split("::")[0] if "::" in test_name else test_name
             fn_name = test_name.split("::")[-1] if "::" in test_name else ""
 
             if test_path.endswith(".py"):
                 if fn_name:
-                    cmd = f"python -B -m pytest -x -q {test_name}"
+                    argv = ["python", "-B", "-m", "pytest", "-x", "-q", test_name]
                 else:
-                    cmd = f"python -B -m pytest -x -q {test_path}"
+                    argv = ["python", "-B", "-m", "pytest", "-x", "-q", test_path]
             elif test_path.endswith(".ts") or test_path.endswith(".spec.ts"):
                 if fn_name:
-                    cmd = f"npx vitest run {test_path} -t {fn_name}"
+                    argv = ["npx", "vitest", "run", test_path, "-t", vitest_name_pattern(fn_name)]
                 else:
-                    cmd = f"npx vitest run {test_path}"
+                    argv = ["npx", "vitest", "run", test_path]
             else:
-                cmd = f"python -B -m pytest -x -q {test_name}"
+                argv = ["python", "-B", "-m", "pytest", "-x", "-q", test_name]
+            cmd = shlex.join(argv)
 
             home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
             env = worktree.check_environment(attempt_path, home)
@@ -1832,6 +1873,8 @@ def compute_site_reverts(
                 result, detail = NOT_RUN, f"the test was killed by signal {-rc}"
             else:
                 coll_files, has_unlocatable = _parse_collection_errors(test_output)
+                # A spec the revert stopped from loading is a collection error, not "no tests".
+                coll_files |= set(_VITEST_UNLOADED.findall(strip_ansi(test_output)))
                 test_path_for_coll = test_name.split("::")[0] if "::" in test_name else test_name
                 # pytest names the module by its absolute path, the citation by a
                 # path relative to the worktree.
@@ -1845,9 +1888,11 @@ def compute_site_reverts(
                 if has_collection:
                     result = ("import_only" if _is_import_only_failure(test_output, defined_names)
                               else "collection_error")
-                elif rc in (4, 5) or "no tests ran" in test_output.lower():
+                elif (rc in (4, 5) or "no tests ran" in test_output.lower()
+                      or _nothing_ran(test_output, vitest=argv[:2] == ["npx", "vitest"])):
                     # pytest exit 4 = no tests collected, 5 = no tests ran: the cited
                     # test does not exist, a wrong citation rather than a measurement gap.
+                    # So is a run that passed or failed nothing (`_nothing_ran`).
                     result = "no_tests"
                 elif rc != 0:
                     # Test failed — check if it's import-only

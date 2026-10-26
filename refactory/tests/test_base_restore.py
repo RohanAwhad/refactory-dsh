@@ -375,6 +375,38 @@ def test_dirty_base_worktree_repaired(base_worktree_env, capsys):
     assert len(base_reset) > 0, "base_reset should have entries"
 
 
+@pytest.mark.parametrize("tracked", [False, True], ids=["writes-lockfile", "rewrites-lockfile"])
+def test_preparing_the_base_never_commits_the_lockfile_its_install_writes(tmp_path, monkeypatch, tracked):
+    """The base is a fixed commit: a lockfile its install writes or rewrites stays in the
+    base worktree, uncommitted, and the run's worktree record still names the run's own
+    worktree (dm-188). The next preparation does not reinstall."""
+    repo = _git_init(tmp_path / "repo")
+    _commit(repo, "package.json", '{"name": "x"}\n')
+    if tracked:
+        _commit(repo, "package-lock.json", '{"lockfileVersion": 1}\n')
+    base_commit = _commit(repo, "tests/test_math.py", "def test_add():\n    assert 1 + 1 == 2\n")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "npm").write_text("#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/calls.log\"\n"
+                              "mkdir -p node_modules/pkg && echo installed > node_modules/pkg/index.js\n"
+                              "echo '{\"lockfileVersion\": 3}' > package-lock.json\n")
+    (stub / "npm").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub}{os.pathsep}{os.environ['PATH']}")
+    run_dir = tmp_path / "run"
+    found = worktree.create(repo, base_commit, "test0base88", run_dir)
+    ctx = _Ctx(run_dir)
+
+    base_path, _, _ = base_check._ensure_base_worktree(ctx)
+
+    assert worktree.git(base_path, "rev-parse", "HEAD").strip() == base_commit
+    assert (base_path / "package-lock.json").read_text() == '{"lockfileVersion": 3}\n'
+    assert worktree.recorded(run_dir) == found
+    base_check._ensure_base_worktree(ctx)
+    assert worktree.git(base_path, "rev-parse", "HEAD").strip() == base_commit
+    calls = (stub / "calls.log").read_text().splitlines()
+    assert len(calls) == 1, f"the base was rebuilt and reinstalled: {calls}"
+
+
 def test_unignored_install_survives_reset_without_reinstall(tmp_path, monkeypatch):
     """An install git does not ignore is kept by the install record, and the re-check
     does not count it as dirt, so a reset neither rebuilds nor reinstalls the base (C1)."""

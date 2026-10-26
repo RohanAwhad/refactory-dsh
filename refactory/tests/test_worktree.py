@@ -328,6 +328,83 @@ def test_an_attempt_that_died_after_its_commit_is_replaced_by_the_redo(repo, tmp
     assert git(Path(found.path), "ls-tree", "--name-only", "HEAD").splitlines() == ["app.py", "tool.py"]
 
 
+def test_an_attempt_never_commits_a_run_artifact_its_emission_names_or_the_worktree_holds(
+        repo, tmp_path, capsys):
+    """b40a committed `.refactory/verifier-findings.md` onto its branch (dm-242)."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "a2a2a2a2b4b4", run)
+    path = Path(found.path)
+    (path / ".refactory").mkdir()
+    (path / ".refactory" / "x.md").write_text("a reviewer's stray notes\n")
+    git(path, "add", "-f", ".refactory/x.md")
+    advanced = worktree.commit_attempt(
+        run, {Path("tool.py"): "x\n", Path(".refactory/verifier-findings.md"): "findings\n",
+              Path(".Refactory/notes.md"): "notes\n"}, "attempt 1")
+    assert git(path, "ls-tree", "-r", "--name-only", advanced.head).splitlines() == ["app.py", "tool.py"]
+    assert not (path / ".refactory" / "verifier-findings.md").exists(), "never written either"
+    assert ("were left out of it: .Refactory/notes.md, .refactory/verifier-findings.md"
+            in capsys.readouterr().err)
+
+
+def test_a_run_artifact_staged_in_the_worktree_is_never_amended_into_the_attempt(repo, tmp_path, monkeypatch):
+    """An amendment commits what is staged: a lockfile amend must not carry a staged run artifact."""
+    stub(tmp_path / "bin", "npm", "echo '{\"lockfileVersion\": 3}' > package-lock.json")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "a3a3a3a3b4b4", run)
+    attempt = worktree.commit_attempt(run, {Path("package.json"): "{}\n"}, "attempt 1")
+    path = Path(found.path)
+    for name in (".refactory/verifier-findings.md", ".Refactory/notes.md"):
+        (path / name).parent.mkdir(exist_ok=True)
+        (path / name).write_text("findings\n")
+        git(path, "add", "-f", name)
+    amended, problems, _pf = worktree.ensure_environment(attempt, run)
+    assert problems == [] and amended.head != attempt.head
+    assert sorted(git(path, "ls-tree", "-r", "--name-only", "HEAD").splitlines()) == [
+        "app.py", "package-lock.json", "package.json"]
+    assert (path / ".refactory" / "verifier-findings.md").read_text() == "findings\n", "left on disk, unstaged"
+
+
+def test_an_attempt_never_deletes_a_run_artifact_the_project_tracks(repo, tmp_path, capsys):
+    """Only the top-level `.refactory/` is the run's; a delete there is left out like a write."""
+    (repo / ".refactory").mkdir()
+    (repo / ".refactory" / "kept.md").write_text("the project's own\n")
+    git(repo, "add", "-f", ".refactory/kept.md")
+    git(repo, "commit", "-q", "-m", "tracked run-artifact path")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "a5a5a5a5b4b4", run)
+    path = Path(found.path)
+    advanced = worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt 1", (Path(".refactory/kept.md"),))
+    assert ".refactory/kept.md" in git(path, "ls-tree", "-r", "--name-only", advanced.head).splitlines()
+    assert (path / ".refactory" / "kept.md").read_text() == "the project's own\n"
+    assert "were left out of it: .refactory/kept.md" in capsys.readouterr().err
+
+
+def test_a_merge_attempt_never_commits_a_staged_run_artifact(repo, tmp_path):
+    """While a merge is in progress the index is kept as it is, so a staged run artifact
+    is unstaged on its own before the merge commit."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "a6a6a6a6b4b4", run)
+    path = Path(found.path)
+    (repo / "later.py").write_text("x = 1\n")
+    git(repo, "add", "later.py")
+    git(repo, "commit", "-q", "-m", "main moved on")
+    git(path, "-c", "core.hooksPath=/dev/null", "merge", "-q", "--no-ff", "--no-commit", "main")
+    (path / ".refactory").mkdir()
+    (path / ".refactory" / "x.md").write_text("stray\n")
+    git(path, "add", "-f", ".refactory/x.md")
+    advanced = worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt 1")
+    assert sorted(git(path, "ls-tree", "-r", "--name-only", advanced.head).splitlines()) == [
+        "app.py", "later.py", "tool.py"]
+
+
+def test_an_emission_of_only_run_artifacts_is_refused_as_such(repo, tmp_path):
+    run = _run(tmp_path)
+    worktree.create(repo, "HEAD", "a7a7a7a7b4b4", run)
+    with pytest.raises(worktree.AttemptRefused, match="names only run artifacts under .refactory/"):
+        worktree.commit_attempt(run, {Path(".refactory/verifier-findings.md"): "findings\n"}, "attempt 1")
+
+
 @pytest.mark.parametrize("name", [".git/config", ".GIT", "sub/.Git/HEAD"])
 def test_an_emitted_path_inside_gits_own_state_is_refused_in_any_case(repo, tmp_path, name):
     """A `.GIT` on a case-insensitive disk would replace the worktree's link to its repository."""
