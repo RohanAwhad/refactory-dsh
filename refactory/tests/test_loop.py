@@ -5,6 +5,7 @@ Phase 6 gate of ``docs/plans/pythonic-modes.md``.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -38,6 +39,25 @@ class ScriptedOptimizer(Optimizer):
             Proposal(edit=self._edit, parent=parents[0].id, rationale="scripted")
             for _ in range(max(1, n))
         ]
+
+
+@pytest.fixture(scope="module")
+def _default_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict]:
+    """One run of the default configuration, for the tests that only read it.
+
+    The run is deterministic (seed 5), and a dozen tests each started an identical
+    one to read a different part of it, about 1.6 s apiece.
+    """
+    root = tmp_path_factory.mktemp("default-loop-run")
+    report = Loop(MODE, _config(root), project=Path(".")).run()
+    return root, report
+
+
+@pytest.fixture
+def default_run(_default_run: tuple[Path, dict]) -> tuple[Path, dict]:
+    """The shared default run's directory, and a copy of its report to read."""
+    root, report = _default_run
+    return root, copy.deepcopy(report)
 
 
 def _structural_edit(mode: nn.Mode) -> dict:
@@ -155,22 +175,21 @@ def test_init_refuses_a_mode_whose_seed_state_is_not_runnable(tmp_path):
             Loop(MODE, _config(tmp_path), project=Path(".")).init()
 
 
-def test_two_epochs_complete_and_report_the_bound(tmp_path):
-    loop = Loop(MODE, _config(tmp_path), project=Path("."))
-    report = loop.run()
+def test_two_epochs_complete_and_report_the_bound(default_run):
+    root, report = default_run
     assert report["bound"] == "epochs"
     assert report["epochs_completed"] == 2
     assert report["evaluations"] >= 4
-    assert (tmp_path / "report.json").exists()
-    assert (tmp_path / "gradient.json").exists()
-    markdown = (tmp_path / "report.md").read_text()
+    assert (root / "report.json").exists()
+    assert (root / "gradient.json").exists()
+    markdown = (root / "report.md").read_text()
     assert markdown.startswith("# Outer loop"), "the report must be markdown, not JSON"
     assert "## Leaderboard" in markdown
     assert "## Refusals by rule" in markdown
 
 
-def test_the_report_names_what_the_run_was(tmp_path):
-    report = Loop(MODE, _config(tmp_path), project=Path(".")).run()
+def test_the_report_names_what_the_run_was(default_run):
+    _root, report = default_run
     assert report["mode"] == MODE
     assert report["optimizer"] == "random"
     assert report["batch_size"] == 4
@@ -178,8 +197,8 @@ def test_the_report_names_what_the_run_was(tmp_path):
     assert report["best_score"] >= report["seed_score"]
 
 
-def test_the_leaderboard_is_ordered_and_complete(tmp_path):
-    report = Loop(MODE, _config(tmp_path), project=Path(".")).run()
+def test_the_leaderboard_is_ordered_and_complete(default_run):
+    _root, report = default_run
     scores = [row["score"] for row in report["leaderboard"]]
     assert scores == sorted(scores, reverse=True)
     assert len(report["leaderboard"]) + len(report["failed_candidates"]) == report["evaluations"]
@@ -188,8 +207,13 @@ def test_the_leaderboard_is_ordered_and_complete(tmp_path):
 
 
 def test_every_evaluated_candidate_validated_first(tmp_path):
-    """An invalid candidate never reaches a run, so it never costs budget."""
-    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    """An invalid candidate never reaches a run, so it never costs budget.
+
+    The steps are driven by hand, so no epoch is opened and only the evaluation
+    bound ends the loop: 12 evaluations already include proposals that validation
+    must refuse (without it, two invalid candidates join the population).
+    """
+    loop = Loop(MODE, _config(tmp_path, max_evaluations=12), project=Path("."))
     loop.init()
     while True:
         evaluated = loop.forward()
@@ -203,8 +227,8 @@ def test_every_evaluated_candidate_validated_first(tmp_path):
         assert nn.validate_state(candidate.state) == [], candidate.id
 
 
-def test_refusals_are_grouped_by_rule(tmp_path):
-    report = Loop(MODE, _config(tmp_path), project=Path(".")).run()
+def test_refusals_are_grouped_by_rule(default_run):
+    _root, report = default_run
     codes = report["rejection_codes"]
     assert codes, "the random sampler should have been refused at least once"
     for code in codes:
@@ -248,8 +272,8 @@ def test_a_structural_edit_beats_its_parent(tmp_path):
     )
 
 
-def test_proposal_outcomes_pair_a_proposal_with_what_happened(tmp_path):
-    report = Loop(MODE, _config(tmp_path), project=Path(".")).run()
+def test_proposal_outcomes_pair_a_proposal_with_what_happened(default_run):
+    _root, report = default_run
     outcomes = report["proposal_outcomes"]
     assert outcomes
     for row in outcomes:
@@ -258,9 +282,9 @@ def test_proposal_outcomes_pair_a_proposal_with_what_happened(tmp_path):
             assert row["delta"] == pytest.approx(row["score"] - row["parent_score"])
 
 
-def test_the_report_counts_model_calls_made_inside_the_graphs(tmp_path):
+def test_the_report_counts_model_calls_made_inside_the_graphs(default_run):
     """An inserted agent node costs model calls, and the report says how many."""
-    report = Loop(MODE, _config(tmp_path), project=Path(".")).run()
+    _root, report = default_run
     assert report["cost"]["inner_model_calls"] == 0, (
         "the deterministic seed pipeline makes no model calls"
     )
@@ -283,7 +307,7 @@ def test_the_gradient_carries_knob_attribution_and_reasons(tmp_path):
     assert gradient["structural"]["accepted_ops"]
 
 
-def test_the_report_names_candidates_that_were_never_evaluated(tmp_path):
+def test_the_report_names_candidates_that_were_never_evaluated(default_run):
     """A batch proposed for an epoch that did not run must be named, not implied.
 
     The pipeline proposes the next epoch's batch at the end of an epoch, so a run
@@ -292,13 +316,12 @@ def test_the_report_names_candidates_that_were_never_evaluated(tmp_path):
     which candidates that left out, and a model-driven round whose output was
     dropped looked like a round that happened.
     """
-    loop = Loop(MODE, _config(tmp_path, epochs=2), project=Path("."))
-    report = loop.run()
+    root, report = default_run  # the default configuration runs two epochs
     unevaluated = report["unevaluated"]
     assert unevaluated, "the final epoch's batch was dropped silently"
     assert len(unevaluated) == report["population"] - report["evaluations"]
     assert all(candidate["id"] not in unevaluated for candidate in report["leaderboard"])
-    markdown = (tmp_path / "report.md").read_text()
+    markdown = (root / "report.md").read_text()
     assert "never evaluated" in markdown, "the report.md does not say so"
     assert all(f"`{candidate}`" in markdown for candidate in unevaluated)
 
@@ -310,8 +333,8 @@ def test_the_scheduler_reports_the_evaluation_bound(tmp_path):
     assert report["evaluations"] == 2
 
 
-def test_the_epoch_summary_counts_what_the_epoch_did(tmp_path):
-    report = Loop(MODE, _config(tmp_path), project=Path(".")).run()
+def test_the_epoch_summary_counts_what_the_epoch_did(default_run):
+    _root, report = default_run
     summary = report["epochs_summary"]
     assert len(summary) == 2
     assert summary[0]["evaluated"] >= 1
@@ -421,10 +444,9 @@ def test_rejections_are_persisted_as_a_stream(tmp_path):
             assert row["codes"]
 
 
-def test_a_proposal_record_is_never_overwritten_by_a_later_candidate(tmp_path):
+def test_a_proposal_record_is_never_overwritten_by_a_later_candidate(default_run):
     """Every recorded proposal names a parent that is not itself."""
-    loop = Loop(MODE, _config(tmp_path), project=Path("."))
-    report = loop.run()
+    _root, report = default_run
     for row in report["proposal_outcomes"]:
         assert row["parent"] != row["id"], (
             f"{row['id']} was recorded as its own parent, so a later candidate "
@@ -432,9 +454,8 @@ def test_a_proposal_record_is_never_overwritten_by_a_later_candidate(tmp_path):
         )
 
 
-def test_the_best_candidates_edits_match_its_lineage(tmp_path):
-    loop = Loop(MODE, _config(tmp_path), project=Path("."))
-    report = loop.run()
+def test_the_best_candidates_edits_match_its_lineage(default_run):
+    _root, report = default_run
     lineage = report["lineage"]
     if lineage:
         best = lineage[-1]
@@ -706,13 +727,12 @@ def test_a_zero_size_cost_leaves_the_raw_score_alone(tmp_path):
     assert report["scoring"]["parsimony"] == 0.0
 
 
-def test_every_recorded_score_carries_the_raw_one_beside_it(tmp_path):
+def test_every_recorded_score_carries_the_raw_one_beside_it(default_run):
     """The journal is what a resumed run and an adopter read, so both live in it."""
-    loop = Loop(MODE, _config(tmp_path), project=Path("."))
-    loop.run()
+    root, _report = default_run
     events = [
         json.loads(line)
-        for line in (tmp_path / "journal.jsonl").read_text().splitlines()
+        for line in (root / "journal.jsonl").read_text().splitlines()
         if line.strip()
     ]
     scored = [event for event in events if event.get("event") == "score"]
