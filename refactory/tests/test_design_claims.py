@@ -39,6 +39,10 @@ _CONTRACT_DESIGN = (
 # ── dm-126: claims checker ────────────────────────────────────────────────
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def _unverified(ctx) -> str:
     """Run the claims check; its unverified claims as one text."""
     result = check_design_claims(ctx)

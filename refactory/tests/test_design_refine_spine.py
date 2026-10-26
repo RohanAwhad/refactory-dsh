@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import refactory_dsh
 from refactory_dsh import lowering
 from refactory_dsh.design import DesignMode
@@ -38,6 +40,10 @@ SOURCE = str(Path(refactory_dsh.__file__).resolve().parents[1])
 
 DESCRIPTION = "WHY-THIS-PULL-REQUEST: the tool prints one, and the next step adds a second tool."
 BRIEF = "Add more.py that prints two."
+
+
+#: Design's prepare checks the model credential (dm-257): the test's own home has a placeholder key.
+pytestmark = pytest.mark.usefixtures("configured_model_home")
 
 
 class SpineRun:

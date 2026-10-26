@@ -131,7 +131,7 @@ When a run's driver checkout moves to a new commit (or its fingerprinted files a
 edited) between launch and resume, the run creates a **pin**: a prepared git
 worktree of the original commit under `~/.refactory/pins/<commit>/checkout`. The
 pin has its own `uv sync`, `pnpm install` and `pnpm build`, and a DSH profile
-named `graph-pin-<commit12>` provisioned in the person's own `~/.dsh` — so
+named `graph-pin-<commit12>` provisioned in the person's own `$DSH_HOME` — so
 credentials stay where they are and DSH_HOME is never changed.
 
 The resume path detects drift by comparing the recorded commit and configuration

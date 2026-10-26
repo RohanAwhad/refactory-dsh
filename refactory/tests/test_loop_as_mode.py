@@ -124,6 +124,25 @@ def test_it_writes_the_run_the_loop_would_have_written(tmp_path):
     assert report["best_score"] > 0
 
 
+def test_the_graph_closes_each_epoch_with_that_epochs_counts(tmp_path, monkeypatch):
+    """The scheduler step is handed the optimizer step's own counts, as the loop is."""
+    from refactory_dsh.loop import Loop as _Loop
+
+    seen: list[dict] = []
+    original = _Loop.scheduler
+
+    def recording(self, **counts):  # type: ignore[no-untyped-def]
+        seen.append(counts)
+        return original(self, **counts)
+
+    monkeypatch.setattr(_Loop, "scheduler", recording)
+    _package, result = _run(tmp_path / "graph")
+    assert result.exit_ok, result.error
+    assert len(seen) == 2
+    for counts in seen:
+        assert counts["proposed"] == counts["accepted"] + counts["refused"] > 0, counts
+
+
 def test_the_run_reports_what_bounded_it(tmp_path):
     _package, result = _run(tmp_path / "graph")
     assert result.facts["bound"] == "epochs"

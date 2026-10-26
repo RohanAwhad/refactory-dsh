@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The plugin's registrations, and their removal when the plugin goes.
  *
@@ -97,8 +98,30 @@ async function boot() {
 }
 
 describe('ui-refactory apply', () => {
-  it('keeps the host Loader entry inert', () => {
-    expect(hostApply).not.toThrow()
+  it('names the product in the initial HTML title, and takes the tap back when it goes', async () => {
+    const ctx = new Context()
+    const taps: Array<(html: string) => string> = []
+    let removed = 0
+    ctx.provide('webServer', {
+      tapIndex: (transform: (html: string) => string) => { taps.push(transform); return () => { removed++ } },
+    } as never)
+    const fiber = ctx.plugin({ apply: hostApply })
+    await fiber.await()
+    expect(taps).toHaveLength(1)
+    expect(taps[0]!('<head><title>DeepSeek Harness</title><script src="a.js"></script></head>'))
+      .toBe('<head><title>Refactory</title><script src="a.js"></script></head>')
+    await fiber.dispose()
+    expect(removed).toBe(1)
+  })
+
+  it('names the product in the document title while it is mounted', async () => {
+    document.title = 'My session — DeepSeek Harness'
+    const { fiber } = await boot()
+    expect(document.title).toBe('My session — Refactory')
+    await fiber.dispose()
+    document.title = 'DeepSeek Harness'
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(document.title).toBe('DeepSeek Harness')
   })
 
   it('registers the type, its dictionaries, and the body seat under the type\'s id with a store and a face', async () => {

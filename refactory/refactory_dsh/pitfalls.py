@@ -120,60 +120,90 @@ def validate_pitfalls(raw: str, source: str = "", run_dir: str = "") -> list[str
     return problems
 
 
-# ── coverage check ─────────────────────────────────────────────────────────
+# ── where the design cites each pitfall ────────────────────────────────────
 
-from refactory_dsh import coverage_helpers
+#: How many lines citing one pitfall the approval card quotes, and how long each may be.
+QUOTES_PER_PITFALL = 2
+QUOTE_LIMIT = 160
 
 
-def pitfall_coverage(
-    design_text: str, pitfalls: list[dict[str, Any]], source: str = "",
-) -> tuple[list[str], list[str], list[str]]:
-    """Check pitfall id coverage in the Anti-patterns section of design.md.
+def _quote(line: str, pid: str) -> str:
+    """A design line as the card quotes it: its markdown bullet, heading marks and bold
+    dropped, its spacing collapsed, and at most `QUOTE_LIMIT` characters, cut at word
+    boundaries, starting a little before the id when the id comes late in the line."""
+    text = re.sub(r"^\s*(?:[-*+]|\d+[.)]|#{1,6})\s+", "", line).replace("**", "")
+    text = " ".join(text.split())
+    if len(text) <= QUOTE_LIMIT:
+        return text
+    at = text.find(pid)
+    if at > QUOTE_LIMIT // 2:
+        start = text.find(" ", at - QUOTE_LIMIT // 4) + 1
+        text = "\u2026" + text[start if 0 < start <= at else at:]
+    if len(text) > QUOTE_LIMIT:
+        cut = text.rfind(" ", 0, QUOTE_LIMIT)
+        text = text[:cut if cut > 0 else QUOTE_LIMIT - 1].rstrip() + "\u2026"
+    return text
 
-    Returns ``(addressed, set_aside, missing)``:
 
-    - *addressed*: pitfall ids that appear in the Anti-patterns section and
-      reference a valid site or heading.
-    - *set_aside*: pitfall ids with a ``[set-aside: <reason>]`` marker where
-      *reason* is non-empty.
-    - *missing*: pitfall ids not found in the Anti-patterns section, or found
-      without a valid reference and without a set-aside marker.
+#: A list item's start: a bullet or a number.
+_ITEM = re.compile(r"\s*(?:[-*+]|\d+[.)])\s")
 
-    *source* is the checkout a design without ``## Rule and sites`` has its cited sites
-    checked against (`coverage_helpers.site_paths`).
+#: The section whose lines the card quotes first: the one a design answers pitfalls in.
+ANSWERS_SECTION = "anti-patterns to avoid"
+
+
+def pitfall_citations(
+    design_text: str, pitfalls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Where design.md cites each pitfall, for the approval card to quote (dm-262).
+
+    No verdict: whether a line answers its pitfall is the person's judgment, so the card
+    shows the lines, at most `QUOTES_PER_PITFALL`, each with the heading it sits under,
+    and says "not mentioned" only for an id the design never cites. Lines in
+    ``## Anti-patterns to avoid`` come first, then the rest in design order; a list item
+    is quoted with the lines that continue it, where its answer often is. A ``#`` line
+    inside a code fence is code, not a heading. One entry per pitfall with an id, in
+    order: ``{"id", "risk", "quotes": [(heading, text), ...]}``.
     """
-    anti = coverage_helpers.extract_section(design_text, "Anti-patterns to avoid")
-    sites = coverage_helpers.site_paths(design_text, source=source)
-    hdgs = coverage_helpers.headings(design_text)
-
-    addressed: list[str] = []
-    set_aside: list[str] = []
-    missing: list[str] = []
-
-    for p in pitfalls:
-        pid = p.get("id", "")
+    rows = design_text.splitlines()
+    # (heading, in the answers section, the line, the line with what continues it)
+    lines: list[tuple[str, bool, str, str]] = []
+    heading = section = ""
+    fenced = False
+    for index, line in enumerate(rows):
+        stripped = line.strip()
+        if stripped.startswith(("```", "~~~")):
+            fenced = not fenced
+        text = line
+        if _ITEM.match(line):
+            for following in rows[index + 1:]:
+                if not following.strip() or not following[:1].isspace() or _ITEM.match(following):
+                    break
+                text += " " + following.strip()
+        lines.append((heading, section.lower() == ANSWERS_SECTION, line, text))
+        if not fenced and (found := re.match(r"(#{1,6})\s+(.+)", stripped)):
+            heading = found[2].strip()
+            if len(found[1]) <= 2:
+                section = heading
+    cited: list[dict[str, Any]] = []
+    for pitfall in pitfalls:
+        pid = str(pitfall.get("id") or "")
         if not pid:
             continue
+        mention = re.compile(rf"(?<![\w-]){re.escape(pid)}(?!\d)")
+        found_lines = [(answers, under, text) for under, answers, line, text in lines
+                       if mention.search(line)]
+        found_lines.sort(key=lambda row: not row[0])   # stable: design order within each
+        cited.append({"id": pid, "risk": str(pitfall.get("risk") or "?"),
+                      "quotes": [(under, _quote(text, pid))
+                                 for _, under, text in found_lines[:QUOTES_PER_PITFALL]]})
+    return cited
 
-        # The id must appear in the Anti-patterns section, not elsewhere.
-        if not anti.strip() or pid not in anti:
-            missing.append(pid)
-            continue
 
-        # Find the line(s) containing this pid in the section.
-        entry_lines = [ln for ln in anti.splitlines() if pid in ln]
-        entry_text = "\n".join(entry_lines)
-
-        # Check for a set-aside marker with a non-empty reason.
-        sa_match = coverage_helpers.SET_ASIDE_RE.search(entry_text)
-        if sa_match and sa_match.group(1).strip():
-            set_aside.append(pid)
-            continue
-
-        # Not set-aside: verify the entry references something that exists.
-        if coverage_helpers.has_valid_reference(entry_text, sites, hdgs):
-            addressed.append(pid)
-        else:
-            missing.append(pid)
-
-    return (addressed, set_aside, missing)
+def citation_line(entry: dict[str, Any]) -> str:
+    """One pitfall as the card lists it: its quoted lines, or "not mentioned"."""
+    head = f"{entry['id']} ({entry['risk']})"
+    if not entry["quotes"]:
+        return f"{head}: not mentioned"
+    return head + ": " + "; ".join(
+        (f"\u00a7 {under}: " if under else "") + f"\"{text}\"" for under, text in entry["quotes"])

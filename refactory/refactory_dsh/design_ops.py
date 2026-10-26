@@ -417,10 +417,10 @@ def gate_design_review(ctx: Any) -> str:
     advisory and is shown on the approval gate's card (`design_review_status`): the
     claims check's unverified claims and notes (`design_claims.check_design_claims`), and
     this gate's own checks -- the light template's other required sections, citations,
-    quotations of the brief, and the optional sections a design has (rule-site markers,
-    pitfall answers). An optional section a design leaves out is not checked; for a
-    design without ``## Anti-patterns to avoid`` the card names the high-risk pitfalls
-    that leaves unchecked. Never reads a review, and never fails the run.
+    quotations of the brief, and the optional sections a design has (rule-site markers).
+    An optional section a design leaves out is not checked. The pitfalls are quoted, not
+    judged: the card shows the lines that cite each one, and names the high-risk ones the
+    design never mentions (dm-262). Never reads a review, and never fails the run.
     """
     from refactory_dsh import design_contract
     from refactory_dsh.nn import Verdict
@@ -542,58 +542,29 @@ def gate_design_review(ctx: Any) -> str:
                 "the design's title is the run name; it must say what the change does"
             )
 
-    # ── advisory 4: pitfall coverage, when the design answers pitfalls ──
+    # ── advisory 4: where the design cites each pitfall ──
+    # Quoted, never judged (dm-262): whether a line answers its pitfall is the person's
+    # call at the gate. The card lists every pitfall with the design lines that cite it,
+    # or "not mentioned"; the advisory names the high-risk ones the design never cites.
     has_pitfalls = ctx.facts.get("has_pitfalls_step", False)
-    answers_pitfalls = not design_contract.missing_sections(
-        design_text, (design_contract.ANTI_PATTERNS,))
-    if has_pitfalls and not answers_pitfalls:
-        # An optional section: a design without it is not checked against the pitfalls,
-        # and the card says which high-risk pitfalls that leaves unchecked.
-        ctx.set_fact("pitfall_coverage",
-                     "pitfall coverage not checked: the design has no "
-                     "## Anti-patterns to avoid section (optional)")
-        unchecked = _high_risk_pitfalls(ctx)
-        if unchecked:
-            advisories.append(
-                "high-risk pitfall(s) not checked: the design has no "
-                f"## Anti-patterns to avoid section: {', '.join(unchecked)}")
-    elif has_pitfalls:
+    if has_pitfalls:
         from refactory_dsh import pitfalls as pitfalls_mod
 
         if ctx.exists("pitfalls.json"):
             try:
-                pitfalls_raw = ctx.read_text("pitfalls.json")
-                pitfalls_data = json.loads(pitfalls_raw)
+                pitfalls_data = json.loads(ctx.read_text("pitfalls.json"))
                 if isinstance(pitfalls_data, list):
                     # gate_pitfalls lets a malformed entry through; only objects count.
-                    pitfalls_data = [p for p in pitfalls_data if isinstance(p, dict)]
-                    addressed, aside, pit_missing = pitfalls_mod.pitfall_coverage(
-                        design_text, pitfalls_data, source=source)
-                    missing_high = [pid for pid in pit_missing
-                                   if any(p.get("id") == pid and p.get("risk") == "high"
-                                          for p in pitfalls_data)]
-                    if missing_high:
-                        advisories.append(
-                            f"high-risk pitfall(s) not addressed in the design: "
-                            f"{', '.join(missing_high)}"
-                        )
-                    coverage_lines = []
-                    for p in pitfalls_data:
-                        pid = p.get("id", "?")
-                        risk = p.get("risk", "?")
-                        if pid in addressed:
-                            coverage_lines.append(f"  {pid} ({risk}): addressed")
-                        elif pid in aside:
-                            coverage_lines.append(f"  {pid} ({risk}): set aside")
-                        else:
-                            # Only a high-risk pitfall must be answered; the others
-                            # appear in a design only where they change a decision.
-                            coverage_lines.append(f"  {pid} ({risk}): "
-                                                  + ("MISSING" if risk == "high"
-                                                     else "not mentioned"))
-                    if coverage_lines:
-                        ctx.set_fact("pitfall_coverage",
-                                     "Pitfall coverage:\n" + "\n".join(coverage_lines))
+                    cited = pitfalls_mod.pitfall_citations(
+                        design_text, [p for p in pitfalls_data if isinstance(p, dict)])
+                    unmentioned_high = [entry["id"] for entry in cited
+                                        if not entry["quotes"] and entry["risk"] == "high"]
+                    if unmentioned_high:
+                        advisories.append("high-risk pitfall(s) the design does not mention: "
+                                          + ", ".join(unmentioned_high))
+                    if cited:
+                        ctx.set_fact("pitfall_coverage", "Pitfall citations:\n" + "\n".join(
+                            f"  {pitfalls_mod.citation_line(entry)}" for entry in cited))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 advisories.append("pitfalls.json exists but is not valid JSON")
         else:
@@ -652,21 +623,12 @@ def gate_design_review(ctx: Any) -> str:
     return "proceed"
 
 
-def _high_risk_pitfalls(ctx: Any) -> list[str]:
-    """The ids of pitfalls.json's high-risk pitfalls; none when it is missing or unreadable
-    (gate_pitfalls has already put that on the card)."""
-    try:
-        data = json.loads(ctx.read_text("pitfalls.json")) if ctx.exists("pitfalls.json") else []
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return []
-    if not isinstance(data, list):
-        return []
-    return [str(entry.get("id") or "?") for entry in data
-            if isinstance(entry, dict) and entry.get("risk") == "high"]
-
-
 #: A research direction's footprint has exactly these keys, each a list (dm-200).
 FOOTPRINT_KEYS = ("existing_functions", "new_items", "shared_engine")
+
+#: The most new items a new or empty project's change may add and be scoped (dm-259,
+#: the user, 2026-10-26); a larger one is full.
+NEW_PROJECT_SCOPED_ITEMS = 3
 
 #: One existing function a change touches: "path:line name" (or "path:start-end
 #: name", counted by its start line), with a real line number and a single name.
@@ -733,7 +695,10 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
     Reads research-plan.json as raw JSON (not via ``_plan()``, which strips
     entries to only focus/slug/finding/ids).  Every direction must carry a
     ``footprint`` object.  The three-part rule decides scoped vs full; the
-    brief is never read.
+    brief is never read.  In a new or empty project (a checkout with no tracked
+    file) everything is new: it is scoped when it adds at most
+    `NEW_PROJECT_SCOPED_ITEMS` new items, names no existing function and no shared
+    engine, and full otherwise.
     """
     # ── refine detection ───────────────────────────────────────────────
     # prepare writes REFINE_SCOPE_REASON for a refine run.  Detect that
@@ -795,10 +760,23 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
     if len(touched) > 2:
         names = ", ".join(key[1] for key in sorted(touched)[:3])
         return _full(f"touches {len(touched)} existing functions (max 2 for scoped): {names}")
-    if new_items:
+    # In a new or empty project everything is a new item, so new items alone do not
+    # make it full (dm-259): it is scoped when it adds at most NEW_PROJECT_SCOPED_ITEMS
+    # and names no existing function (which an empty checkout cannot resolve: full
+    # above) and no shared engine. A larger one is full.
+    empty_project = tracked is not None and not tracked
+    added = sorted(set(new_items))
+    if new_items and not empty_project:
         return _full(f"adds new items: {', '.join(sorted(new_items)[:3])}")
+    if empty_project and len(added) > NEW_PROJECT_SCOPED_ITEMS:
+        return _full(f"a new or empty project that adds {len(added)} new items "
+                     f"(max {NEW_PROJECT_SCOPED_ITEMS} for scoped): {', '.join(added[:3])}")
     if engine:
         return _full(f"changes a shared engine: {', '.join(engine[:3])}")
+    if new_items:
+        return {"research_scope": "scoped",
+                "research_scope_reason": "a new or empty project: adds " + ", ".join(added)
+                + "; touches no existing function, no shared engine"}
     detail = ", ".join(f"{key[1]} at {touched[key]}" for key in sorted(touched))
     reason = (
         f"touches {len(touched)} existing function(s)"
@@ -866,9 +844,10 @@ def design_card(facts: dict, design_text: str = "") -> str:
     '' while `design_review_status` is. Then, in order: ``Design: <the first sentences
     of design.md's Summary>``; the review status (`design_review_status`: the headline,
     ``PASS, nothing blocks the build`` or what is unresolved, the scale, then the
-    advisories, unverified claims first); then ``Pitfalls: N`` with one
-    ``- PIT-001 (high): addressed`` line each, or the one line saying why they were not
-    checked. Everything the card listed under its old markdown heading is here, once.
+    advisories, unverified claims first); then ``Pitfalls: N`` with one line each quoting
+    the design lines that cite it (``- PIT-001 (high): § Changes: "…"``) or saying it is
+    ``not mentioned``, never a verdict (dm-262); or the one line saying why they were not
+    listed. Everything the card listed under its old markdown heading is here, once.
 
     Each item and the ``- `` lines under it are one paragraph, set apart by a blank line,
     so the question card, which renders it as text, keeps the lines apart.
@@ -889,7 +868,7 @@ def design_card(facts: dict, design_text: str = "") -> str:
     coverage = str(facts.get("pitfall_coverage") or "").strip()
     if coverage:
         first, *entries = coverage.splitlines()
-        if first.strip() == "Pitfall coverage:":
+        if first.strip() == "Pitfall citations:":
             entries = [entry.strip() for entry in entries if entry.strip()]
             lines.append(f"Pitfalls: {len(entries)}")
             lines.extend(f"- {entry}" for entry in entries)

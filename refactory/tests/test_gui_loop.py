@@ -95,17 +95,23 @@ def test_a_catalogue_entry_names_both_routes_and_the_gates_that_ask_a_person():
     assert all(gate["user"] is False for gate in scored["gates"]), scored["gates"]
 
 
-def test_the_terminal_listing_names_the_route_and_the_person(tmp_path):
-    """`refactory list modes` says the same thing the catalogue reports, for a person."""
-    from refactory_dsh import registry
+def test_the_terminal_listing_leaves_the_routes_to_the_json(tmp_path, capsys):
+    """`refactory list` is for a person: no `[run: start or wf_open]` tool hints. The JSON an
+    agent reads (`refactory list --json`) still says how each mode runs and who it asks."""
+    from refactory_dsh import cli, registry
 
     listing = registry.render_catalogue(Path("."))
-    design = next(line for line in listing.splitlines() if "default_pack/design" in line)
-    assert "run: design or wf_open" in design
-    assert "asks a person at: gate_strategy" in design
-    adaptive = next(line for line in listing.splitlines() if "circle_packing/adaptive" in line)
-    assert "run: start or wf_open" in adaptive
-    assert "asks a person" not in adaptive
+    design = next(line for line in listing.splitlines() if "default_pack/design " in line)
+    assert design.split() == ["default_pack/design", *"design, emit and check a software "
+                              "artifact from a brief".split()]
+    for hint in ("wf_open", "[run:", "asks a person at", "gate_strategy"):
+        assert hint not in listing, hint
+    assert cli.main(["list", "--json"]) == 0
+    entries = {entry["id"]: entry for entry in json.loads(capsys.readouterr().out)}
+    assert entries["default_pack/design"]["action"] == "design"
+    assert entries["default_pack/design"]["interactive"] is True
+    assert {"id": "gate_strategy", "user": True} in entries["default_pack/design"]["gates"]
+    assert entries["circle_packing/adaptive"]["action"] == "start"
 
 
 def test_a_disabled_package_is_listed_but_not_startable(tmp_path):

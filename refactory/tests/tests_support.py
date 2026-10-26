@@ -47,6 +47,58 @@ def _link_bundle(home: Path, name: str, bundle: str, target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     link.symlink_to(target)
 
+#: A placeholder stored as the configured key in a fake model home. Never a real
+#: credential, and it must never reach any output.
+PLACEHOLDER_KEY = "placeholder-not-a-real-key"
+
+
+def model_home_with_a_key(home: Path, *, provider: str = "fakeprov", model: str = "fake-model",
+                          base_url: str = "http://127.0.0.1:9") -> Path:
+    """A DSH home whose headless profile routes two providers: one with a stored key, one without.
+
+    The profile is the shape install writes for `headless` (DSH's own bundles, no
+    refactory layer), with the routes in its patch, which is where the pinned harness
+    keeps what Settings -> Models saves. The store is the managed credential document.
+    ``provider``/``model`` (by default `fakeprov/fake-model`) is the default route, at
+    ``base_url``, and has its key; `otherprov` has none.
+    """
+    profile = home / "profiles" / "headless"
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / "package.json").write_text(json.dumps({
+        "name": "dsh-profile-headless", "private": True, "dependencies": {},
+        "dsh": {"profile": {"bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"]}},
+    }))
+    (profile / "cordis.yml").write_text("[]\n")
+    (profile / "cordis.patch.yml").write_text(
+        "- id: llm-pi-ai\n"
+        "  name: '@deepseek-ai/dsh-llm-pi-ai'\n"
+        "  config:\n"
+        "    providers:\n"
+        f"      {provider}:\n"
+        f"        baseURL: {base_url}\n"
+        "        apiKeyEnv: REFACTORY_TEST_KEY_SET\n"
+        "      otherprov:\n"
+        "        baseURL: http://127.0.0.1:9\n"
+        "        apiKeyEnv: REFACTORY_TEST_KEY_UNSET\n"
+        "- id: agent-default-model\n"
+        "  name: '@deepseek-ai/dsh-agent-default-model'\n"
+        "  config:\n"
+        f"    provider: {provider}\n"
+        f"    model: {model}\n"
+    )
+    store = home / ".credentials.yaml"
+    store.write_text(f"version: 1\nrefs:\n  REFACTORY_TEST_KEY_SET: {PLACEHOLDER_KEY}\n")
+    store.chmod(0o600)
+    return home
+
+
+def graph_profile(home: Path, checkout: Path) -> Path:
+    """The `graph` profile install.sh leaves: DSH's base bundle and ``checkout``'s graph bundle."""
+    directory = _profile(home, dsh_profile.GRAPH_PROFILE, ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _link_bundle(home, dsh_profile.GRAPH_PROFILE, dsh_profile.GRAPH_BUNDLE, checkout / "packages" / "bundle" / "graph")
+    return directory
+
+
 _INIT = '''\
 """A generated package."""
 from refactory_dsh.nn import Package

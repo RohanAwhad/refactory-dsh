@@ -2,24 +2,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-models/client'
-import { PRODUCT_NAME } from '../identity.ts'
-
-/** Preserve session titles; translate only the shell's exact product suffix. */
-export function productTitle(title: string): string {
-  return title.replace(/DeepSeek Harness$/, PRODUCT_NAME)
-}
-
-/** The pin has no configurable document-title input. Keep this bridge isolated. */
-export function installTitle(doc: Document): () => void {
-  const update = (): void => {
-    const next = productTitle(doc.title)
-    if (next !== doc.title) doc.title = next
-  }
-  update()
-  const observer = new MutationObserver(update)
-  observer.observe(doc.head, { subtree: true, childList: true, characterData: true })
-  return () => { observer.disconnect() }
-}
+// The document-title bridge is `ui-refactory`'s (`src/client/title.ts`): that package
+// is on the additive page too, where this brand is not.
 
 /**
  * The pinned settings shell lists raw registrations instead of slot winners.

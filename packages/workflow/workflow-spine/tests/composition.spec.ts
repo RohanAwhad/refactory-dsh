@@ -173,6 +173,9 @@ describe('the cursor status a run leaves behind', () => {
     const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status: string; error: string }
     expect(recorded.status).toBe('refused')
     expect(recorded.error).toContain('gate gate')
+    // dm-255: the refusal names the one real way to answer, not a command to invent.
+    expect(recorded.error).toContain(`answer it with \`refactory steer --run ${workdir} --verdict gate=<proceed|halt> `
+      + `[--note "…"]\`, then \`refactory graph-control resume --run ${workdir}\``)
   })
 
   it('records the failed node\'s own stderr, not only its exit code', async () => {
