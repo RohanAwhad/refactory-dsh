@@ -137,6 +137,8 @@ def _worktree_knobs(args: argparse.Namespace, *, deliver: bool = True) -> list[s
         knobs.append(f"refine={args.refine}")
     if args.review_comments:
         knobs.append("review_comments=1")
+    if getattr(args, 'refine_design', 'light') != 'light':
+        knobs.append(f"refine_design={args.refine_design}")
     return knobs
 
 
@@ -602,6 +604,9 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument("--review-comments", action="store_true",
                      help="design only, with --refine: add the pull request's reviews and comments to the "
                           "run's steering")
+    ceo.add_argument("--refine-design", default="light", choices=["light", "full"],
+                     help="design only, with --refine: light (default) skips research and strategy; "
+                          "full walks the whole design phase")
     for key in ("worker_backend", "effort", "permission_mode"):
         ceo.add_argument("--" + key.replace("_", "-"), default="")
     ceo.add_argument(

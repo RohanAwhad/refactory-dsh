@@ -2609,6 +2609,36 @@ and in both of the CLI's prints when a run stops at a user gate.
 - `test_design_short_path.py::test_the_design_graph_routes_on_the_scale`
 - `test_interactive.py::test_prepare_design_sets_full_even_when_brief_names_a_file`
 
+### Light refine
+
+A design-mode refine (`--refine <PR>`) follows up an open pull request.  By
+default (`refine_design=light`), the `route_refine_design` gate skips the
+research, pitfalls and strategy phases and goes from `prepare` straight to
+`design_doc`.  The gate writes sentinel facts and files — research, pitfalls,
+strategy_plan, strategy (including the PR description, diff stat and
+changed-file list from the worktree) — so every downstream node finds its
+declared inputs on disk on the spine.  With `refine_design=full`, or on any
+non-refine run, the gate returns `full` and the existing pipeline runs
+unchanged.
+
+The `refine_design` knob is frozen: it cannot change after the run starts.
+The default is `light`.  The CLI flag is `--refine-design light|full`.
+
+If the person reloops at `gate_strategy`, the existing reloop edge goes to
+`synthesize_strategy`, which works from the light sentinels and the person's
+note.  The run reaches `design_doc` and the gate again without running
+research, pitfalls or `strategy_director`.
+
+#### Tests that hold it
+
+- `test_design_refine.py::test_light_refine_skips_research_and_strategy`
+- `test_design_refine.py::test_full_refine_walks_all_agents`
+- `test_design_refine.py::test_non_refine_unchanged`
+- `test_design_refine.py::test_light_refine_reloop_at_gate_strategy`
+- `test_design_refine.py::test_route_refine_design_unit`
+- `test_design_refine_spine.py::test_spine_route_refine_design_light`
+- `test_design_refine_spine.py::test_spine_route_refine_design_full_on_non_refine`
+
 **Tests.** `test_check_beside_reviews.py`: the graph and the lowered workflow; what the
 reviews read and see; scripted runs whose check passes, and whose first check fails
 (two emits, the second carrying the failure, both attempts reviewed); `gate_check`'s

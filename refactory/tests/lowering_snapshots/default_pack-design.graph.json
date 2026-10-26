@@ -598,6 +598,28 @@
       "post_checks": [],
       "_type": "AgentNode"
     },
+    "route_refine_design": {
+      "id": "route_refine_design",
+      "reads": [],
+      "writes": [
+        "pitfalls-review.txt",
+        "pitfalls.json",
+        "pitfalls.md",
+        "research-plan.json",
+        "research-review.txt",
+        "research/",
+        "strategy-plan.json",
+        "strategy.json",
+        "strategy/"
+      ],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.run refactory_dsh.design_ops:route_refine_design",
+      "gate_prompt": "on a light refine, skip research and strategy and go straight to design_doc",
+      "max_iterations": 2,
+      "_type": "GateNode"
+    },
     "route_strategy": {
       "id": "route_strategy",
       "reads": [],
@@ -861,7 +883,7 @@
     },
     {
       "source": "prepare",
-      "target": "research_director",
+      "target": "route_refine_design",
       "condition": null
     },
     {
@@ -893,6 +915,16 @@
       "source": "research_director",
       "target": "record_findings",
       "condition": null
+    },
+    {
+      "source": "route_refine_design",
+      "target": "design_doc",
+      "condition": "light"
+    },
+    {
+      "source": "route_refine_design",
+      "target": "research_director",
+      "condition": "full"
     },
     {
       "source": "route_strategy",
@@ -940,6 +972,7 @@
     "judge_rereads": 1.0,
     "self_check_fixups": 2.0,
     "self_check_timeout_s": 300.0,
+    "refine_design": "light",
     "target": "",
     "base": "",
     "worktree": 1.0,
@@ -1083,6 +1116,20 @@
       "values": [],
       "frozen": false,
       "description": "how long the self-check's tests may run before the reviews; never more than a third of check_timeout_s",
+      "required": false
+    },
+    "refine_design": {
+      "default": "light",
+      "kind": "str",
+      "lo": null,
+      "hi": null,
+      "enum": [],
+      "values": [
+        "light",
+        "full"
+      ],
+      "frozen": true,
+      "description": "on a refine: light skips research and strategy; full walks the whole design phase",
       "required": false
     },
     "target": {

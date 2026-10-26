@@ -246,6 +246,11 @@ class DesignMode(Mode):
                 description="how long the self-check's tests may run before the reviews; "
                             "never more than a third of check_timeout_s",
             ),
+            "refine_design": Knob(
+                "light", "str", values=("light", "full"), frozen=True,
+                description="on a refine: light skips research and strategy; "
+                            "full walks the whole design phase",
+            ),
             **repo_change.knobs(),
             **delivery.knobs(),
         }
@@ -282,6 +287,23 @@ class DesignMode(Mode):
                       "has_pitfalls_step", "pitfalls", "pitfalls_review",
                       "claims_check_feedback", "design_review_status"),
             notes="read the brief and the command that decides whether it is done",
+        ))
+
+        # ── design-v2: route_refine_design gate ──
+        graph.add(Node(
+            "route_refine_design", "gate",
+            evaluator=f"{OPS}:route_refine_design",
+            knobs=("refine_design",),
+            writes=("research-plan.json", "pitfalls.json", "pitfalls.md",
+                    "strategy-plan.json", "strategy.json",
+                    "research-review.txt", "pitfalls-review.txt",
+                    "research/", "strategy/"),
+            produces=("research", "findings_recorded", "research_review",
+                      "research_attempts_used", "research_advisory",
+                      "pitfalls", "pitfalls_review", "pitfalls_attempts_used",
+                      "pitfalls_advisory", "strategy_plan", "strategy"),
+            max_iterations=2,
+            notes="on a light refine, skip research and strategy and go straight to design_doc",
         ))
 
         # ── design-v2's head: research, perspectives, then the design itself ──
@@ -890,7 +912,9 @@ class DesignMode(Mode):
             notes="terminal node after delivery succeeds",
         ))
 
-        graph.connect("prepare", "research_director")
+        graph.connect("prepare", "route_refine_design")
+        graph.connect("route_refine_design", "research_director", condition="full")
+        graph.connect("route_refine_design", "design_doc", condition="light")
         graph.connect("research_director", "record_findings")
         graph.connect("record_findings", "gate_research")
         graph.connect("gate_research", "research_director", condition="reloop")
@@ -984,6 +1008,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="keep the work on the run's local branch instead of opening a pull request")
     parser.add_argument("--refine", default="", metavar="PR",
                         help="follow up an open pull request: start from its branch and update it")
+    parser.add_argument("--refine-design", default="light", choices=["light", "full"],
+                        help="on a refine: light (default) skips research and strategy; "
+                             "full walks the whole design phase")
     parser.add_argument("--review-comments", action="store_true",
                         help="with --refine: add the pull request's reviews and comments to the steering")
     from refactory_dsh.budgets import add_arguments, arguments
@@ -1084,6 +1111,8 @@ def main(argv: list[str] | None = None) -> int:
         state["knobs"]["pr"]["value"] = False
     if args.review_comments:
         state["knobs"]["review_comments"]["value"] = True
+    if args.refine_design:
+        state["knobs"]["refine_design"]["value"] = args.refine_design
     mode.load_state_dict(state)
     from refactory_dsh.create import parse_verdicts
 

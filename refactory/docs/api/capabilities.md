@@ -4768,6 +4768,21 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "refine_design": {
+      "default": "light",
+      "description": "design only, with --refine: light (default) skips research and strategy; full walks the whole design phase",
+      "enum": [
+        "light",
+        "full"
+      ],
+      "flags": [
+        "--refine-design"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "repair_attempts": {
       "default": null,
       "description": "",
@@ -4965,7 +4980,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "054734e27c8a8bda0075d478425f857975ffb609ea6ec2e2a6d1a6c7d4e400c5"
+  "reviewed_schema": "de75e9029a10ccea7e2b07ee02f42cdd2bde13cca2ffc47f192e95c35d417ef9"
 }
 ```
 
@@ -7784,7 +7799,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": null,
       "source": "prepare",
-      "target": "research_director"
+      "target": "route_refine_design"
     },
     {
       "condition": "reloop",
@@ -7815,6 +7830,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "research_director",
       "target": "record_findings"
+    },
+    {
+      "condition": "light",
+      "source": "route_refine_design",
+      "target": "design_doc"
+    },
+    {
+      "condition": "full",
+      "source": "route_refine_design",
+      "target": "research_director"
     },
     {
       "condition": "proceed",
@@ -7886,6 +7911,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "id": "prepare_check",
+      "user": false
+    },
+    {
+      "id": "route_refine_design",
       "user": false
     },
     {
@@ -8206,6 +8235,17 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.design_ops:route_refine_design",
+      "gate_kind": "fn",
+      "id": "route_refine_design",
+      "kind": "gate",
+      "knobs": [
+        "refine_design"
+      ],
+      "notes": "on a light refine, skip research and strategy and go straight to design_doc",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.design_ops:route_strategy",
       "gate_kind": "fn",
       "id": "route_strategy",
@@ -8404,6 +8444,21 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": "",
       "values": []
     },
+    "refine_design": {
+      "default": "light",
+      "description": "on a refine: light skips research and strategy; full walks the whole design phase",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "light",
+      "values": [
+        "light",
+        "full"
+      ]
+    },
     "refusal_attempts": {
       "default": 3,
       "description": "consecutive refused emissions before the run stops",
@@ -8567,7 +8622,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "5ff2fa0638f896acdc0cdacff8c654c0ff452c3d86a79e8b34b5a92857e6c631"
+    "reviewed_schema": "4eb0ce78a5e4cf17c0205c85b3b3f009146f70c0f70372a8b5c5a0420a2a0f68"
   }
 }
 ```
@@ -8898,6 +8953,21 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "value": "",
       "values": []
     },
+    "refine_design": {
+      "default": "light",
+      "description": "on a refine: light skips research and strategy; full walks the whole design phase",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "light",
+      "values": [
+        "light",
+        "full"
+      ]
+    },
     "refusal_attempts": {
       "default": 3,
       "description": "consecutive refused emissions before the run stops",
@@ -9000,7 +9070,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "f14fffeafec111f5333c61ea98299e4a3d3985fc351ced03f1ff936dc44f2b61"
+    "reviewed_schema": "2d8fc94a625bae0250a36418ebd222c730dedda6b8243d52af0f56c081865f0d"
   }
 }
 ```

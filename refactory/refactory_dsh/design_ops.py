@@ -242,6 +242,97 @@ SCOPED_STRATEGY_PLAN = (
 )
 
 
+#: What a light refine's plan tells design_doc.
+LIGHT_REFINE_STRATEGY_PLAN = (
+    "This is a light refine — a follow-up to an existing pull request. The brief "
+    "describes exactly what to fix. Below are the PR description, the diff stat and "
+    "the changed-file list against the PR's base so you know what the change already "
+    "does. Plan exactly the requested fixes and nothing else. Keep every part of the "
+    "existing change that the brief does not ask to modify. Do not redesign what "
+    "already works."
+)
+
+
+def route_refine_design(ctx: Any) -> Any:
+    """Skip research and strategy on a light refine; a full refine or a non-refine walks them."""
+    from refactory_dsh.nn import Verdict
+
+    # A non-refine run always takes the full path, regardless of the knob.
+    if ctx.facts.get("research_scope_reason") != REFINE_SCOPE_REASON:
+        return Verdict("full", "not a refine: walking the full design phase")
+
+    # A refine with the full knob walks the full path too.
+    if ctx.knob("refine_design", "light") == "full":
+        return Verdict("full", "refine_design=full: walking the full design phase")
+
+    # ── light path: write sentinel facts and files ──
+    # Retrieve the PR body from delivery_plan.
+    plan = ctx.facts.get("delivery_plan") or {}
+    refining = plan.get("refine") or plan.get("inputs", {}).get("refine") or {}
+    if isinstance(plan, dict):
+        # The refining dict may be nested under 'inputs' or directly on the plan.
+        for key in ("refine", "inputs"):
+            candidate = plan.get(key)
+            if isinstance(candidate, dict) and "body" in candidate:
+                refining = candidate
+                break
+    pr_body = str(refining.get("body") or "(no pull request description)")
+    pr_into = str(refining.get("into") or "main")
+
+    # Get diff stat and changed files from the worktree.
+    diff_stat = "(diff stat unavailable)"
+    changed_files = "(changed files unavailable)"
+    try:
+        wt = worktree.recorded(ctx.workdir)
+        if wt is not None:
+            wt_path = Path(wt.path)
+            # Use merge-base to find the right base for the diff.
+            try:
+                merge_base = worktree.git(wt_path, "merge-base", f"origin/{pr_into}", "HEAD").strip()
+            except (ValueError, OSError):
+                merge_base = wt.base
+            diff_stat = worktree.git(wt_path, "diff", "--stat", merge_base).strip() or "(empty diff)"
+            changed_files = worktree.git(wt_path, "diff", "--name-only", merge_base).strip() or "(no files changed)"
+    except Exception:
+        pass
+
+    # Build the strategy context block.
+    strategy_block = (
+        f"{LIGHT_REFINE_STRATEGY_PLAN}\n\n"
+        f"## Pull request description\n{pr_body}\n\n"
+        f"## Diff stat against the PR's base\n```\n{diff_stat}\n```\n\n"
+        f"## Changed files\n```\n{changed_files}\n```"
+    )
+
+    # Write sentinel facts.
+    ctx.set_fact("research", "(light refine: research was skipped)")
+    ctx.set_fact("findings_recorded", "")
+    ctx.set_fact("research_review", "(light refine: research review was skipped)")
+    ctx.set_fact("research_attempts_used", 0)
+    ctx.set_fact("research_advisory", "")
+    ctx.set_fact("pitfalls",
+                 "(Light refine: the pitfalls analysis was skipped. Check the change "
+                 "against the brief's requirements and general code quality instead.)")
+    ctx.set_fact("pitfalls_review", "(light refine: pitfalls review was skipped)")
+    ctx.set_fact("pitfalls_attempts_used", 0)
+    ctx.set_fact("pitfalls_advisory", "")
+    ctx.set_fact("strategy_plan", LIGHT_REFINE_STRATEGY_PLAN)
+    ctx.set_fact("strategy", strategy_block)
+
+    # Write sentinel files.
+    ctx.write_text("research-plan.json", "[]\n")
+    ctx.write_text("pitfalls.json", "[]\n")
+    ctx.write_text("pitfalls.md", "")
+    ctx.write_text("strategy-plan.json", "[]\n")
+    ctx.write_text("strategy.json", json.dumps({"strategy": strategy_block}, indent=2) + "\n")
+    ctx.write_text("research-review.txt", "(light refine: research was skipped)\n")
+    ctx.write_text("pitfalls-review.txt", "(light refine: pitfalls review was skipped)\n")
+    ctx.path("research").mkdir(parents=True, exist_ok=True)
+    ctx.path("strategy").mkdir(parents=True, exist_ok=True)
+
+    return Verdict("light", "light refine: skipping research and strategy")
+
+
 def route_strategy(ctx: Any) -> Any:
     """Send a scoped change straight to the plan; a full design weighs perspectives first.
 

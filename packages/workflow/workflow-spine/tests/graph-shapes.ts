@@ -332,14 +332,26 @@ export const designGraph: ShapeEntry = {
   gatesWithReloop: ['gate_research', 'gate_pitfalls', 'gate_design_review', 'gate_strategy', 'prepare_check', 'gate_check', 'gate_qa', 'gate_overwatch'],
   // A full design: the perspectives step runs. No reviewer sits between the design and
   // the person's gate at either scale.
-  fixedVerdicts: { route_strategy: 'proceed' }, large: true,
+  fixedVerdicts: { route_strategy: 'proceed', route_refine_design: 'full' }, large: true,
 }
 
 /** The same graph for a scoped change, which skips the perspectives step. */
 export const designGraphScoped: ShapeEntry = {
   ...designGraph,
   name: 'designGraphScoped',
-  fixedVerdicts: { route_strategy: 'scoped' },
+  fixedVerdicts: { route_strategy: 'scoped', route_refine_design: 'full' },
+}
+
+/** A light refine: skips research and strategy, goes straight to design_doc.
+ *  gate_strategy is not relooped in this shape because its reloop target
+ *  (synthesize_strategy) is unreachable on the light path and would never
+ *  be re-completed on a redo, failing the redo invariant's static forward
+ *  closure check. */
+export const designGraphRefineLight: ShapeEntry = {
+  ...designGraph,
+  name: 'designGraphRefineLight',
+  gatesWithReloop: ['gate_design_review', 'prepare_check', 'gate_check', 'gate_qa', 'gate_overwatch'],
+  fixedVerdicts: { route_refine_design: 'light', route_strategy: 'proceed' },
 }
 
 // ─── Shape 13: crossContainerReloop (constructor-refused) ────────
@@ -389,4 +401,5 @@ export const shapes: ShapeEntry[] = [
   alternativeEnds_halt,
   designGraph,
   designGraphScoped,
+  designGraphRefineLight,
 ]
