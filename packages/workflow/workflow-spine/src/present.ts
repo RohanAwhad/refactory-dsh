@@ -145,6 +145,10 @@ function stepTitle(summary: ResultSummary): string {
 
 /** What a gate call came to. */
 function verdictTitle(summary: ResultSummary): string | undefined {
+  // A run that halts on any other answer than halt hit the gate's reloop limit (dm-141).
+  if (summary.halted !== undefined && summary.verdict !== undefined && summary.verdict.toLowerCase() !== 'halt') {
+    return `Reloop limit reached: the run stopped at ${summary.halted}`
+  }
   if (summary.halted !== undefined) return summary.answeredBy === 'user' ? 'You stopped the run' : 'Run stopped'
   if (summary.status === 'replied') return 'Your message went to the CEO'
   if (summary.status === 'cancelled') return `Cancelled ${summary.gate ?? 'the gate'}`

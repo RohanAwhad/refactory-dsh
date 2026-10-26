@@ -1308,6 +1308,79 @@ def test_reverts_in_one_file_never_run_stale_bytecode(tmp_path):
     assert [p["result"] for p in results] == ["fail"] * 6
 
 
+@pytest.mark.toolchain("node")
+def test_a_cited_test_name_reaches_its_runner_whole_and_runs_nothing_else(tmp_path):
+    """Real vitest and pytest (dm-193). A vitest citation is `describe > test`, but `-t` is a
+    regular expression matched against the names joined by a space: unconverted, it
+    selected nothing, which exited 0 and read as a test that still passes, and a `(`
+    stopped vitest at startup, which read as a catch. Unquoted, the shell cut the name at
+    ` > ` into a stray file and ran what followed a `;`. A run that passed or failed no
+    test is measured as running none, never as a pass or a catch, and a spec the revert
+    stopped from loading is a collection error, not one that ran no tests."""
+    from refactory_dsh import base_check
+
+    repo_root = Path(__file__).resolve().parents[2]
+    if not (repo_root / "node_modules" / ".bin" / "vitest").is_file():
+        pytest.skip("vitest not found at node_modules/.bin/vitest")
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    repo = git_repo(tmp_path / "repo")
+    (repo / ".gitignore").write_text("node_modules\n")
+    (repo / "node_modules").symlink_to(repo_root / "node_modules")
+    (repo / "src").mkdir()
+    (repo / "src" / "hmr.ts").write_text("export const enabled = true\n")
+    (repo / "m.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "run-branch")
+    (repo / "src" / "hmr.ts").write_text("export const enabled = false\n\n\nexport function helper() { return 1 }\n")
+    (repo / "src" / "load.test.ts").write_text(
+        "import { expect, it } from 'vitest'\nimport * as hmr from './hmr'\n"
+        "const one = (hmr as any).helper()\nit('loads', () => { expect(one).toBe(1) })\n")
+    (repo / "src" / "hmr.test.ts").write_text(
+        "import { describe, expect, it } from 'vitest'\nimport { enabled } from './hmr'\n"
+        "describe('client-hmr composition', () => {\n"
+        "  it('is disabled after composition', () => { expect(enabled).toBe(false) })\n})\n"
+        "it('stays off', () => { expect(enabled).toBe(false) })\n"
+        "it('stays off (no reload); touch pwned', () => { expect(enabled).toBe(false) })\n")
+    (repo / "m.py").write_text("def f():\n    return 2\n")
+    (repo / "test_m.py").write_text(
+        "import pytest\nimport m\n\n\n@pytest.mark.parametrize('label', ['a b'])\n"
+        "def test_f(label):\n    assert m.f() == 2\n\n\n"
+        "@pytest.mark.skip(reason='off')\ndef test_skipped():\n    assert m.f() == 2\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "change")
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base, "head": git(repo, "rev-parse", "HEAD"),
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir)}))
+    ctx = nn.RunContext(run_dir, facts={"brief": "test"})
+    cited = {
+        "src/hmr.test.ts::client-hmr composition > is disabled after composition": "fail",
+        "src/hmr.test.ts::stays off": "fail",
+        "src/hmr.test.ts::stays off (no reload); touch pwned": "fail",
+        "src/hmr.test.ts::client-hmr composition > is not there": "no_tests",
+        "src/gone.test.ts::client-hmr composition > is disabled after composition": "no_tests",
+        "src/load.test.ts::loads": "collection_error",
+        "test_m.py::test_f[a b]": "fail",
+        "test_m.py::test_skipped": "no_tests",
+    }
+    sites = {"test_m": "m.py:2", "src/load": "src/hmr.ts:4"}
+    pairs = [(next((site for prefix, site in sites.items() if name.startswith(prefix)), "src/hmr.ts:1"), name, "local")
+             for name in cited]
+    results = base_check.compute_site_reverts(ctx, pairs)["pairs"]
+    assert {entry["test"]: entry["result"] for entry in results} == cited, results
+    stray = [line for line in git(repo, "status", "--porcelain", "--untracked-files=all").splitlines()
+             if "pytest_cache" not in line and "__pycache__" not in line]
+    assert stray == [], "nothing the shell wrote: no stray capture, no `pwned`"
+
+
+def test_a_vitest_citation_becomes_the_pattern_vitest_matches():
+    from refactory_dsh import base_check
+
+    assert base_check.vitest_name_pattern("a > b (c); d") == "a b \\(c\\); d"
+
+
 def test_a_documentation_site_needs_no_test_but_must_be_in_the_diff(tmp_path):
     """A correction to a prose document is evidenced by the diff: no test is expected to
     fail when its line is reverted, or to be cited at all, so either is advisory, not a

@@ -7,10 +7,12 @@
  * does — choosing from a select, pressing a button — and reads the store and the
  * scripted Remote afterwards.
  */
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { makeTranslate } from './translate.client.ts'
 import { failureLine } from '../src/client/RefactoryBody.tsx'
+import css from '../src/client/RefactoryBody.module.css'
 import { en, zh } from '../src/client/locales.ts'
 import {
   AUTHORING, CANDIDATES, COMPLETED, DISABLED, FRAME, GATED, GATED_STEERING, MODE, NO_STRATEGIES,
@@ -337,6 +339,24 @@ describe('the steering the picker offers for the run it reads', () => {
     })
     expect(missing(quiet.view, 'data-refactory-gate')).toBe(true)
     expect(missing(quiet.view, 'data-refactory-verdict')).toBe(true)
+  })
+
+  it('keeps the line breaks of a gate\'s prompt', () => {
+    // Design mode's card is one item a line; a plain note collapses them (dm-163).
+    const prompt = 'Design: it prints.\n\nPitfalls: 1\n- PIT-001 (high): addressed\n\nApprove the design?'
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
+      steering: { kind: 'ready', value: { ...GATED_STEERING, gates: [{ ...GATED_STEERING.gates[0]!, prompt }] } },
+    })
+    const note = at(view, 'data-refactory-gate-note')
+    expect(note.textContent).toBe(prompt)
+    expect(note.classList.contains(css.gatePrompt!)).toBe(true)
+    // jsdom applies no module CSS, so the rule is read where it is written (vitest runs
+    // from the repository root).
+    const rules = readFileSync('packages/client/ui-refactory/src/client/RefactoryBody.module.css', 'utf8')
+    expect(rules).toMatch(/\.gatePrompt\s*\{[^}]*white-space:\s*pre-wrap/u)
   })
 
   it('answers the waiting gate with the verdict the person pressed', async () => {

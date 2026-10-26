@@ -839,3 +839,73 @@ def test_research_director_footprint_instruction_clauses():
     section = prompt[prompt.index("## Footprint"):prompt.index("## What was wrong with the last plan")]
     assert "refactory" not in section
     assert not re.search(r"\b\w+\.(py|ts)\b", section)
+
+
+# ── the gate card (dm-163) ──────────────────────────────────────────────────────
+
+_CARD_DESIGN = (
+    "# Make the tool print what it built\n\n## Summary\n\nThe tool prints the name it built. "
+    "Nothing else changes. A third sentence the card leaves out.\n\n"
+    "## Changes\n\n- `tool.py` — print the built name\n\n"
+    "## Tests\n\n- `tests/test_tool.py::test_build` — the name is printed\n\n"
+    "## Anti-patterns to avoid\n\n- PIT-002: see § Changes\n")
+_CARD_PITFALLS = [{"id": "PIT-001", "risk": "high", "text": "the cache key ignores the base"},
+                  {"id": "PIT-002", "risk": "low", "text": "the log line moves"}]
+
+
+def _card(design: str, *, attempts: int = 1) -> FakeCtx:
+    ctx = FakeCtx(
+        files={"design.md": design, "brief.json": json.dumps({"brief": "a tool"}),
+               "pitfalls.json": json.dumps(_CARD_PITFALLS)},
+        facts={"name": "card", "has_pitfalls_step": True, "research_scope": "scoped",
+               "research_scope_reason": "one file", "source": "",
+               "claims_check": {"unverified": ["`nope.py` does not exist"], "notes": []}})
+    ctx._knobs["design_review_attempts"] = attempts
+    gate_design_review(ctx)
+    return ctx
+
+
+def test_the_gate_card_is_plain_text_summary_review_scale_advisories_then_pitfalls():
+    """The design gate's card was markdown under a '## Unresolved design review findings'
+    heading, with every pitfall's coverage dumped below it (dm-163). It is plain text now:
+    what the design builds, the review, the scale, the advisories with unverified claims
+    first, then one short line per pitfall, each item a paragraph of its own so the
+    question card keeps them apart, and nothing the old card carried is lost."""
+    from types import SimpleNamespace
+
+    from refactory_dsh.nn.executor import render
+
+    ctx = _card(_CARD_DESIGN)
+    assert ctx.facts["design_card"] == (
+        "Design: The tool prints the name it built. Nothing else changes.\n\n"
+        "Design review: PASS, nothing blocks the build\n\n"
+        "Scale: scoped \u2014 one file\n\n"
+        "Unverified claims (high, advisory): 1\n"
+        "- unverified claim: `nope.py` does not exist\n\n"
+        "Other advisories: 1\n"
+        "- high-risk pitfall(s) not addressed in the design: PIT-001\n\n"
+        "Pitfalls: 2\n"
+        "- PIT-001 (high): MISSING\n"
+        "- PIT-002 (low): addressed")
+    notes = DesignMode().build().nodes["gate_strategy"].notes
+    facts = {**ctx.facts, "delivery": "this run opens a draft pull request"}
+    shown = render(notes, SimpleNamespace(knobs={}, facts=facts))
+    assert shown == (ctx.facts["design_card"] + "\n\nApprove the design before the artifact is written? It is "
+                     "in design.md in the run directory. Then, this run opens a draft pull request; delivery.md "
+                     "there says more. Answer proceed to build and deliver it that way, or reloop to have the "
+                     "plan redone.")
+    assert "#" not in shown
+
+    # Out of rewrites, the unresolved section is named on the card.
+    failed = _card(_CARD_DESIGN.replace("## Changes\n\n- `tool.py` \u2014 print the built name\n\n", ""),
+                   attempts=0)
+    assert failed.facts["design_card"].split("\n\n")[:2] == [
+        "Design: The tool prints the name it built. Nothing else changes.",
+        "Design review: FAIL, 1 unresolved\n"
+        "- the design is missing the section the build needs, or it is empty: ## Changes"]
+
+    # A design with no Anti-patterns section: the one line saying the pitfalls were not checked.
+    card = _card(_CARD_DESIGN.split("## Anti-patterns")[0]).facts["design_card"]
+    assert card.split("\n\n")[-1] == ("Pitfalls: pitfall coverage not checked: the design has no "
+                                       "## Anti-patterns to avoid section (optional)")
+    assert not any(line.startswith("#") for line in card.splitlines()), "no markdown heading"

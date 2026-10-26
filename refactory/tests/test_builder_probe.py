@@ -1223,8 +1223,14 @@ def test_walker_design_run_that_ends_before_materialise_leaves_no_warm_clone(tmp
     task = {"name": "probe_tool", "brief": "a tool", "check": check, "target": str(repo)}
 
     if end == "stopped":
-        with pytest.raises(KeyboardInterrupt):
-            DesignMode().run(run, model=builder, verdicts={"gate_strategy": "proceed"}, task=task)
+        # A suite run in the background (nohup, `&`) inherits SIGINT as ignored, so the
+        # builder's own SIGINT would do nothing: Python's handler is put back for the run.
+        previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                DesignMode().run(run, model=builder, verdicts={"gate_strategy": "proceed"}, task=task)
+        finally:
+            signal.signal(signal.SIGINT, previous)
     else:
         result = DesignMode().run(run, model=builder, verdicts={"gate_strategy": "proceed"}, task=task)
         assert not result.exit_ok and "the builder's session ended" in (result.error or "")

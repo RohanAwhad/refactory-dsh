@@ -28,6 +28,22 @@ BESIDE_CHECK_VERIFIER_NOTE = (
     "its own. Do not run the whole check yourself.\n"
 )
 
+#: What design mode's builder checks before it answers (approved 2026-10-26): every extra
+#: build round the QA judge caused was a gate correction with no test that exercises it,
+#: or a fix whose test still passes with the fix reverted. Design mode only.
+EMIT_CHECKLIST = (
+    "\n## Before you answer\n"
+    "- For each correction made at the design gate and each ask in the brief, find the test "
+    "that proves it and run it with the builder probe, when you have one.\n"
+    "- Then undo that change in your draft emit.txt and probe the same test again: it must "
+    "fail. If it still passes, the test does not prove the change: fix the test, then "
+    "restore the change.\n"
+    "- A correction counts as met only if a test fails without it. The reviewers check this.\n"
+    "- Avoid a test that calls the helper under test instead of driving the real path the "
+    "brief names, test inputs nothing uses (such as a verdict list nothing consumes), and "
+    "assertions on results the test built by hand.\n"
+)
+
 _ACCEPTANCE_BASELINE = (
     "Acceptance baseline: the original brief, any approved design, and explicit user "
     "steering. Preserve user-approved non-goals. A README limitation, proposed "
@@ -541,7 +557,7 @@ class DesignMode(Mode):
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
                       "design_review_rewrites", "design_review_findings", "pitfall_coverage",
-                      "finding_coverage", "design_review_status",
+                      "finding_coverage", "design_review_status", "design_card",
                       "design_review_advisory", "design_review_blocking"),
             knobs=("design_review_attempts",),
             max_iterations=6,
@@ -559,14 +575,14 @@ class DesignMode(Mode):
             max_iterations=4,
             # `{{delivery}}` is filled from the run's facts wherever the question is put
             # (the spine's question card, the panel, the CEO's view), so the card itself
-            # names the repository a run would create, and who can see it.
+            # names the repository a run would create, and who can see it. The card is
+            # plain text, as the question card shows it (`design_ops.design_card`, dm-163).
             notes=(
-                "{{design_review_status}}\n\n"
+                "{{design_card}}\n\n"
                 "Approve the design before the artifact is written? It is in design.md "
                 "in the run directory. Then, {{delivery}}; delivery.md there says more. "
                 "Answer proceed to build and deliver it that way, or reloop to have the "
-                "plan redone.\n\n"
-                "## Unresolved design review findings\n{{design_review_findings}}"
+                "plan redone."
             ),
         ))
         graph.add(Node(
@@ -585,6 +601,7 @@ class DesignMode(Mode):
                 "run's worktree or a copy — because materialise and the check do that after "
                 "you answer and send you the result. Then return a short completion message.\n"
                 "{{probe_instruction}}\n"
+                + EMIT_CHECKLIST
             ),
             reads=("brief.json", "design.md", "check.txt", "check-record.json"),
             writes=(repo_change.EMIT_FILE,),
