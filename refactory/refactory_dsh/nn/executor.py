@@ -1204,3 +1204,30 @@ def execute(
     finally:
         if own_budget and budget is not None:
             budget.pause()
+        # However the run ended -- done, stopped, failed or halted -- nothing it
+        # kept for one turn (a builder probe's warm clone) outlives it.
+        _run_end_cleanup(ctx.workdir)
+
+
+def _run_end_cleanup(workdir: Path) -> None:
+    """Run the product's run-end cleanups on ``workdir``, however the run ended.
+
+    The walker is core and imports nothing from the product, so a cleanup reaches it
+    through the ``refactory.run_end`` entry-point group: the builder probe's warm
+    clones (``refactory/refactory_dsh/builder_probe.py``). A cleanup that fails is
+    logged with its error, which names what it left on disk; it never replaces the
+    run's own result or exception. The DSH evaluator calls this too
+    (``refactory/refactory_dsh/dsh_runtime.py``). The group is read on every call,
+    not cached: a lookup costs under a millisecond, once per run.
+    """
+    import importlib.metadata
+
+    for entry in importlib.metadata.entry_points(group="refactory.run_end"):
+        try:
+            entry.load()(Path(workdir))
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "run-end cleanup %s under %s: %s", entry.name, workdir, exc,
+            )
