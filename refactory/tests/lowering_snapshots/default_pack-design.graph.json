@@ -178,7 +178,7 @@
         "changes.diff"
       ],
       "writes": [
-        ".refactory/early-asks-check.json"
+        "early-asks-check.json"
       ],
       "blocking": true,
       "command": "python -m refactory_dsh.run refactory_dsh.design_ops:early_asks_check",

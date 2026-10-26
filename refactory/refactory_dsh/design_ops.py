@@ -25,7 +25,10 @@ from refactory_dsh.nn import Verdict
 FIRST_CHECK_CACHE = Path(".refactory") / "first-check-cache.json"
 
 #: File the ``early_asks_check`` op writes its result to; ``_self_check`` reads it.
-EARLY_ASKS_FILE = Path(".refactory") / "early-asks-check.json"
+#: Lives at the workdir root, not under ``.refactory/``, because
+#: ``.refactory/`` is runtime-owned territory and ``owned_outputs`` rejects
+#: node writes there.
+EARLY_ASKS_FILE = Path("early-asks-check.json")
 
 #: Marker the early-asks judge prompt carries, so ``FakeModel`` can intercept it.
 EARLY_ASKS_JUDGE_MARK = "## Early asks judge"
@@ -1162,7 +1165,6 @@ def early_asks_check(ctx: Any) -> dict[str, Any]:
     """
     items = _early_asks_check(ctx)
     path = ctx.workdir / EARLY_ASKS_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"items": items}))
     return {}
 

@@ -2386,7 +2386,6 @@ def test_early_asks_check_unbuilt_ask_in_first_fixup(tmp_path, monkeypatch):
     _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
     # Pre-write the early-asks-check result (simulating the graph node on the spine).
     ea_path = run / EARLY_ASKS_FILE
-    ea_path.parent.mkdir(parents=True, exist_ok=True)
     ea_path.write_text(json.dumps({"items": unbuilt_items}))
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err

@@ -256,7 +256,6 @@ def test_prepare_check_sends_back_before_the_reviews_when_last_attempts_failures
     monkeypatch.setattr(repo_change, "run_check", lambda *a, **kw: _fail)
     # Write the early-asks-check result (the graph node runs before prepare_check).
     ea_path = ctx.workdir / EARLY_ASKS_FILE
-    ea_path.parent.mkdir(parents=True, exist_ok=True)
     ea_path.write_text('{"items": []}')
     early_stops = []
     monkeypatch.setattr(design_ops, "_early_stop", lambda ctx, prepass, prev, base: (
