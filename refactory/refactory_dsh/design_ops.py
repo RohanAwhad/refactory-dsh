@@ -24,6 +24,12 @@ from refactory_dsh.nn import Verdict
 #: Cache of the first self-check's full-command result so ``_full_check`` can reuse it.
 FIRST_CHECK_CACHE = Path(".refactory") / "first-check-cache.json"
 
+#: File the ``early_asks_check`` op writes its result to; ``_self_check`` reads it.
+EARLY_ASKS_FILE = Path(".refactory") / "early-asks-check.json"
+
+#: Marker the early-asks judge prompt carries, so ``FakeModel`` can intercept it.
+EARLY_ASKS_JUDGE_MARK = "## Early asks judge"
+
 #: The reason prepare_design writes when the run is a refinement.  classify_scale
 #: recognises a refine by this constant rather than reading research_scope (which
 #: classify_scale itself writes), so a rerun reclassifies from the footprint.
@@ -1069,13 +1075,14 @@ def _brief_and_corrections_block(ctx: Any) -> str:
 
 
 def _early_asks_check(ctx: Any) -> list[dict[str, Any]]:
-    """Deterministic asks-presence check on the first self-check of each attempt.
+    """LLM judge: reads the diff against the brief's asks and approved corrections.
 
-    Reads the brief and approved corrections, extracts numbered items, and checks
-    whether the diff addresses each one by looking for mentioned file paths among
-    the changed files.  Returns a list of ``{"item": ..., "kind": ...}`` for items
-    whose mentioned files are absent from the diff.  Items that mention no file path
-    are skipped (presence cannot be determined mechanically).
+    Returns structured JSON: each ask and correction, built or not built, with
+    ``file:line`` evidence for built items.  Only "not built" items are returned.
+    The judge checks presence, not quality, and does not change the QA judge's
+    severity bar.
+
+    When ``ctx.model`` is not available (spine node runner), returns ``[]``.
     """
     brief = str(ctx.facts.get("brief") or "")
     corrections = str(ctx.facts.get("gate_corrections") or "")
@@ -1086,36 +1093,78 @@ def _early_asks_check(ctx: Any) -> list[dict[str, Any]]:
     if found is None:
         return []
 
-    from refactory_dsh.base_check import _all_changed_files
-
-    changed = set(_all_changed_files(Path(found.path), found.base))
-    if not changed:
+    model = getattr(ctx, "model", None)
+    if model is None:
         return []
 
+    # Build the diff to send to the judge.
+    diff_text = ""
+    try:
+        diff_text = worktree.git(Path(found.path), "diff", found.base, "HEAD")
+    except (ValueError, OSError):
+        if ctx.exists("changes.diff"):
+            diff_text = ctx.read_text("changes.diff")
+    if not diff_text:
+        return []
+
+    prompt = (
+        f"{EARLY_ASKS_JUDGE_MARK}\n\n"
+        "You are a presence judge. Read the diff below and decide whether each "
+        "numbered ask and correction has been built. Judge presence only, not quality. "
+        "For each item, say whether the diff contains code that addresses it. "
+        "For built items, cite a file:line from the diff as evidence.\n\n"
+        "Return a JSON object: {\"items\": [{\"number\": N, \"item\": \"text\", "
+        "\"kind\": \"ask\"|\"correction\", \"built\": true|false, "
+        "\"evidence\": \"file:line\" or null}]}.\n"
+        "Include ALL items. Return only the JSON.\n\n"
+        f"## Brief\n{brief}\n\n"
+        f"## Approved corrections\n{corrections}\n\n"
+        f"## Diff\n```\n{diff_text[:30000]}\n```\n"
+    )
+    try:
+        response = model.complete(prompt, system="early asks judge")
+    except Exception:
+        return []
+
+    # Parse the JSON from the model response.
+    try:
+        # Strip markdown fences if present.
+        text = response.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+        data = json.loads(text)
+        items = data.get("items", []) if isinstance(data, dict) else []
+    except (json.JSONDecodeError, ValueError, KeyError):
+        return []
+
+    # Return only not-built items.
     not_built: list[dict[str, Any]] = []
-    for kind, text in [("ask", brief), ("correction", corrections)]:
-        if not text:
-            continue
-        items = _re.split(r"\n\s*(\d+)\.\s+", "\n" + text)
-        for i in range(1, len(items) - 1, 2):
-            number = items[i]
-            item_text = items[i + 1].split("\n\n")[0].strip()
-            if not item_text:
-                continue
-            paths = set(_re.findall(
-                r"[\w/.\-]+\.(?:py|ts|tsx|js|jsx|json|md)", item_text))
-            if not paths:
-                continue
-            addressed = any(
-                cf == p or cf.endswith("/" + p) or cf.endswith("/" + p.split("/")[-1])
-                for p in paths for cf in changed
-            )
-            if not addressed:
-                not_built.append({
-                    "number": int(number), "item": item_text[:300], "kind": kind,
-                    "built": False,
-                })
+    for item in items:
+        if isinstance(item, dict) and not item.get("built", True):
+            not_built.append({
+                "number": item.get("number", 0),
+                "item": str(item.get("item", ""))[:300],
+                "kind": str(item.get("kind", "ask")),
+                "built": False,
+                "evidence": item.get("evidence"),
+            })
     return not_built
+
+
+def early_asks_check(ctx: Any) -> dict[str, Any]:
+    """Op node: run the early-asks judge and write results for ``_self_check``.
+
+    This is a graph node on both runtimes.  ``_self_check`` reads the result file
+    instead of calling ``_early_asks_check`` inline.
+    """
+    items = _early_asks_check(ctx)
+    path = ctx.workdir / EARLY_ASKS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"items": items}))
+    return {}
 
 
 def _cache_first_check(ctx: Any, result: Any, command: str) -> None:
@@ -1698,7 +1747,15 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
                                       bounds=test_selection.lower_bounds(earlier),
                                       alone=test_selection.run_alone(earlier))
 
+    # Read results from the early_asks_check graph node (written before prepare_check).
     early_asks_items: list[dict[str, Any]] = []
+    _ea_path = ctx.workdir / EARLY_ASKS_FILE
+    if _ea_path.exists():
+        try:
+            _ea_data = json.loads(_ea_path.read_text())
+            early_asks_items = _ea_data.get("items", [])
+        except (json.JSONDecodeError, ValueError):
+            pass
 
     if not _fixups_used(ctx) and selection.tests:
         # ── First self-check: run the full check command ──────────────
@@ -1742,7 +1799,6 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
             elapsed_s=getattr(full_result, "elapsed_s", 0),
             outputs=[_full_output] if parsed else [], left_out=[], timings=[],
         )
-        early_asks_items = _early_asks_check(ctx)
     elif _fixups_used(ctx):
         prepass = targeted_prepass(
             prev_record, command,
@@ -1759,7 +1815,6 @@ def _self_check(ctx: Any, command: str, check_timeout: int, prev_record: dict[st
             ran=False, early_stop=False, targeted_command=None,
             check_mode="full", result=None, digest_text="",
         )
-        early_asks_items = _early_asks_check(ctx)
 
     failing, inherited, base = (list(prepass.failing_ids), [], "")
     if failing:
@@ -1844,11 +1899,10 @@ def _the_changes_failures(ctx: Any, command: str, failing: list[str], check_time
         return failing, [], f"unavailable, so nothing is inherited: {result.environment_failure}"
     # Condition (a) only: inherited when the base fails the same test.
     inherited = set(to_check) & result.failures
-    # Exception: a test the brief, an approved correction, or the design names is never inherited.
+    # Exception: a test the brief or an approved correction names is never inherited.
     brief_text = str(ctx.facts.get("brief") or "")
     corrections_text = str(ctx.facts.get("gate_corrections") or "")
-    design_text = ctx.read_text("design.md") if ctx.exists("design.md") else ""
-    named_text = (brief_text + "\n" + corrections_text + "\n" + design_text).lower()
+    named_text = (brief_text + "\n" + corrections_text).lower()
     never_inherited: set[str] = set()
     for test_id in inherited:
         parts = base_check._test_name_parts(test_id)

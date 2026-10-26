@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from refactory_dsh import design_ops, failfast, lowering, repo_change, test_selection, worktree
+from refactory_dsh.design_ops import EARLY_ASKS_FILE
 from refactory_dsh.check_digest import build_probe_command
 from refactory_dsh.design import DesignMode
 from refactory_dsh.fast import DesignFastMode
@@ -122,6 +123,10 @@ def _emit(run: Path, emission: str, monkeypatch) -> None:
     (run / "emit.txt").write_text(emission)
     code, _, err = _node(run, f"{repo_change.OPS}:materialise", "materialise", "op", monkeypatch)
     assert code == 0, err
+    # Run the early_asks_check node (writes EARLY_ASKS_FILE for prepare_check).
+    code2, _, err2 = _node(run, f"{design_ops.__name__}:early_asks_check",
+                           "early_asks_check", "op", monkeypatch)
+    assert code2 == 0, err2
 
 
 def _prepare(run: Path, monkeypatch) -> tuple[int, str, str]:
@@ -2161,11 +2166,42 @@ def test_full_first_check_sees_every_failure_and_converges_in_one_fixup(tmp_path
     assert cached["commit"] == _facts(run3)["commit"]
     assert cached["command"] == CHECK
 
+    # ── Verify _full_check actually reuses the cached result ─────────
+    # Spy on run_check to confirm it is NOT called when the cache matches.
+    run_check_calls: list[str] = []
+    _orig_run_check = repo_change.run_check
+
+    def _spy_run_check(*args, **kwargs):
+        run_check_calls.append("called")
+        return _orig_run_check(*args, **kwargs)
+
+    monkeypatch.setattr(repo_change, "run_check", _spy_run_check)
+    # Call check_beside_reviews, which calls _full_check.
+    from refactory_dsh.invocations import CHECK_PREP as _CK_PREP
+    prep_data = json.loads((run3 / _CK_PREP).read_text()) if (run3 / _CK_PREP).exists() else {}
+    code3, out3, err3 = _node(run3, f"{design_ops.__name__}:check_beside_reviews",
+                              "check", "op", monkeypatch)
+    assert code3 == 0, err3
+    # The cache was consumed: run_check was NOT called.
+    assert run_check_calls == [], "run_check should not be called when the cache matches"
+    # The evidence says "reused from the first self-check, commit <sha>".
+    check_record = json.loads((run3 / "check-record.json").read_text()) if (
+        run3 / "check-record.json").exists() else {}
+    evidence_text = str(check_record.get("evidence", ""))
+    # Also check check.txt and validation.txt for the reuse note.
+    check_txt = (run3 / "check.txt").read_text() if (run3 / "check.txt").exists() else ""
+    validation_txt = (run3 / "validation.txt").read_text() if (
+        run3 / "validation.txt").exists() else ""
+    combined = evidence_text + check_txt + validation_txt
+    assert "reused from the first self-check, commit" in combined, (
+        f"Expected reuse evidence; got: {combined[:500]}")
+
 
 def test_inherited_failure_in_touched_file_is_never_sent_back(tmp_path, monkeypatch):
     """A test that fails on the base, in a file the change touches, is reported as
     inherited (condition a only) and never sent back.  A test the brief or an approved
-    correction names is never classed as inherited."""
+    correction names is never classed as inherited.  Both runtimes."""
+    # ── Spine runtime ────────────────────────────────────────────────
     _Chunks(monkeypatch, fails={PIN, ENV_FAILURE})
     repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef600003")
@@ -2197,6 +2233,23 @@ def test_inherited_failure_in_touched_file_is_never_sent_back(tmp_path, monkeypa
     # test_env is NOT inherited because the brief names it.
     assert ENV_FAILURE in record2["failing_ids"]
     assert ENV_FAILURE not in record2["inherited_filtered"]
+
+    # ── Walker runtime ───────────────────────────────────────────────
+    tmp3 = tmp_path / "v3"
+    tmp3.mkdir()
+    _Chunks(monkeypatch, emissions=[{PIN, ENV_FAILURE}, set()])
+    repo3 = _target(tmp3 / "repo3", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
+    breaks3 = render({"tool.py": "VERSION = 2\n"})
+    fixes3 = render({"tests/test_pin.py":
+                      "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 2\n"})
+    model3 = FakeModel(_answers(breaks3, fixes3))
+    run3 = tmp3 / "run3"
+    result3 = _design(run3, model3, repo3)
+    assert result3.exit_ok, result3.error
+    records3 = _records(run3)
+    first3 = records3[0]
+    assert first3["failing_ids"] == [PIN]
+    assert first3["inherited_filtered"] == [ENV_FAILURE]
 
 
 def test_approved_correction_gets_enriched_message_and_weakening_is_flagged(tmp_path, monkeypatch):
@@ -2246,7 +2299,7 @@ def test_b47a_replay_round_one_would_list_all_failures(tmp_path, monkeypatch):
     with b47a's per-file outcomes.  With the full-command-first approach ``cut_ids`` is
     empty, ``failing_ids`` contains the union of rounds 1 and 2, and the lab-only
     failures (test_resource_lifecycle, test_worker_permission_contexts) are classified
-    as inherited."""
+    as inherited.  Both runtimes."""
     # b47a evidence: round 1 had 25 failures with 10 cut files; round 2 had 18 with 4 cut.
     # All failures are in tests/ files.  Two of them also fail on the base.
     round1_only = {f"tests/test_r1_{n}.py::test_r1_{n}" for n in range(1, 18)}
@@ -2265,6 +2318,7 @@ def test_b47a_replay_round_one_would_list_all_failures(tmp_path, monkeypatch):
         fname = test_id.split("::")[-1]
         files[fpath] = f"import tool\n\n\ndef {fname}():\n    assert False, 'base failure'\n"
 
+    # ── Spine runtime ────────────────────────────────────────────────
     _Chunks(monkeypatch, fails=all_failures)
     repo = _target(tmp_path / "repo", files)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef600006",
@@ -2283,14 +2337,45 @@ def test_b47a_replay_round_one_would_list_all_failures(tmp_path, monkeypatch):
     assert base_also <= inherited_set
     assert not (base_also & failing_set)
 
+    # ── Walker runtime ───────────────────────────────────────────────
+    tmp2 = tmp_path / "v2"
+    tmp2.mkdir()
+    # All failures on round 1, then fixed on round 2.
+    _Chunks(monkeypatch, emissions=[all_failures, set()])
+    repo2 = _target(tmp2 / "repo2", files)
+    breaks2 = render({"tool.py": "VERSION = 2\n"})
+    # Fix all non-base-also tests.
+    fix_files = {}
+    for test_id in (round1_only | round2_only):
+        fpath = test_id.split("::")[0]
+        fname = test_id.split("::")[-1]
+        fix_files[fpath] = f"import tool\n\n\ndef {fname}():\n    assert tool.VERSION == 2\n"
+    fixes2 = render(fix_files)
+    model2 = FakeModel(_answers(breaks2, fixes2))
+    run2 = tmp2 / "run2"
+    result2 = _design(run2, model2, repo2,
+                      _mode(self_check_timeout_s=10, check_timeout_s=30))
+    assert result2.exit_ok, result2.error
+    records2 = _records(run2)
+    first2 = records2[0]
+    assert first2["cut"] == []
+    failing2 = set(first2["failing_ids"])
+    inherited2 = set(first2["inherited_filtered"])
+    assert (round1_only | round2_only) <= (failing2 | inherited2)
+    assert base_also <= inherited2
+    assert not (base_also & failing2)
+
 
 def test_early_asks_check_unbuilt_ask_in_first_fixup(tmp_path, monkeypatch):
     """An attempt that leaves one ask unbuilt: the early asks check names it in the
     first fix-up message.  Both runtimes."""
+    unbuilt_items = [{"number": 2, "item": "Add helper.py with a helper.",
+                      "kind": "ask", "built": False, "evidence": None}]
     files = {
         "tool.py": "VERSION = 1\n",
         "tests/test_pin.py": "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 1\n",
     }
+    # ── Spine runtime ────────────────────────────────────────────────
     _Chunks(monkeypatch, fails={PIN})
     repo = _target(tmp_path / "repo", files)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef600007")
@@ -2299,6 +2384,10 @@ def test_early_asks_check_unbuilt_ask_in_first_fixup(tmp_path, monkeypatch):
     (run / "facts.json").write_text(json.dumps(
         {**facts, "brief": "1. Change tool.py to VERSION 2.\n2. Add helper.py with a helper."}))
     _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
+    # Pre-write the early-asks-check result (simulating the graph node on the spine).
+    ea_path = run / EARLY_ASKS_FILE
+    ea_path.parent.mkdir(parents=True, exist_ok=True)
+    ea_path.write_text(json.dumps({"items": unbuilt_items}))
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err
     assert "self-check fix-up 1 of 2" in out
@@ -2307,13 +2396,43 @@ def test_early_asks_check_unbuilt_ask_in_first_fixup(tmp_path, monkeypatch):
     assert "helper.py" in validation
     assert "Unbuilt asks" in validation
 
+    # ── Walker runtime ───────────────────────────────────────────────
+    tmp2 = tmp_path / "v2"
+    tmp2.mkdir()
+    _Chunks(monkeypatch, emissions=[{PIN}, set()])
+    repo2 = _target(tmp2 / "repo2", files)
+    breaks2 = render({"tool.py": "VERSION = 2\n"})
+    fixes2 = render({"tests/test_pin.py":
+                      "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 2\n",
+                      "helper.py": "def helper(): pass\n"})
+    # Override _early_asks_check to return the unbuilt item on the first call.
+    _ea_call_count = [0]
+    _orig_ea = design_ops._early_asks_check
+
+    def _mock_ea(ctx):
+        _ea_call_count[0] += 1
+        return list(unbuilt_items) if _ea_call_count[0] == 1 else []
+
+    monkeypatch.setattr(design_ops, "_early_asks_check", _mock_ea)
+    model2 = FakeModel(_answers(breaks2, fixes2))
+    run2 = tmp2 / "run2"
+    result2 = _design(run2, model2, repo2,
+                      brief="1. Change tool.py to VERSION 2.\n2. Add helper.py with a helper.")
+    assert result2.exit_ok, result2.error
+    # Check that the first fixup message had the unbuilt ask.
+    records2 = _records(run2)
+    first2 = records2[0]
+    assert first2["outcome"] == "fixup"
+
 
 def test_early_asks_check_fully_built_produces_no_items(tmp_path, monkeypatch):
-    """A fully built attempt produces no not-built items from the early asks check."""
+    """A fully built attempt produces no not-built items from the early asks check.
+    Both runtimes."""
     files = {
         "tool.py": "VERSION = 1\n",
         "tests/test_pin.py": "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 1\n",
     }
+    # ── Spine runtime ────────────────────────────────────────────────
     _Chunks(monkeypatch, fails={PIN})
     repo = _target(tmp_path / "repo", files)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef600008")
@@ -2322,11 +2441,29 @@ def test_early_asks_check_fully_built_produces_no_items(tmp_path, monkeypatch):
     (run / "facts.json").write_text(json.dumps(
         {**facts, "brief": "1. Change tool.py to VERSION 2."}))
     _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
+    # The early_asks_check node (called by _emit) writes empty items.
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err
     validation = _facts(run)["validation"]
-    # No "Unbuilt asks" section because tool.py is in the diff.
+    # No "Unbuilt asks" section because all asks are built.
     assert "Unbuilt asks" not in validation
+
+    # ── Walker runtime ───────────────────────────────────────────────
+    tmp2 = tmp_path / "v2"
+    tmp2.mkdir()
+    _Chunks(monkeypatch, emissions=[{PIN}, set()])
+    repo2 = _target(tmp2 / "repo2", files)
+    breaks2 = render({"tool.py": "VERSION = 2\n"})
+    fixes2 = render({"tests/test_pin.py":
+                      "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 2\n"})
+    model2 = FakeModel(_answers(breaks2, fixes2))
+    run2 = tmp2 / "run2"
+    result2 = _design(run2, model2, repo2, brief="1. Change tool.py to VERSION 2.")
+    assert result2.exit_ok, result2.error
+    # The early_asks_check returns empty (FakeModel default), so no "Unbuilt asks".
+    for prompt in model2.prompts:
+        if "Unbuilt asks" in prompt:
+            pytest.fail("Unbuilt asks appeared in a prompt but all asks are built")
 
 
 def test_the_limit_is_the_knob_and_never_more_than_a_third_of_the_check():

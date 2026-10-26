@@ -453,6 +453,8 @@ def _is_emission(answer: str) -> bool:
 #: Design mode's two judges (`refactory_dsh.judges`), keyed by a line of each prompt.
 QA_JUDGE_MARK = "You are the QA judge."
 OVERWATCH_JUDGE_MARK = "Write `overwatch-verdict.json`"
+#: The early-asks judge's prompt marker (design_ops.EARLY_ASKS_JUDGE_MARK).
+EARLY_ASKS_JUDGE_MARK = "## Early asks judge"
 
 #: What a judge answers when the script has no verdict for it: the QA judge proceeds and
 #: the overwatch passes, with nothing listed.
@@ -501,6 +503,9 @@ def _judge_answer(prompt: str, answers: list[str]) -> str | None:
     if isinstance(following, Scripted):
         return None
     judgment = _judgment_of(following)
+    if EARLY_ASKS_JUDGE_MARK in prompt:
+        # Default: all asks built, no items returned.
+        return json.dumps({"items": []})
     if QA_JUDGE_MARK in prompt:
         is_qa = judgment.get("verdict") in ("proceed", "redo") and "corrections" not in judgment
         return None if is_qa else QA_PROCEED

@@ -34,7 +34,8 @@ def _edges(graph):
 def test_the_check_is_a_branch_of_the_review_fork():
     graph = DesignMode().build()
     edges = _edges(graph)
-    assert ("materialise", "prepare_check", None) in edges
+    assert ("materialise", "early_asks_check", None) in edges
+    assert ("early_asks_check", "prepare_check", None) in edges
     assert ("prepare_check", "emit", "reloop") in edges
     assert ("prepare_check", "fork_qa", "proceed") in edges
     assert "check" in graph.nodes["fork_qa"].targets
@@ -237,6 +238,7 @@ def test_a_check_that_stops_the_run_is_recorded_once_and_raised_after_the_review
 def test_prepare_check_sends_back_before_the_reviews_when_last_attempts_failures_remain(
         tmp_path, monkeypatch):
     from refactory_dsh import failfast, repo_change, test_selection
+    from refactory_dsh.design_ops import EARLY_ASKS_FILE
     from types import SimpleNamespace
 
     ctx = _ctx(tmp_path)
@@ -252,6 +254,10 @@ def test_prepare_check_sends_back_before_the_reviews_when_last_attempts_failures
         stderr="", timed_out=False, elapsed_s=0.1, timeout_s=60)
     _fail.problem = lambda: "exit code 1"
     monkeypatch.setattr(repo_change, "run_check", lambda *a, **kw: _fail)
+    # Write the early-asks-check result (the graph node runs before prepare_check).
+    ea_path = ctx.workdir / EARLY_ASKS_FILE
+    ea_path.parent.mkdir(parents=True, exist_ok=True)
+    ea_path.write_text('{"items": []}')
     early_stops = []
     monkeypatch.setattr(design_ops, "_early_stop", lambda ctx, prepass, prev, base: (
         early_stops.append(prepass.failing_ids) or nn.Verdict("reloop", "still failing")))

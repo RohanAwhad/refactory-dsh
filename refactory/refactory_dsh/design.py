@@ -18,6 +18,7 @@ from refactory_dsh.create_ops import API, MARKER_RULE, RESEARCH_SCHEMA, SEVERITY
 from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT, SELF_CHECK_RECORD
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
+from refactory_dsh.design_ops import EARLY_ASKS_FILE
 
 OPS = "refactory_dsh.design_ops"
 
@@ -277,19 +278,26 @@ class DesignMode(Mode):
         }
 
     def graph(self) -> Graph:
-        """The graph, with prepare_check's iteration limit following the knobs' values."""
+        """The graph, with prepare_check's and early_asks_check's iteration limits."""
         graph = super().graph()
+        limit = prepare_check_iterations(self.values())
         if "prepare_check" in graph.nodes:
-            graph.nodes["prepare_check"].max_iterations = prepare_check_iterations(self.values())
+            graph.nodes["prepare_check"].max_iterations = limit
+        if "early_asks_check" in graph.nodes:
+            graph.nodes["early_asks_check"].max_iterations = limit + 1
         return graph
 
     def state_dict(self) -> dict[str, Any]:
-        """The state, with prepare_check's iteration limit following the knobs' values, so a
-        lowered run (the spine) gets the limit the walker does."""
+        """The state, with iteration limits following the knobs' values, so a lowered run
+        (the spine) gets the limits the walker does."""
         state = super().state_dict()
+        limit = prepare_check_iterations(self.values())
         node = state["graph"].get("nodes", {}).get("prepare_check")
         if node is not None:
-            node["max_iterations"] = prepare_check_iterations(self.values())
+            node["max_iterations"] = limit
+        ea_node = state["graph"].get("nodes", {}).get("early_asks_check")
+        if ea_node is not None:
+            ea_node["max_iterations"] = limit + 1
         return state
 
     def build(self) -> Graph:
@@ -647,6 +655,19 @@ class DesignMode(Mode):
                       "changed_functions", "consecutive_refusals", "draft_delivery"),
             knobs=("refusal_attempts",),
         ))
+        # ── early asks check ──
+        # A judge that reads the diff against the brief's asks and corrections,
+        # returning structured JSON.  Runs between materialise and prepare_check
+        # on both runtimes.  Iteration limits never end the run.
+        graph.add(Node(
+            "early_asks_check", "op", call=f"{OPS}:early_asks_check",
+            reads=("brief.json", "changes.diff"),
+            writes=(str(EARLY_ASKS_FILE),),
+            max_iterations=prepare_check_iterations({name: knob.default
+                                                      for name, knob in self.declare().items()}) + 1,
+            notes="judge whether each ask and correction is built in the diff; "
+                  "not-built items join the self-check fix-up",
+        ))
         # ── the check, beside the reviews ──
         # prepare_check settles the commit the check and the reviewers both see; the
         # check runs as a branch of the review fork and records its decision; gate_check
@@ -977,7 +998,8 @@ class DesignMode(Mode):
         graph.connect("pick_corrections", "emit", condition="skip")
         graph.connect("apply_corrections", "emit")
         graph.connect("emit", "materialise")
-        graph.connect("materialise", "prepare_check")
+        graph.connect("materialise", "early_asks_check")
+        graph.connect("early_asks_check", "prepare_check")
         graph.connect("prepare_check", "emit", condition="reloop")
         graph.connect("prepare_check", "fork_qa", condition="proceed")
         graph.connect("prepare_check", "report", condition="draft")

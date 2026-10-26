@@ -50,6 +50,10 @@
       "id": "done",
       "_type": "FnNode"
     },
+    "early_asks_check": {
+      "id": "early_asks_check",
+      "_type": "FnNode"
+    },
     "emit": {
       "id": "emit",
       "role": "ceo",
@@ -263,6 +267,11 @@
       "condition": null
     },
     {
+      "source": "early_asks_check",
+      "target": "prepare_check",
+      "condition": null
+    },
+    {
       "source": "emit",
       "target": "materialise",
       "condition": null
@@ -364,7 +373,7 @@
     },
     {
       "source": "materialise",
-      "target": "prepare_check",
+      "target": "early_asks_check",
       "condition": null
     },
     {

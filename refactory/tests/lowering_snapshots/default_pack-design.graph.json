@@ -171,6 +171,21 @@
       "notes": "terminal node after delivery succeeds",
       "_type": "FnNode"
     },
+    "early_asks_check": {
+      "id": "early_asks_check",
+      "reads": [
+        "brief.json",
+        "changes.diff"
+      ],
+      "writes": [
+        ".refactory/early-asks-check.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.run refactory_dsh.design_ops:early_asks_check",
+      "callable_name": "refactory_dsh.design_ops:early_asks_check",
+      "notes": "judge whether each ask and correction is built in the diff; not-built items join the self-check fix-up",
+      "_type": "FnNode"
+    },
     "emit": {
       "id": "emit",
       "reads": [
@@ -763,6 +778,11 @@
       "condition": null
     },
     {
+      "source": "early_asks_check",
+      "target": "prepare_check",
+      "condition": null
+    },
+    {
       "source": "emit",
       "target": "materialise",
       "condition": null
@@ -864,7 +884,7 @@
     },
     {
       "source": "materialise",
-      "target": "prepare_check",
+      "target": "early_asks_check",
       "condition": null
     },
     {
