@@ -17,7 +17,9 @@ The selection, in order:
 - **The last check's failures** that are not inherited (dm-128's set), as test ids.
 - **The tests that import a module the emission changed**, depth 1, and, when a source
   file changed but no hub did, the structural tests: cheapest first, so a slow file at
-  the time limit does not hide cheap ones behind it (`estimated_costs`).
+  the time limit does not hide cheap ones behind it (`estimated_costs`). A file a chunk
+  was stopped with at the limit runs in a chunk of its own until one finishes it
+  (`run_alone`); until then its time is a lower bound, which never lowers its estimate.
 
 For a TypeScript runner only the spec files the emission touched are selected: the
 check's own vitest invocation (``vitest run``) has no related-file selection, and
@@ -53,11 +55,13 @@ class Selection:
     importers: list[str] = field(default_factory=list)
     structural: list[str] = field(default_factory=list)
     first: list[str] = field(default_factory=list)
+    alone: list[str] = field(default_factory=list)  # files that run one per chunk (`run_alone`)
 
     def record(self) -> dict[str, Any]:
         return {"first": self.first, "engine": self.engine, "hubs_changed": self.hubs_changed,
                 "touched_tests": self.touched_tests, "last_failures": self.last_failures,
-                "importers": self.importers, "structural": self.structural}
+                "importers": self.importers, "structural": self.structural,
+                "alone": self.alone}
 
 
 def is_test_file(path: str) -> bool:
@@ -237,22 +241,93 @@ def runnable(test_id: str) -> str:
     return test_id
 
 
-def costs_from_record(entries: list[dict[str, Any]], root: Path) -> dict[str, float]:
-    """Each test file's seconds, from the chunks earlier self-checks timed.
+def _whole_files(chunk: dict[str, Any]) -> set[str]:
+    """The files a timed chunk ran whole, not only some of their tests by id."""
+    return {_file_of(name) for name in chunk.get("tests", [])
+            if "::" not in name and " > " not in name}
 
-    A chunk's time is shared among its files by their size; the latest chunk wins.
+
+def _chunk_costs(chunk: dict[str, Any]) -> dict[str, tuple[float, bool]]:
+    """Each file's seconds from one timed chunk, and whether they are only a lower bound.
+
+    With ``"durations"`` (per-test seconds from ``--junitxml``) a file costs the sum of its
+    tests'. Without them only a chunk of one file says what that file took: its elapsed
+    time. A chunk of several files without durations says nothing about any one of them.
+    A chunk stopped at the limit (``timed_out``) gives lower bounds, and so does a file
+    the chunk ran only some tests of, by id: the whole file takes at least as long.
     """
-    costs: dict[str, float] = {}
+    stopped = bool(chunk.get("timed_out"))
+    whole = _whole_files(chunk)
+    durations = chunk.get("durations")
+    if durations:
+        seconds: dict[str, float] = {}
+        for duration in durations:
+            name = _file_of(duration["test_id"])
+            seconds[name] = seconds.get(name, 0.0) + float(duration["seconds"])
+        return {name: (value, stopped or name not in whole) for name, value in seconds.items()}
+    files = list(dict.fromkeys(_file_of(name) for name in chunk.get("tests", [])))
+    if len(files) == 1:
+        return {files[0]: (float(chunk.get("s", 0)), stopped or files[0] not in whole)}
+    return {}
+
+
+def _timed(entries: list[dict[str, Any]]) -> dict[str, tuple[float, bool]]:
+    """Each test file's seconds from the chunks earlier self-checks timed (`_chunk_costs`),
+    and whether that is still only a lower bound.
+
+    A finished time beats a lower bound, and between two of a kind the higher stands, so a
+    lower bound only ever raises what is known of a file, never lowers it.
+    """
+    timed: dict[str, tuple[float, bool]] = {}
     for entry in entries:
         for chunk in entry.get("timings", []):
             if not chunk.get("counted"):
                 continue
-            chunk_files = list(dict.fromkeys(_file_of(name) for name in chunk.get("tests", [])))
-            sizes = {name: _size(root, name) for name in chunk_files}
-            total = sum(sizes.values()) or 1
-            for name in chunk_files:
-                costs[name] = float(chunk.get("s", 0)) * sizes[name] / total
-    return costs
+            for name, (value, bound) in _chunk_costs(chunk).items():
+                if name not in timed or (timed[name][1] and not bound):
+                    timed[name] = (value, bound)
+                elif timed[name][1] == bound:
+                    timed[name] = (max(timed[name][0], value), bound)
+    return timed
+
+
+def costs_from_record(entries: list[dict[str, Any]], root: Path) -> dict[str, float]:
+    """Each test file's seconds, from the chunks earlier self-checks timed (`_timed`).
+
+    A chunk of several files without per-test durations leaves each file's estimate as it
+    was; its files run one per chunk on the next self-check (`run_alone`).
+    """
+    return {name: value for name, (value, _) in _timed(entries).items()}
+
+
+def lower_bounds(entries: list[dict[str, Any]]) -> list[str]:
+    """The test files whose time is only a lower bound: no chunk has finished them whole."""
+    return [name for name, (_, bound) in _timed(entries).items() if bound]
+
+
+def run_alone(entries: list[dict[str, Any]]) -> list[str]:
+    """The test files the next self-check runs one per chunk: each file of a chunk the limit
+    stopped, until a later chunk finishes it whole.
+
+    A stopped chunk writes no per-test durations (its runner is killed), so when it held
+    several files its time says nothing about which of them was slow: a small slow file
+    would keep its small estimate, run first, and cut everything behind it on every
+    self-check (dm-247). Alone, each file gets a time or a lower bound of its own, and a
+    file that has only a bound cannot take a chunk of other files down with it when the
+    limit stops it again.
+    """
+    alone: dict[str, None] = {}
+    for entry in entries:
+        for chunk in entry.get("timings", []):
+            if not chunk.get("counted"):
+                continue
+            if chunk.get("timed_out"):
+                alone.update(dict.fromkeys(_file_of(name) for name in chunk.get("tests", [])))
+                continue
+            for name, (_, bound) in _chunk_costs(chunk).items():
+                if not bound:
+                    alone.pop(name, None)
+    return list(alone)
 
 
 def _size(root: Path, name: str) -> int:
@@ -262,21 +337,37 @@ def _size(root: Path, name: str) -> int:
         return 1
 
 
-def estimated_costs(tests: list[str], root: Path, known: dict[str, float]) -> dict[str, float]:
+def estimated_costs(tests: list[str], root: Path, known: dict[str, float],
+                    bounds: list[str] = ()) -> dict[str, float]:
     """A test file's cost: the seconds a self-check timed it at, else its size.
 
-    Sizes are put in seconds at the rate the timed files ran, when there are any.
+    Sizes are put in seconds at the rate the finished files ran, when there are any. A
+    file of ``bounds`` has only a lower bound, which is no rate it ran at: it costs the
+    higher of its bound and its size estimate, so a bound never lowers an estimate. A
+    file stopped near the limit has a small bound; costed by that alone, it would run
+    early the next time and cut everything behind it. With no finished file there is no
+    rate, and sizes stay in bytes, which a bound in seconds cannot be weighed against:
+    the files with only a bound then go last, in the order of their bounds.
     """
-    timed = [name for name in tests if name in known]
+    lower = set(bounds)
+    timed = [name for name in tests if name in known and name not in lower]
     rate = (sum(known[name] for name in timed) / sum(_size(root, name) for name in timed)
             if timed else 1.0)
-    return {name: known[name] if name in known else _size(root, name) * rate for name in tests}
+    costs = {name: known.get(name, _size(root, name) * rate) for name in tests}
+    for name in lower & costs.keys():
+        costs[name] = max(costs[name], _size(root, name) * rate)
+    if not timed:
+        last = max((cost for name, cost in costs.items() if name not in lower), default=0.0)
+        for name in lower & costs.keys():
+            costs[name] = last + known.get(name, 0.0)
+    return costs
 
 
 def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = None, *,
            check_command: str = "", files: list[str] | None = None,
            imports: dict[str, set[str]] | None = None, first: list[str] = (),
-           costs: dict[str, float] | None = None) -> Selection:
+           costs: dict[str, float] | None = None, bounds: list[str] = (),
+           alone: list[str] = ()) -> Selection:
     """The self-check's selection for an emission that changed ``touched`` in ``root``.
 
     ``touched`` are paths from the repository root (`base_check._all_changed_files`);
@@ -285,7 +376,9 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
     counted among them. ``imports`` stands for `import_map` when given: the imports of
     a tree as it was, for a selection replayed on it. ``first`` are the ids the last
     self-check found failing, on a fix-up; ``costs`` the seconds earlier self-checks
-    timed test files at (`costs_from_record`).
+    timed test files at (`costs_from_record`), ``bounds`` those of them that are only lower
+    bounds (`lower_bounds`); ``alone`` the files to run one per chunk (`run_alone`), kept
+    in ``Selection.alone`` when the selection holds them.
     """
     from refactory_dsh.changed_functions import is_generated
 
@@ -308,6 +401,7 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
                                                    if (root / _file_of(test_id)).is_file())))
     if not sources and not touched_tests and not last_failures:
         selection.tests = list(dict.fromkeys(selection.first))
+        selection.alone = _kept(alone, selection.tests)
         return selection
     if imports is None:
         imports = import_map(root, files, tuple(sources), scope)
@@ -324,12 +418,12 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
     if sources and not selection.hubs_changed:
         selection.structural = structural
     rest = list(dict.fromkeys([*importers, *selection.structural]))
-    cost = estimated_costs(rest, root, costs or {})
+    cost = estimated_costs(rest, root, costs or {}, bounds)
     rest.sort(key=lambda test: (cost[test], test))
     selection.importers = [test for test in rest if test in importers]
     selection.structural = [test for test in rest if test not in importers]
     ordered: list[str] = list(dict.fromkeys(selection.first))
-    whole: set[str] = set()
+    whole: set[str] = {name for name in ordered if "::" not in name}
     for name in [*selection.engine, *selection.touched_tests]:
         if name not in whole:
             whole.add(name)
@@ -344,4 +438,11 @@ def select(touched: list[str], root: Path, prev_record: dict[str, Any] | None = 
             whole.add(name)
             ordered.append(name)
     selection.tests = ordered
+    selection.alone = _kept(alone, ordered)
     return selection
+
+
+def _kept(alone: list[str], tests: list[str]) -> list[str]:
+    """The files of ``alone`` that ``tests`` run, whole or by id."""
+    files = {_file_of(name) for name in tests}
+    return [name for name in dict.fromkeys(alone) if name in files]

@@ -12,8 +12,11 @@ import math
 import re
 import os
 import subprocess
+import tempfile
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 #: How many chunks the self-check cuts its selection into. Each chunk is its own
@@ -30,6 +33,8 @@ SELF_CHECK_CHUNK_FILES = 4
 _COLLECTION_ERROR = re.compile(r"^ERROR\s+([\w/.\[\]-]+\.py)\s*(?:-\s.*)?$", re.MULTILINE)
 #: pytest stops before running anything once a module does not import.
 _INTERRUPTED = re.compile(r"Interrupted: \d+ errors? during collection")
+#: pytest's "not found" line for an id that does not exist on disk.
+_NOT_FOUND = re.compile(r"ERROR:\s+not found:\s+\S+?(tests/[\w/.\-]+(?:::[\w\[\]\-]+)+)", re.MULTILINE)
 
 
 @dataclass
@@ -78,21 +83,89 @@ def _runner_of(name: str) -> str:
     return "pytest" if "::" in name or name.endswith(".py") else "other"
 
 
-def _chunks(selection: list[str]) -> list[list[str]]:
+def _chunks(selection: list[str], alone: list[str] = ()) -> list[list[str]]:
     """The selection in order, cut into about `SELF_CHECK_CHUNKS` chunks of one runner each,
     none of more than `SELF_CHECK_CHUNK_FILES` tests.
 
     The targeted command keeps the check's ``&&`` between steps, so a chunk that held
-    two runners' tests would not run the second runner's once the first failed.
+    two runners' tests would not run the second runner's once the first failed. A file
+    of ``alone`` (`test_selection.run_alone`) shares its chunk with no other file.
     """
+    from refactory_dsh.test_selection import _file_of
+
     size = min(SELF_CHECK_CHUNK_FILES, max(1, math.ceil(len(selection) / SELF_CHECK_CHUNKS)))
+    single = set(alone)
+
+    def own(name: str) -> str | None:
+        """``name``'s file when that file runs alone, else None: a chunk holds one value."""
+        return _file_of(name) if _file_of(name) in single else None
+
     chunks: list[list[str]] = []
     for name in selection:
-        if chunks and len(chunks[-1]) < size and _runner_of(chunks[-1][-1]) == _runner_of(name):
+        if (chunks and len(chunks[-1]) < size and _runner_of(chunks[-1][-1]) == _runner_of(name)
+                and own(chunks[-1][-1]) == own(name)):
             chunks[-1].append(name)
         else:
             chunks.append([name])
     return chunks
+
+
+def _not_found_ids(output: str) -> set[str]:
+    """The test ids pytest reports as ``ERROR: not found:`` — ids that do not exist."""
+    return set(_NOT_FOUND.findall(output))
+
+
+def _is_dropped(name: str, dropped: set[str]) -> bool:
+    """Whether *name* matches any id in *dropped* by path suffix or bracket prefix.
+
+    pytest prints absolute paths and strips ``[...]`` from parametrized ids,
+    so ``tests/test_x.py::test_y`` must match ``refactory/tests/test_x.py::test_y``
+    and ``tests/test_x.py::test_p`` must cover ``refactory/tests/test_x.py::test_p[2.5]``.
+    """
+    for d in dropped:
+        if name == d or name.endswith("/" + d):
+            return True
+        # A dropped id without brackets covers that test's parametrized ids.
+        if "[" not in d:
+            base = name.split("[")[0]
+            if base == d or base.endswith("/" + d):
+                return True
+    return False
+
+
+def _is_single_pytest_command(command: str) -> bool:
+    """Whether *command* is a single pytest invocation (no ``&&``)."""
+    return "pytest" in command and "&&" not in command
+
+
+def _parse_junitxml(path: str) -> list[dict[str, Any]] | None:
+    """Parse a pytest --junitxml file into per-test durations.
+
+    Returns a list of ``{"test_id": str, "seconds": float}`` or ``None``
+    when the file is missing or malformed.
+    """
+    try:
+        tree = ET.parse(path)
+    except (ET.ParseError, OSError):
+        return None
+    durations: list[dict[str, Any]] = []
+    for case in tree.getroot().iter("testcase"):
+        name = case.get("name", "")
+        seconds = float(case.get("time", 0))
+        fpath = _junit_file(case.get("classname", ""))
+        test_id = f"{fpath}::{name}" if name else fpath
+        durations.append({"test_id": test_id, "seconds": seconds})
+    return durations if durations else None
+
+
+def _junit_file(classname: str) -> str:
+    """The test file a junit ``classname`` (``pkg.tests.test_x``, or ``pkg.tests.test_x.Class``
+    for a test in a class) stands for: the dotted path without its trailing class names, so
+    a capitalised package directory stays (``src/MyPkg/tests/test_x.py``, not ``src.py``)."""
+    parts = classname.split(".")
+    while len(parts) > 1 and parts[-1][:1].isupper():
+        parts.pop()
+    return "/".join(parts) + ".py"
 
 
 def _output(result: Any) -> str:
@@ -141,6 +214,7 @@ def _self_check(
     run_check_fn: Callable[[str, float], Any],
     limit_s: float,
     root: str | None,
+    alone: list[str] = (),
 ) -> PrepassResult:
     """Run ``selection`` in chunks until the limit is spent; report what failed.
 
@@ -152,8 +226,6 @@ def _self_check(
     failure; pytest then stops before the chunk's other tests, so they run again
     without it. Tests ``build_probe_command`` cannot target are left out and named.
     """
-    from pathlib import Path
-
     from refactory_dsh.check_digest import build_probe_command
 
     inherited = set(prev_record.get("inherited", []))
@@ -167,7 +239,7 @@ def _self_check(
     failed_outputs: list[str] = []
     timings: list[dict[str, Any]] = []
     last = None
-    queue = _chunks(selection)
+    queue = _chunks(selection, alone)
     number = 0
     while queue:
         chunk = queue.pop(0)
@@ -187,10 +259,33 @@ def _self_check(
             cut.extend(chunk)
             notes.append(f"chunk {number} could not be targeted: {refusal}")
             continue
+        # Optionally collect per-test durations via --junitxml (single pytest
+        # invocation only, written outside the worktree).
+        junit_path: str | None = None
+        actual_command = command
+        if _is_single_pytest_command(command):
+            fd, junit_path = tempfile.mkstemp(suffix=".xml", prefix=f"refactory-chunk-{number}-")
+            os.close(fd)
+            actual_command = f"{command} --junitxml={junit_path}"
         began = time.monotonic()
-        result = run_check_fn(command, remaining)
+        result = run_check_fn(actual_command, remaining)
         last = result
+        chunk_durations: list[dict[str, Any]] | None = None
+        if junit_path is not None:
+            try:
+                chunk_durations = _parse_junitxml(junit_path)
+            finally:
+                try:
+                    os.unlink(junit_path)
+                except OSError:
+                    pass
         if getattr(result, "timed_out", False):
+            elapsed = round(time.monotonic() - began, 1)
+            entry_t: dict[str, Any] = {"tests": chunk, "s": elapsed,
+                                       "timed_out": True, "counted": True}
+            if chunk_durations:
+                entry_t["durations"] = chunk_durations
+            timings.append(entry_t)
             for later in (chunk, *queue):
                 cut.extend(later)
             notes.append(f"chunk {number} of {of} was stopped at the "
@@ -198,9 +293,73 @@ def _self_check(
             break
         commands.append(command)
         found, why_not = _chunk_report(result, inherited)
-        timings.append({"tests": chunk, "s": round(time.monotonic() - began, 1),
-                        "counted": not why_not})
+        entry_f: dict[str, Any] = {"tests": chunk, "s": round(time.monotonic() - began, 1),
+                                   "counted": not why_not}
+        if chunk_durations:
+            entry_f["durations"] = chunk_durations
+        timings.append(entry_f)
         if why_not:
+            if "exit 4" in why_not:
+                dropped = _not_found_ids(_output(result))
+                if dropped:
+                    rest_of_chunk = [name for name in chunk
+                                     if not _is_dropped(name, dropped)]
+                    remaining_for_rerun = limit_s - (time.monotonic() - started)
+                    if remaining_for_rerun < 1:
+                        timings.append({"tests": rest_of_chunk or chunk,
+                                        "s": round(time.monotonic() - began, 1),
+                                        "timed_out": True, "counted": True})
+                        cut.extend(chunk)
+                        notes.append(f"chunk {number}: dropped not-found ids "
+                                     f"{sorted(dropped)}, but no time left for a rerun")
+                        notes.append(f"chunk {number} did not count: {why_not}")
+                        continue
+                    if rest_of_chunk:
+                        ids2 = [name for name in rest_of_chunk if "::" in name or " > " in name]
+                        files2 = [name for name in rest_of_chunk if name not in ids2]
+                        cmd2, ref2 = build_probe_command(check_command, ids2,
+                                                         root=root_path, test_files=files2)
+                        if not ref2:
+                            result2 = run_check_fn(cmd2, remaining_for_rerun)
+                            found2, why2 = _chunk_report(result2, inherited)
+                            timings.append({"tests": rest_of_chunk,
+                                            "s": round(time.monotonic() - began, 1),
+                                            "counted": not why2})
+                            commands.append(cmd2)
+                            if not why2:
+                                for test_id in sorted(found2):
+                                    if test_id not in failing:
+                                        failing.append(test_id)
+                                if found2:
+                                    failed_outputs.append(_output(result2))
+                                # Check for _INTERRUPTED in the rerun (module did not import).
+                                if _INTERRUPTED.search(_output(result2)):
+                                    named2 = self_check_failures(_output(result2))
+                                    broken2 = [name for name in rest_of_chunk
+                                               if name in named2]
+                                    rest2 = [name for name in rest_of_chunk
+                                             if name not in broken2]
+                                    ran.extend(broken2)
+                                    if broken2 and rest2:
+                                        queue.insert(0, rest2)
+                                        notes.append(
+                                            f"chunk {number}: dropped not-found ids "
+                                            f"{sorted(dropped)}, reran; "
+                                            f"{', '.join(broken2)} did not import")
+                                        continue
+                                ran.extend(rest_of_chunk)
+                                notes.append(f"chunk {number}: dropped not-found ids "
+                                             f"{sorted(dropped)}, reran the rest")
+                                continue
+                            # Rerun also failed: note and fall through to cut.
+                            notes.append(f"chunk {number}: dropped not-found ids "
+                                         f"{sorted(dropped)}, reran but the rest also failed")
+                            cut.extend(chunk)
+                            notes.append(f"chunk {number} did not count: {why_not}")
+                            continue
+                    # Nothing left after dropping not-found ids, or couldn't target.
+                    notes.append(f"chunk {number}: dropped not-found ids "
+                                 f"{sorted(dropped)}, nothing left after dropping")
             cut.extend(chunk)
             notes.append(f"chunk {number} did not count: {why_not}")
             continue
@@ -285,6 +444,7 @@ def targeted_prepass(
     root: str | None = None,
     selection: list[str] | None = None,
     self_check_timeout_s: float | None = None,
+    alone: list[str] = (),
 ) -> PrepassResult:
     """Run previously-failing tests first and stop early while one still fails.
 
@@ -311,13 +471,16 @@ def targeted_prepass(
         ``focused_check``), it is the dm-128 pre-pass, unchanged.
     self_check_timeout_s:
         The self-check's own time limit (its knob), used with ``selection``.
+    alone:
+        The selection's files that run one per chunk (`test_selection.run_alone`).
     """
     if selection is not None:
         if not selection:
             return _skip()
         limit = self_check_limit(300 if self_check_timeout_s is None else self_check_timeout_s,
                                  check_timeout_s)
-        return _self_check(selection, prev_record, check_command, run_check_fn, limit, root)
+        return _self_check(selection, prev_record, check_command, run_check_fn, limit, root,
+                           alone)
 
     # 1. Skip when previous record is not a failure.
     if prev_record.get("status") != "fail":
