@@ -48,11 +48,22 @@ apply:
 - **Isolated HOME and DSH_HOME**: per-probe directories under `probe-<id>/`.
 - **PATH stripped**: the run worktree's `.venv/bin` and `node_modules/.bin` are
   removed so tools resolve from the clone, not from the run's worktree.
-- **Deleted afterwards**: the probe directory is removed in a `finally` block.
-  Leaked probes are swept by `materialise` (owner PID check).
+- **Lifecycle**: cold probes are deleted in a `finally` block. Warm probes
+  (`--test` via the CLI) are kept on disk between probes for reuse — the clone
+  directory survives with `.venv` and `node_modules` intact — and are removed
+  by `sweep_warm_clones`: at `materialise`, and at the run's end by the walker
+  (`nn.executor.execute`, through the `refactory.run_end` entry point), by the
+  owner of a spine run started from the CLI (`interactive.run`) and by the DSH
+  evaluator (`dsh_runtime.evaluate_on_dsh`). A run the GUI's DSH server drives
+  has no Python owner, so nothing removes a clone it leaves before materialise.
+  A clone another probe is using is skipped; one that cannot be removed is
+  named in a warning. Leaked cold probes are swept by `sweep_dead_probes`
+  (owner PID check).
 - **Not an attempt**: no `commit_attempt`, no attempt counter increment.
 - **target_guard preserved**: the existing test at `test_design_worktree.py:667`
-  continues to pass.  The probe cleans up before `finish()`.
+  continues to pass.  A cold probe is removed before `finish()`; a warm clone
+  stays under the run directory's `.refactory/` until materialise or the
+  run's end.
 
 #### Why each isolation guarantee exists
 
@@ -63,7 +74,15 @@ apply:
 | Hooks off | pnpm and lefthook rewrite shared hooks (dm-96) |
 | Isolated HOME | Tool caches stay out of the worktree's diff |
 | PATH stripped | A missing tool from the clone must not resolve into the run's worktree |
-| Deleted afterwards | A tool timeout can SIGKILL the probe; materialise sweeps leaked dirs |
+| Lifecycle | Cold probes deleted in finally; warm probes reused within the attempt, cleaned by materialise and at run's end; a SIGKILL leaves a warm clone that the next materialise or end-of-run cleanup removes |
+
+- **Vitest mixed-ID routing**: when a probe command includes both bare spec IDs
+  (whole files) and structured `file > suite > test` IDs, the named files run
+  whole — more tests than strictly asked, never fewer. Splitting into two
+  `&&`-joined invocations was rejected because a failing first invocation would
+  silently skip the second (the failure class #502 already fixed for the
+  self-check's chunks), and `failfast.targeted_prepass` passes bare spec IDs
+  as `test_ids`, so the split would reach the self-check.
 
 #### What is not isolated
 

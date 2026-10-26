@@ -269,6 +269,10 @@ def evaluate_on_dsh(
     name = f"{type(mode).__module__.split('.')[-2]}-{mode.name}"
     run = run_on_dsh(state, workdir, name=name, timeout_s=timeout_s, on_output=on_output,
                      **({"model": model} if model is not None else {}))
+    # The DSH evaluator's run end (a spine run it launched and waited for): the
+    # same cleanups the walker runs when its own run ends.
+    from refactory_dsh.nn.executor import _run_end_cleanup
+    _run_end_cleanup(Path(run.workdir))
     if run.returncode != 0 or not run.facts:
         detail = run.stderr.strip().splitlines()[-1] if run.stderr.strip() else "no output"
         return RunResult(
