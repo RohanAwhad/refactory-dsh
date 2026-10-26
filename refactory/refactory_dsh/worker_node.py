@@ -112,9 +112,22 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
     if refilled_keys:
         context = RunContext(workdir, knobs=context.knobs, facts={**context.facts, **{k: values[k] for k in refilled_keys}})
     client = DshModelClient(**spec['model_context']).for_node(node)
-    delivery = begin(workdir, node, render(prompt, context), spec['writes'],
-                     reads=spec['reads'], model_context=client.context())
-    output = client.complete(delivery['prompt'], workdir=workdir)
+    # A node that declares a workspace works there (`workspace.py`): prepared before the
+    # delivery bracket opens, so the contract can name it, and collected into the node's
+    # outputs before the bracket closes, so delivery checks what the workspace produced.
+    from refactory_dsh import workspace as workspaces
+    runtime_root = (client.context() or {}).get('runtime_root') if spec.get('workspace') else None
+    with workspaces.dispatched(workdir, node, spec.get('workspace'), knobs=context.knobs, facts=context.facts,
+                               route=client.route(),
+                               runtime_root=Path(runtime_root) if runtime_root else None) as place:
+        delivery = begin(workdir, node, render(prompt, context), spec['writes'],
+                         reads=spec['reads'], model_context=client.context(),
+                         **({'workspace': place.describe()} if place is not None else {}))
+        if place is None:
+            output = client.complete(delivery['prompt'], workdir=workdir)
+        else:
+            output = workspaces.ask(place, client, delivery['prompt'], workdir=workdir)
+            workspaces.collect(place, workdir, spec['writes'], final_response=output)
     receipt = finish(workdir, node, final_response=output, capture_final=client.route()["worker_backend"] == "dsh")
     for check in spec.get('post_checks', []):
         artifact = _path(workdir, check['path'])

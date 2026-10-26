@@ -787,24 +787,8 @@ def _finding_description(finding: str) -> str:
 
 
 def _parse_verifier_rebuttals(ctx: Any) -> list[str]:
-    """Parse ## Verifier findings section from emit.txt for rebuttals."""
-    if not ctx.exists("emit.txt"):
-        return []
-    text = ctx.read_text("emit.txt")
-    lines = text.splitlines()
-    in_section = False
-    rebuttals: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("## Verifier findings"):
-            in_section = True
-            continue
-        if in_section:
-            if stripped.startswith("## ") or stripped.startswith("===FILE:"):
-                break
-            if "rebutted:" in stripped.lower() or "fixed" in stripped.lower():
-                rebuttals.append(stripped)
-    return rebuttals
+    """The builder's rebuttals of the verifier's findings (`create_ops.verifier_rebuttals`)."""
+    return create_ops.verifier_rebuttals(ctx)
 
 
 def _write_finding_sources_fast(ctx: Any, qa: Any, verifier_findings: list[str],

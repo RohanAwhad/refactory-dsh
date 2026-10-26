@@ -33,17 +33,78 @@ following the same pattern as `refactory.environment_overlay`.  Core modules
 (`agent_delivery`, `worker_node`, `nn.executor`) import nothing from the product;
 they reach the refill logic only through the entry point.
 
+### Agent workspaces
+
+An agent node can declare where it works: `workspace` on the node (`nn.graph`,
+saved only when it is not the default, `none`), carried by the IR, the run's
+declarations and the worker spec. `scratch` is a fresh empty folder per dispatch;
+`clone` (`of: attempt` or `base`) is a prepared clone of the run's worktree.
+`collect: files` copies the node's declared writes out of the workspace;
+`collect: diff` writes the clone's diff into the node's first write. Both runtimes
+run it through one module, `refactory_dsh/workspace.py`: the spine's worker
+(`worker_node.execute`) and the walker (`Executor._visit_agent`) prepare the
+workspace before the delivery bracket opens and collect from it before it closes, so
+`agent_delivery.finish` checks what the workspace produced. A workspace is refused on
+the CEO-subagent route (`workers.lower_workflow` with no worker model context): nothing
+there could give the node a workspace or collect from it. The spine only passes the
+declaration through.
+
+Design mode's builder (`emit`, in design and design_fast) works in a clone of the
+last attempt and collects its diff: it edits the repository there, runs the tests,
+the CLI and the brief's own example as often as it needs, and stops. Materialise,
+the check, the reviews and the target guard read the derived `emit.txt` as they read
+an emitted one. create, edit and fast-create keep the emission-only builder.
+
+- **Prepared once per run.** The clone (`clones.prepare`, the product's half,
+  reached through the `refactory.workspace_clone` entry point) shares the target's
+  objects (`git clone --shared`), keeps its own refs and index, and has no remote and
+  no hooks. It persists across commands, fix-ups and attempts. When materialise has
+  committed what it derived, the clone already holds the new head: the next dispatch
+  verifies that (the clone's change from the new head, less what its preparation
+  made, is empty) and only moves its base (`verified`). A head that did not move keeps
+  the clone as the agent left it (`kept`), so a refused emission's work is still there
+  to fix; any other head resets the clone to it (`reset`). Installs run again only when
+  the dependency manifests and lockfiles change (`worktree.manifest_key`), setup with
+  them or after a reset, and generate on every dispatch. A step that fails does not stop
+  the node: the agent is told, and the check runs the same steps.
+- **Run.** The model's working directory is the workspace; its receipt and patch stay
+  in the run directory (`DshModelClient.complete(cwd=...)`). Its environment is the
+  clone's (`worktree.check_environment`): the clone's own `.venv` and
+  `node_modules/.bin` first, the run worktree's taken off PATH, and HOME at the
+  clone's `.refactory/home`. Its DSH sandbox policy is `workspace-write` rooted at the
+  workspace, with approval `never` (`workers.permission_patch`), where a DSH runner
+  works here (bubblewrap or Landlock on Linux, Seatbelt on macOS; probed once). Where
+  none does, it keeps today's full access, and the dispatch record and a warning say so.
+- **Collect.** `derive_emission` writes whole-file `===FILE:` and `===DELETE:` blocks
+  from `git diff --raw --no-renames <base>` and the untracked files, leaving out
+  `.refactory/`, the environments and tool caches, and what the preparation made while
+  the agent left it as made. A binary file, a symlink, a mode change, a new executable,
+  a submodule, a line the emission would read as a block header, or (without a
+  worktree) a deletion is refused, as is a workspace with no change: the refusal is
+  left beside the emission (`.refactory/workspace-refusal.json`, keyed by its digest)
+  and materialise sends it back to the builder like any refused emission. Line endings
+  and end-of-file newlines are normalised by the blocks, with a warning.
+- **Clean-up.** At the run's end, however it ended: the walker and the DSH evaluator
+  (the `refactory.run_end` entry point) and a spine run's owner. A workspace a
+  dispatch holds is left.
+- **OpenShell.** On the `openshell` worker backend the same workspace is packed
+  (`openshell_backend.pack_workspace`), the agent (Claude Code, the binary the
+  gateway's provider admits) runs inside the sandbox, and the folder comes back
+  (`download_artifacts`) to the same collect step (`workspace.sync_back`).
+
 ### The builder probe
 
-The emit prompt's "do not apply or test your change anywhere" exists because
-direct edits to the worktree bypass materialise and the check.  The builder probe
-gives a safe alternative.  Since dm-133, the probe is also available to
-`design_doc` via `--command` (no `--emission`); the clone
+The emit prompt's "do not apply or test your change anywhere", which create, edit
+and fast-create still carry, exists because direct edits to the worktree bypass
+materialise and the check. The builder probe gave design's builder a safe way to test
+before its workspace did; its prompt no longer names it. Since dm-133, the probe is
+also available to `design_doc` via `--command` (no `--emission`); the clone
 runs at the run's base with `emission=None`, and the same isolation guarantees
 apply:
 
-- **Standalone clone** (`git clone --no-local --depth 1`): not a linked worktree.
-  No `.git` registration.  `origin` removed after clone.
+- **Standalone clone** (`clones.clone_shared`, `git clone --shared`): not a linked
+  worktree, so no `.git` registration; its own refs and index, the target's objects
+  shared.  `origin` removed after clone.
 - **Hooks off**: `core.hooksPath=/dev/null`, `LEFTHOOK=0`, `HUSKY=0`.
 - **Isolated HOME and DSH_HOME**: per-probe directories under `probe-<id>/`.
 - **PATH stripped**: the run worktree's `.venv/bin` and `node_modules/.bin` are

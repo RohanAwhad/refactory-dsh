@@ -754,7 +754,10 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
     applied -- a malformed block, an edit whose text is not in its file, text copied from a
     truncated read, or an emission that changes nothing because every file and edit is
     already in the last attempt -- does not end the run: it is recorded as
-    ``emission_refused``, and the check sends the reason back to emit.
+    ``emission_refused``, and the check sends the reason back to emit. So does an emission
+    derived from an agent's workspace whose change the blocks could not carry (a binary
+    file, a symlink, a mode change), which the workspace's collect step refused
+    (`workspace.refusal_for`).
     """
     # Sweep dead probes and warm clones before proceeding. A warm clone left on
     # disk is named in a warning; it does not stop the attempt.
@@ -772,6 +775,11 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
         # Like emission_refused: reset only when set, so a run lowered before the
         # refusal count existed still materialises.
         reset_refusals = {"consecutive_refusals": 0} if ctx.facts.get("consecutive_refusals") else {}
+        from refactory_dsh.workspace import refusal_for
+        if ctx.exists(EMIT_FILE):
+            collected = refusal_for(ctx.workdir, EMIT_FILE, ctx.read_text(EMIT_FILE))
+            if collected is not None:
+                raise AttemptRefused(collected)
         if found is None:
             change = (f"The artifact directory is a copy of {source} with this run's files applied."
                       if source is not None else "The artifact directory holds only the files this run wrote.")
@@ -1128,17 +1136,19 @@ def prepare_check_environment(
     home: Path,
     timeout: float,
     budget: Any = None,
+    record: Path | None = None,
 ) -> tuple[worktree.Worktree, dict[str, str], list[str], dict[str, Any] | None]:
     """Install dependencies, build check environment, run generate/setup.
 
-    Factored from _check_in_worktree so the check, the base check and the probe
-    can all call it.  *amend* and *commit_lockfiles* have no default — callers
-    must pass them explicitly.
+    Factored from _check_in_worktree so the check, the base check, the probe and an
+    agent's clone workspace (`clones.prepare`) can all call it.  *amend* and
+    *commit_lockfiles* have no default — callers must pass them explicitly. *record*
+    is where the install record is kept (`worktree.ensure_environment`).
 
     Returns (found, env, problems, prep_fail).
     """
     amended, problems, install_fail = worktree.ensure_environment(
-        found, run, budget, commit_lockfiles=commit_lockfiles,
+        found, run, budget, commit_lockfiles=commit_lockfiles, record=record,
     )
     if amended.head != found.head:
         found = amended

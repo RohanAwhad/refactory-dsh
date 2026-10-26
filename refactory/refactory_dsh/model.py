@@ -256,6 +256,12 @@ class DshModelClient:
         #: it declares one: the session stops there whatever the route allows.
         self._node_wall_s = int(node_wall_s) if node_wall_s is not None else None
         self._worker_receipt: Path | None = None
+        #: Set per completion on the copy `complete` makes, as the receipt is: where the
+        #: agent works when that is not the run directory, what its environment
+        #: overrides, and whether its tools are confined there (`workspace.py`).
+        self._cwd: Path | None = None
+        self._env_overrides: dict[str, str | None] = {}
+        self._confine = False
         ledger = budget_ledger or os.environ.get("REFACTORY_BUDGET_LEDGER")
         self._budget = None
         if ledger:
@@ -379,6 +385,13 @@ class DshModelClient:
         # An agent's own shell can run install commands that would rewrite the
         # target's hooks; suppress hook managers there too (#347).
         result.update(HOOK_SUPPRESS)
+        # Last: an agent workspace's own environment (its PATH, HOME and virtual
+        # environment) replaces the run worktree's, and None removes a name.
+        for name, value in (getattr(self, "_env_overrides", None) or {}).items():
+            if value is None:
+                result.pop(name, None)
+            else:
+                result[name] = value
         return result
 
     def _readiness_unavailable(self, reason: str) -> dict[str, object]:
@@ -434,14 +447,26 @@ class DshModelClient:
         return result
 
     def complete(
-        self, prompt: str, *, system: str = "", workdir: Path | None = None
+        self, prompt: str, *, system: str = "", workdir: Path | None = None,
+        cwd: Path | None = None, env: dict[str, str | None] | None = None,
+        confine: bool = False,
     ) -> str:
+        """One completion. ``workdir`` is the run directory: the worker's receipt and
+        patch are written there, and the run's worktree environment is found from it.
+        ``cwd`` is where the agent works, the run directory unless given (an agent
+        workspace, `workspace.py`); ``env`` overrides its environment last, a None value
+        removing the name; ``confine`` makes DSH's sandbox policy workspace-write, rooted
+        at ``cwd`` (`workers.permission_patch`).
+        """
         from refactory_dsh import workers
         scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
         original_workdir = workdir
         run_dir = Path(workdir).expanduser().resolve() if workdir is not None else scratch
         run_dir.mkdir(parents=True, exist_ok=True)
         client = copy.copy(self)
+        client._cwd = Path(cwd).expanduser().resolve() if cwd is not None else None
+        client._env_overrides = dict(env or {})
+        client._confine = bool(confine and cwd is not None)
         client._checkpoint()
         if client._budget is not None:
             client._budget.require_usage_capability(self._worker_backend == "dsh")
@@ -507,7 +532,8 @@ class DshModelClient:
         if self._worker_receipt is not None:
             from refactory_dsh.workers import write_patch
             patch = self._worker_receipt.with_suffix(".patch.yml")
-            write_patch(patch, self._runtime_root, self.route(), provider_config=self._provider_config)
+            write_patch(patch, self._runtime_root, self.route(), provider_config=self._provider_config,
+                        workspace_root=getattr(self, "_cwd", None) if getattr(self, "_confine", False) else None)
             cmd += ["--patch", str(patch)]
         if self._worker_backend == "dsh":
             if self._provider:
@@ -612,7 +638,8 @@ class DshModelClient:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                     stdin=task_file if task_file is not None else None,
-                    cwd=str(run_dir), env=self._environment(target_workdir=target_workdir),
+                    cwd=str(getattr(self, "_cwd", None) or run_dir),
+                    env=self._environment(target_workdir=target_workdir),
                     # A terminal Ctrl-C reaches the Python caller only. Forward one
                     # shutdown request: DSH escalates a second signal to immediate exit.
                     start_new_session=os.name == "posix",

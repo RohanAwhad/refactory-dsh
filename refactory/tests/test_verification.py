@@ -376,11 +376,11 @@ class _CrashingModel:
         from tests_support import FakeModel
         self.inner, self.mark, self.crashes = FakeModel(answers), mark, 0
 
-    def complete(self, prompt, *, system="", workdir=None):
+    def complete(self, prompt, *, system="", workdir=None, **workspace):
         if self.mark in prompt:
             self.crashes += 1
             raise RuntimeError("branch crashed")
-        return self.inner.complete(prompt, system=system, workdir=workdir)
+        return self.inner.complete(prompt, system=system, workdir=workdir, **workspace)
 
 
 _VERIFIER_MARK = "design.md is in the run directory. Do NOT read it"

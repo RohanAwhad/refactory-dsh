@@ -350,14 +350,16 @@ def test_create_research_gate_is_unchanged(tmp_path):
 def test_only_design_modes_builder_checks_each_correction_fails_without_its_change():
     """Every extra build round the QA judge caused was a gate correction no test exercised,
     or a fix whose test still passed with the fix reverted (approved 2026-10-26). Design
-    mode's builder is told to probe each test with its change undone; no other mode is."""
-    from refactory_dsh.design import EMIT_CHECKLIST
+    mode's builder is told to run each test with its change reverted in its workspace (it
+    works in a clone of the attempt, so it reverts there, not in a draft emit.txt); no other
+    mode is."""
+    from refactory_dsh.design import EMIT_CHECKLIST, WORKSPACE_BRIEFING
     from test_lowering_smoke import _mode_classes
 
     emit = DesignMode().build().nodes["emit"].prompt_template
-    assert EMIT_CHECKLIST in emit and emit.index("{{probe_instruction}}") < emit.index(EMIT_CHECKLIST)
+    assert EMIT_CHECKLIST in emit and emit.index(WORKSPACE_BRIEFING) < emit.index(EMIT_CHECKLIST)
     for line in ("each correction made at the design gate and each ask in the brief",
-                 "undo that change in your draft emit.txt and probe the same test again: it must fail",
+                 "revert that change in the workspace and run the same test again: it must fail",
                  "A correction counts as met only if a test fails without it",
                  "calls the helper under test", "a verdict list nothing consumes",
                  "results the test built by hand"):
@@ -365,4 +367,4 @@ def test_only_design_modes_builder_checks_each_correction_fails_without_its_chan
     others = {key: cls().build().nodes.get("emit") for key, cls in _mode_classes() if cls is not DesignMode}
     assert "default_pack-design_fast" in others
     assert [key for key, node in others.items()
-            if node is not None and "## Before you answer" in node.prompt_template] == []
+            if node is not None and "## Before you stop" in node.prompt_template] == []

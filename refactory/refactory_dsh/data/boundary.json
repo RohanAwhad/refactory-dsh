@@ -65,13 +65,15 @@
     "refactory_dsh.tools",
     "refactory_dsh.worker_config",
     "refactory_dsh.worker_node",
-    "refactory_dsh.workers"
+    "refactory_dsh.workers",
+    "refactory_dsh.workspace"
   ],
   "product": [
     "refactory_dsh.authoring_evidence",
     "refactory_dsh.base_check",
     "refactory_dsh.brief_guard",
     "refactory_dsh.cli",
+    "refactory_dsh.clones",
     "refactory_dsh.console",
     "refactory_dsh.coverage_helpers",
     "refactory_dsh.create",

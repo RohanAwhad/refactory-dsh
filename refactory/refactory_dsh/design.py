@@ -30,18 +30,37 @@ BESIDE_CHECK_VERIFIER_NOTE = (
 
 #: What design mode's builder checks before it answers (approved 2026-10-26): every extra
 #: build round the QA judge caused was a gate correction with no test that exercises it,
-#: or a fix whose test still passes with the fix reverted. Design mode only.
+#: or a fix whose test still passes with the fix reverted. Design mode only. The builder
+#: works in a clone of the attempt (`BUILDER_WORKSPACE`), so it reverts and reruns there.
 EMIT_CHECKLIST = (
-    "\n## Before you answer\n"
+    "\n## Before you stop\n"
     "- For each correction made at the design gate and each ask in the brief, find the test "
-    "that proves it and run it with the builder probe, when you have one.\n"
-    "- Then undo that change in your draft emit.txt and probe the same test again: it must "
-    "fail. If it still passes, the test does not prove the change: fix the test, then "
-    "restore the change.\n"
+    "that proves it and run it in your workspace.\n"
+    "- Then revert that change in the workspace and run the same test again: it must fail. "
+    "If it still passes, the test does not prove the change: fix the test, then restore "
+    "the change and run the test once more.\n"
     "- A correction counts as met only if a test fails without it. The reviewers check this.\n"
     "- Avoid a test that calls the helper under test instead of driving the real path the "
     "brief names, test inputs nothing uses (such as a verdict list nothing consumes), and "
     "assertions on results the test built by hand.\n"
+)
+
+#: Where design mode's builder works (`workspace.py`): a prepared clone of the last
+#: attempt, whose diff the runtime writes into emit.txt. design_fast's builder too.
+BUILDER_WORKSPACE = {"kind": "clone", "of": "attempt", "collect": "diff"}
+
+#: How design mode's builder is told to work in its workspace, and when to stop.
+WORKSPACE_BRIEFING = (
+    "## Your workspace\n"
+    "Your workspace is a prepared clone of the last attempt, with its dependencies "
+    "installed and its setup and generate commands run; its path is in the execution "
+    "block above. Make the change there, and run the tests, the CLI and the brief's own "
+    "example there as often as you need: the check command runs there as it runs in the "
+    "check. `git diff HEAD` there shows what you changed since the last attempt; the "
+    "run's base commit is {{base}}.\n"
+    "When you are done, stop: the workspace's diff is your answer. The runtime turns it "
+    "into the next attempt, which the check and the reviews then judge. Return a short "
+    "completion message.\n"
 )
 
 _ACCEPTANCE_BASELINE = (
@@ -619,19 +638,15 @@ class DesignMode(Mode):
                 "## What went wrong last time\n{{validation}}\n\n"
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
                 + _ACCEPTANCE_BASELINE
-                + "{{emit_scope}}\n\n"
-                "Write those blocks into emit.txt, with no prose outside them. Write nothing "
-                "but emit.txt: do not apply or test your change anywhere — the target, the "
-                "run's worktree or a copy — because materialise and the check do that after "
-                "you answer and send you the result. Then return a short completion message.\n"
-                "{{probe_instruction}}\n"
+                + WORKSPACE_BRIEFING
                 + EMIT_CHECKLIST
             ),
             reads=("brief.json", "design.md", "check.txt", "check-record.json"),
             writes=(repo_change.EMIT_FILE,),
             produces=("emit",),
             feedback_keys=("validation", "qa_gate", "overwatch_review"),
-            notes="write the artifact's files",
+            workspace=dict(BUILDER_WORKSPACE),
+            notes="make the change in a clone of the last attempt; its diff is the emission",
         ))
         graph.add(repo_change.materialise_node(
             call=f"{OPS}:design_materialise",
