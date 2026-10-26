@@ -395,20 +395,26 @@ def prepared_clone(
                 fcntl.flock(creation_lock_fd, fcntl.LOCK_UN)
                 creation_lock_fd.close()
 
-            # Acquire per-clone lock outside the creation lock
-            lock_fd = open(target_probe_dir / "probe.lock", "w")
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            # Acquire per-clone lock outside the creation lock.
+            # If the directory was removed between creation-lock release and
+            # here (TOCTOU), fall through to the cold-clone path below.
+            try:
+                lock_fd = open(target_probe_dir / "probe.lock", "w")
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            except FileNotFoundError:
+                lock_fd = None
 
             # TOCTOU guard: clone may have been evicted between lock release
             # and per-clone lock acquisition (fix 6C)
-            if not (target_probe_dir / "cache.key").is_file():
+            if lock_fd is None or not (target_probe_dir / "cache.key").is_file():
                 # Clone was evicted — create a fresh cold clone
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    lock_fd.close()
-                except OSError:
-                    pass
-                lock_fd = None
+                if lock_fd is not None:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        lock_fd.close()
+                    except OSError:
+                        pass
+                    lock_fd = None
                 probe_id = uuid.uuid4().hex[:12]
                 probe_dir = workdir / ".refactory" / f"probe-{probe_id}"
                 clone_dir = probe_dir / "repo"

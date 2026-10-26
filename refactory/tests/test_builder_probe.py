@@ -807,11 +807,11 @@ def test_sweep_dead_probes_spares_warm_clone(tmp_path):
     refactory_dir = workdir / ".refactory"
     refactory_dir.mkdir()
 
-    # Create a synthetic warm clone with cache.key and owner.pid
+    # Create a synthetic warm clone with cache.key only (no owner.pid —
+    # real warm clones never write owner.pid; that is cold-clone only)
     probe_dir = refactory_dir / "probe-warmtest"
     probe_dir.mkdir()
     (probe_dir / "cache.key").write_text("test-key")
-    (probe_dir / "owner.pid").write_text(str(os.getpid()))
 
     sweep_dead_probes(workdir)
     assert probe_dir.exists(), "sweep_dead_probes must spare warm clones (cache.key)"
