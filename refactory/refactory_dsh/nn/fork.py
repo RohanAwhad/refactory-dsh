@@ -27,6 +27,29 @@ def _overlap(left: Path, right: Path) -> bool:
     )
 
 
+def _settle_missing(workdir: Path, members: list[Node], error: str) -> None:
+    """Settle the deliveries of an optional branch recorded missing (dm-232).
+
+    An agent whose model call raised -- a session past its wall, say -- never reaches
+    ``agent_delivery.finish``, so its pending marker would outlive the branch, and a
+    later recovery of the run directory would refuse on it as an unknown outcome. The
+    spine's worker settles it the same way (``worker_node``); ``invalidate`` is a no-op
+    for a member that left no marker.
+    """
+    from refactory_dsh.agent_delivery import invalidate
+
+    agents = [member.id for member in members if member.kind == "agent"]
+    if not agents:
+        return
+    try:
+        invalidate(Path(workdir), agents, f"optional branch missing: {error}")
+    except Exception as settle_error:  # the branch stays missing either way
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "could not settle the delivery markers of %s: %s", ", ".join(agents), settle_error)
+
+
 def _branches(executor: Executor, fork: Node, barrier: str) -> list[list[Node]]:
     """Admit disjoint flat branches before any branch can have side effects."""
     from .executor import ExecutionError
@@ -257,6 +280,7 @@ def run_fork(executor: Executor, node: Node) -> str | None:
             for step in child.steps:
                 if step.error:
                     step.reason, step.error = f"missing: {step.error}", None
+            _settle_missing(ctx.workdir, branches[index], errors[index])
         executor.steps.extend(child.steps)
         executor.model_calls += child.model_calls
         ctx.writes_made.extend(child.ctx.writes_made)

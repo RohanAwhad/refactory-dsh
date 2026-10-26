@@ -67,9 +67,8 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         if spine_stat == 'paused':
             pid = saved.get('owner_pid')
             if not isinstance(pid, int) or not _alive(pid):
-                _write_control_file(root, 'stop')
-                from refactory_dsh import recovery as _rec
-                _rec.start(root)
+                queued = _write_control_file(root, 'stop')
+                _start_owner_for(root, queued, 'stop')
                 return _wait_for_halted(root)
 
     if action == 'preview':
@@ -228,14 +227,32 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         except (OSError, json.JSONDecodeError):
             pass
     if action == 'rerun' and restart_owner:
-        from refactory_dsh import recovery
-        owner_result = recovery.start(root, acknowledge_failed=True)
+        owner_result = _start_owner_for(root, directory / f'{identifier}.json', 'rerun',
+                                        acknowledge_failed=True)
         return {**result, 'owner': owner_result}
     return result
 
 
+def _start_owner_for(root: Path, queued: Path, action: str, *,
+                     acknowledge_failed: bool = False) -> dict[str, Any]:
+    """Start an owner to apply the control just queued at ``queued``.
+
+    When recovery refuses (an unknown worker outcome, changed configuration, a live
+    owner), nothing may stay queued: a later resume's owner would apply the orphaned
+    control as if the person had just asked for it (dm-244, dm-252). So the queued
+    file is removed, the withdrawal is journalled, and the refusal is raised.
+    """
+    try:
+        return recovery.start(root, acknowledge_failed=acknowledge_failed)
+    except BaseException:
+        queued.unlink(missing_ok=True)
+        emit(root, 'control_requested', state='withdrawn',
+             summary=f'{action} withdrawn: no owner could start to apply it')
+        raise
+
+
 def _write_control_file(root: Path, action: str) -> Path:
-    """Write a graph-control file for ``action`` and return its path."""
+    """Queue a graph-control file for ``action``, journal it, and return its path."""
     identifier = f'{time.time_ns():020d}-{uuid.uuid4().hex}'
     invocation_data = read(root / '.refactory/invocation.json')
     payload = {
@@ -250,6 +267,7 @@ def _write_control_file(root: Path, action: str) -> Path:
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps(payload))
     tmp.replace(path)
+    emit(root, 'control_requested', state='queued', summary=action, node_id='')
     return path
 
 
@@ -533,9 +551,8 @@ def _amend_command(root: Path, checkpoint: Path, saved: dict[str, Any], *,
 
     # If the checkpoint is failed and acknowledge_failure is set, start a new owner
     if acknowledge_failure and saved.get('status') == 'failed':
-        from refactory_dsh import recovery
-        owner_result = recovery.start(root, acknowledge_failed=True)
-        result['owner'] = owner_result
+        result['owner'] = _start_owner_for(root, directory / f'{rerun_id}.json', 'amend-command',
+                                           acknowledge_failed=True)
     return result
 
 
@@ -659,7 +676,8 @@ def _redeliver(root: Path, saved: dict[str, Any], current_revision: str) -> dict
          node_id=deliver_node_id)
 
     # Start the owner, acknowledging the failure when the due node is deliver
-    owner_result = recovery.start(root, acknowledge_failed=acknowledge_failed)
+    owner_result = _start_owner_for(root, directory / f'{identifier}.json', 'redeliver',
+                                    acknowledge_failed=acknowledge_failed)
     return {**result, 'owner': owner_result}
 
 

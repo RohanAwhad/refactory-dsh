@@ -823,6 +823,133 @@ def test_run_node_optional_settles_pending_marker(tmp_path, monkeypatch):
     assert updated['status'] == 'superseded'
 
 
+def test_worker_node_warns_when_the_marker_cannot_be_settled(tmp_path, monkeypatch, capsys):
+    """dm-232: a marker that cannot be settled is a run warning, not silence; the branch stays missing."""
+    import sys
+    from refactory_dsh import agent_delivery, worker_node
+
+    spec_path = tmp_path / 'spec.json'
+    spec_path.write_text(json.dumps({'schema_version': 1, 'node_id': 'verifier', 'optional': True,
+                                     'reads': [], 'writes': [], 'prompt': 'test', 'model_context': {}}))
+    monkeypatch.setattr(sys, 'argv', ['worker_node', str(spec_path)])
+    monkeypatch.chdir(tmp_path)
+
+    def _failing_execute(s, w):
+        raise RuntimeError('model completion timed out after 1s')
+
+    def _unsettled(workdir, nodes, reason):
+        raise OSError('receipt is unreadable')
+
+    monkeypatch.setattr(worker_node, 'execute', _failing_execute)
+    monkeypatch.setattr(agent_delivery, 'invalidate', _unsettled)
+    assert worker_node.main() == 0
+    err = capsys.readouterr().err
+    assert 'refactory: run warning: could not settle the delivery marker of optional verifier' in err
+    assert 'receipt is unreadable' in err
+    assert (tmp_path / 'reviews/verifier-missing.txt').exists()
+
+
+def test_run_node_warns_when_the_marker_cannot_be_settled(tmp_path, monkeypatch, capsys):
+    """dm-232: run.py's optional path reports a marker it could not settle as a run warning."""
+    from refactory_dsh import agent_delivery
+    from refactory_dsh import run as run_mod
+
+    workdir = tmp_path / 'run'
+    (workdir / '.refactory').mkdir(parents=True)
+    (workdir / '.refactory' / 'declarations.json').write_text(json.dumps({
+        'verifier': {'reads': [], 'writes': [], 'produces': [], 'optional': True}}))
+    (workdir / 'facts.json').write_text('{}')
+
+    def _always_fail(ctx):
+        raise RuntimeError('deliberate test failure')
+
+    def _unsettled(workdir, nodes, reason):
+        raise OSError('receipt is unreadable')
+
+    monkeypatch.setattr(run_mod, 'resolve', lambda target: _always_fail)
+    monkeypatch.setattr(agent_delivery, 'invalidate', _unsettled)
+    monkeypatch.setenv('REFACTORY_PROJECT', str(tmp_path))
+    assert run_mod.run_node('test_module:always_fail', workdir=workdir, node_id='verifier') == {}
+    err = capsys.readouterr().err
+    assert 'refactory: run warning: could not settle the delivery marker of optional verifier' in err
+    assert 'receipt is unreadable' in err
+
+
+class _TimesOutFor:
+    """A model client whose session for one node runs past its wall; others answer."""
+
+    def __init__(self, slow: str, node: str = '') -> None:
+        self.slow, self.node = slow, node
+
+    def for_node(self, node, role='worker'):
+        return _TimesOutFor(self.slow, node)
+
+    def complete(self, prompt, *, system='', workdir=None):
+        if self.node == self.slow:
+            raise RuntimeError('model completion timed out after 1s; requested runtime shutdown; not retried')
+        return 'ok'
+
+
+def _walker_review_fork():
+    from refactory_dsh.nn import Graph, Node
+
+    graph = Graph()
+    graph.add(Node('fork', 'fork', targets=('verifier', 'reviewer'), optional_targets=('verifier',)))
+    graph.add(Node('verifier', 'agent', prompt_template='Verify.', timeout_s=1))
+    graph.add(Node('reviewer', 'agent', prompt_template='Review.'))
+    graph.add(Node('join', 'join', sources=('reviewer',)))
+    graph.connect('fork', 'join')
+    graph.connect('verifier', 'join')
+    graph.connect('reviewer', 'join')
+    return graph
+
+
+@pytest.mark.parametrize('concurrent', [False, True])
+def test_walker_optional_branch_settles_its_pending_marker(tmp_path, concurrent):
+    """dm-232 on the walker: an optional agent whose session timed out never reached
+    `finish`, so the fork settles the delivery it began when it records the branch
+    missing. Otherwise a later recovery of the directory refuses on the marker.
+
+    A custom client runs the fork's branches on the caller's thread; the shipped DSH
+    client runs them concurrently, here against a stand-in DSH whose verifier session
+    outlives the verifier's one-second wall."""
+    from refactory_dsh.nn.executor import Executor, RunContext
+
+    workdir = tmp_path / 'run'
+    workdir.mkdir()
+    ctx = RunContext(workdir, knobs={}, facts={}, task={})
+    if concurrent:
+        dsh = tmp_path / 'dsh'
+        dsh.write_text('#!/bin/sh\nif grep -q Verify; then exec sleep 60; fi\necho ok\n')
+        dsh.chmod(0o755)
+        ctx.model = DshModelClient(worker_backend='dsh', dsh_cli=str(dsh), attempts=1)
+    else:
+        ctx.model = _TimesOutFor('verifier')
+    executor = Executor(_walker_review_fork(), ctx)
+    executor.run(start='fork')
+    assert any(step.node == 'verifier' and (step.reason or '').startswith('missing:') for step in executor.steps)
+    assert list((workdir / '.refactory/agent-delivery/pending').glob('*.json')) == []
+    receipts = [json.loads(p.read_text()) for p in (workdir / '.refactory/agent-delivery').glob('*/receipt.json')]
+    assert {r['node']: r['status'] for r in receipts}['verifier'] == 'superseded'
+
+
+def test_walker_warns_when_an_optional_marker_cannot_be_settled(tmp_path, monkeypatch, caplog):
+    from refactory_dsh import agent_delivery
+    from refactory_dsh.nn.executor import Executor, RunContext
+
+    def _unsettled(workdir, nodes, reason):
+        raise OSError('receipt is unreadable')
+
+    monkeypatch.setattr(agent_delivery, 'invalidate', _unsettled)
+    workdir = tmp_path / 'run'
+    workdir.mkdir()
+    ctx = RunContext(workdir, knobs={}, facts={}, task={})
+    ctx.model = _TimesOutFor('verifier')
+    with caplog.at_level('WARNING', logger='refactory_dsh.nn.fork'):
+        Executor(_walker_review_fork(), ctx).run(start='fork')
+    assert 'could not settle the delivery markers of verifier: receipt is unreadable' in caplog.text
+
+
 def test_worker_node_non_optional_exits_one_on_failure(tmp_path, monkeypatch, capsys):
     """A worker spec without optional still exits 1 when execute raises."""
     import sys

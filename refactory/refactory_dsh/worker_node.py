@@ -206,8 +206,12 @@ def main() -> int:
                 try:
                     from refactory_dsh.agent_delivery import invalidate as _invalidate
                     _invalidate(workdir, [node_id], f'optional branch missing: {error}')
-                except Exception:
-                    pass
+                except Exception as settle_error:
+                    # The branch stays missing either way; a marker left pending only
+                    # makes the next resume ask for `graph-control acknowledge`.
+                    print(f'refactory: run warning: could not settle the delivery marker of '
+                          f'optional {node_id}: {type(settle_error).__name__}: {settle_error}; '
+                          f'a later resume asks for graph-control acknowledge', file=sys.stderr)
                 print(json.dumps({'node': node_id, 'status': 'missing'}))
                 return 0
             raise

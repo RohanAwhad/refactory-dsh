@@ -1695,6 +1695,60 @@ def test_stop_paused_with_live_owner_queues(tmp_path):
     assert control['action'] == 'stop'
 
 
+# ── dm-252: amend-command and redeliver name the stored graph revision ─────
+
+def _store_graph_revision(root: Path, revision: str) -> None:
+    """Record the revision the spine stores beside its checkpoint (a post-dm-252 owner)."""
+    path = root / '.refactory/spine-checkpoint.json'
+    path.write_text(json.dumps({**json.loads(path.read_text()), 'graph_revision': revision}))
+
+
+def _queued_controls(root: Path) -> list[dict[str, Any]]:
+    return [json.loads(p.read_text()) for p in sorted((root / '.refactory/graph-controls').glob('*.json'))]
+
+
+def test_amend_command_names_the_stored_graph_revision(tmp_path):
+    """The spine compares a rerun's revision with the graph revision it recomputes, so
+    amend-command's queued rerun names the one it stored, not the checkpoint's bytes."""
+    root = _make_run_dir(tmp_path, status='halted', owner_pid=_dead_pid())
+    _store_graph_revision(root, 'stored-revision')
+    graph_control.request(root, 'amend-command', field='check', value='correct command')
+    assert [c['revision'] for c in _queued_controls(root)] == ['stored-revision']
+
+
+def test_redeliver_names_the_stored_graph_revision(tmp_path):
+    root = _make_run_dir_with_deliver(tmp_path, status='done')
+    _store_graph_revision(root, 'stored-revision')
+    with patch('refactory_dsh.graph_control.recovery.start', return_value={'status': 'queued', 'pid': 1}):
+        graph_control.request(root, 'redeliver')
+    assert [c['revision'] for c in _queued_controls(root)] == ['stored-revision']
+
+
+def _refused(*args, **kwargs):
+    raise ValueError('a dispatched worker outcome is unknown; set it aside first with acknowledge')
+
+
+def test_a_refused_amend_command_owner_leaves_no_rerun_queued(tmp_path):
+    """When recovery refuses the owner a failed run's amend-command needs, its rerun must
+    not stay queued for a later owner to apply unasked."""
+    root = _make_run_dir(tmp_path, status='failed', owner_pid=_dead_pid())
+    with patch('refactory_dsh.graph_control.recovery.start', side_effect=_refused):
+        with pytest.raises(ValueError, match='set it aside'):
+            graph_control.request(root, 'amend-command', field='check', value='correct command',
+                                  acknowledge_failure=True)
+    assert _queued_controls(root) == []
+    events = [json.loads(line) for line in (root / '.refactory/events.jsonl').read_text().splitlines()]
+    assert [e['state'] for e in events if e.get('kind') == 'control_requested'] == ['queued', 'withdrawn']
+
+
+def test_a_refused_redeliver_owner_leaves_no_rerun_queued(tmp_path):
+    root = _make_run_dir_with_deliver(tmp_path, status='failed', cursor=['deliver'])
+    with patch('refactory_dsh.graph_control.recovery.start', side_effect=_refused):
+        with pytest.raises(ValueError, match='set it aside'):
+            graph_control.request(root, 'redeliver')
+    assert _queued_controls(root) == []
+
+
 def test_confirm_completion_writes_completion_override(tmp_path):
     """confirm-completion writes completion_override into spine-status.json."""
     root = tmp_path

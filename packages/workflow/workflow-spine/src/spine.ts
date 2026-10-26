@@ -1303,8 +1303,16 @@ export class Spine {
     this.log.push(`feedback ${node}`)
   }
 
-  /** Describe invalidation before the runtime archives and clears current facts. */
-  planRedo(node: string, opts?: { deferred?: boolean; commandCorrection?: boolean }): RedoPlan {
+  /**
+   * Describe invalidation before the runtime archives and clears current facts.
+   *
+   * A paused run refuses unless `whilePaused` is set. Only a person's rerun (a
+   * graph-control applied at a boundary) and the checkpoint's descriptive plans set
+   * it: the pause is the person's own, so they may reopen work behind it, while the
+   * CEO's `wf_redo` must not move the cursor off a boundary the person is holding.
+   */
+  planRedo(node: string, opts?: { deferred?: boolean; commandCorrection?: boolean; whilePaused?: boolean | undefined }): RedoPlan {
+    if (this.isPaused() && !opts?.whilePaused) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before reopening work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') {
@@ -1366,9 +1374,9 @@ export class Spine {
       restartData: [...affected].filter(id => this.nodes.get(id)?._type === 'DataNode') }
   }
 
-  /** Reopen a due node with a command correction and invalidate forward descendants. */
-  redoCommandCorrection(node: string): SpineNext {
-    const plan = this.planRedo(node, { commandCorrection: true })
+  /** Reopen a due node with a command correction and invalidate forward descendants; `whilePaused` as for {@link planRedo}. */
+  redoCommandCorrection(node: string, opts?: { whilePaused?: boolean }): SpineNext {
+    const plan = this.planRedo(node, { commandCorrection: true, whilePaused: opts?.whilePaused })
     const affected = new Set(plan.nodes)
     this.invalidateNodes(affected, true, false)
     if (plan.resetPass) this.pass = undefined
@@ -1396,9 +1404,9 @@ export class Spine {
     return this.next()
   }
 
-  /** Reopen work and invalidate descendants; prompts and historical log remain. */
-  redo(node: string, opts?: { preserveIterations?: boolean }): SpineNext {
-    const plan = this.planRedo(node)
+  /** Reopen work and invalidate descendants; prompts and historical log remain. `whilePaused` as for {@link planRedo}. */
+  redo(node: string, opts?: { preserveIterations?: boolean; whilePaused?: boolean }): SpineNext {
+    const plan = this.planRedo(node, { whilePaused: opts?.whilePaused })
     const affected = new Set(plan.nodes)
     this.invalidateNodes(affected, true, opts?.preserveIterations ?? false)
     if (plan.resetPass) this.pass = undefined
@@ -1511,12 +1519,14 @@ export class Spine {
   checkpoint(): Record<string, unknown> {
     const redo_plans: Record<string, RedoPlan> = {}
     for (const node of this.completed) {
-      try { redo_plans[node] = this.planRedo(node) } catch { /* unsafe replay stays unavailable */ }
+      // A person may preview and rerun behind their own pause, so the plans are
+      // described while paused too (dm-227); the CEO's redo still refuses there.
+      try { redo_plans[node] = this.planRedo(node, { whilePaused: true }) } catch { /* unsafe replay stays unavailable */ }
     }
     const deferred_redo_plans: Record<string, RedoPlan> = {}
     for (const node of this.completed) {
       if (node in redo_plans) continue
-      try { deferred_redo_plans[node] = this.planRedo(node, { deferred: true }) } catch { /* unsafe replay stays unavailable */ }
+      try { deferred_redo_plans[node] = this.planRedo(node, { deferred: true, whilePaused: true }) } catch { /* unsafe replay stays unavailable */ }
     }
     return { schema_version: 2, source_graph: this.sourceGraph, state: this.state(),
       graph: { name: this.workflow, project_dir: this.projectDir, start_node: this.cursor[0] ?? '',

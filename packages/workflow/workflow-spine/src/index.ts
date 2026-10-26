@@ -544,6 +544,53 @@ function payloadEnv(value: unknown): Record<string, string> | undefined {
 }
 
 /**
+ * Stable stringify replacer: recursively sorts object keys for deterministic
+ * JSON serialization. Arrays are preserved in order; primitives pass through.
+ */
+function stableStringify(_key: string, value: unknown): unknown {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
+  }
+  return value
+}
+
+/**
+ * The graph revision a person's preview names and a rerun must still match (dm-252):
+ * a SHA-256 of a checkpoint's graph-structural fields.
+ *
+ * Runtime metadata (owner_pid, status, file_fingerprints, materialised, run_id,
+ * graph_revision itself) and ephemeral state (pause_before, halted, log,
+ * skip_provenance, pending_skip_receipts) are excluded, so the revision is stable
+ * across owner restarts, acknowledgements and pause/resume cycles.
+ * @param saved - a checkpoint, as `Spine.checkpoint()` returns it or as it was saved.
+ * @returns the hex digest.
+ */
+export function computeGraphRevision(saved: Record<string, unknown>): string {
+  const state = saved.state as Record<string, unknown>
+  const structural = {
+    schema_version: saved.schema_version,
+    source_graph: saved.source_graph,
+    graph: saved.graph,
+    afters_map: saved.afters_map,
+    successors: saved.successors,
+    redo_plans: saved.redo_plans,
+    deferred_redo_plans: saved.deferred_redo_plans,
+    cursor: state.cursor,
+    completed: state.completed,
+    skipped: state.skipped,
+    gate_verdicts: state.gate_verdicts,
+    iterations: state.iterations,
+    feedback: state.feedback,
+    gate_reasons: state.gate_reasons,
+    prompts: state.prompts,
+    pass: state.pass,
+  }
+  return createHash('sha256')
+    .update(JSON.stringify(structural, stableStringify))
+    .digest('hex')
+}
+
+/**
  * Build the argv for {@code wf_open}, including the session's project when set.
  *
  * Exported so the project-propagation tests call the real logic instead of
@@ -1210,49 +1257,6 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  /**
-   * Stable stringify replacer: recursively sorts object keys for deterministic
-   * JSON serialization. Arrays are preserved in order; primitives pass through.
-   */
-  function stableStringify(_key: string, value: unknown): unknown {
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
-    }
-    return value
-  }
-
-  /**
-   * Compute a SHA-256 of the graph-structural fields of a checkpoint.
-   * Runtime metadata (owner_pid, status, file_fingerprints, materialised,
-   * run_id) and ephemeral state (pause_before, halted, log, skip_provenance,
-   * pending_skip_receipts) are excluded so that the revision is stable across
-   * owner restarts and pause/resume cycles.
-   */
-  function computeGraphRevision(saved: Record<string, unknown>): string {
-    const state = saved.state as Record<string, unknown>
-    const structural = {
-      schema_version: saved.schema_version,
-      source_graph: saved.source_graph,
-      graph: saved.graph,
-      afters_map: saved.afters_map,
-      successors: saved.successors,
-      redo_plans: saved.redo_plans,
-      deferred_redo_plans: saved.deferred_redo_plans,
-      cursor: state.cursor,
-      completed: state.completed,
-      skipped: state.skipped,
-      gate_verdicts: state.gate_verdicts,
-      iterations: state.iterations,
-      feedback: state.feedback,
-      gate_reasons: state.gate_reasons,
-      prompts: state.prompts,
-      pass: state.pass,
-    }
-    return createHash('sha256')
-      .update(JSON.stringify(structural, stableStringify))
-      .digest('hex')
-  }
-
   /** The full status record {@link recordStatus} last wrote, or undefined when absent. */
   function readStatusRecord(workdir: string | undefined): Record<string, unknown> | undefined {
     if (workdir === undefined) return undefined
@@ -1293,6 +1297,10 @@ export function apply(ctx: Context, config: Config): void {
           const target = String(request.target)
           const isCommandCorrection = request.source === 'amend-command'
           const deferredNodes = request.deferred_nodes as string[] | undefined
+          // dm-227: a person's rerun reopens work behind their own pause (the
+          // `whilePaused` below, which the CEO's wf_redo never passes), and a run that
+          // was paused when it arrived then holds at the reopened node.
+          const wasPaused = spine.isPaused()
 
           if (Array.isArray(deferredNodes) && deferredNodes.length > 0) {
             if (spine.hasConcurrentWork()) {
@@ -1306,7 +1314,7 @@ export function apply(ctx: Context, config: Config): void {
               continue  // skip unlinkSync — file survives to next boundary
             }
             // Concurrent work has finished. Verify the plan still matches.
-            const currentPlan = spine.planRedo(target)
+            const currentPlan = spine.planRedo(target, { whilePaused: true })
             const currentSet = new Set(currentPlan.nodes)
             const deferredSet = new Set(deferredNodes)
             if (currentSet.size !== deferredSet.size
@@ -1325,7 +1333,7 @@ export function apply(ctx: Context, config: Config): void {
             const liveRevision = computeGraphRevision(liveSaved)
             if (liveRevision !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
           }
-          const plan = spine.planRedo(target, isCommandCorrection ? { commandCorrection: true } : undefined)
+          const plan = spine.planRedo(target, { commandCorrection: isCommandCorrection, whilePaused: true })
           const nodes = (spine.checkpoint().graph as WorkflowGraph).nodes
           if (typeof request.text === 'string' && request.text.trim() !== '' && !['AgentNode', 'LLMNode'].includes(nodes[target]?._type ?? '')) {
             throw new Error('this node has no editable prompt; correct its source with explicit invalidation')
@@ -1335,15 +1343,14 @@ export function apply(ctx: Context, config: Config): void {
             runtimeBridge(`${dataCommand} reset`, workdir, env, { ...plan, state, archiveArtifacts: true })
           }
           if (isCommandCorrection) {
-            spine.redoCommandCorrection(target)
+            spine.redoCommandCorrection(target, { whilePaused: true })
           } else {
-            spine.redo(target)
+            spine.redo(target, { whilePaused: true })
           }
-          // dm-227: when a rerun is applied to a paused spine, arm a pause
-          // before the redo's start node so the run holds there until resumed.
-          if (spine.isPaused() || (state.pause_before as string[]).length > 0) {
-            spine.pauseBefore(plan.start, true)
-          }
+          // dm-227: a rerun applied while the run was paused holds before the redo's
+          // start node until the person resumes. A live run is not held, even when a
+          // targeted pause is still armed on a route it never took.
+          if (wasPaused) spine.pauseBefore(plan.start, true)
           const gateReason = spine.gateReasonFor(target)
           const rerunText = typeof request.text === 'string' && request.text.trim() !== '' ? request.text.trim() : ''
           if (gateReason !== undefined || rerunText !== '') {

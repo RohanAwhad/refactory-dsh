@@ -1,10 +1,13 @@
 /**
- * Run-control tests: dm-252 (stable graph revision), dm-227 (planRedo on
- * paused runs), dm-231 (targeted pause), and supporting invariants.
+ * Run-control tests: dm-252 (stable graph revision), dm-227 (a person's rerun
+ * behind their own pause), dm-231 (targeted pause), and supporting invariants.
  *
  * Integration tests exercise applyControls through the plugin's wf_next,
- * verifying the production code path with control files.
+ * verifying the production code path with control files. The same controls are
+ * driven through the `refactory graph-control` CLI, against a spine owner, in
+ * refactory/tests/test_graph_control_owner.py.
  */
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -14,6 +17,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as spinePlugin from '../src/index.ts'
+import { computeGraphRevision } from '../src/index.ts'
 import { Spine } from '../src/spine.ts'
 import type { Config } from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
@@ -40,31 +44,6 @@ function ids(spine: Spine): string[] {
 }
 
 // ── Graphs ──────────────────────────────────────────────────────────────
-
-/** Build a small graph: gate_strategy → emit, with a gate that routes to emit or proceed. */
-function gateGraph(): WorkflowGraph {
-  return {
-    name: 't', start_node: 'gate_strategy',
-    nodes: {
-      gate_strategy: {
-        _type: 'GateNode', id: 'gate_strategy', evaluator_type: 'user',
-        gate_prompt: 'proceed?', reads: [],
-      },
-      emit: {
-        _type: 'AgentNode', id: 'emit', role: 'builder',
-        prompt_template: 'Emit', writes: ['emit.txt'], reads: [],
-      },
-      proceed: {
-        _type: 'AgentNode', id: 'proceed', role: 'builder',
-        prompt_template: 'P', writes: [], reads: [],
-      },
-    },
-    edges: [
-      { source: 'gate_strategy', target: 'emit', condition: 'emit' },
-      { source: 'gate_strategy', target: 'proceed', condition: 'proceed' },
-    ],
-  }
-}
 
 /** Linear graph: a → gate_qa → emit. */
 function linearGraph(): WorkflowGraph {
@@ -123,48 +102,6 @@ function reviewGraph(): WorkflowGraph {
       { source: 'gate_qa', target: 'proceed', condition: 'proceed' },
     ],
   }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────
-
-/**
- * Stable stringify replacer: recursively sorts object keys for deterministic
- * JSON serialization. Mirrors the one added to index.ts.
- */
-function stableStringify(_key: string, value: unknown): unknown {
-  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
-    )
-  }
-  return value
-}
-
-/** Compute graph revision from a saved checkpoint, mirroring index.ts. */
-function computeGraphRevision(saved: Record<string, unknown>): string {
-  const state = saved.state as Record<string, unknown>
-  const structural = {
-    schema_version: saved.schema_version,
-    source_graph: saved.source_graph,
-    graph: saved.graph,
-    afters_map: saved.afters_map,
-    successors: saved.successors,
-    redo_plans: saved.redo_plans,
-    deferred_redo_plans: saved.deferred_redo_plans,
-    cursor: state.cursor,
-    completed: state.completed,
-    skipped: state.skipped,
-    gate_verdicts: state.gate_verdicts,
-    iterations: state.iterations,
-    feedback: state.feedback,
-    gate_reasons: state.gate_reasons,
-    prompts: state.prompts,
-    pass: state.pass,
-  }
-  return createHash('sha256')
-    .update(JSON.stringify(structural, stableStringify))
-    .digest('hex')
 }
 
 // ── Plugin infrastructure ───────────────────────────────────────────────
@@ -231,6 +168,38 @@ function writePauseControl(workdir: string, target?: string): void {
   writeFileSync(join(directory, `${id}.json`), JSON.stringify(control))
 }
 
+/** Write any control file; controls apply in lexical order of their names. */
+function writeControl(workdir: string, name: string, body: Record<string, unknown>): void {
+  const directory = join(workdir, '.refactory', 'graph-controls')
+  mkdirSync(directory, { recursive: true })
+  writeFileSync(join(directory, `${name}.json`), JSON.stringify({
+    id: name, run_id: resolve(workdir), invocation: null, status: 'queued', text: '', target: '', ...body,
+  }))
+}
+
+const checkpointPath = (workdir: string): string => join(workdir, '.refactory', 'spine-checkpoint.json')
+/** The revision Python's preview hands a person: the field the spine stored. */
+const storedRevision = (workdir: string): string => JSON.parse(readFileSync(checkpointPath(workdir), 'utf8')).graph_revision
+const statusOf = (workdir: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
+const receiptOf = (workdir: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), 'utf8'))
+
+/** A shell that runs commands for real and logs nothing of its own. */
+function realShell(): object {
+  return {
+    resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string> }) => ({
+      command: request.command, workdir: request.workdir ?? process.cwd(), timeoutMs: request.timeoutMs ?? 10_000,
+      onExpiry: 'kill', stdoutMaxBytes: 1_000_000, env: request.env }),
+    execute: async (spec: { command: string; workdir?: string }) => {
+      const done = spawnSync('bash', ['-c', spec.command], { encoding: 'utf8', timeout: 10_000, cwd: spec.workdir })
+      return { result: async () => ({ exitCode: done.status ?? 1, signal: done.signal, timedOut: false, aborted: false,
+        timeoutMs: 10_000, stdout: { text: done.stdout ?? '', truncated: false },
+        stderr: { text: done.stderr ?? '', truncated: false } }) }
+    },
+  }
+}
+
 // ── dm-252: Stable graph revision ─────────────────────────────────────────
 
 describe('dm-252: stable graph revision', () => {
@@ -248,6 +217,22 @@ describe('dm-252: stable graph revision', () => {
     spine.complete('a')
     const after = computeGraphRevision(spine.checkpoint())
     expect(before).not.toBe(after)
+  })
+
+  it('graph_revision ignores pause boundaries, so a preview stays current across pause and resume', () => {
+    const spine = new Spine(linearGraph())
+    spine.complete('a')
+    const unpaused = computeGraphRevision(spine.checkpoint())
+    spine.pauseBefore('gate_qa', true)
+    expect(spine.isPaused()).toBe(true)
+    expect(computeGraphRevision(spine.checkpoint())).toBe(unpaused)
+  })
+
+  it('graph_revision changes when only the cursor changes', () => {
+    const saved = new Spine(linearGraph()).checkpoint()
+    const state = saved.state as Record<string, unknown>
+    const moved = { ...saved, state: { ...state, cursor: ['gate_qa'] } }
+    expect(computeGraphRevision(moved)).not.toBe(computeGraphRevision(saved))
   })
 
   it('rerun control accepted after owner restart', () => {
@@ -297,39 +282,78 @@ describe('dm-252: stable graph revision', () => {
     // 'a' is back in cursor (reopened)
     expect(next.nodes?.map(n => n.id)).toContain('a')
   })
+
+  /** a → b → c, driven to the boundary before c with everything persisted. */
+  async function atC(workdir: string): Promise<Context> {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+        c: { _type: 'AgentNode', id: 'c', role: 'builder', prompt_template: 'C', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }, { source: 'b', target: 'c' }],
+    }
+    const ctx = await mount(graph, { workdir })
+    await call(ctx, 'wf_next'); await call(ctx, 'wf_done', { node: 'a' })
+    await call(ctx, 'wf_next'); await call(ctx, 'wf_done', { node: 'b' })
+    await call(ctx, 'wf_next')
+    return ctx
+  }
+
+  it('compares the revision recomputed from the live spine, never the stored field', async () => {
+    // A stored revision that no longer describes the live spine (written by another
+    // owner, or stale) must not let a rerun through: only the live graph decides.
+    const workdir = scratch()
+    const ctx = await atC(workdir)
+    const saved = JSON.parse(readFileSync(checkpointPath(workdir), 'utf8'))
+    writeFileSync(checkpointPath(workdir), JSON.stringify({ ...saved, graph_revision: 'not-this-graph' }))
+    writeControl(workdir, '1', { action: 'rerun', target: 'a', revision: 'not-this-graph' })
+    await call(ctx, 'wf_next')
+    expect(receiptOf(workdir)).toMatchObject({ status: 'failed', message: 'graph changed since preview; preview invalidation again' })
+  })
+
+  it('refuses a preview taken from a pre-upgrade checkpoint, whose revision was its byte hash', async () => {
+    const workdir = scratch()
+    const ctx = await atC(workdir)
+    const byteHash = createHash('sha256').update(readFileSync(checkpointPath(workdir))).digest('hex')
+    writeControl(workdir, '1', { action: 'rerun', target: 'a', revision: byteHash })
+    await call(ctx, 'wf_next')
+    expect(receiptOf(workdir)).toMatchObject({ status: 'failed', message: 'graph changed since preview; preview invalidation again' })
+    // The same rerun with the revision preview hands out is applied.
+    writeControl(workdir, '2', { action: 'rerun', target: 'a', revision: storedRevision(workdir) })
+    await call(ctx, 'wf_next')
+    expect(receiptOf(workdir)).toMatchObject({ status: 'applied' })
+  })
 })
 
 // ── dm-227: planRedo on paused runs ───────────────────────────────────────
 
-describe('dm-227: planRedo succeeds on a paused spine', () => {
-  it('planRedo succeeds when paused', () => {
-    const spine = new Spine(gateGraph())
-    spine.verdict('gate_strategy', 'emit')
-    spine.complete('emit')
-    // Pause before gate_strategy (which is completed, but we can pause before emit)
-    // Actually we need a graph where we can get paused. Let's use linearGraph.
-    const spine2 = new Spine(linearGraph())
-    spine2.complete('a')
-    spine2.verdict('gate_qa', 'proceed')
-    // pause before emit
-    spine2.pauseBefore('emit', true)
-    expect(spine2.isPaused()).toBe(true)
-    // planRedo on a completed node
-    const plan = spine2.planRedo('a')
-    expect(plan.nodes).toContain('a')
-    expect(plan.start).toBe('a')
-  })
-
-  it('redo succeeds on a paused spine', () => {
+describe("dm-227: a person's rerun behind their own pause", () => {
+  it('planRedo and redo refuse on a paused spine unless a person reruns', () => {
     const spine = new Spine(linearGraph())
     spine.complete('a')
     spine.verdict('gate_qa', 'proceed')
     spine.pauseBefore('emit', true)
     expect(spine.isPaused()).toBe(true)
-    // redo 'a' — should succeed
-    spine.redo('a')
-    // cursor should be at 'a'
+    // The CEO's path: the person's pause holds.
+    expect(() => spine.planRedo('a')).toThrow(/run paused before emit/)
+    expect(() => spine.redo('a')).toThrow(/run paused before emit/)
+    // A person's rerun: the pause is their own.
+    const plan = spine.planRedo('a', { whilePaused: true })
+    expect(plan.start).toBe('a')
+    expect(plan.nodes).toContain('a')
+    spine.redo('a', { whilePaused: true })
     expect(ids(spine)).toContain('a')
+  })
+
+  it('a paused checkpoint still describes its redo plans, so preview works while paused', () => {
+    const spine = new Spine(linearGraph())
+    spine.complete('a')
+    spine.verdict('gate_qa', 'proceed')
+    spine.pauseBefore('emit', true)
+    const saved = spine.checkpoint() as { redo_plans: Record<string, { start: string }> }
+    expect(saved.redo_plans.a?.start).toBe('a')
   })
 
   it('skip and expand still refuse on a paused spine', () => {
@@ -380,6 +404,85 @@ describe('dm-227: planRedo succeeds on a paused spine', () => {
     // The status file confirms paused (at gate_strategy, not emit)
     const statusFile = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
     expect(statusFile.status).toBe('paused')
+    expect(statusFile.paused_before).toEqual(['gate_strategy'])
+  })
+
+  it("the CEO's wf_redo cannot move the cursor off a person's pause", async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'gs',
+      nodes: {
+        gs: { _type: 'AgentNode', id: 'gs', role: 'builder', prompt_template: 'GS', reads: [], writes: [] },
+        emit: { _type: 'AgentNode', id: 'emit', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [{ source: 'gs', target: 'emit' }],
+    }
+    const ctx = await mount(graph, { workdir })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'gs' })
+    writePauseControl(workdir)
+    expect((await call(ctx, 'wf_next') as { status: string }).status).toBe('paused')
+    await expect(call(ctx, 'wf_redo', { node: 'gs' })).rejects.toThrow(/run paused before emit/)
+    expect((await call(ctx, 'wf_next') as { status: string }).status).toBe('paused')
+    expect(statusOf(workdir)).toMatchObject({ status: 'paused', paused_before: ['emit'] })
+  })
+
+  it('a rerun on a live run is not held by a targeted pause armed on a route it never took', async () => {
+    const workdir = scratch()
+    const ctx = await mount(reviewGraph(), { workdir })
+    await call(ctx, 'wf_next')
+    writePauseControl(workdir, 'emit')
+    await call(ctx, 'wf_verdict', { gate: 'gate_check', verdict: 'proceed' })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'synthesize_qa' })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_verdict', { gate: 'gate_qa', verdict: 'proceed' })
+    expect((await call(ctx, 'wf_next') as { status: string }).status).toBe('ready')
+    // The pause on emit is still armed, but the run is not paused.
+    expect(JSON.parse(readFileSync(checkpointPath(workdir), 'utf8')).state.pause_before).toEqual(['emit'])
+    writeControl(workdir, '1', { action: 'rerun', target: 'synthesize_qa', revision: storedRevision(workdir) })
+    const next = await call(ctx, 'wf_next') as { status: string; nodes?: Array<{ id: string }> }
+    expect(receiptOf(workdir).status).toBe('applied')
+    expect(next.status).toBe('ready')
+    expect(next.nodes?.map(node => node.id)).toEqual(['synthesize_qa'])
+  })
+
+  it("holds before the redo's start node, which for a finished dataset's body is the data node", async () => {
+    // Reopening a body node of a finished dataset restarts the dataset: the run
+    // must hold before the data node itself, before its items are even listed.
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 'dataset', start_node: 'data',
+      nodes: {
+        data: { _type: 'DataNode', id: 'data', task_ref: 'probe', subgraph_entry: 'work', subgraph_exit: 'end', reads: [], writes: [] },
+        work: { _type: 'FnNode', id: 'work', command: `echo work >> ${join(workdir, 'dispatch.log')}`, reads: [], writes: [] },
+        end: { _type: 'FnNode', id: 'end', command: `echo end >> ${join(workdir, 'dispatch.log')}`, reads: [], writes: [] },
+        after: { _type: 'FnNode', id: 'after', command: `echo after >> ${join(workdir, 'dispatch.log')}`, reads: [], writes: [] },
+      },
+      edges: [{ source: 'data', target: 'after' }, { source: 'work', target: 'end' }],
+    }
+    // The run finished its dataset and is due at `after`; its owner restarts from there.
+    const finished = new Spine(graph)
+    finished.startPass('data', 1)
+    finished.complete('work')
+    finished.complete('end')
+    finished.endPass()
+    expect(finished.next().nodes?.map(node => node.id)).toEqual(['after'])
+    mkdirSync(join(workdir, '.refactory'), { recursive: true })
+    const saved = { ...finished.checkpoint(), status: 'ready', materialised: null, run_id: resolve(workdir) }
+    writeFileSync(checkpointPath(workdir), JSON.stringify(saved))
+    writeFileSync(join(workdir, '.refactory', 'resume-request.json'), JSON.stringify({
+      checkpoint_sha256: createHash('sha256').update(readFileSync(checkpointPath(workdir))).digest('hex') }))
+    const ctx = await mount(graph, { workdir, executeCommands: true, dataCommand: `cat > /dev/null; echo '{}' #` })
+    ctx.provide('shell', realShell())
+    // The person pauses, then reruns the body node `work`.
+    writeControl(workdir, '1-pause', { action: 'pause' })
+    writeControl(workdir, '2-rerun', { action: 'rerun', target: 'work', revision: computeGraphRevision(finished.checkpoint()) })
+    const next = await call(ctx, 'wf_next') as { status: string }
+    expect(receiptOf(workdir)).toMatchObject({ action: 'rerun', status: 'applied' })
+    expect(next.status).toBe('paused')
+    expect(statusOf(workdir)).toMatchObject({ status: 'paused', paused_before: ['data'] })
+    expect(existsSync(join(workdir, 'dispatch.log'))).toBe(false)
   })
 })
 
