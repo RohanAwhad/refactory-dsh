@@ -221,7 +221,8 @@ def test_every_evaluated_candidate_validated_first(tmp_path):
         loop.backward()
         candidates, rejections = loop.optimizer_step()
         loop.step(candidates)
-        if not loop.scheduler(evaluated=evaluated, proposed=len(candidates) + len(rejections)):
+        if not loop.scheduler(evaluated=evaluated, proposed=len(candidates) + len(rejections),
+                              accepted=len(candidates), refused=len(rejections)):
             break
     for candidate in loop.population:
         assert nn.validate_state(candidate.state) == [], candidate.id

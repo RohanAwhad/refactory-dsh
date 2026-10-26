@@ -5,7 +5,7 @@ import { cleanup, render } from '@testing-library/react'
 import { apply, inject } from '../src/client/index.ts'
 import { RefactoryBrandMark, RefactoryBrandName, RefactoryHeroMark } from '../src/client/Brand.tsx'
 import { brandIndex, apply as hostApply } from '../src/index.ts'
-import { installTitle, installWelcome, productTitle } from '../src/client/presentation.ts'
+import { installWelcome } from '../src/client/presentation.ts'
 import { FAVICON } from '../src/identity.ts'
 
 const contexts: Context[] = []
@@ -229,21 +229,6 @@ describe('transparent Refactory identity', () => {
     expect(container.querySelector('[aria-label="Refactory"]')).not.toBeNull()
     expect(container.querySelector('[data-refactory-hero]')).not.toBeNull()
     expect(container.querySelector('svg')?.getAttribute('width')).toBe('280')
-  })
-
-  it('keeps session titles and provider names intact while following title changes', async () => {
-    expect(productTitle('DeepSeek model — DeepSeek Harness')).toBe('DeepSeek model — Refactory')
-    expect(productTitle('DeepSeek provider')).toBe('DeepSeek provider')
-    document.title = 'DeepSeek Harness'
-    const dispose = installTitle(document)
-    expect(document.title).toBe('Refactory')
-    document.title = 'My session — DeepSeek Harness'
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(document.title).toBe('My session — Refactory')
-    dispose()
-    document.title = 'DeepSeek Harness'
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(document.title).toBe('DeepSeek Harness')
   })
 })
 

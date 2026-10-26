@@ -63,6 +63,8 @@ export interface RefactoryModeChoice {
   readonly parameters: Readonly<Record<string, RefactoryKnob>>
   /** The package's trust level, when the catalogue resolved the mode. */
   readonly trust?: string
+  /** `passed`, or `pending` while a package a create or edit run registered has not passed its smoke. */
+  readonly smoke?: string
   /** Why the mode could not be resolved, for a mode whose package fails to import. */
   readonly reason?: string
 }

@@ -3,7 +3,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { installPresets } from './presets.ts'
-import { installPresetNavigation, installTitle, installWelcome } from './presentation.ts'
+import { installPresetNavigation, installWelcome } from './presentation.ts'
 import { RefactoryBrandMark, RefactoryBrandName, RefactoryHeroMark } from './Brand.tsx'
 
 /** Required service: the UI slot registry. */
@@ -16,7 +16,6 @@ export const inject = ['slots', 'locale']
  * @param ctx - Client root context.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => installTitle(document))
   installWelcome(ctx)
   installPresets(ctx)
   ctx.effect(() => installPresetNavigation(document, () => ctx.locale.bind('settings.agentPreset')('nav')))

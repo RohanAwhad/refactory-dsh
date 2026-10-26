@@ -23,6 +23,7 @@ import { refactoryConsoleOverConnection, refactoryFace } from './face.ts'
 import { RefactoryBody } from './RefactoryBody.tsx'
 import { en, zh } from './locales.ts'
 import { createRefactoryStore } from './store.ts'
+import { installTitle } from './title.ts'
 
 export type { SidebarRefactoryKey } from './locales.ts'
 export type {
@@ -46,6 +47,8 @@ export const inject = ['connection', 'remote', 'slots', 'locale', 'sidebarRightT
  * @param ctx - client root context carrying the registry, the slots, and the RPC caller.
  */
 export async function apply(ctx: ClientContext): Promise<void> {
+  // The product's name in the tab, on the additive page as on the refactory GUI.
+  ctx.effect(() => installTitle(document), 'ui-refactory: document title')
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.sidebarRightTabs.register(refactoryDefinition(t)), 'ui-refactory: refactory type')
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-refactory: dictionaries')
