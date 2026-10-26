@@ -8,7 +8,9 @@ point `https://github.com/` there with `url.<base>.insteadOf`), ``<owner>/<name>
 what GitHub says about it (``"drafts": false`` refuses draft pull requests, as GitHub
 does for private repositories on some plans), and ``<owner>/<name>.pulls.json`` its pull
 requests. A ``login`` file holds the account gh is logged in to; without one, gh is
-logged out.
+logged out, and `gh auth status` says so. A logged-out gh with a ``rate-limited`` file asks
+GitHub anyway, as gh 2.99 does, and gets GitHub's rate limit, which names the caller's
+address (dm-260).
 Every call's HOME is appended to ``homes.log``, so a test can see where it ran from.
 """
 
@@ -70,6 +72,15 @@ def _view(slug: str, pull: dict, fields: str) -> dict:
     return {field: shown[field] for field in fields.split(",")}
 
 
+def _origin(cwd: Path) -> str:
+    """The `owner/name` the repository at ``cwd`` names as origin, as gh infers it without --repo."""
+    url = subprocess.run(["git", "-C", str(cwd), "config", "--get", "remote.origin.url"],
+                         capture_output=True, text=True).stdout.strip()
+    if not url.startswith("https://github.com/"):
+        _fail("could not determine base repository: no GitHub remote here")
+    return url.removeprefix("https://github.com/").removesuffix(".git")
+
+
 def _find(ref: str, args: list[str]) -> tuple[str, dict]:
     if ref.startswith("https://github.com/"):
         owner, name, _pull, number = ref.removeprefix("https://github.com/").split("/")[:4]
@@ -88,8 +99,19 @@ def main(args: list[str]) -> None:
     if (ROOT / "offline").exists():
         _fail("error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com")
     login = ROOT / "login"
+    if args[:2] == ["auth", "status"]:
+        # Answered from gh's own configuration, without asking GitHub.
+        if not login.exists():
+            _fail("You are not logged into any GitHub hosts. To log in, run: gh auth login")
+        print(f"github.com\n  \u2713 Logged in to github.com account {login.read_text().strip()} (GH_CONFIG_DIR)")
+        return
     if not login.exists():
-        # gh 2.92 exits 4 here; 2.99 asks GitHub anyway and is refused with a 401.
+        # gh 2.92 exits 4 here; 2.99 asks GitHub anyway and is refused with a 401, or, from
+        # an address that has spent its unauthenticated requests, with the rate limit.
+        if (ROOT / "rate-limited").exists():
+            _fail("gh: API rate limit exceeded for 203.0.113.7. (But here's the good news: Authenticated "
+                  "requests get a higher rate limit. Check out the documentation for more details.) "
+                  "(HTTP 403)")
         if (ROOT / "logged-out-as-401").exists():
             _fail("gh: Requires authentication (HTTP 401)")
         _fail("To get started with GitHub CLI, please run:  gh auth login", 4)
@@ -110,7 +132,8 @@ def main(args: list[str]) -> None:
         _slug, pull = _find(number, ["--repo", f"{owner}/{name}"])
         print(json.dumps([pull.get("review_comments", [])]))
     elif args[:2] == ["repo", "create"]:
-        slug = args[2]
+        # A name without an owner is created under the account gh is logged in to.
+        slug = args[2] if "/" in args[2] else f"{login.read_text().strip()}/{args[2]}"
         if (ROOT / f"{slug}.git").exists():
             _fail("GraphQL: Name already exists on this account (createRepository)")
         visibility = next(flag.removeprefix("--") for flag in args if flag in ("--private", "--public", "--internal"))
@@ -119,13 +142,16 @@ def main(args: list[str]) -> None:
         made = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         (ROOT / f"{slug}.json").write_text(json.dumps({"visibility": visibility, "default_branch": "main",
                                                        "created_at": made}))
+        if "--source" in args:
+            subprocess.run(["git", "-C", _option(args, "--source"), "remote", "add",
+                            _option(args, "--remote", "origin"), f"https://github.com/{slug}.git"], check=True)
         print(f"https://github.com/{slug}")
     elif args[:2] == ["pr", "list"]:
         slug, head = _option(args, "--repo"), _option(args, "--head")
         print(json.dumps([_view(slug, pull, _option(args, "--json")) for pull in _pulls(slug)
                           if pull["head"] == head]))
     elif args[:2] == ["pr", "create"]:
-        slug, head = _option(args, "--repo"), _option(args, "--head")
+        slug, head = _option(args, "--repo") or _origin(Path.cwd()), _option(args, "--head")
         if not _head(slug, head):
             _fail(f"pull request create failed: GraphQL: Head sha can't be blank, No commits between main and {head}")
         pulls = _pulls(slug)
