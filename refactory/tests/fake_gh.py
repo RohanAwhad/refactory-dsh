@@ -100,7 +100,11 @@ def main(args: list[str]) -> None:
         _fail("error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com")
     login = ROOT / "login"
     if args[:2] == ["auth", "status"]:
-        # Answered from gh's own configuration, without asking GitHub.
+        # Answered from gh's own configuration, without asking GitHub. gh 2.99 with GH_HOST
+        # set and no login reports a phantom token instead of saying it is not logged in.
+        if not login.exists() and os.environ.get("GH_HOST"):
+            _fail(f"{os.environ['GH_HOST']}\n  X Failed to log in to {os.environ['GH_HOST']} using token (default)\n"
+                  "  - The token in default is invalid.")
         if not login.exists():
             _fail("You are not logged into any GitHub hosts. To log in, run: gh auth login")
         print(f"github.com\n  \u2713 Logged in to github.com account {login.read_text().strip()} (GH_CONFIG_DIR)")

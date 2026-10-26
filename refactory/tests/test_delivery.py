@@ -4068,6 +4068,16 @@ def test_a_repository_with_no_github_remote_is_left_the_local_merge(github, tmp_
     assert (repo / "tool.py").read_text() == "print('built')\n"
 
 
+def test_gh_is_asked_for_its_login_without_gh_host(github, tmp_path):
+    """dm-260: delivery runs gh with GH_HOST set, and with it a logged-out gh 2.99's `auth
+    status` reports a phantom token rather than "not logged in". So the login is asked
+    without GH_HOST, and a logged-out gh is named without anything being sent to GitHub."""
+    (github / "login").unlink()
+    planned = delivery.plan(tmp_path / "new", base="", branch="refactory/run-x")
+    assert planned["why"] == delivery.LOGGED_OUT and planned.get("logged_out") is True
+    assert "auth status" in _calls(tmp_path) and "api user" not in _calls(tmp_path)
+
+
 def test_what_github_says_reaches_no_record_with_an_address(tmp_path, monkeypatch):
     """dm-260: a refusal from GitHub can name the address a request came from. Every reason
     delivery records hides it, while a version or a time in the same text stays as it was."""
