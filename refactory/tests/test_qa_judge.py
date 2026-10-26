@@ -342,8 +342,8 @@ def test_a_site_outside_the_change_is_removed_only_when_the_change_deletes_it(tm
 
 def test_an_overwatch_redo_counts_toward_the_review_limit_and_stops_at_it(tmp_path):
     """An overwatch redo goes back to emit with its must-fix item and spends a review
-    attempt; at the review limit, design mode routes to draft delivery instead of failing
-    (always-a-PR: every run with an applied commit delivers a draft)."""
+    attempt; at the review limit the build loop stops, and the applied attempt goes to the
+    report as a draft listing the item, with both attempts that named it (b45a)."""
     repo = git_repo(tmp_path / "repo")
     redo = overwatch_judgment("redo", must_fix=[
         {"source": "overwatch", "where": "tool.py:1", "what": "no test shows built is printed",
@@ -352,16 +352,14 @@ def test_an_overwatch_redo_counts_toward_the_review_limit_and_stops_at_it(tmp_pa
                                _round(_tool("built!"), overwatch=redo)))
     result = _design(tmp_path / "run", model, repo, review_attempts=2)
 
-    # Design mode with an applied commit: the run delivers a draft instead of failing
-    # (always-a-PR: every run with an applied commit delivers a draft).
-    if result.facts.get("commit"):
-        assert result.exit_ok is True
-        assert result.facts.get("draft_delivery"), "expected draft_delivery fact"
-    else:
-        assert result.exit_ok is False
-        assert "BuildLoopStop" in (result.error or ""), result.error
+    assert result.exit_ok, result.error
+    fact = result.facts["draft_delivery"]
+    assert fact["reason"] == "review reloop limit reached after 2 review cycle(s)"
+    [item] = fact["unresolved"]
+    assert "tool.py:1: no test shows built is printed" in item["text"]
+    assert (item["source"], item["rounds"]) == ("overwatch", [1, 2])
     emits = _prompts(model, EMIT_MARK)
-    assert len(emits) >= 2
+    assert len(emits) == 2
     assert "tool.py:1: no test shows built is printed" in model.prompts[emits[1]]
 
 

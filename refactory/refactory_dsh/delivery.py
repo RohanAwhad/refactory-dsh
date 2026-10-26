@@ -11,9 +11,12 @@ What delivery may do is settled before anything is built. `prepare` plans it
 (:func:`plan`) and writes the plan to ``delivery.md``, which the approval gate
 (`gate_strategy`) reads, so the person approves the pull request, or the repository it
 creates, together with the design. The `deliver` step runs after `report`, so only for
-a run whose reviews passed. It plans again and does at most what was approved;
-anything else keeps the work on the local branch and says why, as a run warning. A run
-that fails never reaches it, so it opens no pull request and creates no repository.
+a run whose reviews passed, or for a draft: a run whose build loop stopped at a limit
+with an applied commit (the `draft_delivery` fact, `design_ops._draft_for_stop`), whose
+pull request is a draft listing what is unresolved. It plans again and does at most
+what was approved; anything else keeps the work on the local branch and says why, as a
+run warning. A run that fails never reaches it, so it opens no pull request and creates
+no repository, and neither does a run whose branch changes nothing (`_same_tree`).
 
 There are three deliveries:
 
@@ -28,13 +31,20 @@ There are three deliveries:
 - **A refinement** (the `refine` knob). The run started from an open pull request's
   head, and its commits are pushed onto that pull request's branch, after merging the
   base branch in when it has moved. A branch that moved since the run started (someone
-  else pushed onto it) is left alone.
+  else pushed onto it) is left alone. The description's delivery sections are written
+  again from the refined run (dm-212).
 
-Delivery never force-pushes, never pushes to a default branch (except a new
-repository's first, empty `main`), and never changes a pull request's
-title or body once it exists: one already open for the branch is reused
-(remote-factory's #1544). Nothing here comes from remote-factory's `publish_github`,
-which creates a public repository without asking and links a same-name one it finds.
+Delivery never force-pushes, and never pushes to a default branch (except a new
+repository's first, empty `main`). A pull request already open for the branch is reused
+(remote-factory's #1544), and of its description delivery changes only what it wrote
+itself, between its markers: `BODY_START`/`BODY_END` around its sections and
+`DRAFT_START`/`DRAFT_END` around a draft's unresolved findings (`_describe`). A person's
+text outside them stays as it is; a description with no markers, opened before they
+existed, is not changed, and the delivery result says so. Of the title it changes only
+the ``[draft] `` and ``[check failing] `` prefixes, and a draft that a later delivery
+finds passing is marked ready for review. Nothing here comes from remote-factory's
+`publish_github`, which creates a public repository without asking and links a
+same-name one it finds.
 
 Delivery runs as a node command, outside the check sandbox, so it has the person's own
 HOME and gh login. Every push and fetch names github.com over HTTPS, with
@@ -789,6 +799,39 @@ def _recover_interrupted_merge(found: worktree.Worktree) -> None:
     # Otherwise, let require_current handle it (foreign commit)
 
 
+#: How many of delivery's own merges a branch may stack on its reviewed commit, one per
+#: delivery that found the target branch moved.
+MERGES_LIMIT = 50
+
+
+def _delivery_merge_of(found: worktree.Worktree, reviewed: str) -> bool:
+    """Whether the run's branch is at ``reviewed``, the attempt its reviews passed, or at
+    delivery's merge of the target branch into it (dm-192).
+
+    That merge is a merge commit whose first parents, merge after merge, lead to
+    ``reviewed``: only delivery advances the worktree record to a merge (`deliver_design`),
+    and only to one whose first parent is the head it had. So a redeliver, which resets
+    deliver's own facts (`delivered_commit` among them) and keeps materialise's ``commit``,
+    finds the branch where the last delivery left it.
+    """
+    if not reviewed:
+        return False
+    if found.head == reviewed:
+        return True
+    head = found.head
+    for _ in range(MERGES_LIMIT):
+        try:
+            parents = worktree.git(Path(found.path), "rev-list", "--parents", "-n", "1", head).split()
+        except ValueError:
+            return False
+        if len(parents) < 3:
+            return False
+        head = parents[1]
+        if head == reviewed:
+            return True
+    return False
+
+
 def deliver_design(ctx: Any) -> dict[str, Any]:
     """The `deliver` step: what the approval gate said delivery would do, and nothing else.
 
@@ -835,15 +878,12 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
         return result
 
     # ── from here on, delivery was planned ──────────────────────────────
-    # Accept both the original commit (materialise's fact) and the delivered merge
-    # commit (deliver's own fact, set when the worktree advances to a merge).
-    # After a delivery with a merge, the worktree record advances to the merge
-    # commit, but materialise's commit fact stays at the reviewed commit.
-    expected_commit = str(ctx.facts.get("commit") or "")
-    delivered = str(ctx.facts.get("delivered_commit") or "")
-    if found.head != expected_commit and found.head != delivered:
+    # `commit` is materialise's: the attempt the reviews passed. A delivery that merged the
+    # target branch in left the branch at its merge (`_delivery_merge_of`, dm-192).
+    reviewed = str(ctx.facts.get("commit") or "")
+    if not _delivery_merge_of(found, reviewed):
         raise ValueError(f"the run's branch {found.branch} is at {found.head[:12]}, not at the attempt its "
-                         f"reviews passed, {expected_commit[:12]}; nothing was delivered")
+                         f"reviews passed, {reviewed[:12]}; nothing was delivered")
     inputs = approved["inputs"]
     now = plan(Path(found.target), base=found.base, branch=found.branch, head=found.head,
                rev=str(inputs.get("rev") or ""), enabled=bool(inputs["enabled"]), owner=inputs["owner"],
@@ -885,10 +925,10 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                                  status="unverified")
         raise
     finally:
-        # When delivery pushes a merge commit, advance the worktree record and
-        # the commit fact to it, so a later attempt (review reloop or builder
-        # rerun) builds on the merge, not the reviewed commit.  This prevents
-        # GitHub from rejecting the push as non-fast-forward (dm-116).
+        # When delivery pushes a merge commit, advance the worktree record to it, so a
+        # later attempt (review reloop or builder rerun) and a redeliver build on the
+        # merge, not the reviewed commit. This prevents GitHub from rejecting the push as
+        # non-fast-forward (dm-116). `commit` stays materialise's (dm-192).
         path = Path(found.path)
         if path.is_dir():
             actual = worktree.git(path, "rev-parse", "HEAD").strip()
@@ -902,19 +942,16 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                         from dataclasses import replace as _replace, asdict as _asdict
                         advanced = _replace(found, head=actual, base=parent_lines[1])
                         worktree._write_json(Path(ctx.workdir) / worktree.RECORD, _asdict(advanced))
-                        # Record the merge SHA in delivered_commit so a redo
-                        # after a failed _verified finds the worktree at the
-                        # commit it already pushed.  delivered_commit IS in
-                        # deliver's produces, so set_fact is allowed.
-                        ctx.set_fact("delivered_commit", actual)
                     else:
                         worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
                 except ValueError:
                     worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
-    # Record the pushed merge commit in delivered_commit (dm-192), not in commit.
-    # Only set when a merge actually pushed a different commit than found.head.
-    if outcome.get("merge") and outcome["merge"].merge_commit:
-        ctx.set_fact("delivered_commit", outcome["merge"].merge_commit)
+    # What the pull request's head now is: the reviewed commit, or the merge commit delivery
+    # pushed. Deliver's own fact, so `commit` stays materialise's and a redeliver resets only
+    # this (dm-192).
+    merged: MergeResult | None = outcome.get("merge")
+    ctx.set_fact("delivered_commit", merged.merge_commit if merged and merged.merge_commit
+                 else found.head)
     updated_dd = outcome.get("_draft_delivery", draft_delivery)
     result = _delivered(ctx, approved, found, outcome, title=title, draft_delivery=updated_dd)
     result["delivery_conflict_files"] = []
@@ -928,6 +965,13 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
     into = str(planned["into"])
     generate = str(ctx.facts.get("generate") or "").strip()
     reviewed_commit = found.head  # the commit the reviews passed on
+
+    # A run whose whole change is empty has nothing to deliver: a pull request of it would
+    # change no file (dm-246). Before the merge, which would only add the target's files.
+    if _same_tree(path, found.base, found.head):
+        raise NotDelivered(f"the run's branch {branch} changes nothing: its head {found.head[:12]} "
+                           f"has the same files as its base {found.base[:12]}, so no pull request "
+                           "is opened")
 
     # ── merge the target branch in when it has moved ──────────────────
     check_timeout_s = float(ctx.knob("check_timeout_s", 180))
@@ -1010,17 +1054,6 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
         if draft_delivery:
             _prepend_draft_preamble(ctx, draft_delivery)
 
-    # ── empty-diff guard (dm-246) ─────────────────────────────────────
-    try:
-        diff_output = worktree.git(path, "diff-tree", "--no-commit-id", "-r", found.base, push_head)
-    except ValueError:
-        diff_output = ""
-    if not diff_output.strip():
-        raise NotDelivered(
-            "the head's tree equals the base's tree (no files changed); "
-            "delivery refuses to open a 0-file pull request"
-        )
-
     if planned["action"] == "refine":
         url = str(planned["pull_request"])
         before = json.loads(_gh("pr", "view", url, "--json", "headRefOid")).get("headRefOid")
@@ -1028,19 +1061,7 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
         status = "already updated" if before == push_head else "updated"
         # After the push, so a refusal from here on leaves the push and the pull request
         # in the record (`_after_push`).
-        if draft_delivery:
-            note = _after_push(lambda: _redraft(ctx, url, draft_delivery), slug, branch, url)
-        else:
-            note = ""
-            # A full delivery after a draft: mark ready, remove draft section/title.
-            _after_push(lambda: _undraft(ctx, url), slug, branch, url)
-            # Update body on refine: replace between body markers (dm-212).
-            # Only when not a draft: _redraft already handles the body.
-            # Write the freshly generated body to the BODY file first so
-            # _update_refine_body reads it (not the stale GitHub body that
-            # _undraft may have written).
-            ctx.write_text(BODY, _body(ctx, found))
-            _after_push(lambda: _update_refine_body(ctx, url), slug, branch, url)
+        note = _after_push(lambda: _describe(ctx, url, draft_delivery), slug, branch, url)
         return {"status": status, "merge": merge, "_draft_delivery": draft_delivery, "draft_note": note,
                 "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
     if planned["action"] == "create":
@@ -1061,17 +1082,12 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
                            merge=merge) from reason
     if existing is not None:
         url = str(existing["url"])
-        if draft_delivery:
-            # After the push, so a refusal from here on leaves the push and the pull
-            # request in the record (`_after_push`).
-            note = _after_push(lambda: _redraft(ctx, url, draft_delivery), slug, branch, url)
-            return {"status": "updated", "merge": merge, "_draft_delivery": draft_delivery,
-                    "draft_note": note,
-                    "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
-        # A full delivery after a draft: mark ready, remove draft section/title.
-        _after_push(lambda: _undraft(ctx, url), slug, branch, url)
-        status = "already open" if existing.get("headRefOid") == push_head else "updated"
-        return {"status": status, "merge": merge, "_draft_delivery": draft_delivery,
+        # After the push, so a refusal from here on leaves the push and the pull request
+        # in the record (`_after_push`).
+        note = _after_push(lambda: _describe(ctx, url, draft_delivery), slug, branch, url)
+        status = ("updated" if draft_delivery or existing.get("headRefOid") != push_head
+                  else "already open")
+        return {"status": status, "merge": merge, "_draft_delivery": draft_delivery, "draft_note": note,
                 "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
     body = Path(ctx.workdir) / BODY
     note = ""
@@ -1122,80 +1138,76 @@ def _open_draft(path: Path, slug: str, branch: str, into: str, title: str, body:
                     f"its title starting {DRAFT_TITLE.strip()}")
 
 
-def _redraft(ctx: Any, url: str, draft_delivery: dict[str, Any]) -> str:
-    """Make the open pull request at ``url`` a draft, its unresolved section first.
+#: What a draft delivery's title starts with when the check fails on its head.
+CHECK_FAILING_TITLE = "[check failing] "
 
-    The section replaces one an earlier draft delivery wrote, so delivering again never
-    stacks a second. Where GitHub refuses the conversion the section is still written,
-    and the returned note says the pull request stayed ready for review; it is empty
-    when the conversion worked.
+
+def _bare_title(title: str) -> str:
+    """``title`` without the prefixes delivery puts on a draft's."""
+    while title.startswith((DRAFT_TITLE, CHECK_FAILING_TITLE)):
+        title = title.removeprefix(DRAFT_TITLE).removeprefix(CHECK_FAILING_TITLE)
+    return title
+
+
+def _describe(ctx: Any, url: str, draft_delivery: dict[str, Any] | None) -> str:
+    """Bring the open pull request at ``url`` to this delivery: its description, draft state
+    and title. Returns a note for the delivery result, or ``""``.
+
+    Of the description only what delivery wrote is changed (dm-212, dm-246): its sections,
+    between `BODY_START` and `BODY_END`, are replaced by the ones this delivery wrote to
+    `BODY`, and a draft's section, between `DRAFT_START` and `DRAFT_END`, is put first, or
+    taken out when this delivery is not a draft. A person's text outside the markers stays.
+    A description with no `BODY_START` (every pull request opened before the markers) keeps
+    its text, and the note says it was not updated. A draft delivery makes the pull request
+    a draft (`gh pr ready --undo`), or, where GitHub refuses, says so in the note and in its
+    title's ``[draft] `` prefix, as `_open_draft` does; one that is not a draft takes the
+    prefixes off and marks ready for review (`gh pr ready`) a draft that a delivery made
+    (its description had the draft section), never a person's own. Nothing is edited when
+    nothing differs, so delivering the same run again changes nothing.
     """
-    note = ""
-    try:
-        _gh("pr", "ready", "--undo", url)
-    except NotDelivered as refused:
-        note = f"{url} could not be converted to a draft ({refused}), so it stays ready for review"
-    old_body = str(json.loads(_gh("pr", "view", url, "--json", "body")).get("body") or "")
-    body_path = Path(ctx.workdir) / BODY
-    body_path.write_text(_with_draft_section(old_body, draft_delivery))
-    _gh("pr", "edit", url, "--body-file", str(body_path))
-    return note
-
-
-def _undraft(ctx: Any, url: str) -> None:
-    """Mark the pull request at *url* ready, remove the draft section and title prefix.
-
-    Called when a later delivery has no ``draft_delivery`` fact, so the pull request
-    transitions from draft to ready.  No-op when no draft markers are in the body.
-    """
-    try:
-        view = json.loads(_gh("pr", "view", url, "--json", "body,title,isDraft"))
-    except NotDelivered:
-        return
-    body = str(view.get("body") or "")
-    title = str(view.get("title") or "")
-    is_draft = view.get("isDraft", False)
-    has_markers = DRAFT_START in body
-    if not has_markers and not is_draft and not title.startswith(DRAFT_TITLE):
-        return
-    if is_draft:
+    shown = json.loads(_gh("pr", "view", url, "--json", "body,title,isDraft"))
+    old_body, old_title = str(shown.get("body") or ""), str(shown.get("title") or "")
+    is_draft = bool(shown.get("isDraft"))
+    notes: list[str] = []
+    ours = _BODY_SECTION.search((Path(ctx.workdir) / BODY).read_text())
+    body = old_body
+    if ours is not None and _BODY_SECTION.search(body):
+        body = _BODY_SECTION.sub(lambda _found: ours.group(0), body, count=1)
+    elif ours is not None:
+        notes.append(f"the description of {url} was not updated: it has no delivery markers, "
+                     "so all of it is kept as written")
+    body = _with_draft_section(body, draft_delivery) if draft_delivery else _without_draft_section(body)
+    if body != old_body:
+        sent = Path(ctx.workdir) / BODY
+        sent.write_text(body)
+        _gh("pr", "edit", url, "--body-file", str(sent))
+    if draft_delivery and not is_draft:
+        try:
+            _gh("pr", "ready", "--undo", url)
+            is_draft = True
+        except NotDelivered as refused:
+            notes.append(f"{url} could not be converted to a draft ({refused}), so it stays ready "
+                         "for review")
+    elif not draft_delivery and is_draft and _DRAFT_SECTION.search(old_body):
         try:
             _gh("pr", "ready", url)
-        except NotDelivered:
-            pass  # best effort
-    if has_markers:
-        clean_body = _remove_draft_section(body)
-        body_path = Path(ctx.workdir) / BODY
-        body_path.write_text(clean_body)
-        _gh("pr", "edit", url, "--body-file", str(body_path))
-    clean_title = title
-    for prefix in (DRAFT_TITLE, "[check failing] "):
-        if clean_title.startswith(prefix):
-            clean_title = clean_title[len(prefix):]
-    if clean_title != title:
-        _gh("pr", "edit", url, "--title", clean_title)
+        except NotDelivered as refused:
+            notes.append(f"{url} could not be marked ready for review ({refused}); it is still a "
+                         "draft")
+    title = _bare_title(old_title)
+    if draft_delivery and draft_delivery.get("check_failing"):
+        title = CHECK_FAILING_TITLE + title
+    if draft_delivery and not is_draft:
+        title = DRAFT_TITLE + title
+    if title != old_title:
+        _gh("pr", "edit", url, "--title", title)
+    return "; ".join(notes)
 
 
-def _update_refine_body(ctx: Any, url: str) -> None:
-    """Replace the body between delivery markers on a refine delivery (dm-212).
-
-    If the existing body has no ``BODY_START`` marker (a legacy PR opened before
-    this change), the body is left unchanged and a note is added to the result.
-    """
-    try:
-        view = json.loads(_gh("pr", "view", url, "--json", "body"))
-    except NotDelivered:
-        return
-    old_body = str(view.get("body") or "")
-    if BODY_START not in old_body:
-        # Legacy PR — do not replace the body.
-        ctx.set_fact("_refine_body_note", "description not updated: no delivery markers in the existing body")
-        return
-    new_inner = (Path(ctx.workdir) / BODY).read_text()
-    updated = _BODY_SECTION.sub(lambda _m: new_inner.rstrip("\n"), old_body)
-    body_path = Path(ctx.workdir) / BODY
-    body_path.write_text(updated)
-    _gh("pr", "edit", url, "--body-file", str(body_path))
+def _same_tree(path: Path, base: str, head: str) -> bool:
+    """Whether ``head`` holds exactly the files ``base`` does: a change of nothing."""
+    trees = worktree.git(path, "rev-parse", f"{base}^{{tree}}", f"{head}^{{tree}}").split()
+    return len(trees) == 2 and trees[0] == trees[1]
 
 
 def _after_push(step: Any, slug: str, branch: str, pull_request: str = "") -> Any:
@@ -1744,37 +1756,52 @@ def _shorten(text: str, limit: int) -> str:
 def _title(ctx: Any, *, draft_delivery: dict[str, Any] | None = None) -> str:
     """The pull request's title: from the design's heading, or the brief as a fallback.
 
-    When ``draft_delivery`` has ``check_failing`` set, the title is prefixed with
-    ``[check failing] ``.
+    A draft whose check fails on its head starts with `CHECK_FAILING_TITLE` (dm-224).
     """
     from refactory_dsh import design_contract
 
     run_name = str(ctx.facts.get("name") or "")
+    title = ""
     if ctx.exists("design.md"):
         parsed = design_contract.parse(ctx.read_text("design.md"), run_name)
-        if parsed.title:
-            base_title = _shorten(parsed.title, TITLE_LIMIT)
-        else:
-            base_title = ""
-    else:
-        base_title = ""
-    if not base_title:
+        title = _shorten(parsed.title, TITLE_LIMIT) if parsed.title else ""
+    if not title:
         # Fallback: first sentence of the brief.
         brief = _public(str(ctx.facts.get("brief") or ""))
         first = next((line.strip() for line in brief.splitlines() if line.strip()), "") or run_name
-        base_title = _shorten(first, TITLE_LIMIT)
+        title = _shorten(first, TITLE_LIMIT)
     if draft_delivery and draft_delivery.get("check_failing"):
-        return "[check failing] " + base_title
-    return base_title
+        return CHECK_FAILING_TITLE + title
+    return title
 
 
-def _base_evidence(ctx: Any) -> str:
-    """Verification lines from the base comparison: inherited failures and the new tests on the base."""
-    lines = ""
-    inherited = ctx.facts.get("inherited_failures") or []
-    if inherited:
-        lines += ("- **Inherited failures:** these also fail on the unchanged base and were not "
-                  "counted against the change: " + ", ".join(f"`{name}`" for name in inherited) + ".\n")
+#: A list item's start in a person's corrections: a bullet, or a number.
+_ITEM_START = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+
+#: A test runner's summary line in the check's output: pytest's and vitest's.
+_PYTEST_SUMMARY = re.compile(r"^(\d+ (?:passed|failed)\b.*?)(?: in [\d.]+s\b.*)?$")
+_VITEST_SUMMARY = re.compile(r"^Tests\s+(\d+ (?:passed|failed)\b.*)$")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _suite_counts(output: str) -> str:
+    """The test runners' last summary lines in the check's output, for its line in the
+    description (``pytest 812 passed, 3 skipped; vitest 989 passed (989)``), or ``""``."""
+    found: dict[str, str] = {}
+    for raw in output.splitlines():
+        line = _ANSI.sub("", raw).strip().strip("=").strip()
+        pytest_line = _PYTEST_SUMMARY.match(line)
+        vitest_line = _VITEST_SUMMARY.match(line)
+        if pytest_line:
+            found["pytest"] = pytest_line.group(1)
+        elif vitest_line:
+            found["vitest"] = " ".join(vitest_line.group(1).split())
+    return "; ".join(f"{runner} {counts}" for runner, counts in found.items())
+
+
+def _guardedness(ctx: Any) -> str:
+    """Whether the new tests fail without the change (`base_check.compute_test_guardedness`):
+    the run's own revert check, on one line, or ``""`` when it has none."""
     record = None
     if ctx.exists("test-guardedness.json"):
         try:
@@ -1783,207 +1810,187 @@ def _base_evidence(ctx: Any) -> str:
             record = None
     if isinstance(record, dict) and record.get("unavailable"):
         reason = _shorten(_public(str(record["unavailable"])).replace("\n", " "), 300)
-        lines += f"- **New tests on the base:** not run: {reason}.\n"
-    elif isinstance(record, dict) and record.get("summary", {}).get("total_new_tests"):
+        return f"New tests on the base: not run: {reason}."
+    if isinstance(record, dict) and record.get("summary", {}).get("total_new_tests"):
         summary = record["summary"]
-        lines += (f"- **New tests on the base:** {summary.get('guarding', 0)} of "
-                  f"{summary['total_new_tests']} fail without the change"
-                  + (f"; {summary['not_guarding']} pass there, so they do not guard it"
-                     if summary.get("not_guarding") else "")
-                  + (f"; {summary['cannot_run_on_base']} cannot run on the base"
-                     if summary.get("cannot_run_on_base") else "")
-                  + ".\n")
-    return lines
+        return (f"{summary.get('guarding', 0)} of {summary['total_new_tests']} new tests fail "
+                "without the change"
+                + (f"; {summary['not_guarding']} pass there, so they do not guard it"
+                   if summary.get("not_guarding") else "")
+                + (f"; {summary['cannot_run_on_base']} cannot run on the base"
+                   if summary.get("cannot_run_on_base") else "")
+                + ".")
+    return ""
+
+
+def _changes(parsed: Any, diff_files: list[str]) -> list[str]:
+    """The ``## Changes`` bullets (`design_contract.describe_changes`, dm-191); a file the
+    design names that the branch does not change is left out, and named in a run warning."""
+    from refactory_dsh import design_contract
+
+    items, mismatches = design_contract.describe_changes(parsed, diff_files)
+    if mismatches:
+        target_guard.warn(f"design sites marked [changed] but not in the diff: {', '.join(mismatches)}")
+    return items
+
+
+def _correction_items(ctx: Any) -> list[str]:
+    """The person's corrections at the approval gate (`pick_gate_corrections`), one short
+    bullet each: a correction's own line breaks and headings are folded into its line."""
+    items: list[str] = []
+    for line in _public(str(ctx.facts.get("gate_corrections") or "")).splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if _ITEM_START.match(text) or not items:
+            while _ITEM_START.match(text):
+                text = _ITEM_START.sub("", text, count=1)
+            items.append(text)
+        else:
+            items[-1] = f"{items[-1]} {text}"
+    return [_shorten(" ".join(item.split()), 300) for item in items if item.strip()]
+
+
+def _check_line(ctx: Any, found: worktree.Worktree, ev_data: dict[str, Any] | None,
+                merge: MergeResult | None) -> str:
+    """The description's one line on the check: what ran, its suite counts, and what it
+    passed with -- the merge it ran on, failures the base has too, a corrected command."""
+    check_cmd = _public(str(ctx.facts.get("check") or ""))
+    validation = ev_data.get("validation") if isinstance(ev_data, dict) else None
+    validation = validation if isinstance(validation, dict) else None
+    report_data = ctx.read_json("design.json", None) if ctx.exists("design.json") else None
+    check_skipped = report_data.get("check_skipped") if isinstance(report_data, dict) else None
+    if isinstance(check_skipped, dict) and check_skipped.get("source") == "person":
+        return (f"**Check:** `{check_cmd}` did not run (skipped by the person at "
+                f"{check_skipped.get('at', '?')} via graph-control; covers later attempts).")
+    if not check_cmd:
+        return ""
+    if validation is None:
+        return f"**Check:** `{check_cmd}` **did not run**."
+    counts = _suite_counts("\n".join((str(validation.get("stdout") or ""),
+                                      str(validation.get("stderr") or ""))))
+    said = f" ({counts})" if counts else ""
+    if validation.get("status") != "pass":
+        return f"**Check:** `{check_cmd}` **failed**{said}."
+    notes: list[str] = []
+    if merge is not None and merge.merge_commit:
+        into = str((ctx.facts.get("delivery_plan") or {}).get("into", "")) or "the target branch"
+        notes.append(f"{into} was merged in at `{merge.merge_commit[:12]}` onto the reviewed commit "
+                     f"`{found.head[:12]}`, and the check passed on the merged result")
+    inherited = ctx.facts.get("inherited_failures") or []
+    if inherited:
+        notes.append(f"{len(inherited)} failure(s) the unchanged base has too were not counted: "
+                     + ", ".join(f"`{name}`" for name in inherited))
+    if ctx.facts.get("base_unavailable"):
+        notes.append("the base could not be prepared, so no failure was excused")
+    history = ctx.facts.get("command_history", [])
+    for entry in history if isinstance(history, list) else []:
+        if isinstance(entry, dict):
+            notes.append(f"its {entry.get('field', '?')} command was corrected during the run, "
+                         f"`{_public(str(entry.get('old_value', '?')))}` → "
+                         f"`{_public(str(entry.get('new_value', '?')))}`")
+    return f"**Check:** `{check_cmd}` passed{said}" + "".join(f"; {note}" for note in notes) + "."
+
+
+def _audit_passed(ctx: Any) -> bool:
+    """Whether the acceptance audit passed: a design run's overwatch judged the evidence map
+    and the correction audit (`design_ops.gate_overwatch`), so its pass is the audit's;
+    without its verdict, the audit's own rows decide."""
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh import judges
+
+    if ctx.exists(judges.OVERWATCH_VERDICT):
+        try:
+            return judges.read(ctx, judges.OVERWATCH_VERDICT,
+                               judges.OVERWATCH_VERDICTS).verdict == "pass"
+        except judges.Unreadable:
+            return False
+    try:
+        audit_data = json.loads(ctx.read_text(evidence.AUDIT)) if ctx.exists(evidence.AUDIT) else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if not isinstance(audit_data, dict):
+        return False
+    rows = audit_data.get("requirements", [])
+    if not isinstance(rows, list) or len(rows) == 0:
+        return False
+    return evidence.audit_problems(ctx) == [] and evidence.read_correction_audit(ctx) == []
+
+
+def _reviews_line(ctx: Any, check_passed: bool, left: list[str]) -> str:
+    """The description's one line on the reviews: how they ended, and how many follow-ups
+    there are."""
+    if not (check_passed and _audit_passed(ctx)):
+        return "**Reviews:** not all review steps completed."
+    if left:
+        return ("**Reviews:** the health check, code review, independent verification, QA and "
+                f"overwatch audit found no core defect; {len(left)} non-core finding(s) are "
+                "listed under Follow-ups.")
+    return ("**Reviews:** the health check, code review, independent verification and QA found "
+            "nothing blocking, and the overwatch audit passed.")
 
 
 def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = None) -> str:
-    """The pull request's description: short and structured.
+    """The pull request's description, as delivery writes it: short (the person, 2026-10-26).
 
-    Format: ``## Summary`` (2-4 sentences), ``## Changes`` (one bullet per behaviour,
-    from the design's Changes section), ``## Tests`` (key test names, then a mutant-kill
-    line when known), ``## Verification`` (one check line, one review line),
-    ``## Follow-ups`` (bullets), ``## Corrections given at approval`` (short bullets).
-    Wrapped in ``BODY_START`` / ``BODY_END`` markers so a refine can replace only
-    the delivery-owned sections.
+    ``## Summary``: the design's, the problem and the fix (else the brief's first lines).
+    ``## Changes``: one bullet per changed file, as the design's ``## Changes`` describes
+    it (`_changes`, dm-191). ``## Tests``: the design's tests by name, then whether the new
+    tests fail without the change (`_guardedness`). ``## Verification``: one line on the
+    check with its suite counts (`_check_line`) and one on the reviews (`_reviews_line`),
+    and a line each for an uncommitted base and for advisories, when there are any.
+    ``## Follow-ups`` and ``## Corrections given at approval``: a short bullet each. All of
+    it between `BODY_START` and `BODY_END`, so a later delivery replaces only this
+    (`_describe`). A draft's section goes before it (`_with_draft_section`).
     """
-    check_cmd = _public(str(ctx.facts.get("check") or ""))
-
-    from refactory_dsh import design_contract
-
-    run_name = str(ctx.facts.get("name") or "")
-    parsed = design_contract.parse(
-        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
-    )
-    summary = parsed.summary
-
-    sections: list[str] = []
-    if summary:
-        sections.append(f"## Summary\n\n{summary}")
-
-    # ## Changes — from the design's ## Changes section (behaviour-level bullets),
-    # falling back to build_what_changed (per-file/per-site items from Rule and sites).
-    diff_files = sorted(
-        line for line in worktree.git(
-            Path(found.path), "diff", "--name-only", "--diff-filter=d",
-            found.base, found.head
-        ).splitlines()
-        if line
-    )
-    if parsed.changes:
-        # Behaviour-level bullets from the design's ## Changes section (dm-191).
-        sections.append("## Changes\n\n" + "\n".join(f"- {item}" for item in parsed.changes))
-    else:
-        what_changed, mismatches_list = design_contract.build_what_changed(parsed, diff_files)
-        if what_changed:
-            sections.append("## Changes\n\n" + "\n".join(f"- {item}" for item in what_changed))
-        if mismatches_list:
-            target_guard.warn(
-                f"design sites marked [changed] but not in the diff: {', '.join(mismatches_list)}"
-            )
-    # Still check for mismatches even when using parsed.changes, for the warning.
-    _unused, mismatches = design_contract.build_what_changed(parsed, diff_files)
-    if parsed.changes and mismatches:
-        target_guard.warn(
-            f"design sites marked [changed] but not in the diff: {', '.join(mismatches)}"
-        )
-
-    # ## Tests — key test names from the design, plus mutant-kill line.
-    tests_lines: list[str] = []
-    design_text = ctx.read_text("design.md") if ctx.exists("design.md") else ""
-    if design_text:
-        _in_tests = False
-        for _line in design_text.splitlines():
-            _stripped = _line.strip()
-            if _stripped.lower() == "## tests":
-                _in_tests = True
-                continue
-            if _in_tests and _stripped.startswith("## "):
-                break
-            if _in_tests and (_stripped.startswith("- ") or _stripped.startswith("* ")):
-                # Extract test name: first backticked token or the bullet text
-                import re as _re_tests
-                _m = _re_tests.match(r'[-*]\s+`([^`]+)`', _stripped)
-                if _m:
-                    tests_lines.append(f"- `{_m.group(1)}`")
     import json as _json
-    from refactory_dsh import authoring_evidence as evidence
 
-    ev_data = None
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh import design_contract
+    from refactory_dsh.create_ops import follow_ups
+
+    design_text = ctx.read_text("design.md") if ctx.exists("design.md") else ""
+    parsed = design_contract.parse(design_text, str(ctx.facts.get("name") or ""))
+    sections: list[str] = []
+    summary = parsed.summary or _shorten(" ".join(str(ctx.facts.get("brief") or "").split()), 600)
+    if summary:
+        sections.append(f"## Summary\n\n{_public(summary)}")
+    diff_files = sorted(line for line in worktree.git(
+        Path(found.path), "diff", "--name-only", "--diff-filter=d", found.base, found.head,
+    ).splitlines() if line)
+    changes = _changes(parsed, diff_files)
+    if changes:
+        sections.append("## Changes\n\n" + "\n".join(f"- {_public(item)}" for item in changes))
+    tests = [f"`{name}`" for name in design_contract.test_names(design_text)]
+    guarded = _guardedness(ctx)
+    if tests or guarded:
+        sections.append("## Tests\n\n" + "\n".join(f"- {line}" for line in (*tests, guarded) if line))
+
     try:
         ev_data = _json.loads(ctx.read_text(evidence.EVIDENCE)) if ctx.exists(evidence.EVIDENCE) else None
-    except Exception:
-        pass
-    mutant_line = ""
-    if ev_data and isinstance(ev_data, dict):
-        mutants = ev_data.get("mutant_kills")
-        if isinstance(mutants, dict) and mutants.get("total"):
-            mutant_line = f"- {mutants.get('killed', 0)} of {mutants['total']} mutants killed"
-    if tests_lines or mutant_line:
-        tests_section = "## Tests\n\n"
-        if tests_lines:
-            tests_section += "\n".join(tests_lines)
-        if mutant_line:
-            if tests_lines:
-                tests_section += "\n"
-            tests_section += mutant_line
-        sections.append(tests_section)
-
-    # ## Verification — check line, review line, and conditional advisory items.
-    check_passed = (ev_data is not None
-                    and isinstance(ev_data.get('validation'), dict)
-                    and ev_data['validation'].get('status') == 'pass')
-    report_data = ctx.read_json("design.json", None) if ctx.exists("design.json") else None
-    check_skipped = report_data.get("check_skipped") if isinstance(report_data, dict) else None
-    if isinstance(check_skipped, dict) and check_skipped.get('source') == 'person':
-        check_line = (f"**Check:** `{check_cmd}` did not run "
-                      f"(skipped by the person at {check_skipped.get('at', '?')} via graph-control; "
-                      f"covers later attempts).")
-    elif check_passed:
-        check_line = f"**Check:** `{check_cmd}` passed."
-    elif check_cmd:
-        check_ran_and_failed = (ev_data is not None
-                                and isinstance(ev_data.get('validation'), dict)
-                                and ev_data['validation'].get('status') != 'pass')
-        if check_ran_and_failed:
-            check_line = f"**Check:** `{check_cmd}` **failed**."
-        else:
-            check_line = f"**Check:** `{check_cmd}` did not run."
-    else:
-        check_line = ""
-
-    def _audit_passed() -> bool:
-        from refactory_dsh import judges
-        if ctx.exists(judges.OVERWATCH_VERDICT):
-            try:
-                return judges.read(ctx, judges.OVERWATCH_VERDICT,
-                                   judges.OVERWATCH_VERDICTS).verdict == "pass"
-            except judges.Unreadable:
-                return False
-        try:
-            audit_data = _json.loads(ctx.read_text(evidence.AUDIT)) if ctx.exists(evidence.AUDIT) else None
-        except (OSError, ValueError, KeyError, TypeError):
-            return False
-        if audit_data is None or not isinstance(audit_data, dict):
-            return False
-        rows = audit_data.get('requirements', [])
-        if not isinstance(rows, list) or len(rows) == 0:
-            return False
-        return evidence.audit_problems(ctx) == [] and evidence.read_correction_audit(ctx) == []
-
-    from refactory_dsh.create_ops import follow_ups
+    except ValueError:
+        ev_data = None
+    check_passed = (isinstance(ev_data, dict) and isinstance(ev_data.get("validation"), dict)
+                    and ev_data["validation"].get("status") == "pass")
     left = follow_ups(ctx)
-    if ev_data is not None and check_passed and _audit_passed() and left:
-        reviews_line = ("**Reviews:** the health check, code review, independent verification, "
-                        "QA and overwatch audit found no core defect; "
-                        f"{len(left)} non-core finding(s) are listed under Follow-ups.")
-    elif ev_data is not None and check_passed and _audit_passed():
-        reviews_line = ("**Reviews:** the health check, code review, independent verification and QA found nothing blocking, "
-                        "and the overwatch audit passed.")
-    else:
-        reviews_line = "**Reviews:** not all review steps completed."
-
-    # Render uncommitted-changes note in the PR's Verification when the base
-    # included the person's uncommitted files.
+    lines = [_check_line(ctx, found, ev_data, merge)]
     uncommitted = worktree.uncommitted_record(found)
-    uncommitted_line = ""
     if uncommitted:
         paths = [entry["path"] for entry in uncommitted]
-        uncommitted_line = (
-            "- **Uncommitted base:** the base included " + str(len(uncommitted)) + " uncommitted "
-            "file(s) from the working tree, opted in via `include_uncommitted`: "
-            + ", ".join(f"`{p}`" for p in paths[:10])
-            + ("\u2026" if len(paths) > 10 else "")
-            + ". They are part of this PR; that is the meaning of opting in.\n"
-        )
-
-    merge_line = ""
-    if merge is not None and merge.merge_commit:
-        into = str((ctx.facts.get("delivery_plan") or {}).get("into", ""))
-        merge_line = (f"- **Merge:** merged {into} at `{merge.merge_commit[:12]}`; "
-                      f"reviewed commit `{found.head[:12]}`; check passed on the merged result.\n")
-    elif merge is not None and merge.conflicts:
-        merge_line = (f"- **Merge:** not merged; conflicts in "
-                      f"{', '.join(f'`{f}`' for f in merge.conflicts)}.\n")
-    elif merge is not None and merge.abandoned:
-        merge_line = (f"- **Merge:** not merged; merge abandoned: {merge.abandoned[:200]}.\n")
-    elif merge is not None and merge.check_failed:
-        merge_line = (f"- **Merge:** not merged; the check failed on "
-                      f"the merged result: {merge.check_failed[:200]}.\n")
-
-    verification = (f"## Verification\n\n"
-                    + (f"- {check_line}\n" if check_line else "")
-                    + uncommitted_line + merge_line
-                    + f"- {reviews_line}")
+        lines.append(f"**Uncommitted base:** the base included {len(uncommitted)} uncommitted "
+                     "file(s) from the working tree, opted in via `include_uncommitted`: "
+                     + ", ".join(f"`{path}`" for path in paths[:10]) + ("…" if len(paths) > 10 else "")
+                     + ". They are part of this pull request; that is the meaning of opting in.")
+    lines.append(_reviews_line(ctx, check_passed, left))
     # Repository questions the reviewers left unanswered (advisory; never re-run).
     if ctx.exists("reviews/qa-gate.txt"):
-        from refactory_dsh.authoring_evidence import ADVISORY_REPO_QUESTIONS
-
         gate_text = ctx.read_text("reviews/qa-gate.txt")
-        if ADVISORY_REPO_QUESTIONS in gate_text:
-            missing = gate_text.split(ADVISORY_REPO_QUESTIONS, 1)[1].strip()
-            verification += ("\n- **Repository questions left unanswered (advisory):**\n"
-                             + missing + "\n")
-    # Overwatch correction judgments or correction-audit advisories.
+        if evidence.ADVISORY_REPO_QUESTIONS in gate_text:
+            asked = gate_text.split(evidence.ADVISORY_REPO_QUESTIONS, 1)[1]
+            lines.append("**Repository questions left unanswered (advisory):** "
+                         + _shorten(_flat(asked), 500))
+    # What the overwatch judged of each correction the person gave, with its evidence; the
+    # audit's measures to confirm by hand when there is no overwatch verdict.
     from refactory_dsh import judges
 
     try:
@@ -1991,33 +1998,28 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
                   if ctx.exists(judges.OVERWATCH_VERDICT) else None)
     except judges.Unreadable:
         judged = None
-    if judged is not None:
-        if judged:
-            verification += ("\n- **Corrections, as the overwatch judged them:**\n"
-                             + "\n".join(f"  - {_public(' '.join(judges.correction_line(item).split()))}"
-                                         for item in judged) + "\n")
-    else:
-        from refactory_dsh.authoring_evidence import correction_audit_advisories
-
-        by_hand = correction_audit_advisories(ctx)
+    if judged:
+        lines.append("**Corrections, as the overwatch judged them:**\n" + "\n".join(
+            f"  - {_flat(judges.correction_line(item))}" for item in judged))
+    elif judged is None:
+        by_hand = evidence.correction_audit_advisories(ctx)
         if by_hand:
-            verification += ("\n- **Correction-audit checks to confirm by hand (advisory):**\n"
-                             + "\n".join(f"  - {note}" for note in by_hand) + "\n")
-    sections.append(verification)
+            lines.append("**Correction-audit checks to confirm by hand (advisory):** "
+                         + "; ".join(_flat(note) for note in by_hand))
+    sections.append("## Verification\n\n" + "\n".join(f"- {line}" for line in lines if line))
 
-    # ## Follow-ups
+    unresolved = ""
+    if ctx.exists("reviews/verification-unresolved.md"):
+        unresolved = ctx.read_text("reviews/verification-unresolved.md")
+    left = [*left, *(f"{line.strip()} (verifier, unresolved)"
+                     for line in unresolved.splitlines() if line.strip())]
     if left:
-        sections.append(
-            "## Follow-ups\n\n" + "\n".join(f"- {_public(' '.join(item.split()))}" for item in left))
-
-    # ## Corrections given at approval
-    corrections = _public(str(ctx.facts.get("gate_corrections") or "")).strip()
+        sections.append("## Follow-ups\n\n" + "\n".join(f"- {_flat(item)}" for item in left))
+    corrections = _correction_items(ctx)
     if corrections:
-        sections.append("## Corrections given at approval\n\n" + "\n".join(
-            f"- {line.strip().removeprefix('- ').removeprefix('* ')}" for line in corrections.splitlines() if line.strip()))
-
-    body = "\n\n".join(sections) + "\n"
-    return BODY_START + "\n" + body + BODY_END + "\n"
+        sections.append("## Corrections given at approval\n\n"
+                        + "\n".join(f"- {item}" for item in corrections))
+    return f"{BODY_START}\n" + _unmarked("\n\n".join(sections)) + f"\n{BODY_END}\n"
 
 
 # ── the delivery_gate evaluator ─────────────────────────────────────────────
@@ -2144,9 +2146,11 @@ def _validate_design_after_corrections(workdir: Path) -> None:
 def draft_fact(ctx: Any) -> dict[str, Any] | None:
     """The run's ``draft_delivery`` fact when it asks for a draft, else None.
 
-    The fact is a mapping ``{reason, unresolved: [{text, source, rounds}]}``. Anything
-    else is no draft, said as a run warning, so report and deliver behave as without the
-    fact rather than failing on it.
+    The fact is a mapping ``{reason, unresolved: [{text, source, rounds}]}``, with
+    ``check_failing`` and ``check_failure`` when the check fails on the draft's head;
+    design mode's limit stops set it (`design_ops._draft_for_stop`). Anything else is no
+    draft, said as a run warning, so report and deliver behave as without the fact rather
+    than failing on it.
     """
     fact = ctx.facts.get("draft_delivery")
     if not fact:
@@ -2169,68 +2173,75 @@ def _flat(text: Any) -> str:
 #: The heading of a draft delivery's section, first in its pull request's description.
 DRAFT_HEADING = "## Unresolved review findings"
 
-#: HTML-comment markers that delimit the draft section.  The old heading-based regex
-#: consumed person text before the next ``## ``; these markers let a person's prose-only
-#: or heading-less description survive any number of draft deliveries.
+#: The heading a draft's section starts with when the check fails on its head (dm-224).
+CHECK_FAILING_HEADING = "## Check failing"
+
+#: The markers around a draft delivery's section (dm-246). Delivering again replaces only
+#: what is between them, so a person's description -- prose with no heading, or no
+#: heading at all -- survives any number of draft deliveries.
 DRAFT_START = "<!-- delivery:draft -->"
 DRAFT_END = "<!-- /delivery:draft -->"
 
-_DRAFT_SECTION = re.compile(
-    re.escape(DRAFT_START) + r".*?" + re.escape(DRAFT_END) + r"\n?",
-    re.S,
-)
-
-#: HTML-comment markers that delimit the delivery-owned body (Summary, Changes, …).
+#: The markers around the sections delivery writes (`_body`). A later delivery, a refine
+#: among them, replaces only what is between them (dm-212, `_describe`).
 BODY_START = "<!-- delivery:body -->"
 BODY_END = "<!-- /delivery:body -->"
 
-_BODY_SECTION = re.compile(
-    re.escape(BODY_START) + r".*?" + re.escape(BODY_END),
-    re.S,
-)
+#: A section between its markers, with the blank line after it.
+_DRAFT_SECTION = re.compile(re.escape(DRAFT_START) + r".*?" + re.escape(DRAFT_END)
+                            + r"[ \t]*(?:\r?\n)?(?:[ \t]*\r?\n)?", re.S)
+_BODY_SECTION = re.compile(re.escape(BODY_START) + r".*?" + re.escape(BODY_END), re.S)
+
+
+def _unmarked(text: str) -> str:
+    """``text`` with any of delivery's markers taken out, so no value can end a section early."""
+    for marker in (DRAFT_START, DRAFT_END, BODY_START, BODY_END):
+        text = text.replace(marker, "")
+    return text
 
 
 def _draft_preamble(draft_delivery: dict[str, Any]) -> str:
-    """Build the ``## Unresolved review findings`` section for a draft PR.
+    """The draft's section, between `DRAFT_START` and `DRAFT_END`: first in its description.
 
-    The one writer of the section, wrapped in ``DRAFT_START`` / ``DRAFT_END``
-    markers so a person's text outside them is never touched.  Every value in
-    it reaches GitHub, so each goes through ``_flat``: credential values hidden
-    as in the rest of the description, and one line per item, so no item can
-    start a heading of its own.
+    ``## Check failing`` and what the check said, when it fails on the draft's head; then
+    ``## Unresolved review findings``: the stop's reason and each item the judges left
+    unresolved, with its source and the attempts that named it. Every value in it reaches
+    GitHub, so each goes through ``_flat``: credential values hidden as in the rest of the
+    description, and one line per item, so no item can start a heading of its own.
     """
-    check_failing = draft_delivery.get("check_failing", False)
-    reason = _flat(draft_delivery.get("reason") or "unknown")
+    def value(text: Any) -> str:
+        return _unmarked(_flat(text))
+
     inner: list[str] = []
-    if check_failing:
-        inner.append("## Check failing")
-        inner.append("")
-    inner.append(DRAFT_HEADING)
-    inner.append("")
-    inner.append(f"**Reason:** {reason}")
-    inner.append("")
-    for item in draft_delivery.get("unresolved", []):
-        text = _flat(item.get("text", "") if isinstance(item, dict) else item)
-        source = _flat(item.get("source", "")) if isinstance(item, dict) else ""
+    if draft_delivery.get("check_failing"):
+        inner += [CHECK_FAILING_HEADING, "",
+                  value(draft_delivery.get("check_failure") or "The check fails on this head."), ""]
+    inner += [DRAFT_HEADING, "", f"**Reason:** {value(draft_delivery.get('reason') or 'unknown')}", ""]
+    items = draft_delivery.get("unresolved", [])
+    for item in items:
+        text = value(item.get("text", "") if isinstance(item, dict) else item)
+        source = value(item.get("source", "")) if isinstance(item, dict) else ""
         rounds = item.get("rounds", []) if isinstance(item, dict) else []
         parts = [f"- {text}"]
         if source:
             parts.append(f" (source: {source})")
         if rounds and isinstance(rounds, list):
-            parts.append(f" (rounds: {', '.join(_flat(r) for r in rounds)})")
+            parts.append(f" (rounds: {', '.join(value(r) for r in rounds)})")
         inner.append("".join(parts))
-    return DRAFT_START + "\n" + "\n".join(inner) + "\n" + DRAFT_END
+    if not items and draft_delivery.get("check_failing"):
+        inner.append("No review judged this head: its check failed first.")
+    return DRAFT_START + "\n" + "\n".join(inner).rstrip("\n") + "\n" + DRAFT_END
 
 
 def _with_draft_section(body: str, draft_delivery: dict[str, Any]) -> str:
     """``body`` with the draft section first, in place of any section an earlier delivery wrote."""
-    rest = _DRAFT_SECTION.sub("", body).lstrip("\r\n")
+    rest = _without_draft_section(body)
     section = _draft_preamble(draft_delivery)
     return f"{section}\n\n{rest}" if rest else f"{section}\n"
 
 
-def _remove_draft_section(body: str) -> str:
-    """Remove the draft section (between markers) from *body*."""
+def _without_draft_section(body: str) -> str:
+    """``body`` without the section a draft delivery wrote; everything else as it was."""
     return _DRAFT_SECTION.sub("", body).lstrip("\r\n")
 
 
@@ -2322,10 +2333,10 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
             and ev["validation"].get("status") == "pass"
         )
         record["draft_reason"] = draft_delivery.get("reason", "")
-        # Where GitHub refused the draft (a ready "[draft] …" pull request, or an
-        # existing one it would not convert), the record says so.
-        if outcome.get("draft_note"):
-            record["draft_note"] = outcome["draft_note"]
+    # Where GitHub refused the draft (a ready "[draft] …" pull request, or an existing one it
+    # would not convert), or delivery left an existing description alone, the record says so.
+    if outcome.get("draft_note"):
+        record["draft_note" if draft_delivery else "note"] = outcome["draft_note"]
     from refactory_dsh.create_ops import follow_ups
 
     left = follow_ups(ctx)
@@ -2338,25 +2349,18 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
     else:
         projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status=outcome["status"])
     delivered_head = (merge.merge_commit if merge and merge.merge_commit else found.head)
-    refine_note = ctx.facts.get("_refine_body_note", "")
-    if refine_note:
-        ctx.set_fact("_refine_body_note", "")
+    # What delivery could not do to an existing pull request (`_describe`), or GitHub's
+    # refusal of a draft (`_open_draft`).
+    note = f"; {outcome['draft_note']}" if outcome.get("draft_note") else ""
     if draft_delivery:
         n_unresolved = len(draft_delivery.get("unresolved", []))
         reason = _flat(draft_delivery.get("reason", ""))
-        note = f"; {outcome['draft_note']}" if outcome.get("draft_note") else ""
-        result = {"delivery_result": (f"draft: {url}, at {delivered_head[:12]}, "
+        return {"delivery_result": (f"draft: {url}, at {delivered_head[:12]}, "
                                     f"with {n_unresolved} unresolved item(s): {reason}{note}"),
                 "pull_request": url}
-        if refine_note:
-            result["delivery_result"] += f"; {refine_note}"
-        return result
-    result = {"delivery_result": f"{outcome['status']}: {url}, at {delivered_head[:12]}"
-                               + (f", with {len(left)} follow-up(s)" if left else ""),
+    return {"delivery_result": f"{outcome['status']}: {url}, at {delivered_head[:12]}"
+                               + (f", with {len(left)} follow-up(s)" if left else "") + note,
             "pull_request": url}
-    if refine_note:
-        result["delivery_result"] += f"; {refine_note}"
-    return result
 
 
 def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, why: str,

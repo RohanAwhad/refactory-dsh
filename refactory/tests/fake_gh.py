@@ -1,7 +1,8 @@
 """A stand-in for `gh`, the GitHub CLI, over bare repositories on disk.
 
 Only what delivery asks for (#350): who is logged in, a repository's details, creating
-one, and listing, opening and reading pull requests. Its state lives under
+one, and listing, opening, reading and editing pull requests, and turning them into drafts
+and back. Its state lives under
 ``FAKE_GH_ROOT``: ``<owner>/<name>.git`` is the repository git pushes to (the tests
 point `https://github.com/` there with `url.<base>.insteadOf`), ``<owner>/<name>.json``
 what GitHub says about it (``"drafts": false`` refuses draft pull requests, as GitHub
@@ -153,14 +154,11 @@ def main(args: list[str]) -> None:
             _save(slug, pulls)
             print(f"https://github.com/{slug}/pull/{pull['number']}")
         else:
-            # `gh pr ready <url>` marks a draft PR as ready for review.
+            # `gh pr ready <url>` marks a draft ready for review. Like GitHub, it changes
+            # nothing else: not the title, not the description.
             ref = args[2] if len(args) > 2 and not args[2].startswith("-") else args[-1]
             slug, pull = _find(ref, args)
             pull["draft"] = False
-            # Strip "[draft] " prefix from title if present.
-            from refactory_dsh.delivery import DRAFT_TITLE
-            if pull["title"].startswith(DRAFT_TITLE):
-                pull["title"] = pull["title"][len(DRAFT_TITLE):]
             pulls = _pulls(slug)
             for i, p in enumerate(pulls):
                 if p["number"] == pull["number"]:

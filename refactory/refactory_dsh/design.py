@@ -611,7 +611,9 @@ class DesignMode(Mode):
         ))
         graph.add(repo_change.materialise_node(
             call=f"{OPS}:design_materialise",
-            writes=("changes.diff", "changed-functions.json"),
+            # check.txt: at the refusal bound, the check's receipt is put back for the draft
+            # (`design_ops._draft_for_stop`).
+            writes=("changes.diff", "changed-functions.json", "check.txt"),
             produces=("artifact", "files", "commit", "change", "emission_refused",
                       "changed_functions", "consecutive_refusals", "draft_delivery"),
             knobs=("refusal_attempts",),
@@ -635,7 +637,8 @@ class DesignMode(Mode):
             writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP, SELF_CHECK_RECORD),
             produces=(*check_produces, *repo_change.CHECK_PRODUCES,
                       "review_feedback", "review_baseline",
-                      "self_check_fixup_count", "total_self_check_fixups_used"),
+                      "self_check_fixup_count", "total_self_check_fixups_used",
+                      "draft_delivery"),
             knobs=(*check_knobs, "self_check_fixups", "self_check_timeout_s"),
             # From the knobs, so the build loop's stop always comes first: 45 with the
             # defaults (`prepare_check_iterations`; `DesignMode.graph` follows the knobs).
@@ -643,7 +646,8 @@ class DesignMode(Mode):
                                                      for name, knob in self.declare().items()}),
             notes="settle the commit the check and the reviews see, and run the tests the "
                   "change can break first: a failure goes back to emit as a fix-up, "
-                  "spending no attempt and running no review",
+                  "spending no attempt and running no review; a limit stop with an "
+                  "applied commit goes to the report as a draft",
         ))
         graph.add(Node(
             "check", "op", call=f"{OPS}:check_beside_reviews", role="validation",
@@ -661,7 +665,8 @@ class DesignMode(Mode):
             writes=(*check_writes, *repo_change.CHECK_WRITES),
             produces=(*check_produces, *repo_change.CHECK_PRODUCES, "draft_delivery"),
             knobs=check_knobs, max_iterations=8,
-            notes="send a failed check back to the builder; otherwise read the reviews",
+            notes="send a failed check back to the builder, or, at its limit, deliver the "
+                  "attempt as a draft marked check failing; otherwise read the reviews",
         ))
 
         # ── design-v2's three reviews, in parallel, and the overwatch pass ──
@@ -806,12 +811,13 @@ class DesignMode(Mode):
             reads=(judges.QA_JUDGE, "reviews/health-check.md", "reviews/code-review.md",
                    "reviews/qa.md", "changed-functions.json"),
             writes=("reviews/qa-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("qa_gate", "qa_judge_rereads", "qa_judge_reread", "draft_delivery"),
+            produces=("qa_gate", "qa_judge_rereads", "qa_judge_reread", "draft_delivery",
+                      "unresolved_findings"),
             knobs=("judge_rereads",),
             max_iterations=5,
             notes="route on the QA judge's verdict: a redo for what holds the change back goes "
-                  "to the builder; an unreadable verdict is read again once; follow-ups go to "
-                  "the pull request",
+                  "to the builder, or, at the review limit, on as a draft; an unreadable "
+                  "verdict is read again once; follow-ups go to the pull request",
         ))
         # The correction audit measures the QA judge's evidence map before the overwatch
         # reads it; it routes nothing.
@@ -841,12 +847,14 @@ class DesignMode(Mode):
             "gate_overwatch", "gate", evaluator=f"{OPS}:gate_overwatch",
             reads=(judges.OVERWATCH_VERDICT, "correction-audit.json"),
             writes=("reviews/overwatch-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("overwatch_review", "overwatch_rereads", "overwatch_reread", "draft_delivery"),
+            produces=("overwatch_review", "overwatch_rereads", "overwatch_reread", "draft_delivery",
+                      "unresolved_findings"),
             knobs=("judge_rereads",),
             max_iterations=4,
             notes="route on the overwatch's verdict: an unmet correction or a redo for what "
-                  "holds the change back goes to the builder, a pass to the report; an "
-                  "unreadable verdict is read again once; follow-ups go to the pull request",
+                  "holds the change back goes to the builder, or, at the review limit, to the "
+                  "report as a draft; a pass to the report; an unreadable verdict is read "
+                  "again once; follow-ups go to the pull request",
         ))
         graph.add(Node(
             "report", "op", call=f"{OPS}:report_judged",
@@ -855,7 +863,8 @@ class DesignMode(Mode):
             notes="summarise what was designed",
         ))
         # After the report, so only a run whose reviews passed and whose sign-offs held
-        # reaches anything outside it (#350).
+        # reaches anything outside it (#350), or a draft: a limit stop with an applied
+        # commit and current check evidence (`design_ops._draft_for_stop`).
         graph.add(Node(
             "pick_corrections", "gate", evaluator=f"{OPS}:pick_gate_corrections",
             produces=("gate_corrections", "design_corrections_applied"),
@@ -892,8 +901,7 @@ class DesignMode(Mode):
             reads=("design.json", "delivery.md", "reviews/follow-ups.json"),
             writes=("delivery.json", "pull-request.md", "design.json"),
             produces=("delivery_result", "pull_request", "delivery_conflict_files",
-                      "delivery_conflict_detail", "delivery_target_tip", "delivered_commit",
-                      "_refine_body_note"),
+                      "delivery_conflict_detail", "delivery_target_tip", "delivered_commit"),
             notes="push the run's branch and open its pull request, as the approval gate said",
         ))
         graph.add(Node(

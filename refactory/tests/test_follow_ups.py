@@ -105,8 +105,8 @@ def test_a_non_core_only_round_delivers_with_follow_ups(tmp_path):
     assert (tmp_path / "run/reviews/qa-gate.txt").read_text().startswith(
         "proceed: the QA judge found nothing that must be fixed")
     pull_request = (tmp_path / "run/pull-request.md").read_text()
-    assert "## Follow-ups (non-core findings)" in pull_request
-    assert "add a test for an empty input file" in pull_request
+    # The short description (2026-10-26): one bullet per follow-up under "## Follow-ups".
+    assert "\n## Follow-ups\n\n- tool.py: add a test for an empty input file (qa)\n" in pull_request
     assert "found no core defect; 1 non-core finding(s) are listed" in pull_request
 
 
@@ -187,7 +187,7 @@ def test_follow_ups_stay_out_of_the_repository_questions_advisory(tmp_path):
     questions = questions.split("## ", 1)[0]
     assert "tool.py::build" in questions
     assert "empty input file" not in questions
-    assert "empty input file" in pull_request.split("## Follow-ups (non-core findings)", 1)[1]
+    assert "empty input file" in pull_request.split("\n## Follow-ups\n", 1)[1]
 
 
 # ── full design: gate_overwatch ───────────────────────────────────────────

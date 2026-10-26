@@ -11,7 +11,8 @@ prompts and docstrings is ``[changed]`` / ``[left: <reason>]`` (bare, no
 backticks).  ``[new]`` is treated as equivalent to ``changed``.
 
 The three consumers are:
-1. PR body "What changed" — ``delivery.py`` ``build_what_changed()``
+1. PR body "Changes" — ``delivery.py`` ``describe_changes()``, from the ``## Changes``
+   bullets and the ``[changed]`` sites (``build_what_changed()``)
 2. Design review gate marker check — ``design_ops.py`` ``gate_design_review()``
    via ``unmarked_sites()``
 3. Run warnings — ``delivery.py`` ``target_guard.warn()`` on mismatches
@@ -398,6 +399,48 @@ def build_what_changed(
             items.append(diff_file)
 
     return (items, mismatches)
+
+
+def describe_changes(
+    parsed: DesignContract, diff_files: list[str],
+) -> tuple[list[str], list[str]]:
+    """The pull request's "Changes": one line per file in the diff, in the design's words.
+
+    A ``## Changes`` bullet names its file first (`` `path` — what changes``,
+    `prompt_contract`); each file in the diff takes the text of the bullets that name it,
+    each cut to 300 characters. A file no bullet describes takes what
+    `build_what_changed` gives it: its ``[changed]`` sites' descriptions, or its name.
+
+    Returns ``(items, mismatches)``: ``mismatches`` names the files a bullet or a
+    ``[changed]`` site names that the diff does not change. A bullet that names no file
+    (a test plan's line, say) is neither listed nor a mismatch.
+    """
+    items, mismatches = build_what_changed(parsed, diff_files)
+    described: dict[str, list[str]] = {}
+    for bullet in parsed.changes:
+        named = _site_matches_diff(bullet, diff_files)
+        if named is None:
+            path = _extract_file_path(bullet)
+            if path and " " not in path and ("/" in path or "." in path):
+                mismatches.append(path)
+            continue
+        what = re.sub(r"^(?:`[^`]*`|\S+)[\s—–:\-]*", "", bullet.strip(), count=1).strip()
+        if what:
+            what = " ".join(what.split())
+            described.setdefault(named, []).append(what if len(what) <= 300 else what[:299].rstrip() + "…")
+    return ([f"{path} — {'; '.join(described[path])}" if path in described else item
+             for path, item in zip(diff_files, items)],
+            list(dict.fromkeys(mismatches)))
+
+
+def test_names(text: str) -> list[str]:
+    """The tests a design's ``## Tests`` names: each bullet's first backticked id."""
+    names: list[str] = []
+    for bullet in _bullets(_section_lines(text.splitlines(), TESTS)):
+        named = re.match(r"`([^`]+)`", bullet)
+        if named:
+            names.append(named.group(1))
+    return names
 
 
 def title_is_run_name(text: str, run_name: str) -> bool:

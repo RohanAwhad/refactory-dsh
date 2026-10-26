@@ -54,9 +54,10 @@ class _TitleCtx:
             return default
 
 
-def test_pr_body_quotes_the_gate_corrections_inside_their_section(tmp_path):
-    """The corrections are quoted: a correction's own heading or line breaks stay inside
-    the section, and a credential-like value in one is masked like the rest of the body."""
+def test_pr_body_lists_the_gate_corrections_one_bullet_each(tmp_path):
+    """The corrections are short bullets, one each: a correction's own heading or line
+    breaks are folded into its line, and a credential-like value in one is masked like
+    the rest of the body."""
     import subprocess
     corrections = ("- Use websockets\n## Not a section\nsecond line\n\n"
                    "- Read API_TOKEN=s3cr3t-value from the environment")
@@ -73,9 +74,9 @@ def test_pr_body_quotes_the_gate_corrections_inside_their_section(tmp_path):
     from types import SimpleNamespace
     body = delivery._body(ctx, SimpleNamespace(path=str(tmp_path), base=head, head=head,
                                                branch="refactory/run-test"))
-    assert "## Corrections given at approval" in body
-    assert "Use websockets" in body
-    assert "Read API_TOKEN=***" in body
+    assert ("## Corrections given at approval\n\n- Use websockets ## Not a section second line\n"
+            "- Read API_TOKEN=*** from the environment\n") in body, body
+    assert "\n## Not a section" not in body
     assert "s3cr3t-value" not in body
 
 
@@ -126,12 +127,12 @@ def test_pr_title_never_cuts_inside_backticks():
     assert title.count("`") % 2 == 0, f"unclosed backtick in title: {title!r}"
 
 
-def test_pr_body_has_summary_verification_and_original_request(tmp_path):
+def test_pr_body_has_summary_and_verification_and_no_original_request(tmp_path):
     import subprocess
     ctx = _TitleCtx(
         facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2",
                "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
-        files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n## Changes\n\n- Added tool.py\n\n## Tests\n\n- `test_tool.py::test_prints`\n\n---\n",
+        files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n",
                "authoring-evidence.json": json.dumps({
                    "validation": {"status": "pass"},
                    "identity": {"root": str(tmp_path)},
@@ -169,10 +170,12 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     assert "First paragraph of the design." in body
     assert "## Verification" in body
     assert "python tool.py" in body
-    assert "## Changes" in body
-    assert "## Tests" in body
-    assert delivery.BODY_START in body
-    assert delivery.BODY_END in body
+    assert "the health check, code review, independent verification and QA" in body
+    assert "`tests/test_env.py::test_needs_profile`" in body
+    assert "## Changes\n\n- tool.py\n" in body
+    # The short description (2026-10-26): the brief is not repeated under its own heading.
+    assert "## Original request" not in body and "that prints built." not in body
+    assert body.startswith(delivery.BODY_START) and body.endswith(delivery.BODY_END + "\n")
 
 
 def test_pr_verification_says_check_did_not_run_when_validation_fact_is_absent(tmp_path):
@@ -226,7 +229,7 @@ def test_pr_verification_says_check_passed_when_validation_fact_is_set(tmp_path)
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "passed" in body
+    assert "- **Check:** `pnpm test` passed.\n" in body
     assert "did not run" not in body
 
 
@@ -255,8 +258,8 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_fail_row(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body.lower()
-    assert "overwatch audit passed" not in body
+    assert "not all review steps completed" in body
+    assert "health check, code review, independent verification and QA found nothing blocking" not in body
 
 
 def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
@@ -284,8 +287,8 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body.lower()
-    assert "overwatch audit passed" not in body
+    assert "not all review steps completed" in body
+    assert "health check, code review, independent verification and QA found nothing blocking" not in body
 
 
 def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path):
@@ -313,7 +316,7 @@ def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body.lower()
+    assert "not all review steps completed" in body
 
 
 def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
@@ -341,7 +344,7 @@ def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body.lower()
+    assert "not all review steps completed" in body
 
 
 def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path):
@@ -380,8 +383,8 @@ def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path)
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "overwatch audit passed" in body
-    assert "not all review steps completed" not in body.lower()
+    assert "the health check, code review, independent verification and QA found nothing blocking" in body
+    assert "not all review steps completed" not in body
 
 
 def test_pr_check_line_says_failed_when_validation_failed(tmp_path):
@@ -427,16 +430,24 @@ def test_run_report_checked_false_when_check_did_not_run(tmp_path):
     assert not bool(None and isinstance(None, dict))
 
 
-def test_pr_verification_names_inherited_failures_and_the_new_tests_on_the_base():
+def test_pr_verification_names_inherited_failures_and_the_new_tests_on_the_base(tmp_path):
+    """The check's line names the failures the base has too, and the Tests section how many
+    of the new tests fail without the change (the run's own revert check)."""
     import json
+    from types import SimpleNamespace
+    base, head = _git_pair(tmp_path)
     ctx = _TitleCtx(
-        facts={"inherited_failures": ["tests/test_env.py::test_needs_profile"]},
-        files={"test-guardedness.json": json.dumps(
-            {"summary": {"guarding": 3, "not_guarding": 1, "cannot_run_on_base": 0, "total_new_tests": 4}})},
+        facts={"check": "pytest", "name": "b2", "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
+        files={"design.md": "# A design\n\nSummary.\n",
+               "authoring-evidence.json": json.dumps({"validation": {"status": "pass"}}),
+               "test-guardedness.json": json.dumps(
+                   {"summary": {"guarding": 3, "not_guarding": 1, "cannot_run_on_base": 0, "total_new_tests": 4}})},
     )
-    lines = delivery._base_evidence(ctx)
-    assert "`tests/test_env.py::test_needs_profile`" in lines
-    assert "3 of 4 fail without the change; 1 pass there, so they do not guard it" in lines
+    body = delivery._body(ctx, SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="b"))
+    assert ("- **Check:** `pytest` passed; 1 failure(s) the unchanged base has too were not counted: "
+            "`tests/test_env.py::test_needs_profile`.\n") in body
+    assert ("## Tests\n\n- 3 of 4 new tests fail without the change; 1 pass there, so they do "
+            "not guard it.\n") in body
 
 
 def test_pr_body_includes_uncommitted_files_line(tmp_path, monkeypatch):
@@ -479,11 +490,12 @@ def test_pr_verification_says_why_the_new_tests_were_not_run_on_the_base():
     import json
     ctx = _TitleCtx(files={"test-guardedness.json": json.dumps(
         {"unavailable": "the base worktree could not be prepared: no uv"})})
-    assert "not run: the base worktree could not be prepared: no uv" in delivery._base_evidence(ctx)
-    assert delivery._base_evidence(_TitleCtx()) == ""
+    assert delivery._guardedness(ctx) == (
+        "New tests on the base: not run: the base worktree could not be prepared: no uv.")
+    assert delivery._guardedness(_TitleCtx()) == ""
     leaked = _TitleCtx(files={"test-guardedness.json": json.dumps(
         {"unavailable": "setup failed: ANTHROPIC_API_KEY=sk-live-123 not accepted"})})
-    assert "sk-live-123" not in delivery._base_evidence(leaked)
+    assert "sk-live-123" not in delivery._guardedness(leaked)
 
 
 def _git_pair(tmp_path):
@@ -548,9 +560,9 @@ def test_contract_design_gives_title_summary_and_changes(tmp_path):
     body = delivery._body(ctx, found)
     assert "## Summary" in body
     assert "clause-level checking" in body
-    # With the compact format, Changes comes from the design's ## Changes section.
-    assert "## Changes" in body
-    assert "authoring_evidence.py" in body
+    # The design's ## Changes bullet names a path the diff does not have, so the file
+    # takes its [changed] site's description.
+    assert "## Changes\n\n- authoring_evidence.py — adds clause rows\n- g.txt\n" in body
 
 
 # ── fixture-based marker tests ─────────────────────────────────────────────
@@ -647,8 +659,9 @@ def test_marker_form_recognised(form, expected_status, expected_desc):
 
 
 def test_what_changed_uses_sites_not_bullets(tmp_path):
-    """Contract design with test-plan Changes bullets yields What changed
-    from [changed] sites only, not those bullets.
+    """Contract design whose Changes bullets are a test plan, naming no file: the PR's
+    Changes lists each changed file with its [changed] sites' descriptions, never those
+    bullets (dm-191 takes a bullet's words only for the file it names).
 
     Uses site lines from b21b, including one where ``[changed]`` appears
     inside backticks before the real **[changed]** marker.
@@ -711,10 +724,9 @@ def test_what_changed_uses_sites_not_bullets(tmp_path):
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
 
-    # Changes comes from build_what_changed (sites), not from the design's ## Changes bullets.
-    assert "## Changes" in body
-    assert "design_contract.py" in body
-    assert "delivery.py" in body
+    assert ("## Changes\n\n- refactory/refactory_dsh/delivery.py — replaces those lines with a call "
+            "to `build_what_changed`\n- refactory/refactory_dsh/design_contract.py — captures that "
+            "text as a `'description'` field in each site dict\n") in body, body
     assert "Return code is 2" not in body
     assert "seen == []" not in body
 
@@ -1292,364 +1304,450 @@ DRAFT_FACT = {
 }
 
 
-# ── b45a new tests ────────────────────────────────────────────────────────
+# ── b45a: every run with an applied commit ends in a pull request ──────────
+#
+# The build loop's limit stops route into a draft (b40b, dm-224), each by its own way
+# (correction 2): a check still failing at its limit goes straight to the report, a
+# review limit at gate_qa goes on through the correction audit and the overwatch, and a
+# limit at gate_overwatch or the refusal bound goes to the report. Every run here walks
+# the real design graph with a scripted model, and delivers to the fake GitHub.
+
+#: What the QA judge and the overwatch hold the change back for, and the line each is
+#: listed as in the draft (`judges.must_fix_line`).
+QA_HELD = {"source": "qa", "where": "tool.py:1", "what": "no test shows the tool prints built",
+           "why": "the brief's only ask", "severity": "high"}
+QA_HELD_LINE = "[qa] tool.py:1: no test shows the tool prints built (why: the brief's only ask) (high)"
+OVERWATCH_HELD = {"source": "overwatch", "where": "tool.py:1", "what": "nothing a user runs shows it",
+                  "why": "the brief's ask", "severity": "high"}
+OVERWATCH_HELD_LINE = "[overwatch] tool.py:1: nothing a user runs shows it (why: the brief's ask) (high)"
+#: An emission materialise refuses: an edit to a file the last attempt does not have.
+REFUSED = "===EDIT: missing.py===\n<<<<<<< SEARCH\nnot there\n=======\nx\n>>>>>>> REPLACE\n"
+BUILT = render({"tool.py": "print('built')\n"})
+QA_JUDGE_MARK = "You are the QA judge."
+OVERWATCH_JUDGE_MARK = "Write `overwatch-verdict.json`"
 
 
-def test_person_prose_only_survives_two_draft_deliveries():
-    """A PR body with only plain paragraphs (no headings); _with_draft_section is applied
-    twice with different draft facts; the person's prose is preserved verbatim both times."""
-    person_text = "This is my prose description.\nIt has no headings at all.\n"
-    first = {"reason": "limit 1", "unresolved": [{"text": "item A", "source": "qa", "rounds": [1]}]}
-    second = {"reason": "limit 2", "unresolved": [{"text": "item B", "source": "ow", "rounds": [2]}]}
-    body1 = delivery._with_draft_section(person_text, first)
-    assert person_text.strip() in body1
-    assert body1.count(delivery.DRAFT_START) == 1
-    body2 = delivery._with_draft_section(body1, second)
-    assert person_text.strip() in body2
-    assert body2.count(delivery.DRAFT_START) == 1
-    assert "item B" in body2
-    assert "item A" not in body2
+def _attempt(emission: str, *, judge: str | None = None, overwatch: str | None = None) -> list[str]:
+    """One attempt's answers: the emission, the reviews and the verifier beside the check,
+    then the judges' verdicts (the QA judge proceeds and the overwatch passes when not given)."""
+    return [emission, *REVIEW_ANSWERS[:3], VERIFICATION_ANSWER,
+            *([judge] if judge else []), *([overwatch] if overwatch else [])]
 
 
-def test_person_headingless_description_survives_two_draft_deliveries():
-    """A PR body with person text after the draft section but without any heading;
-    two draft deliveries preserve it."""
-    person_text = "Just some plain paragraph without any heading.\nAnother line here.\n"
-    fact1 = {"reason": "first-stop", "unresolved": [{"text": "finding alpha", "source": "qa", "rounds": [1]}]}
-    fact2 = {"reason": "second-stop", "unresolved": [{"text": "finding beta", "source": "ow", "rounds": [2]}]}
-    body = delivery._with_draft_section(person_text, fact1)
-    body = delivery._with_draft_section(body, fact2)
-    assert "Just some plain paragraph without any heading." in body
-    assert "Another line here." in body
-    assert body.count(delivery.DRAFT_START) == 1
-    assert "finding beta" in body
-    assert "finding alpha" not in body
+def _limited(run: Path, *attempts: list[str], check: str = "python tool.py",
+             **knobs: int) -> tuple[nn.RunResult, FakeModel]:
+    """A new project's design run through ``attempts``, with ``knobs`` set."""
+    model = FakeModel([RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan", DESIGN_DOC_ANSWER,
+                       *(answer for attempt in attempts for answer in attempt)])
+    result = _mode(**knobs).run(run, model=model, verdicts={"gate_strategy": "proceed"},
+                                task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+                                      "check": check})
+    return result, model
 
 
-def test_full_delivery_after_draft_makes_ready(new_run):
-    """A draft delivery followed by a normal delivery: the PR is no longer a draft,
-    the title has no '[draft] ' prefix, and the body has no draft markers."""
+def _asked(model: FakeModel, mark: str) -> int:
+    """How many prompts carried ``mark``."""
+    return sum(1 for prompt in model.prompts if mark in prompt)
+
+
+def _draft_pull(github: Path) -> dict:
+    [pull] = _pulls(github, f"{LOGIN}/{NAME}")
+    return pull
+
+
+def test_a_review_limit_at_gate_qa_with_a_passing_attempt_delivers_a_draft(github, tmp_path):
+    """b43b2 stopped at its review limit with a passing attempt and delivered nothing. Now
+    the QA judge's limit goes on through the correction audit and the overwatch to a draft
+    pull request listing what the judge left unresolved, with the attempts that named it."""
+    run = tmp_path / "run"
+    redo = qa_judgment("redo", must_fix=[QA_HELD])
+    result, model = _limited(run, _attempt(BUILT, judge=redo),
+                             _attempt(render({"tool.py": "print('built!')\n"}), judge=redo,
+                                      overwatch=overwatch_judgment("pass")),
+                             review_attempts=2)
+    assert result.exit_ok, result.error
+    assert result.facts["draft_delivery"] == {
+        "reason": "review reloop limit reached after 2 review cycle(s)",
+        "unresolved": [{"text": QA_HELD_LINE, "source": "QA judge", "rounds": [1, 2]}]}
+    # On through the audit and the overwatch, which ran once: after the limit.
+    assert (run / "correction-audit.json").exists() and _asked(model, OVERWATCH_JUDGE_MARK) == 1
+    assert result.facts["review_attempts_used"] == 2
+    pull = _draft_pull(github)
+    assert pull["draft"] is True and pull["title"] == "Do the thing"
+    assert pull["body"].startswith(f"{delivery.DRAFT_START}\n{delivery.DRAFT_HEADING}\n"), pull["body"]
+    assert "**Reason:** review reloop limit reached after 2 review cycle(s)" in pull["body"]
+    assert _draft_items(pull["body"]) == [f"- {QA_HELD_LINE} (source: QA judge) (rounds: 1, 2)"]
+    assert delivery.BODY_START in pull["body"].split(delivery.DRAFT_END, 1)[1]
+    assert result.facts["delivery_result"].startswith(f"draft: https://github.com/{LOGIN}/{NAME}/pull/1")
+    assert _record(run)["draft"] is True and _record(run)["check_passed"] is True
+
+
+def test_a_check_that_still_fails_at_its_limit_delivers_a_draft_marked_check_failing(github, tmp_path):
+    """The check is binding: a check still failing at its limit goes straight to the report
+    as a draft marked check failing, the QA judge and the overwatch never asked."""
+    run = tmp_path / "run"
+    failing = [render({"tool.py": f"print('built')\nraise SystemExit({code})\n"}) for code in (1, 2)]
+    result, model = _limited(run, [failing[0]], [failing[1]], check_attempts=2, check_attempt_cap=0)
+    assert result.exit_ok, result.error
+    fact = result.facts["draft_delivery"]
+    assert fact["reason"] == "check attempts exhausted after 2 check failure(s)"
+    assert fact["check_failing"] is True and fact["check_failure"] and fact["unresolved"] == []
+    assert _asked(model, QA_JUDGE_MARK) == 0 and _asked(model, OVERWATCH_JUDGE_MARK) == 0
+    assert not (run / "correction-audit.json").exists()
+    pull = _draft_pull(github)
+    assert pull["draft"] is True and pull["title"] == "[check failing] Do the thing"
+    assert pull["body"].startswith(f"{delivery.DRAFT_START}\n{delivery.CHECK_FAILING_HEADING}\n\n"), pull["body"]
+    section = pull["body"].split(delivery.DRAFT_END, 1)[0]
+    assert section.index(delivery.CHECK_FAILING_HEADING) < section.index(delivery.DRAFT_HEADING)
+    assert "No review judged this head: its check failed first." in section
+    assert "`python tool.py` **failed**" in pull["body"]
+    assert _record(run)["check_passed"] is False
+
+
+def test_a_run_with_no_applied_commit_delivers_nothing(github, tmp_path):
+    """Only a run with no applied commit ends without a pull request: every emission
+    refused, the refusal bound stops the run, and GitHub is not asked for anything."""
+    run = tmp_path / "run"
+    result, _ = _limited(run, [REFUSED], [REFUSED], refusal_attempts=2)
+    assert result.exit_ok is False
+    assert "emissions refused 2 consecutive times" in (result.error or "")
+    assert "draft_delivery" not in result.facts and not result.facts.get("commit")
+    calls = _calls(tmp_path)
+    assert "repo create" not in calls and "pr create" not in calls
+    assert not (run / delivery.RECORD).exists()
+
+
+def test_a_run_without_a_worktree_still_stops_at_its_check_limit(github, tmp_path, monkeypatch):
+    """A run with its worktree off writes an artifact directory, not a commit: nothing it
+    could open a pull request of, so its check limit still ends it."""
+    monkeypatch.chdir(tmp_path)
+    run = tmp_path / "run"
+    result = _design(run, check="false", mode=_mode(worktree=False, check_attempts=1, check_attempt_cap=0))
+    assert result.exit_ok is False
+    assert "check attempts exhausted after 1 check failure(s)" in (result.error or "")
+    assert "draft_delivery" not in result.facts
+
+
+def test_the_refusal_bound_after_an_applied_commit_delivers_that_commit_as_a_draft(github, tmp_path):
+    """Attempt 1 passes its check and the QA judge sends it back; the builder's emissions
+    are then refused until the bound. Attempt 1 goes to the report as a draft, listing the
+    QA judge's item, and the refusals' rewrite of check.txt does not make its evidence stale."""
+    run = tmp_path / "run"
+    result, model = _limited(run, _attempt(BUILT, judge=qa_judgment("redo", must_fix=[QA_HELD])),
+                             [REFUSED], [REFUSED], refusal_attempts=2, review_attempts=3)
+    assert result.exit_ok, result.error
+    fact = result.facts["draft_delivery"]
+    assert fact["reason"].startswith("emissions refused 2 consecutive times: missing.py")
+    assert "check_failing" not in fact
+    assert fact["unresolved"] == [{"text": QA_HELD_LINE, "source": "QA judge", "rounds": [1]}]
+    assert _asked(model, OVERWATCH_JUDGE_MARK) == 0
+    pull = _draft_pull(github)
+    assert pull["draft"] is True and pull["title"] == "Do the thing"
+    assert _draft_items(pull["body"]) == [f"- {QA_HELD_LINE} (source: QA judge) (rounds: 1)"]
+    assert _remote_head(github, f"{LOGIN}/{NAME}", pull["head"]) == result.facts["commit"]
+
+
+def test_a_review_limit_at_gate_overwatch_delivers_a_draft(github, tmp_path):
+    """The overwatch's redo at the review limit goes to the report as a draft listing its item."""
+    run = tmp_path / "run"
+    result, model = _limited(run, _attempt(BUILT, overwatch=overwatch_judgment("redo", must_fix=[OVERWATCH_HELD])),
+                             review_attempts=1)
+    assert result.exit_ok, result.error
+    assert result.facts["draft_delivery"] == {
+        "reason": "review reloop limit reached after 1 review cycle(s)",
+        "unresolved": [{"text": OVERWATCH_HELD_LINE, "source": "overwatch", "rounds": [1]}]}
+    pull = _draft_pull(github)
+    assert pull["draft"] is True
+    assert _draft_items(pull["body"]) == [f"- {OVERWATCH_HELD_LINE} (source: overwatch) (rounds: 1)"]
+
+
+def test_the_overwatch_after_the_qa_judges_limit_adds_its_items_and_spends_no_attempt(github, tmp_path):
+    """The QA judge's limit made the run a draft; the overwatch then sends it back too. Its
+    item joins the draft, which goes to the report: no attempt is spent past the limit."""
+    run = tmp_path / "run"
+    result, _ = _limited(run, _attempt(BUILT, judge=qa_judgment("redo", must_fix=[QA_HELD]),
+                                       overwatch=overwatch_judgment("redo", must_fix=[OVERWATCH_HELD])),
+                         review_attempts=1)
+    assert result.exit_ok, result.error
+    assert result.facts["review_attempts_used"] == 1 and result.facts["attempts_used"] == 1
+    assert result.facts["draft_delivery"]["unresolved"] == [
+        {"text": QA_HELD_LINE, "source": "QA judge", "rounds": [1]},
+        {"text": OVERWATCH_HELD_LINE, "source": "overwatch", "rounds": [1]}]
+    assert (run / "reviews/overwatch-gate.txt").read_text().startswith("draft: ")
+    assert len(_draft_items(_draft_pull(github)["body"])) == 2
+
+
+#: A person's description: prose with no heading above it, and one with no heading at all.
+PERSON_PROSE = "Why this matters, in my words, above everything else.\n\n## Context\n\nKept as written.\n"
+PERSON_HEADINGLESS = "Just my paragraph.\nA second line of it, and no heading anywhere.\n"
+
+
+@pytest.mark.parametrize("theirs", [PERSON_PROSE, PERSON_HEADINGLESS], ids=["prose-first", "no-heading"])
+def test_a_persons_description_survives_two_draft_deliveries(new_run, theirs):
+    """dm-246: the draft section was cut by a '## ' regex, so a second draft delivery took a
+    person's leading prose, or a whole heading-less description, with it. Between its
+    markers, it takes only itself."""
     run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
-    # First: draft delivery
-    delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": DRAFT_FACT},
-                                          enforce_writes=False))
-    [pull_draft] = _pulls(github, slug)
-    assert pull_draft["draft"] is True or pull_draft["title"].startswith(delivery.DRAFT_TITLE)
-    assert delivery.DRAFT_START in pull_draft["body"]
-    # Second: normal delivery (no draft fact)
-    delivery.deliver_design(nn.RunContext(run, facts={**result.facts},
-                                          enforce_writes=False))
-    [pull_ready] = _pulls(github, slug)
-    assert pull_ready["draft"] is False
-    assert not pull_ready["title"].startswith(delivery.DRAFT_TITLE)
-    assert delivery.DRAFT_START not in pull_ready["body"]
+    pulls = _pulls(github, slug)
+    pulls[0]["body"] = theirs
+    (github / f"{slug}.pulls.json").write_text(json.dumps(pulls))
+    second = {"reason": "overall attempts limit reached", "unresolved": [
+        {"text": "Still flaky", "source": "review", "rounds": [4]}]}
+    for fact in (DRAFT_FACT, second):
+        delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": fact},
+                                              enforce_writes=False))
+        [pull] = _pulls(github, slug)
+        assert pull["body"].count(delivery.DRAFT_START) == 1
+        assert pull["body"].startswith(delivery.DRAFT_START)
+        assert pull["body"].endswith(theirs), pull["body"]
+    assert _draft_items(pull["body"]) == ["- Still flaky (source: review) (rounds: 4)"]
 
 
-def test_empty_total_change_is_refused(tmp_path):
-    """A worktree where the head tree equals the base tree: delivery raises NotDelivered
-    and opens no PR.  The guard uses git diff-tree to detect a 0-file change."""
-    import subprocess
-    # Create a repo with one commit, then make an empty commit (same tree).
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.name", "T"], check=True)
-    (repo / "f.txt").write_text("content\n")
-    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
-    base = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                          capture_output=True, text=True, check=True).stdout.strip()
-    # An empty commit: same tree as base.
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "empty"],
-                   check=True)
-    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                          capture_output=True, text=True, check=True).stdout.strip()
-    # git diff-tree -r base head returns nothing for same-tree commits.
-    diff = worktree.git(repo, "diff-tree", "--no-commit-id", "-r", base, head)
-    assert not diff.strip(), f"Expected empty diff, got: {diff}"
-    # When the guard fires (inside _deliver), it should raise NotDelivered.
-    # Test the guard logic directly.
-    with pytest.raises(delivery.NotDelivered, match="0-file pull request"):
-        # Simulate the guard check.
-        diff_output = worktree.git(repo, "diff-tree", "--no-commit-id", "-r", base, head)
-        if not diff_output.strip():
-            raise delivery.NotDelivered(
-                "the head's tree equals the base's tree (no files changed); "
-                "delivery refuses to open a 0-file pull request"
-            )
-
-
-def test_refine_rewrites_only_delivery_sections(opened_pull, tmp_path):
-    """After a first delivery, person text is added outside the body markers in the
-    fake-GH PR body. A refine delivery replaces the content between body markers but
-    preserves the person text."""
-    repo, url, pull, github = opened_pull.repo, opened_pull.url, opened_pull.pull, opened_pull.github
-    slug = "acme/app"
-    # Add person text outside markers
-    [pr] = _pulls(github, slug)
-    person_text = "Person's own notes here.\n"
-    pr["body"] = person_text + pr["body"]
-    pulls_path = github / f"{slug}.pulls.json"
-    pulls_path.write_text(json.dumps([pr], indent=2))
-    # Run a refine
-    run = tmp_path / "refine"
-    result = _design(run, refine=url)
-    assert result.exit_ok, result.error
-    [after] = _pulls(github, slug)
-    assert "Person's own notes here." in after["body"]
-    assert delivery.BODY_START in after["body"]
-
-
-def test_refine_legacy_body_without_markers_is_left_unchanged(opened_pull, tmp_path):
-    """A refine on a PR whose body has no delivery markers (legacy PR): the body is
-    left unchanged, and delivery_result says description was not updated."""
-    repo, url, pull, github = opened_pull.repo, opened_pull.url, opened_pull.pull, opened_pull.github
-    slug = "acme/app"
-    # Replace body with legacy content (no markers)
-    [pr] = _pulls(github, slug)
-    legacy_body = "This is a hand-written legacy PR body.\nNo delivery markers here.\n"
-    pr["body"] = legacy_body
-    pulls_path = github / f"{slug}.pulls.json"
-    pulls_path.write_text(json.dumps([pr], indent=2))
-    run = tmp_path / "refine"
-    result = _design(run, refine=url)
-    assert result.exit_ok, result.error
-    [after] = _pulls(github, slug)
-    assert after["body"] == legacy_body
-    assert "not updated" in result.facts.get("delivery_result", "") or "no delivery markers" in result.facts.get("_refine_body_note", "")
-
-
-def test_description_has_changes_and_short_structure(new_run):
-    """After a design delivery, the PR body contains the short structure:
-    Summary, Changes, Tests, Verification, Follow-ups in order;
-    does not contain Original request or What changed or the long footer."""
+@pytest.mark.parametrize("drafts", [True, False], ids=["draft", "github-refuses-drafts"])
+def test_a_full_delivery_after_a_draft_makes_it_ready_with_no_section(new_run, drafts):
+    """dm-246: a later delivery with no draft fact marks the pull request ready, and takes
+    the draft section and the title's prefixes away: the description is the run's again."""
     run, result, github = new_run.run, new_run.result, new_run.github
     slug = f"{LOGIN}/{NAME}"
-    [pull] = _pulls(github, slug)
-    body = pull["body"]
-    assert "## Summary" in body
-    assert "## Changes" in body
-    assert "## Verification" in body
-    assert delivery.BODY_START in body
-    assert delivery.BODY_END in body
-    # Short structure: no verbose sections
-    assert "## Original request" not in body
-    assert "## What changed" not in body
-    assert "Written by a refactory design run" not in body
-    # Verification has exactly two content lines (check + review)
-    verif_start = body.index("## Verification")
-    verif_section = body[verif_start:]
-    # Find next ## or end
-    next_heading = verif_section.find("\n## ", 1)
-    if next_heading > 0:
-        verif_section = verif_section[:next_heading]
-    verif_lines = [l for l in verif_section.splitlines() if l.startswith("- ")]
-    assert len(verif_lines) == 2, f"Expected 2 verification lines, got {len(verif_lines)}: {verif_lines}"
+    meta = json.loads((github / f"{slug}.json").read_text())
+    (github / f"{slug}.json").write_text(json.dumps({**meta, "drafts": drafts}))
+    [before] = _pulls(github, slug)
+    failing = {**DRAFT_FACT, "check_failing": True, "check_failure": "FAILED test_tool.py::test_build"}
+    delivery.deliver_design(nn.RunContext(run, facts={**result.facts, "draft_delivery": failing},
+                                          enforce_writes=False))
+    [drafted] = _pulls(github, slug)
+    assert drafted["draft"] is drafts
+    assert drafted["title"] == ("" if drafts else delivery.DRAFT_TITLE) + "[check failing] " + before["title"]
+    assert drafted["body"].startswith(f"{delivery.DRAFT_START}\n{delivery.CHECK_FAILING_HEADING}\n")
+    again = delivery.deliver_design(nn.RunContext(run, facts=result.facts, enforce_writes=False))
+    [ready] = _pulls(github, slug)
+    assert ready["draft"] is False and ready["title"] == before["title"]
+    assert ready["body"] == before["body"]
+    assert again["delivery_result"].startswith("updated: ") or again["delivery_result"].startswith("already open: ")
 
 
-def test_redeliver_on_design_run_behind_main_merges_and_pushes(new_run):
-    """A design run's deliver node completes; main advances past the branch; redeliver
-    clears only deliver's declared produces (which includes delivered_commit but not
-    commit); the commit fact survives; deliver_design reads it and succeeds.
-    After a merge delivery the worktree HEAD may be the merge commit which differs
-    from the original commit fact; delivery accepts both."""
-    from refactory_dsh import items
+def test_a_persons_own_draft_is_not_marked_ready(opened_pull, tmp_path):
+    """Only a draft delivery made is marked ready by a later one; a person's own draft stays one."""
+    url, github = opened_pull.url, opened_pull.github
+    pulls = _pulls(github, "acme/app")
+    pulls[0]["draft"] = True
+    (github / "acme/app.pulls.json").write_text(json.dumps(pulls))
+    result = _design(tmp_path / "refine", {"tool.py": "print('one')\n", "more.py": "x = 1\n"}, refine=url)
+    assert result.exit_ok, result.error
+    [after] = _pulls(github, "acme/app")
+    assert after["draft"] is True and "pr ready" not in _calls(opened_pull.root)
+
+
+def test_a_run_whose_whole_change_is_empty_opens_no_pull_request(github, tmp_path, monkeypatch):
+    """dm-246: attempt 2 put the tree back to the base, so the branch changes nothing.
+    Delivery refuses before it creates the repository or pushes, and says why."""
+    real = delivery.deliver_design
+
+    def put_back(ctx):
+        found = worktree.recorded(ctx.workdir)
+        git(Path(found.path), "rm", "-q", "-r", "tool.py")
+        git(Path(found.path), "-c", "user.name=t", "-c", "user.email=t@example.com",
+            "commit", "-q", "-m", "attempt 2")
+        head = git(Path(found.path), "rev-parse", "HEAD")
+        from dataclasses import asdict, replace
+
+        worktree._write_json(Path(ctx.workdir) / worktree.RECORD, asdict(replace(found, head=head)))
+        ctx.facts["commit"] = head
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", put_back)
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    record = _record(run)
+    assert record["status"] == "kept local" and "changes nothing" in record["why"]
+    assert "changes nothing" in result.facts["delivery_result"]
+    calls = _calls(tmp_path)
+    assert "repo create" not in calls and "pr create" not in calls
+
+
+def _section(body: str) -> str:
+    """The sections delivery wrote, between its markers."""
+    return body[body.index(delivery.BODY_START):body.index(delivery.BODY_END) + len(delivery.BODY_END)]
+
+
+def test_a_refine_rewrites_only_the_sections_delivery_wrote(opened_pull, tmp_path):
+    """dm-212: a refine writes its own sections again, from the refined run, between the
+    markers; a person's text above and below them stays as it is, and so does the title."""
+    url, pull, github = opened_pull.url, opened_pull.pull, opened_pull.github
+    pulls = _pulls(github, "acme/app")
+    above, below = "Person's intro, kept.\n\n", "\n## Reviewer notes\n\nKeep this \\1 too.\n"
+    pulls[0]["body"] = above + pull["body"] + below
+    (github / "acme/app.pulls.json").write_text(json.dumps(pulls))
+    run = tmp_path / "refine"
+    result = _design(run, {"tool.py": "print('one')\n", "more.py": "print('two')\n"}, refine=url)
+    assert result.exit_ok, result.error
+    [after] = _pulls(github, "acme/app")
+    ours = _section((run / delivery.BODY).read_text())
+    assert after["body"] == above + ours + "\n" + below
+    assert "more.py" in ours and "more.py" not in _section(pull["body"])
+    assert after["title"] == pull["title"]
+
+
+def test_a_refine_leaves_a_description_without_markers_as_it_is(opened_pull, tmp_path):
+    """Correction 4: a pull request opened before the markers keeps its description,
+    hand edits and all, and the delivery result says it was not updated."""
+    url, github = opened_pull.url, opened_pull.github
+    pulls = _pulls(github, "acme/app")
+    legacy = "## What changed\n\n- tool.py, by hand: I rewrote this.\n\n## Original request\n\nA tool.\n"
+    pulls[0]["body"] = legacy
+    (github / "acme/app.pulls.json").write_text(json.dumps(pulls))
+    run = tmp_path / "refine"
+    result = _design(run, {"tool.py": "print('one')\n", "more.py": "print('two')\n"}, refine=url)
+    assert result.exit_ok, result.error
+    [after] = _pulls(github, "acme/app")
+    assert after["body"] == legacy
+    said = f"the description of {url} was not updated: it has no delivery markers"
+    assert said in result.facts["delivery_result"] and said in _record(run)["note"]
+    assert "pr edit" not in _calls(opened_pull.root).split("pr create", 1)[-1]
+
+
+def test_a_runs_description_is_short_and_its_changes_come_from_the_design(new_run):
+    """dm-191 and the short structure: Summary and Changes from the design, the design's
+    tests, one line for the check and one for the reviews, nothing else."""
+    body = _draft_pull(new_run.github)["body"]
+    assert body.startswith(delivery.BODY_START) and body.rstrip().endswith(delivery.BODY_END)
+    headings = [line for line in body.splitlines() if line.startswith("## ")]
+    assert headings == ["## Summary", "## Changes", "## Tests", "## Verification"]
+    assert "## Summary\n\nFix it properly.\n" in body
+    assert "## Tests\n\n- `test_tool.py::test_build`\n" in body
+    verification = body.split("## Verification\n\n", 1)[1].split(delivery.BODY_END, 1)[0]
+    assert [line[:12] for line in verification.splitlines() if line] == ["- **Check:**", "- **Reviews:"]
+    assert "Original request" not in body and "Written by a refactory design run" not in body
+
+
+def test_the_changes_section_takes_the_designs_words_for_each_changed_file(tmp_path, capsys):
+    """dm-191: each file the branch changes is described as the design's ## Changes says; a
+    bullet for a file the branch does not change, and one naming no file, are left out."""
+    base, _ = _git_pair(tmp_path)
+    path = tmp_path
+    (path / "tool.py").write_text("print('built')\n")
+    git(path, "add", "tool.py")
+    git(path, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "tool")
+    head = git(path, "rev-parse", "HEAD")
+    design = ("# Build a tool\n\n## Summary\n\nThe problem, and the fix.\n\n## Changes\n\n"
+              "- `tool.py` — prints what it built, on one line\n"
+              "- `docs/tool.md` — say what it prints\n"
+              "- Return code is 2\n\n"
+              "## Tests\n\n- `tests/test_tool.py::test_prints` — it prints\n")
+    ctx = _TitleCtx(facts={"brief": "b", "check": "pytest", "name": "b45a"}, files={"design.md": design})
+    from types import SimpleNamespace
+    body = delivery._body(ctx, SimpleNamespace(path=str(path), base=base, head=head, branch="b"))
+    changes = body.split("## Changes\n\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert changes == ["- g.txt", "- tool.py — prints what it built, on one line"]
+    assert "Return code is 2" not in body and "docs/tool.md" not in body
+    assert "docs/tool.md" in capsys.readouterr().err
+    assert "## Tests\n\n- `tests/test_tool.py::test_prints`\n" in body
+
+
+def test_a_refine_keeps_backslashes_in_the_sections_it_writes(tmp_path, monkeypatch):
+    """The new sections replace the old ones as written: a backslash in them, as in a
+    Windows path or a regular expression, is not read as a group reference."""
+    ours = f"{delivery.BODY_START}\n## Summary\n\nMatch C:\\1 and \\g<0>.\n{delivery.BODY_END}\n"
+    (tmp_path / delivery.BODY).write_text(ours)
+    old = f"Theirs.\n\n{delivery.BODY_START}\n## Summary\n\nOld.\n{delivery.BODY_END}\n"
+    sent: list[str] = []
+
+    def gh(*args, **_):
+        if args[:2] == ("pr", "view"):
+            return json.dumps({"body": old, "title": "T", "isDraft": False})
+        if args[:2] == ("pr", "edit") and "--body-file" in args:
+            sent.append(Path(args[args.index("--body-file") + 1]).read_text())
+        return ""
+
+    monkeypatch.setattr(delivery, "_gh", gh)
+    assert delivery._describe(nn.RunContext(tmp_path, enforce_writes=False), "u", None) == ""
+    assert sent == ["Theirs.\n\n" + ours]
+
+
+def test_the_check_line_carries_the_suite_counts(tmp_path):
+    """The Verification's check line says what the test runners counted."""
+    from types import SimpleNamespace
+    base, head = _git_pair(tmp_path)
+    stdout = ("..........\n3 passed, 1 skipped in 0.52s\n"
+              "\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m4 passed\x1b[39m\x1b[22m (4)\n")
+    ctx = _TitleCtx(facts={"check": "make test", "name": "b"},
+                    files={"authoring-evidence.json": json.dumps({"validation": {"status": "pass", "stdout": stdout}})})
+    body = delivery._body(ctx, SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="b"))
+    assert "- **Check:** `make test` passed (pytest 3 passed, 1 skipped; vitest 4 passed (4)).\n" in body
+
+
+@pytest.mark.parametrize("said", [
+    # gh 2.x, as fake_gh says it.
+    "pull request create failed: GraphQL: Draft pull requests are not supported in this "
+    "repository. (createPullRequest)",
+    # Older gh releases, as reported in cli/cli#520 and MetaMask/action-create-release-pr#67.
+    "failed to create pull request: graphql error: 'Draft pull requests are not supported in "
+    "this repository.'",
+    "pull request create failed: GraphQL error: Draft pull requests are not supported in this "
+    "repository.",
+])
+def test_githubs_draft_refusal_is_recognised_in_each_wording_gh_has_used(tmp_path, monkeypatch, said):
+    """dm-246: a refused draft is recognised by GitHub's own message, which every gh release
+    has carried, however it wrapped it: the pull request then opens ready, titled [draft]."""
+    opened: list[str] = []
+
+    def opens(path, slug, branch, into, title, body, *, draft=False):
+        if draft:
+            raise delivery.NotDelivered(f"`gh pr create` failed: {said}")
+        opened.append(title)
+        return "https://github.com/acme/app/pull/1"
+
+    monkeypatch.setattr(delivery, "_open", opens)
+    url, note = delivery._open_draft(tmp_path, "acme/app", "b", "main", "Do the thing", tmp_path / "body")
+    assert opened == [delivery.DRAFT_TITLE + "Do the thing"] and url.endswith("/pull/1")
+    assert "GitHub refused a draft pull request" in note
+
+
+def _main_moved(github: Path, slug: str, name: str, tmp_path: Path) -> str:
+    """Someone merged ``name`` into main on GitHub; returns main's new tip."""
+    other = tmp_path / f"other-{name}"
+    git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+    (other / name).write_text(f"{name}\n")
+    git(other, "add", name)
+    git(other, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", name)
+    git(other, "push", "-q", "origin", "main")
+    return git(other, "rev-parse", "HEAD")
+
+
+def test_redeliver_on_a_design_run_behind_main_merges_and_pushes(new_run, tmp_path, monkeypatch):
+    """dm-192: deliver declared the `commit` it reads, so `graph-control redeliver`, which
+    resets deliver's facts, always failed. It resets `delivered_commit` now and keeps
+    materialise's `commit`: each redeliver merges main and pushes, the second building on
+    the first's merge, and the merge it pushed is deliver's own fact (correction 3)."""
+    from refactory_dsh import items, lowering
+    from refactory_dsh.run import run_node
+
     run, result, github = new_run.run, new_run.result, new_run.github
-    # The commit fact is set by materialise, not deliver.
-    assert result.facts.get("commit"), "commit fact should exist after a successful run"
-    # delivered_commit is set by deliver.
-    assert result.facts.get("delivered_commit") or result.facts.get("delivery_result"), \
-        "delivery should have completed"
-    # Simulate redeliver: clear only deliver's declared produces.
-    # deliver's produces are: delivery_result, pull_request, delivery_conflict_files,
-    # delivery_conflict_detail, delivery_target_tip, delivered_commit, _refine_body_note
-    # commit is NOT in deliver's produces, so it survives.
-    facts = dict(result.facts)
-    for key in ("delivery_result", "pull_request", "delivery_conflict_files",
-                "delivery_conflict_detail", "delivery_target_tip", "delivered_commit",
-                "_refine_body_note"):
-        facts.pop(key, None)
-    # The commit fact must survive.
-    assert facts.get("commit"), "commit fact should survive redeliver clearing deliver's produces"
-    # Verify that after clearing, a redeliver could succeed: the commit fact
-    # (materialise's original commit) is still present, so deliver_design can
-    # find it and push.
-    original_commit = facts["commit"]
-    wt = worktree.recorded(run)
-    # The worktree HEAD should be either the original commit or a merge commit
-    # whose first parent is the original commit.
-    assert wt.head == original_commit or True, \
-        "worktree HEAD should relate to the original commit"
-
-
-def test_delivered_commit_records_merge_sha(new_run):
-    """After a delivery that pushes, commit still holds materialise's original commit.
-    delivered_commit is only set when a merge pushes a different commit."""
-    run, result = new_run.run, new_run.result
-    rec = _record(run)
-    if rec.get("status") in ("opened", "updated", "already open"):
-        # commit should still be materialise's value
-        assert result.facts.get("commit"), "commit fact should still exist"
-        # delivered_commit is only set when a merge occurs
-        if result.facts.get("delivered_commit"):
-            assert result.facts["delivered_commit"] != result.facts["commit"], \
-                "delivered_commit should differ from commit (it is the merge commit)"
-
-
-def _b45a_round(emission, *, reviews=("health: ran it, it prints built",
-                                       "code review: matches the design",
-                                       "qa: ok"),
-                verifier=VERIFICATION_ANSWER, judge=None, overwatch=None):
-    """One attempt's answers for the draft-delivery tests."""
-    def _a(value):
-        return [] if value is None else [value] if isinstance(value, str) else list(value)
-    return [emission, *reviews, verifier, *_a(judge), *_a(overwatch)]
-
-
-def _b45a_answers(*rounds):
-    head = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER]
-    return head + [answer for one in rounds for answer in one]
-
-
-def test_review_limit_with_applied_commit_delivers_draft(tmp_path):
-    """A design run with review_attempts=1 whose QA judge sends back with must-fix items
-    stops at the review limit in gate_qa; since a commit fact exists, gate_qa sets
-    draft_delivery and the run proceeds through audit_corrections and overwatch to report
-    and deliver as a draft PR."""
-    redo = qa_judgment("redo", must_fix=[
-        {"source": "qa", "where": "tool.py:1", "what": "missing error handling",
-         "why": "the brief asks for it", "severity": "high"}])
-    repo = git_repo(tmp_path / "repo")
-    model = FakeModel(_b45a_answers(
-        _b45a_round(render({"tool.py": "print('built')\n"}), judge=redo),
-        _b45a_round(render({"tool.py": "print('built!')\n"}), judge=redo)))
-    mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["review_attempts"]["value"] = 1
-    mode.load_state_dict(state)
-    run = tmp_path / "run"
-    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
-                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
-                            "check": "python tool.py", "target": str(repo)})
-    # Design mode with an applied commit: the run delivers a draft instead of failing.
-    assert result.exit_ok is True, result.error
-    assert result.facts.get("draft_delivery"), "expected draft_delivery fact"
-    assert result.facts["draft_delivery"].get("reason")
-    assert result.facts["draft_delivery"].get("unresolved")
-
-
-def test_check_failing_at_limit_delivers_draft_marked_check_failing(tmp_path):
-    """A design run whose check always fails; gate_check sets draft_delivery with
-    check_failing: true and routes straight to report and deliver, skipping QA
-    and overwatch. The draft PR has '[check failing]' in the title."""
-    repo = git_repo(tmp_path / "repo")
-    model = FakeModel(_b45a_answers(
-        _b45a_round(render({"tool.py": "import sys; sys.exit(1)\n"}))))
-    mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["check_attempts"]["value"] = 1
-    state["knobs"]["check_attempt_cap"]["value"] = 0
-    mode.load_state_dict(state)
-    run = tmp_path / "run"
-    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
-                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
-                            "check": "python tool.py", "target": str(repo)})
-    if result.facts.get("commit"):
-        assert result.exit_ok is True, result.error
-        dd = result.facts.get("draft_delivery")
-        assert dd, "expected draft_delivery fact"
-        assert dd.get("check_failing") is True
-
-
-def test_no_applied_commit_delivers_nothing(tmp_path):
-    """A run where every emission is refused (commit fact never set) still raises
-    BuildLoopStop and fails with no PR."""
-    repo = git_repo(tmp_path / "repo")
-    # Emission that always gets refused (bad edit)
-    bad = "===EDIT: nonexistent.py===\n<<<<<<< SEARCH\ntext not in file\n=======\nreplacement\n>>>>>>> REPLACE\n"
-    model = FakeModel(_b45a_answers(_b45a_round(bad)))
-    mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["refusal_attempts"]["value"] = 1
-    mode.load_state_dict(state)
-    run = tmp_path / "run"
-    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
-                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
-                            "check": "python tool.py", "target": str(repo)})
-    assert result.exit_ok is False, "expected the run to fail with no applied commit"
-    assert not result.facts.get("draft_delivery"), "no draft_delivery when no commit"
-
-
-def test_overwatch_limit_with_applied_commit_delivers_draft(tmp_path):
-    """A design run where gate_overwatch reaches its review limit with a commit fact;
-    gate_overwatch sets draft_delivery and routes to report, delivering a draft."""
-    redo = overwatch_judgment("redo", must_fix=[
-        {"source": "overwatch", "where": "tool.py:1", "what": "no test shows built is printed",
-         "why": "the brief's only ask has no evidence"}])
-    repo = git_repo(tmp_path / "repo")
-    model = FakeModel(_b45a_answers(
-        _b45a_round(render({"tool.py": "print('built')\n"}), overwatch=redo),
-        _b45a_round(render({"tool.py": "print('built!')\n"}), overwatch=redo)))
-    mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["review_attempts"]["value"] = 1
-    mode.load_state_dict(state)
-    run = tmp_path / "run"
-    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
-                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
-                            "check": "python tool.py", "target": str(repo)})
-    assert result.exit_ok is True, result.error
-    assert result.facts.get("draft_delivery"), "expected draft_delivery fact"
-
-
-def test_refusal_bound_with_applied_commit_delivers_draft(tmp_path):
-    """A design run where the refusal bound is reached but a commit fact exists;
-    the materialise refusal path sets draft_delivery and routes to report.
-    Round 1: emission succeeds (commit set), reviews send it back.
-    Round 2: emission is refused repeatedly until the refusal bound fires."""
-    redo = qa_judgment("redo", must_fix=[
-        {"source": "qa", "where": "tool.py:1", "what": "needs error handling",
-         "why": "the brief asks for it", "severity": "high"}])
-    repo = git_repo(tmp_path / "repo")
-    good = render({"tool.py": "print('built')\n"})
-    bad = "===EDIT: nonexistent.py===\n<<<<<<< SEARCH\ntext not in file\n=======\nreplacement\n>>>>>>> REPLACE\n"
-    # Round 1: good emission, QA sends it back. Round 2: bad emissions until refusal bound.
-    model = FakeModel(_b45a_answers(
-        _b45a_round(good, judge=redo),
-        [bad] * 10))
-    mode = DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["refusal_attempts"]["value"] = 1
-    state["knobs"]["review_attempts"]["value"] = 5
-    mode.load_state_dict(state)
-    run = tmp_path / "run"
-    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
-                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
-                            "check": "python tool.py", "target": str(repo)})
-    if result.facts.get("commit"):
-        assert result.exit_ok is True, result.error
-        assert result.facts.get("draft_delivery"), "expected draft_delivery fact"
-
-
-def test_create_mode_at_review_limit_still_raises_build_loop_stop(tmp_path):
-    """Create mode at its review limit still raises BuildLoopStop, confirming that
-    create_ops.repair is unchanged."""
-    from refactory_dsh.run import BuildLoopStop
-    from refactory_dsh.create_ops import repair
-    from refactory_dsh import nn
-
-    ctx = nn.RunContext(tmp_path, facts={"name": "test_pkg",
-                                         "package_root": str(tmp_path / "stage/.factory/packages/test_pkg")},
-                        knobs={"review_attempts": 1, "check_attempts": 1, "attempts": 1})
-    ctx.enforce_writes = False
-    ctx.set_fact("review_attempts_used", 0)
-    ctx.set_fact("attempts_used", 0)
-    ctx.write_text("validation.txt", "")
-    with pytest.raises(BuildLoopStop):
-        repair(ctx, ["a review finding"], kind="review")
+    slug = f"{LOGIN}/{NAME}"
+    reviewed = result.facts["commit"]
+    if not (run / lowering.DECLARATIONS).exists():
+        lowering.write_declarations(DesignMode().state_dict(), run)
+    (run / "facts.json").write_text(json.dumps(result.facts, default=str))
+    monkeypatch.setenv("REFACTORY_WORKDIR", str(run))
+    heads = [reviewed]
+    for name in ("first.txt", "second.txt"):
+        tip = _main_moved(github, slug, name, tmp_path)
+        # What the spine does for `graph-control redeliver`: a rerun of deliver.
+        items.command_reset(run, {"nodes": ["deliver", "delivery_gate", "done"], "start": "deliver"})
+        facts = json.loads((run / "facts.json").read_text())
+        assert facts["commit"] == reviewed and "delivered_commit" not in facts
+        monkeypatch.setenv("DSH_WORKFLOW_NODE", json.dumps({"id": "deliver", "type": "op"}))
+        run_node("refactory_dsh.delivery:deliver_design", workdir=run, node_id="deliver")
+        facts = json.loads((run / "facts.json").read_text())
+        [pull] = _pulls(github, slug)
+        pushed = _remote_head(github, slug, pull["head"])
+        assert _parents(github, slug, pushed) == [heads[-1], tip]
+        assert facts["delivered_commit"] == pushed and facts["commit"] == reviewed
+        assert _record(run)["merge_commit"] == pushed
+        heads.append(pushed)
+    assert len(_pulls(github, slug)) == 1
 
 
 def _design_draft(workdir, github, tmp_path, *, mode=None, emit=None, target=None,
@@ -1845,8 +1943,7 @@ def test_draft_passing_check_opens_draft_pr(github, tmp_path):
     # The PR body starts with the unresolved section.
     slug = f"{LOGIN}/{NAME}"
     [pull] = _pulls(github, slug)
-    assert delivery.DRAFT_START in pull["body"]
-    assert delivery.DRAFT_HEADING in pull["body"]
+    assert pull["body"].startswith(f"{delivery.DRAFT_START}\n{delivery.DRAFT_HEADING}\n"), pull["body"][:200]
     assert "review reloop limit reached" in pull["body"]
     assert "The logging format is inconsistent" in pull["body"]
     assert "source: review" in pull["body"]
@@ -2099,11 +2196,9 @@ def test_draft_existing_pr_converted_to_draft(new_run):
     # The PR body is the unresolved preamble followed by the previous body.
     pulls = _pulls(github, slug)
     updated_pull = next(p for p in pulls if p["number"] == pull_before["number"])
-    assert delivery.DRAFT_START in updated_pull["body"]
-    assert delivery.DRAFT_HEADING in updated_pull["body"]
+    assert updated_pull["body"].startswith(f"{delivery.DRAFT_START}\n{delivery.DRAFT_HEADING}\n"), updated_pull["body"][:200]
     # The old body is preserved after the preamble.
-    assert old_body in updated_pull["body"] or delivery.BODY_START in updated_pull["body"], \
-        "old body should be preserved"
+    assert updated_pull["body"].endswith(old_body), "old body should be preserved"
     assert updated_pull.get("draft") is True
 
 
@@ -2204,8 +2299,7 @@ def test_draft_no_pr_mode(github, tmp_path):
 
     # The PR text carries the unresolved preamble.
     pr_text = (run / delivery.BODY).read_text()
-    assert delivery.DRAFT_START in pr_text
-    assert delivery.DRAFT_HEADING in pr_text
+    assert pr_text.startswith(f"{delivery.DRAFT_START}\n{delivery.DRAFT_HEADING}\n"), pr_text[:200]
 
     # Delivery record says draft.
     rec = _record(run)
@@ -2363,8 +2457,7 @@ def test_a_draft_github_refuses_opens_ready_with_its_title_marked(github, tmp_pa
     [pull] = _pulls(github, "acme/nodrafts")
     assert pull["title"].startswith(delivery.DRAFT_TITLE) and pull["draft"] is False
     assert pull["title"] == delivery.DRAFT_TITLE + _record(run)["title"]
-    assert delivery.DRAFT_START in pull["body"]
-    assert delivery.DRAFT_HEADING in pull["body"]
+    assert pull["body"].startswith(f"{delivery.DRAFT_START}\n{delivery.DRAFT_HEADING}\n"), pull["body"][:200]
     rec = _record(run)
     assert (rec["status"], rec["pull_request"]) == ("opened", result.facts["pull_request"])
     assert rec["draft"] is True and "Draft pull requests are not supported" in rec["draft_note"]
@@ -2391,7 +2484,9 @@ def test_a_pull_request_github_will_not_make_a_draft_keeps_its_delivery(new_run)
     assert outcome["delivery_result"].startswith(f"draft: {url}")
     assert "could not be converted to a draft" in outcome["delivery_result"]
     [pull] = _pulls(github, slug)
-    assert delivery.DRAFT_START in pull["body"] and delivery.DRAFT_HEADING in pull["body"] and pull["draft"] is False
+    assert pull["body"].startswith(f"{delivery.DRAFT_START}\n{delivery.DRAFT_HEADING}\n") and pull["draft"] is False
+    # A ready pull request that is really a draft says so in its title, as one opened so does.
+    assert pull["title"].startswith(delivery.DRAFT_TITLE)
 
 
 def test_a_draft_whose_description_gh_cannot_edit_still_records_its_push(new_run, monkeypatch):
@@ -2430,8 +2525,7 @@ def test_delivering_a_draft_again_replaces_its_unresolved_section(new_run):
     assert pull["body"].count(delivery.DRAFT_HEADING) == 1
     assert "overall attempts limit reached" in pull["body"] and DRAFT_FACT["reason"] not in pull["body"]
     assert _draft_items(pull["body"]) == ["- Still flaky (source: review) (rounds: 4)"]
-    # The first delivery's body (between body markers) is still there.
-    assert delivery.BODY_START in pull["body"]
+    assert pull["body"].endswith(first["body"])
 
 
 def test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft(opened_pull, tmp_path):
@@ -2446,7 +2540,9 @@ def test_a_draft_refinement_turns_the_refined_pull_request_into_a_draft(opened_p
                                                       enforce_writes=False))
     [after] = _pulls(github, "acme/app")
     assert after["draft"] is True and after["body"].count(delivery.DRAFT_START) == 1
-    assert delivery.DRAFT_START in after["body"]
+    # The section first, then the description, its delivery sections the refined run's.
+    assert after["body"].startswith(f"{delivery.DRAFT_START}\n{delivery.DRAFT_HEADING}\n")
+    assert after["body"].endswith(_section((run / delivery.BODY).read_text()) + "\n")
     assert again["delivery_result"].startswith(f"draft: {url}")
 
 
@@ -2517,7 +2613,7 @@ def test_a_draft_whose_push_is_refused_keeps_the_work_local_as_without_the_fact(
     assert "draft" not in rec
     assert result.facts["delivery_result"].startswith("not delivered: push refused by GitHub")
     assert _registry_note(run)["delivery"] == "kept local"
-    assert delivery.DRAFT_START in (run / delivery.BODY).read_text()
+    assert (run / delivery.BODY).read_text().startswith(f"{delivery.DRAFT_START}\n{delivery.DRAFT_HEADING}\n")
     assert any(cmd.startswith("gh pr create") and cmd.endswith(" --draft") for cmd in rec["finish"])
 
 
@@ -2567,7 +2663,7 @@ def test_a_new_project_gets_a_private_repository_whose_first_pull_request_holds_
     assert (pull["head"], pull["base"], pull["title"]) == (branch, "main", "Do the thing")
     assert _remote_head(github, slug, branch) == git(project, "rev-parse", branch)
     assert git(project, "ls-tree", "--name-only", "main") == ""
-    assert "python tool.py" in pull["body"] or "## Summary" in pull["body"]
+    assert "## Summary\n\nFix it properly." in pull["body"] and "`python tool.py` passed" in pull["body"]
     url = f"https://github.com/{slug}/pull/1"
     assert result.facts["pull_request"] == url
     assert _record(run)["status"] == "opened" and _record(run)["verified"] is True
@@ -2693,19 +2789,17 @@ def test_no_pr_keeps_the_work_on_its_branch_and_asks_github_nothing(github, tmp_
     assert result.facts["delivery"].startswith("once the reviews pass, this run won't open"), "the plan is kept"
 
 
-def test_a_failed_run_creates_no_repository_and_opens_no_pull_request(github, tmp_path):
-    result = _design(tmp_path / "run", check="false", mode=_mode(check_attempts=1))
-    # With the always-a-PR change, a run with an applied commit now delivers a
-    # draft instead of failing.  The run either succeeds (draft PR opened) or
-    # fails without a PR (no commit).
-    if result.facts.get("commit"):
-        # Draft delivery: the run ends as done, not failed.
-        assert result.exit_ok is True
-    else:
-        assert result.exit_ok is False
-        calls = _calls(tmp_path)
-        assert "repo create" not in calls and "pr create" not in calls and not list(github.glob("*/*.git"))
-        assert not (tmp_path / "run" / delivery.RECORD).exists()
+def test_a_run_whose_check_never_passes_opens_a_draft_in_its_private_repository(github, tmp_path):
+    """b45a: a new project's run whose check fails at its limit has an applied commit, so it
+    is delivered: its repository is created, private as for any run, and its pull request
+    is a draft marked check failing. A run with no applied commit still creates nothing
+    (`test_a_run_with_no_applied_commit_delivers_nothing`)."""
+    result = _design(tmp_path / "run", check="false", mode=_mode(check_attempts=1, check_attempt_cap=0))
+    assert result.exit_ok, result.error
+    slug = f"{LOGIN}/{NAME}"
+    assert json.loads((github / f"{slug}.json").read_text())["visibility"] == "private"
+    [pull] = _pulls(github, slug)
+    assert pull["draft"] is True and pull["title"] == "[check failing] Do the thing"
 
 
 def test_a_run_without_a_worktree_has_nothing_to_deliver(github, tmp_path, capsys, monkeypatch):
@@ -2805,12 +2899,10 @@ def test_refine_starts_from_the_pull_requests_head_and_pushes_onto_its_branch(op
     assert _remote_head(github, "acme/app", pull["head"]) == found.head
     assert git(repo, "merge-base", "--is-ancestor", head, found.head) == ""
     [after] = _pulls(github, "acme/app")
+    # The title stays; the description's delivery sections are the refined run's (dm-212).
     assert after["title"] == pull["title"]
-    # Refine updates the delivery-owned body sections (dm-212)
-    assert delivery.BODY_START in after["body"]
-    assert delivery.BODY_END in after["body"]
-    # Person text outside body markers is preserved
-    assert "Person's own notes here." in after["body"]
+    assert after["body"] == _section((run / delivery.BODY).read_text()) + "\n" != pull["body"]
+    assert "more.py" in after["body"]
     assert _record(run)["status"] == "updated" and result.facts["pull_request"] == url
     assert f"pushes onto {pull['head']}, the branch of the pull request {url}" in (run / delivery.PLAN).read_text()
     ledger = (run / "intent-ledger.md").read_text()
@@ -3512,10 +3604,11 @@ def test_a_run_planned_while_gh_was_logged_out_says_the_next_run_delivers(github
     assert "`gh auth login` signs in, for the next run" in (run / delivery.PLAN).read_text()
 
 
-def test_the_pull_request_says_the_commits_are_the_runs_attempts(new_run):
+def test_the_pull_request_recommends_no_way_to_merge(new_run):
+    """The description no longer explains the branch's commits (the short description,
+    2026-10-26), and still recommends no merge method."""
     [pull] = _pulls(new_run.github, f"{LOGIN}/{NAME}")
-    # The compact body format does not include the "run's attempts" sentence.
-    assert delivery.BODY_START in pull["body"]
+    assert "the run's attempts" not in pull["body"]
     assert "squash merge is recommended" not in pull["body"]
 
 

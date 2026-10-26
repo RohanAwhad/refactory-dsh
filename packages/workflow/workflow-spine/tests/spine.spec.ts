@@ -328,6 +328,27 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     s.verdict('gate_check', 'reloop', 'the check failed')
     expect(ids(s)).toEqual(['emit'])
   })
+
+  it('a check still failing at its limit goes from gate_check straight to the report, as a draft', () => {
+    const s = new Spine(graph)
+    advance(s, 'fork_qa', 'proceed')
+    s.complete('fork_qa')
+    for (const n of ['check', 'health_checker', 'code_reviewer', 'qa_director', 'verifier']) s.complete(n)
+    s.complete('join_qa')
+    expect(spineEdges(graph, 'gate_check')).toEqual(
+      [['emit', 'reloop'], ['report', 'draft'], ['synthesize_qa', 'proceed']])
+    s.verdict('gate_check', 'draft', 'check attempts exhausted after 3 check failure(s)')
+    expect(ids(s)).toEqual(['report'])
+  })
+
+  it('a limit stop before the review fork goes from prepare_check straight to the report, as a draft', () => {
+    const s = new Spine(graph)
+    advance(s, 'prepare_check', 'proceed')
+    expect(spineEdges(graph, 'prepare_check')).toEqual(
+      [['emit', 'reloop'], ['fork_qa', 'proceed'], ['report', 'draft']])
+    s.verdict('prepare_check', 'draft', 'emissions refused 3 consecutive times')
+    expect(ids(s)).toEqual(['report'])
+  })
 })
 
 describe('skip mutation', () => {

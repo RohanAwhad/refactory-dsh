@@ -169,8 +169,9 @@ def test_walker_stop_reaches_run_result_error(tmp_path):
 
 # ── consecutive refusals end the run (walker) ──────────────────────────────
 
-def test_consecutive_refusals_end_the_run(tmp_path):
-    """A scripted walker run whose emissions keep changing nothing ends after refusal_attempts."""
+def test_consecutive_refusals_end_the_build_loop(tmp_path):
+    """A scripted walker run whose emissions keep changing nothing ends after refusal_attempts.
+    Its first attempt applied, so it ends as a draft of that attempt (b45a), not a failure."""
     from refactory_dsh.design import DesignMode
     from tests_support import FakeModel, render, RESEARCH_ANSWER, PITFALLS_ANSWER
     from tests_support import DESIGN_DOC_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER
@@ -207,11 +208,11 @@ def test_consecutive_refusals_end_the_run(tmp_path):
               "target": str(repo)},
     )
 
-    # The refusal bound raises BuildLoopStop even with an applied commit — the
-    # materialise node is an op, not a gate, so it cannot route to report.
-    assert result.exit_ok is False
-    assert "emissions refused" in (result.error or ""), f"Expected refusal stop, got: {result.error}"
-    assert "consecutive" in (result.error or "")
+    assert result.exit_ok, result.error
+    reason = result.facts["draft_delivery"]["reason"]
+    assert reason.startswith("emissions refused 3 consecutive times"), reason
+    # The bound, not the gates' iteration limits, ended it: the first emission and three refused.
+    assert sum(1 for prompt in model.prompts if "Write the artifact `" in prompt) == 4
 
 
 def test_interleaved_refusals_and_successes_converge(tmp_path):
@@ -392,10 +393,9 @@ def _run_node_main(run, target, node_id, node_type, monkeypatch):
     return code, err.getvalue()
 
 
-def test_a_design_check_limit_ends_the_walker_run_with_the_stop(tmp_path):
-    """Design mode runs its check beside the reviews; at the check limit with a commit
-    fact, the run now exits successfully with a draft delivery instead of failing.
-    Without a commit fact, the run still fails with BuildLoopStop."""
+def test_a_design_check_limit_ends_the_walker_run_in_a_check_failing_draft(tmp_path):
+    """Design mode runs its check beside the reviews; at the check limit the build loop
+    stops, and the applied attempt is delivered as a draft marked check failing (b45a)."""
     from tests_support import (DESIGN_DOC_ANSWER, PITFALLS_ANSWER,
                                RESEARCH_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER, FakeModel,
                                git_repo, render)
@@ -408,21 +408,17 @@ def test_a_design_check_limit_ends_the_walker_run_with_the_stop(tmp_path):
     result = _design_mode(check_attempts=2, check_attempt_cap=0).run(
         tmp_path / "run", model=FakeModel(answers), verdicts={"gate_strategy": "proceed"},
         task={"name": "stop_tool", "brief": "a tool", "check": "exit 1", "target": str(repo)})
-    # With an applied commit, the run delivers a draft instead of failing.
-    if result.facts.get("commit"):
-        assert result.exit_ok is True
-        assert result.facts.get("draft_delivery")
-        assert result.facts["draft_delivery"].get("check_failing") is True
-    else:
-        assert result.exit_ok is False
-        assert "BuildLoopStop" in (result.error or ""), result.error
+    assert result.exit_ok, result.error
+    fact = result.facts["draft_delivery"]
+    assert fact["reason"] == "check attempts exhausted after 2 check failure(s)"
+    assert fact["check_failing"] is True
 
 
-def test_a_design_check_limit_exits_3_on_the_spine(tmp_path, monkeypatch):
+def test_a_design_check_limit_goes_to_the_report_as_a_draft_on_the_spine(tmp_path, monkeypatch):
     """The spine runs materialise, prepare_check, the check beside the reviews and
-    gate_check as separate processes; at the check limit gate_check exits 3 with the
-    marker, so the spine records the run failed and a CEO redo is refused (dm-202)."""
-    from refactory_dsh import design_ops, lowering, repo_change, worktree
+    gate_check as separate processes; at the check limit gate_check routes ``draft``,
+    straight to the report, which accepts the draft (b45a, correction 2)."""
+    from refactory_dsh import lowering, worktree
     from tests_support import git_repo, render
 
     repo = git_repo(tmp_path / "repo")
@@ -433,26 +429,117 @@ def test_a_design_check_limit_exits_3_on_the_spine(tmp_path, monkeypatch):
     monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 1, "check_attempt_cap": 0,
                                                       "refusal_attempts": 3}))
     (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
-    steps = [(f"{repo_change.OPS}:materialise", "materialise", "op"),
-             (f"{design_ops.__name__}:prepare_check", "prepare_check", "gate"),
-             (f"{design_ops.__name__}:check_beside_reviews", "check", "op"),
-             (f"{design_ops.__name__}:gate_check", "gate_check", "gate")]
-    codes = []
+    routes = _walk_on_the_spine(run, monkeypatch, *_ATTEMPT, _REPORT)
+    assert routes == [("materialise", 0, ""), ("prepare_check", 0, "proceed"), ("check", 0, ""),
+                      ("gate_check", 0, "draft"), ("report", 0, "")], routes
+    facts = json.loads((run / "facts.json").read_text())
+    assert facts["draft_delivery"]["reason"] == "check attempts exhausted after 1 check failure(s)"
+    assert facts["draft_delivery"]["check_failing"] is True
+    assert json.loads((run / "design.json").read_text())["draft"] is True
+
+
+#: The nodes of one attempt, as the spine runs design's graph (`DesignMode.graph`).
+_ATTEMPT = (("refactory_dsh.design_ops:design_materialise", "materialise", "op"),
+            ("refactory_dsh.design_ops:prepare_check", "prepare_check", "gate"),
+            ("refactory_dsh.design_ops:check_beside_reviews", "check", "op"),
+            ("refactory_dsh.design_ops:gate_check", "gate_check", "gate"))
+_REPORT = ("refactory_dsh.design_ops:report_judged", "report", "op")
+
+
+def _walk_on_the_spine(run, monkeypatch, *steps) -> list[tuple[str, int, str]]:
+    """Run ``steps`` as the spine does, each its own process through `refactory_dsh.run`,
+    stopping at the first that fails; each with its exit code and the verdict it printed."""
+    import io
+
+    walked = []
     for target, node, kind in steps:
-        code, err = _run_node_main(run, target, node, kind, monkeypatch)
-        codes.append((node, code))
+        monkeypatch.setenv("REFACTORY_WORKDIR", str(run))
+        monkeypatch.setenv("DSH_WORKFLOW_NODE", json.dumps({"id": node, "type": kind}))
+        err, out = io.StringIO(), io.StringIO()
+        old_err, old_out = sys.stderr, sys.stdout
+        sys.stderr, sys.stdout = err, out
+        try:
+            code = main([target, "--node", node])
+        finally:
+            sys.stderr, sys.stdout = old_err, old_out
+        lines = [line for line in out.getvalue().splitlines() if line.strip()]
+        walked.append((node, code, lines[-1] if lines and kind == "gate" else ""))
         if code != 0:
             break
-    # With a commit fact, gate_check now returns "draft" (exit 0) instead of raising.
-    # Without a commit fact (no materialise), it still raises (exit 3).
+    return walked
+
+
+def _spine_attempt(tmp_path, monkeypatch, check: str, **knobs) -> Path:
+    """A design run on the spine, its first attempt applied and checked."""
+    from refactory_dsh import lowering, worktree
+    from tests_support import git_repo, render
+
+    repo = git_repo(tmp_path / "repo")
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef555555", run)
+    lowering.write_declarations(_design_mode(**knobs).state_dict(), run)
+    (run / "facts.json").write_text(json.dumps({"name": "draft_tool", "brief": "a tool", "check": check}))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 3, "check_attempt_cap": 0,
+                                                      "refusal_attempts": 3, **knobs}))
+    (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
+    return run
+
+
+def test_the_refusal_bound_after_an_applied_commit_goes_to_the_report_on_the_spine(tmp_path, monkeypatch):
+    """Attempt 1 applies and passes its check; the next emissions are refused to the bound.
+    materialise then exits 0 with the draft, prepare_check routes ``draft``, and the report
+    accepts it: the refusals' rewrite of check.txt is put back from the evidence's history."""
+    from refactory_dsh import authoring_evidence as evidence
+    import hashlib
+
+    run = _spine_attempt(tmp_path, monkeypatch, "true", refusal_attempts=2)
+    assert [step[1:] for step in _walk_on_the_spine(run, monkeypatch, *_ATTEMPT)] == [
+        (0, ""), (0, "proceed"), (0, ""), (0, "proceed")]
+    bad = "===EDIT: missing.py===\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n"
+    (run / "emit.txt").write_text(bad)
+    assert _walk_on_the_spine(run, monkeypatch, *_ATTEMPT[:2]) == [
+        ("materialise", 0, ""), ("prepare_check", 0, "reloop")]
+    assert "materialise could not apply emit.txt" in (run / "check.txt").read_text()
+    (run / "emit.txt").write_text(bad)
+    assert _walk_on_the_spine(run, monkeypatch, *_ATTEMPT[:2], _REPORT) == [
+        ("materialise", 0, ""), ("prepare_check", 0, "draft"), ("report", 0, "")]
     facts = json.loads((run / "facts.json").read_text())
-    if facts.get("commit"):
-        assert codes[-1] == ("gate_check", 0), codes
-        assert facts.get("draft_delivery")
-        assert facts["draft_delivery"].get("check_failing") is True
-    else:
-        assert codes[-1] == ("gate_check", 3), codes
-        assert FAILURE_MARKER in err
+    assert facts["draft_delivery"]["reason"].startswith("emissions refused 2 consecutive times")
+    assert "check_failing" not in facts["draft_delivery"]
+    receipt = json.loads((run / evidence.EVIDENCE).read_text())["receipts"]["check.txt"]
+    assert hashlib.sha256((run / "check.txt").read_bytes()).hexdigest() == receipt
+
+
+def test_a_review_limit_at_gate_qa_goes_on_as_a_draft_on_the_spine(tmp_path, monkeypatch):
+    """At the review limit gate_qa routes ``proceed`` with the draft set (on to the audit
+    and the overwatch); gate_overwatch then adds its own problem to the draft without
+    spending an attempt, and the report accepts it."""
+    run = _spine_attempt(tmp_path, monkeypatch, "true", review_attempts=1)
+    _walk_on_the_spine(run, monkeypatch, *_ATTEMPT)
+    steps = (("refactory_dsh.design_ops:gate_qa", "gate_qa", "gate"),
+             ("refactory_dsh.design_ops:gate_overwatch", "gate_overwatch", "gate"), _REPORT)
+    assert _walk_on_the_spine(run, monkeypatch, *steps) == [
+        ("gate_qa", 0, "proceed"), ("gate_overwatch", 0, "proceed"), ("report", 0, "")]
+    facts = json.loads((run / "facts.json").read_text())
+    assert facts["draft_delivery"]["reason"] == "review reloop limit reached after 1 review cycle(s)"
+    # No review signed off: gate_qa names each, and so does gate_overwatch, all on attempt 1.
+    unresolved = facts["draft_delivery"]["unresolved"]
+    assert sorted({item["source"] for item in unresolved}) == ["QA gate", "overwatch gate"]
+    assert all(item["rounds"] == [1] for item in unresolved), unresolved
+    assert any("health_checker has no current delivery" in item["text"] for item in unresolved)
+    assert facts["review_attempts_used"] == 1 and facts["attempts_used"] == 1
+    assert json.loads((run / "design.json").read_text())["draft"] is True
+
+
+def test_a_review_limit_at_gate_overwatch_goes_to_the_report_as_a_draft_on_the_spine(tmp_path, monkeypatch):
+    run = _spine_attempt(tmp_path, monkeypatch, "true", review_attempts=1)
+    _walk_on_the_spine(run, monkeypatch, *_ATTEMPT)
+    steps = (("refactory_dsh.design_ops:gate_overwatch", "gate_overwatch", "gate"), _REPORT)
+    assert _walk_on_the_spine(run, monkeypatch, *steps) == [
+        ("gate_overwatch", 0, "proceed"), ("report", 0, "")]
+    facts = json.loads((run / "facts.json").read_text())
+    assert facts["draft_delivery"]["reason"] == "review reloop limit reached after 1 review cycle(s)"
+    assert [item["source"] for item in facts["draft_delivery"]["unresolved"]] == ["overwatch gate"]
 
 
 def test_every_limit_raise_in_the_build_loop_is_a_stop():
@@ -593,3 +680,63 @@ def test_an_applied_package_resets_the_create_refusal_count(tmp_path, monkeypatc
             ctx.set_fact(key, value)
         counts.append(ctx.facts.get("consecutive_refusals"))
     assert counts == [1, 2, 0, 1, 2], counts
+
+
+@pytest.mark.parametrize("mode_name", ["create", "edit"])
+def test_create_and_edit_still_stop_at_their_review_limit_with_an_applied_commit(mode_name, tmp_path,
+                                                                                 monkeypatch):
+    """Correction 1: the draft route is design mode's own. create's and edit's gate_qa
+    (`create_ops.gate_qa`, `create_ops.repair`) still end the run at the review limit, an
+    applied commit or not: exit 3 with the marker, and no draft."""
+    from refactory_dsh import lowering
+    from refactory_dsh.create import CreateMode
+    from refactory_dsh.edit import EditMode
+
+    run = tmp_path / "run"
+    run.mkdir()
+    mode = {"create": CreateMode, "edit": EditMode}[mode_name]()
+    lowering.write_declarations(mode.state_dict(), run)
+    (run / "facts.json").write_text(json.dumps({"name": "pkg", "brief": "a mode", "commit": "a" * 40}))
+    (run / "reviews").mkdir()
+    (run / "reviews/qa-synthesized.md").write_text("# QA synthesis\n")
+    # Check evidence, as an applied and checked attempt leaves: create's gate spends a
+    # review attempt only then.
+    (run / "authoring-evidence.json").write_text(json.dumps(
+        {"identity": {"root": str(run)}, "validation": {"status": "pass"}}))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"review_attempts": 1, "check_attempts": 3}))
+    code, err = _run_node_main(run, "refactory_dsh.create_ops:gate_qa", "gate_qa", "gate", monkeypatch)
+    assert code == 3, err
+    assert FAILURE_MARKER in err and "review reloop limit reached after 1 review cycle(s)" in err
+    assert "draft_delivery" not in json.loads((run / "facts.json").read_text())
+
+
+def test_a_gate_check_that_runs_the_check_itself_drafts_at_its_limit_on_the_spine(tmp_path, monkeypatch):
+    """When no decision stands for the attempt (the check command was corrected after the
+    check ran), gate_check runs the whole check itself; at the limit it routes ``draft``."""
+    run = _spine_attempt(tmp_path, monkeypatch, "exit 1", check_attempts=1)
+    assert [step[0] for step in _walk_on_the_spine(run, monkeypatch, *_ATTEMPT[:3])] == [
+        "materialise", "prepare_check", "check"]
+    facts = json.loads((run / "facts.json").read_text())
+    (run / "facts.json").write_text(json.dumps({**facts, "check": "exit 2"}))
+    assert _walk_on_the_spine(run, monkeypatch, _ATTEMPT[3], _REPORT) == [
+        ("gate_check", 0, "draft"), ("report", 0, "")]
+    fact = json.loads((run / "facts.json").read_text())["draft_delivery"]
+    assert fact["reason"] == "check attempts exhausted after 2 check failure(s)" and fact["check_failing"]
+
+
+def test_a_stop_whose_commit_has_no_current_evidence_is_not_a_draft(tmp_path, monkeypatch):
+    """A draft says what its check showed (`report_judged` requires current evidence), so a
+    stop whose applied commit's evidence is stale stays a stop."""
+    from refactory_dsh import design_ops, nn
+
+    run = _spine_attempt(tmp_path, monkeypatch, "true")
+    _walk_on_the_spine(run, monkeypatch, *_ATTEMPT)
+    knobs = json.loads(os.environ["REFACTORY_KNOBS"])
+
+    def context():
+        return nn.RunContext(run, facts=json.loads((run / "facts.json").read_text()), knobs=knobs,
+                             enforce_writes=False)
+
+    assert design_ops._draft_for_stop(context(), BuildLoopStop("limit")) is not None
+    (run / "design.md").write_text("# A design approved after the check ran\n")
+    assert design_ops._draft_for_stop(context(), BuildLoopStop("limit")) is None

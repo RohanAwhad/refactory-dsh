@@ -692,7 +692,9 @@ def test_a_design_run_produces_a_checked_artifact():
     assert not (ARTIFACTS / ARTIFACT).exists(), "nothing is written under .factory/artifacts"
 
 
-def test_a_design_that_never_passes_its_check_fails_loudly():
+def test_a_design_that_never_passes_its_check_is_delivered_as_a_check_failing_draft():
+    """Its attempts applied, so at the check limit the run is not a failure but a draft
+    marked check failing (b45a): loud in its title and its description, not in its exit."""
     mode = DesignMode()
     workdir = Path(".factory/design-fail")
     shutil.rmtree(workdir, ignore_errors=True)
@@ -705,16 +707,10 @@ def test_a_design_that_never_passes_its_check_fails_loudly():
         task={"name": ARTIFACT, "brief": "a tool", "check": "python tool.py"},
         verdicts={"gate_strategy": "proceed"},
     )
-    # With the always-a-PR change: when a commit fact exists, gate_check routes
-    # to draft delivery instead of raising.  Without a commit (no applied attempt),
-    # the run still fails.
-    if result.facts.get("commit"):
-        assert result.exit_ok is True
-        assert result.facts.get("draft_delivery"), "expected draft_delivery fact"
-        assert result.facts["draft_delivery"].get("check_failing") is True
-    else:
-        assert result.exit_ok is False
-        assert "check attempts exhausted after 3 check failure(s)" in (result.error or "")
+    assert result.exit_ok, result.error
+    fact = result.facts["draft_delivery"]
+    assert fact["reason"] == "check attempts exhausted after 3 check failure(s)"
+    assert fact["check_failing"] is True
 
 
 def test_a_revision_records_the_state_it_came_from(tmp_path):
