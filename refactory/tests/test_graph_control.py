@@ -1251,7 +1251,8 @@ def test_rerun_text_on_no_prompt_node_refused(tmp_path):
     # Try to rerun the 'materialise' FnNode with text
     # First get the revision
     checkpoint = root / '.refactory/spine-checkpoint.json'
-    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    saved = json.loads(checkpoint.read_text())
+    revision = saved.get('graph_revision') or hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match='this node takes no text; drop --text'):
         graph_control.request(root, 'rerun', node='materialise',
                               text='fix this', revision=revision)
@@ -1263,7 +1264,8 @@ def test_rerun_text_on_agent_node_not_refused_by_text_check(tmp_path):
     """
     root = _make_run_dir(tmp_path, status='halted', owner_pid=_dead_pid())
     checkpoint = root / '.refactory/spine-checkpoint.json'
-    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    saved = json.loads(checkpoint.read_text())
+    revision = saved.get('graph_revision') or hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     # The 'emit' node is an AgentNode — text should pass the type check
     # but may fail at redo_plans/revision validation
     try:

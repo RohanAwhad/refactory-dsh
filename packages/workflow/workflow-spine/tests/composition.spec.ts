@@ -391,9 +391,8 @@ describe('gate reason composition through applyControls', () => {
     const halted = await call(ctx, 'wf_next') as { status: string; halted?: { reason: string } }
     expect(halted.status).toBe('done')
     expect(halted.halted?.reason).toBe('max_iterations')
-    // Write a checkpoint for the revision
-    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Read the checkpoint's graph_revision (the way a person gets it from preview)
+    const revision = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     // Queue a rerun control without text
     const directory = join(workdir, '.refactory', 'graph-controls')
     mkdirSync(directory, { recursive: true })
@@ -420,8 +419,8 @@ describe('gate reason composition through applyControls', () => {
     await call(ctx, 'wf_next')     // check is due again
     await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'fourth refusal' })
     // count=2, cap=1: 2 > 1 → halts at max_iterations
-    const cpBytes2 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision2 = createHash('sha256').update(cpBytes2).digest('hex')
+    await call(ctx, 'wf_next')     // flush halted state to disk
+    const revision2 = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     writeFileSync(join(directory, '2.json'), JSON.stringify({
       id: '2', action: 'rerun', target: 'emit', text: 'try a different approach',
       revision: revision2, run_id: resolve(workdir), invocation: null,
@@ -441,8 +440,8 @@ describe('gate reason composition through applyControls', () => {
     await call(ctx, 'wf_next')     // done_node
     await call(ctx, 'wf_done', { node: 'done_node' })
     // Now done. Redo emit after gate proceeded.
-    const cpBytes3 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision3 = createHash('sha256').update(cpBytes3).digest('hex')
+    await call(ctx, 'wf_next')     // flush done state to disk
+    const revision3 = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     writeFileSync(join(directory, '3.json'), JSON.stringify({
       id: '3', action: 'rerun', target: 'emit', text: '',
       revision: revision3, run_id: resolve(workdir), invocation: null,
