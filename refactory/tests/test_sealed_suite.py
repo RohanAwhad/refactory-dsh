@@ -26,14 +26,27 @@ def test_a_test_gets_an_empty_dsh_home_of_its_own():
     assert home.is_dir() and not any(home.iterdir())
 
 
-def test_reaching_the_real_dsh_home_is_refused():
-    real = Path(conftest._REAL_DSH_HOMES[0])
+def test_the_persons_dsh_home_is_among_the_sealed_homes():
+    """Read from the session's start, without touching the filesystem."""
+    assert os.path.realpath(Path.home() / ".dsh") in conftest._REAL_DSH_HOMES
+
+
+def test_reaching_a_sealed_home_is_refused(tmp_path, monkeypatch):
+    """The guard is exercised on a directory standing in for the real home, so that if it
+    ever stopped working this test would write into a temporary directory, not the
+    person's DSH home."""
+    stand_in = tmp_path / "stand-in-home"
+    stand_in.mkdir()
+    monkeypatch.setattr(conftest, "_REAL_DSH_HOMES", (str(stand_in),))
+    monkeypatch.setattr(conftest, "_REAL_DSH_HOME_IN_TEXT",
+                        conftest.re.compile(conftest.re.escape(str(stand_in)) + r"(?![\w.-])"))
     with pytest.raises(conftest.SealBroken):
-        os.listdir(real)
+        os.listdir(stand_in)
     with pytest.raises(conftest.SealBroken):
-        open(real / "sealed-suite-probe", "w")
+        open(stand_in / "sealed-suite-probe", "w")
     with pytest.raises(conftest.SealBroken):
-        subprocess.run(["true"], env={**os.environ, "DSH_HOME": str(real)})
+        subprocess.run(["true"], env={**os.environ, "DSH_HOME": str(stand_in)})
+    assert not (stand_in / "sealed-suite-probe").exists()
     # Refused as intended: this test is not the one that broke the seal.
     conftest._SEAL["touched"].clear()
 
