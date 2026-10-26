@@ -48,5 +48,8 @@ steer = "refactory_dsh.console"
 [project.entry-points.'refactory.owner_module']
 interactive = "refactory_dsh.interactive"
 
+[project.entry-points.'refactory.run_end']
+warm_clones = "refactory_dsh.builder_probe:sweep_warm_clones"
+
 [tool.setuptools.package-data]
 refactory_dsh = ["*.mjs", "patches/*.yml", "data/*.json"]

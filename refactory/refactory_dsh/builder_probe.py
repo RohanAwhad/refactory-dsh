@@ -117,45 +117,82 @@ def _warm_key(head: str, target: str, setup: str, generate: str) -> str:
     ).hexdigest()
 
 
+class CloneNotRemoved(OSError):
+    """A warm clone is still on disk after its removal; the message names it and why."""
+
+
 def sweep_warm_clones(workdir: Path) -> None:
     """Remove all warm probe clones for this run.
 
     Called by materialise (``refactory/refactory_dsh/repo_change.py``, the step
-    right after emit) to clean up warm clones once the builder's turn is over.
-    Cold probes are cleaned by ``sweep_dead_probes``; warm clones are identified
-    by having a ``cache.key`` file.
+    right after emit) once the builder's turn is over, and at the run's end: by
+    the walker (``refactory/refactory_dsh/nn/executor.py``, through the
+    ``refactory.run_end`` entry point), by a spine run's owner
+    (``refactory/refactory_dsh/interactive.py``) and by the DSH evaluator
+    (``refactory/refactory_dsh/dsh_runtime.py``). Cold probes are cleaned by
+    ``sweep_dead_probes``; warm clones are identified by having a ``cache.key``
+    file.
+
+    A clone whose lock another probe holds is in use and is left. One that cannot
+    be removed raises :class:`CloneNotRemoved` naming it, after every other clone
+    was tried, so the caller's warning says which clone is left on disk.
     """
     refactory_dir = Path(workdir) / ".refactory"
     if not refactory_dir.is_dir():
         return
+    left: list[str] = []
     for entry in sorted(refactory_dir.iterdir()):
         if not entry.name.startswith("probe-") or not entry.is_dir():
             continue
         if not (entry / "cache.key").is_file():
             continue
-        _try_evict_clone(entry, refactory_dir)
+        try:
+            _try_evict_clone(entry, refactory_dir)
+        except CloneNotRemoved as exc:
+            left.append(str(exc))
+    if left:
+        raise CloneNotRemoved("; ".join(left))
+
+
+def _remove_tree(path: Path) -> list[str]:
+    """Remove ``path`` as far as it can be removed; what could not be, as messages."""
+    failures: list[str] = []
+
+    def record(_function: Any, _name: str, error: Any) -> None:
+        failures.append(str(error[1] if isinstance(error, tuple) else error))
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=record)
+    else:  # pragma: no cover - Python 3.11 names the handler onerror
+        shutil.rmtree(path, onerror=record)
+    return failures
 
 
 def _try_evict_clone(probe_dir: Path, refactory_dir: Path) -> bool:
-    """Try to evict a warm clone: acquire its lock without blocking, then rmtree.
+    """Evict a warm clone: take its lock without blocking, then remove it.
 
-    Returns True if the clone was removed, False if it was skipped (in use).
+    Returns True when the clone is gone, False when another probe holds its lock
+    (in use, so it is left). Raises :class:`CloneNotRemoved` naming the clone when
+    it is still on disk afterwards.
     """
-    lock_path = probe_dir / "probe.lock"
     try:
-        fd = open(lock_path, "w")
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (BlockingIOError, OSError):
-        return False
-    try:
-        probe_id = probe_dir.name.removeprefix("probe-")
-        shutil.rmtree(probe_dir, ignore_errors=True)
-        (refactory_dir / "slot" / f"run-probe-{probe_id}.json").unlink(missing_ok=True)
-    finally:
+        fd = open(probe_dir / "probe.lock", "w")
+    except OSError as exc:
+        if not probe_dir.exists():
+            return True  # another sweep removed it first
+        raise CloneNotRemoved(f"could not remove warm clone {probe_dir}: {exc}") from exc
+    with fd:
         try:
-            fd.close()
-        except OSError:
-            pass
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        except OSError as exc:
+            raise CloneNotRemoved(f"could not remove warm clone {probe_dir}: {exc}") from exc
+        failures = _remove_tree(probe_dir)
+        if failures:
+            raise CloneNotRemoved(f"could not remove warm clone {probe_dir}: {failures[0]}")
+        probe_id = probe_dir.name.removeprefix("probe-")
+        (refactory_dir / "slot" / f"run-probe-{probe_id}.json").unlink(missing_ok=True)
     return True
 
 
@@ -292,7 +329,8 @@ def prepared_clone(
     When *warm* is True the clone is kept on disk after the context exits and
     reused by subsequent probes whose cache key matches.  Concurrent probes
     are serialised by ``fcntl.flock`` on the clone directory.  Warm clones
-    are cleaned up by ``sweep_warm_clones``, called from materialise.
+    are cleaned up by ``sweep_warm_clones``, called from materialise and at
+    the run's end.
     """
     workdir = Path(workdir)
     lock_fd = None
@@ -369,8 +407,12 @@ def prepared_clone(
                         dsh_home_dir = probe_dir / "dsh_home"
                         warm_hit = True
                     else:
-                        # Stale eviction — lock-safe (fix 6)
-                        _try_evict_clone(entry, refactory_dir)
+                        # Stale eviction — lock-safe (fix 6). One it cannot
+                        # remove is left for the next sweep, which names it.
+                        try:
+                            _try_evict_clone(entry, refactory_dir)
+                        except CloneNotRemoved:
+                            pass
 
                 if not warm_hit:
                     # Cold clone under the creation lock
@@ -457,6 +499,11 @@ def prepared_clone(
 
                 clone_head = _stage_emission(
                     clone_dir, clone_base, emission, workdir, found)
+            except worktree.AttemptRefused:
+                # The builder's emission is refused before it touches the clone
+                # (apply_emission and the .git and symlink guards run first), so
+                # the clone is not broken: keep it warm for the next probe.
+                raise
             except Exception:
                 # Evict the broken clone and fall back to a cold clone (fix 3B)
                 if lock_fd is not None:
@@ -466,10 +513,13 @@ def prepared_clone(
                     except OSError:
                         pass
                     lock_fd = None
-                # If eviction fails (clone locked by another process), a
-                # second clone with the same cache.key is created; the orphan
-                # is cleaned by the next sweep.
-                _try_evict_clone(probe_dir, refactory_dir)
+                # If eviction fails (clone locked by another process, or not
+                # removable), a second clone with the same cache.key is
+                # created; the orphan is cleaned by the next sweep.
+                try:
+                    _try_evict_clone(probe_dir, refactory_dir)
+                except CloneNotRemoved:
+                    pass
                 probe_id = uuid.uuid4().hex[:12]
                 probe_dir = workdir / ".refactory" / f"probe-{probe_id}"
                 clone_dir = probe_dir / "repo"

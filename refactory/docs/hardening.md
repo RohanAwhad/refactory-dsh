@@ -50,13 +50,20 @@ apply:
   removed so tools resolve from the clone, not from the run's worktree.
 - **Lifecycle**: cold probes are deleted in a `finally` block. Warm probes
   (`--test` via the CLI) are kept on disk between probes for reuse — the clone
-  directory survives with `.venv` and `node_modules` intact — and are cleaned up
-  by `sweep_warm_clones`, called from `materialise` and from both runtimes'
-  end-of-run cleanup. Leaked cold probes are swept by `sweep_dead_probes`
+  directory survives with `.venv` and `node_modules` intact — and are removed
+  by `sweep_warm_clones`: at `materialise`, and at the run's end by the walker
+  (`nn.executor.execute`, through the `refactory.run_end` entry point), by the
+  owner of a spine run started from the CLI (`interactive.run`) and by the DSH
+  evaluator (`dsh_runtime.evaluate_on_dsh`). A run the GUI's DSH server drives
+  has no Python owner, so nothing removes a clone it leaves before materialise.
+  A clone another probe is using is skipped; one that cannot be removed is
+  named in a warning. Leaked cold probes are swept by `sweep_dead_probes`
   (owner PID check).
 - **Not an attempt**: no `commit_attempt`, no attempt counter increment.
 - **target_guard preserved**: the existing test at `test_design_worktree.py:667`
-  continues to pass.  The probe cleans up before `finish()`.
+  continues to pass.  A cold probe is removed before `finish()`; a warm clone
+  stays under the run directory's `.refactory/` until materialise or the
+  run's end.
 
 #### Why each isolation guarantee exists
 
