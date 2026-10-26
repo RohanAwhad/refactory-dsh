@@ -6,9 +6,10 @@ most five pitfalls, one strategy perspective.  Non-refine research is guided to 
 classify_scale runs after research and sets the class from the footprint.  At every
 scale the design goes straight from the claims check to the design-review gate, which
 sends it back only when its ## Changes section is missing or empty, and once; everything
-else -- a misquote, a citation past the end of its file, an unanswered high-risk
-pitfall -- is listed as advisory at the person's gate and costs no round, and an
-optional section a design leaves out is not checked.
+else -- a misquote, a citation past the end of its file, a high-risk pitfall the
+design never mentions -- is listed as advisory at the person's gate and costs no round,
+and an optional section a design leaves out is not checked.  Pitfalls are quoted on the
+card, never judged (dm-262).
 """
 from __future__ import annotations
 
@@ -64,13 +65,12 @@ def test_a_light_design_passes_with_nothing_to_list():
     assert verdict == "proceed"
     assert ctx.facts["design_review_advisory"] == ""
     assert ctx.facts["design_review_status"] == "Design review: PASS"
-    # No Anti-patterns section: the pitfalls are not checked against it.
-    assert "not checked" in ctx.facts["pitfall_coverage"]
+    # A low-risk pitfall the design does not mention is listed, not advised on.
+    assert ctx.facts["pitfall_coverage"] == "Pitfall citations:\n  PIT-002 (low): not mentioned"
 
 
-def test_a_light_design_names_the_high_risk_pitfalls_it_leaves_unchecked():
-    """Without an Anti-patterns section nothing is checked against the pitfalls; the card
-    says which high-risk ones that leaves, in one line."""
+def test_a_light_design_names_the_high_risk_pitfalls_it_never_mentions():
+    """The card says which high-risk pitfalls the design never cites, in one line."""
     light = ("# Make the tool print what it built\n\n## Summary\n\nIt prints nothing now.\n\n"
              "## Changes\n\n- `tool.py` \u2014 print the built name\n\n"
              "## Tests\n\n- `tests/test_tool.py::test_build` \u2014 the name is printed\n")
@@ -81,9 +81,7 @@ def test_a_light_design_names_the_high_risk_pitfalls_it_leaves_unchecked():
     assert verdict == "proceed"
     assert ctx.facts["design_review_status"] == (
         "Design review: PASS\nOther advisories: 1\n"
-        "- high-risk pitfall(s) not checked: the design has no ## Anti-patterns to avoid "
-        "section: PIT-001, PIT-003")
-    assert "not checked" in ctx.facts["pitfall_coverage"]
+        "- high-risk pitfall(s) the design does not mention: PIT-001, PIT-003")
 
 
 def test_a_missing_summary_or_tests_section_is_listed():
@@ -123,12 +121,12 @@ def test_a_misquote_that_drops_a_negation_is_not_called_a_punctuation_slip():
     assert "only in punctuation" not in ctx.facts["design_review_advisory"]
 
 
-def test_a_missing_high_risk_pitfall_is_listed_when_the_design_answers_pitfalls():
+def test_a_high_risk_pitfall_the_design_never_mentions_is_listed():
     design = _make_design() + "\n## Anti-patterns to avoid\n\n- PIT-002: addressed at \u00a7 Changes\n"
     ctx, verdict = _gate(design, pitfalls=[
         {"id": "PIT-001", "risk": "high", "text": "the cache key ignores the base"}])
     assert verdict == "proceed"
-    assert "high-risk pitfall(s) not addressed in the design: PIT-001" in (
+    assert "high-risk pitfall(s) the design does not mention: PIT-001" in (
         ctx.facts["design_review_advisory"])
 
 
@@ -158,13 +156,13 @@ def test_paperwork_items_are_listed_and_cost_no_round():
     assert "Other advisories: 2" in status and "other.py:3" in status
 
 
-def test_an_unmentioned_medium_pitfall_is_not_called_missing():
+def test_an_unmentioned_medium_pitfall_is_listed_but_not_advised_on():
     design = _make_design() + "\n## Anti-patterns to avoid\n\n- none of high risk\n"
     ctx, verdict = _gate(design, pitfalls=[
         {"id": "PIT-002", "risk": "medium", "text": "a slower path on large inputs"}])
     assert verdict == "proceed"
     assert "PIT-002 (medium): not mentioned" in ctx.facts["pitfall_coverage"]
-    assert "MISSING" not in ctx.facts["pitfall_coverage"]
+    assert "pitfall" not in ctx.facts["design_review_advisory"]
 
 
 def test_the_fail_count_counts_only_blocking_findings():
@@ -316,6 +314,98 @@ def test_doc_only_research_with_empty_footprints_is_scoped():
     result = classify_scale(ctx)
     assert result["research_scope"] == "scoped"
     assert "0 existing function" in result["research_scope_reason"]
+
+
+def _checkout(path: Path, *, empty: bool) -> Path:
+    """A git checkout: a new project's (one empty commit) or a person's (it holds app.py)."""
+    import subprocess
+
+    path.mkdir(parents=True)
+    run = lambda *args: subprocess.run(["git", "-C", str(path), *args], check=True,  # noqa: E731
+                                       capture_output=True)
+    run("init", "-q", "-b", "main")
+    if not empty:
+        (path / "app.py").write_text("def main():\n    pass\n")
+        run("add", "app.py")
+    run("-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+        "commit", "-q", "--allow-empty", "-m", "start")
+    return path
+
+
+_WORDCOUNT_PLAN = (Path(__file__).resolve().parent / "fixtures" / "wordcount_research_plan.json").read_text()
+
+
+def test_a_new_project_brief_that_only_adds_new_items_is_scoped(tmp_path):
+    """The README's wordcount brief was classed full because a new project always "adds new
+    items", and took 14.5 min to its gate (dm-259). Its research, as the run wrote it."""
+    ctx = _scale_ctx(_WORDCOUNT_PLAN, facts={"source": str(_checkout(tmp_path / "new", empty=True))})
+    result = classify_scale(ctx)
+    assert result["research_scope"] == "scoped"
+    assert result["research_scope_reason"] == (
+        "a new or empty project: adds sample.txt:1 — new sample data file, wordcount.py:1 "
+        "— new script file with main() function; touches no existing function, no shared engine")
+
+
+def _direction(slug: str, new: list[str], engine: list[str] | None = None) -> dict:
+    return {"focus": slug, "slug": slug, "finding": "f", "ids": [], "footprint": {
+        "existing_functions": [], "new_items": new, "shared_engine": engine or []}}
+
+
+def test_a_new_project_with_more_than_three_new_items_stays_full(tmp_path):
+    """The user's limit (2026-10-26): a new project with at most 3 new items is scoped;
+    larger ones stay full. The review's service plan is nine new items."""
+    source = str(_checkout(tmp_path / "new", empty=True))
+    service = [
+        _direction("api", ["api/server.py:1 FastAPI app with 12 REST endpoints",
+                           "api/auth.py:1 OAuth2 + JWT middleware"]),
+        _direction("storage", ["db/models.py:1 SQLAlchemy models for 9 tables",
+                               "db/migrations/:1 Alembic migrations"]),
+        _direction("worker", ["worker/queue.py:1 Redis-backed job queue",
+                              "worker/tasks.py:1 6 background tasks"]),
+        _direction("cli", ["cli/main.py:1 admin CLI with 8 commands"]),
+        _direction("deploy", ["Dockerfile:1 image", "docker-compose.yml:1 api+worker+db+redis"]),
+    ]
+    result = classify_scale(_scale_ctx(service, facts={"source": source}))
+    assert result["research_scope"] == "full"
+    assert result["research_scope_reason"].startswith(
+        "a new or empty project that adds 9 new items (max 3 for scoped): ")
+
+    items = ["a.py:1 a", "b.py:1 b", "c.py:1 c", "d.py:1 d"]
+    three = classify_scale(_scale_ctx([_direction("q", items[:3])], facts={"source": source}))
+    assert three == {"research_scope": "scoped", "research_scope_reason":
+                     "a new or empty project: adds a.py:1 a, b.py:1 b, c.py:1 c; touches no "
+                     "existing function, no shared engine"}
+    # Counted once however many directions name an item.
+    twice = [_direction("q", items[:3]), _direction("r", items[1:3])]
+    assert classify_scale(_scale_ctx(twice, facts={"source": source}))["research_scope"] == "scoped"
+    four = classify_scale(_scale_ctx([_direction("q", items)], facts={"source": source}))
+    assert four["research_scope"] == "full"
+
+
+def test_an_existing_project_brief_that_adds_new_items_is_still_full(tmp_path):
+    ctx = _scale_ctx(_WORDCOUNT_PLAN, facts={"source": str(_checkout(tmp_path / "old", empty=False))})
+    assert classify_scale(ctx) == {
+        "research_scope": "full",
+        "research_scope_reason": "adds new items: sample.txt:1 — new sample data file, "
+                                 "wordcount.py:1 — new script file with main() function"}
+
+
+def test_a_new_project_still_goes_full_on_a_shared_engine_or_a_cited_function(tmp_path):
+    source = str(_checkout(tmp_path / "new", empty=True))
+    engine = [{"focus": "q", "slug": "s", "finding": "f", "ids": [], "footprint": {
+        "existing_functions": [], "new_items": ["tool.py:1 new"], "shared_engine": ["executor.py:10"]}}]
+    assert classify_scale(_scale_ctx(engine, facts={"source": source}))["research_scope_reason"] == (
+        "changes a shared engine: executor.py:10")
+    # Nothing exists to cite in an empty checkout: a cited function is unresolvable.
+    cited = [{"focus": "q", "slug": "s", "finding": "f", "ids": [], "footprint": {
+        "existing_functions": ["app.py:1 main"], "new_items": ["tool.py:1 new"], "shared_engine": []}}]
+    assert classify_scale(_scale_ctx(cited, facts={"source": source}))["research_scope"] == "full"
+    # A refine is decided before the footprint is read, new project or not.
+    refine = classify_scale(_scale_ctx(_WORDCOUNT_PLAN, facts={
+        "source": source, "research_scope_reason": REFINE_SCOPE_REASON}))
+    assert refine == {"research_scope": "scoped", "research_scope_reason": REFINE_SCOPE_REASON}
+    # Without a checkout to read, nothing says the project is empty: full, as before.
+    assert classify_scale(_scale_ctx(_WORDCOUNT_PLAN))["research_scope"] == "full"
 
 
 def test_footprint_entry_without_evidence_is_full():
@@ -883,10 +973,10 @@ def test_the_gate_card_is_plain_text_summary_review_scale_advisories_then_pitfal
         "Unverified claims (high, advisory): 1\n"
         "- unverified claim: `nope.py` does not exist\n\n"
         "Other advisories: 1\n"
-        "- high-risk pitfall(s) not addressed in the design: PIT-001\n\n"
+        "- high-risk pitfall(s) the design does not mention: PIT-001\n\n"
         "Pitfalls: 2\n"
-        "- PIT-001 (high): MISSING\n"
-        "- PIT-002 (low): addressed")
+        "- PIT-001 (high): not mentioned\n"
+        "- PIT-002 (low): \u00a7 Anti-patterns to avoid: \"PIT-002: see \u00a7 Changes\"")
     notes = DesignMode().build().nodes["gate_strategy"].notes
     facts = {**ctx.facts, "delivery": "this run opens a draft pull request"}
     shown = render(notes, SimpleNamespace(knobs={}, facts=facts))
@@ -904,8 +994,8 @@ def test_the_gate_card_is_plain_text_summary_review_scale_advisories_then_pitfal
         "Design review: FAIL, 1 unresolved\n"
         "- the design is missing the section the build needs, or it is empty: ## Changes"]
 
-    # A design with no Anti-patterns section: the one line saying the pitfalls were not checked.
+    # A design with no Anti-patterns section: its pitfalls are listed all the same.
     card = _card(_CARD_DESIGN.split("## Anti-patterns")[0]).facts["design_card"]
-    assert card.split("\n\n")[-1] == ("Pitfalls: pitfall coverage not checked: the design has no "
-                                       "## Anti-patterns to avoid section (optional)")
+    assert card.split("\n\n")[-1] == ("Pitfalls: 2\n- PIT-001 (high): not mentioned\n"
+                                       "- PIT-002 (low): not mentioned")
     assert not any(line.startswith("#") for line in card.splitlines()), "no markdown heading"

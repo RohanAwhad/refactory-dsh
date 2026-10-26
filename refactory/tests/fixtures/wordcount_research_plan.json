@@ -1,0 +1,57 @@
+[
+  {
+    "focus": "How does Python count lines, words, and characters, and how do these compare to the Unix wc command?",
+    "slug": "python-wc-semantics",
+    "finding": "Python's content.count('\\n') exactly matches wc -l (counts newline terminators, not visual lines). len(content.split()) matches wc -w in UTF-8 locales. len(content) on str matches wc -m (character/code-point count), while len(content.encode('utf-8')) matches wc -c (byte count). For ASCII-only files, bytes and characters are identical. splitlines() does NOT match wc -l — it counts visual lines and handles trailing newlines differently.",
+    "ids": ["FND-python-wc-semantics-1", "FND-python-wc-semantics-2", "FND-python-wc-semantics-3", "FND-python-wc-semantics-4", "FND-python-wc-semantics-5", "FND-python-wc-semantics-6", "FND-python-wc-semantics-7", "FND-python-wc-semantics-8"],
+    "footprint": {
+      "existing_functions": [],
+      "new_items": [],
+      "shared_engine": []
+    }
+  },
+  {
+    "focus": "What CLI interface and output format should wordcount.py use?",
+    "slug": "cli-interface-pattern",
+    "finding": "Use sys.argv[1] directly (no argparse needed for a single-file tool). Output should be a single line in wc order: lines words chars filename, space-separated via print(). Use content.count('\\n') for lines, len(content.split()) for words, and len(content) for characters. The complete implementation is ~7 lines of code using only the standard library.",
+    "ids": ["FND-cli-interface-pattern-1", "FND-cli-interface-pattern-2", "FND-cli-interface-pattern-3", "FND-cli-interface-pattern-4", "FND-cli-interface-pattern-5", "FND-cli-interface-pattern-6", "FND-cli-interface-pattern-7"],
+    "footprint": {
+      "existing_functions": [],
+      "new_items": ["wordcount.py:1 — new script file with main() function"],
+      "shared_engine": []
+    }
+  },
+  {
+    "focus": "What content should sample.txt contain to exercise edge cases in line, word, and character counting?",
+    "slug": "sample-txt-design",
+    "finding": "A 7-line ASCII file with: a normal 2-word line, two 6-word lines, one empty line, a single-word line, a line with extra spaces between words, and a 3-word closing line. This yields exactly 7 lines, 23 words, and 126 characters (including newlines). All three counts match both Python and wc. The file ends with a trailing newline per POSIX convention. The extra-spaces line exercises split() vs split(' '), and the empty line tests zero-word line handling.",
+    "ids": ["FND-sample-txt-design-1", "FND-sample-txt-design-2", "FND-sample-txt-design-3", "FND-sample-txt-design-4", "FND-sample-txt-design-5"],
+    "footprint": {
+      "existing_functions": [],
+      "new_items": ["sample.txt:1 — new sample data file"],
+      "shared_engine": []
+    }
+  },
+  {
+    "focus": "How should wordcount.py handle errors such as missing files and no arguments?",
+    "slug": "error-handling",
+    "finding": "Check sys.argv length and print a usage message to stderr with exit(1) if no argument given. Wrap open() in try/except FileNotFoundError and print an error naming the file with exit(1). Default UTF-8 encoding is sufficient; no stdin fallback is needed. The happy path (file exists, ASCII content) is the priority since the check command always provides sample.txt.",
+    "ids": ["FND-error-handling-1", "FND-error-handling-2", "FND-error-handling-3", "FND-error-handling-4", "FND-error-handling-5", "FND-error-handling-6"],
+    "footprint": {
+      "existing_functions": [],
+      "new_items": [],
+      "shared_engine": []
+    }
+  },
+  {
+    "focus": "How should the output of wordcount.py be structured for verification, and what constitutes a passing check?",
+    "slug": "verification-strategy",
+    "finding": "Exit code 0 is the primary pass/fail signal. The output format can be either labeled (Lines: N / Words: N / Characters: N) or wc-style (N N N filename) — both are acceptable. The script and sample file must agree on counting semantics; using wc-compatible semantics (count('\\n'), split(), len()) lets wc serve as an independent oracle. The sample file should be ASCII-only so character count equals byte count. Expected output for the proposed sample.txt: 7 23 126 sample.txt.",
+    "ids": ["FND-verification-strategy-1", "FND-verification-strategy-2", "FND-verification-strategy-3", "FND-verification-strategy-4", "FND-verification-strategy-5", "FND-verification-strategy-6", "FND-verification-strategy-7", "FND-verification-strategy-8"],
+    "footprint": {
+      "existing_functions": [],
+      "new_items": [],
+      "shared_engine": []
+    }
+  }
+]

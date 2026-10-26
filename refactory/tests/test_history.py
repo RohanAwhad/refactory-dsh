@@ -163,7 +163,8 @@ def test_no_batch_slot_is_silently_lost(tmp_path):
         candidates, rejections = loop.optimizer_step()
         added = loop.step(candidates)
         counts.append((len(candidates), len(added), len(rejections)))
-        if not loop.scheduler(evaluated=evaluated, proposed=len(candidates) + len(rejections)):
+        if not loop.scheduler(evaluated=evaluated, proposed=len(candidates) + len(rejections),
+                              accepted=len(candidates), refused=len(rejections)):
             break
     for proposed, added, refused in counts:
         assert added + refused >= proposed, (

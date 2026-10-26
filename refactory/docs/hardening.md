@@ -2975,7 +2975,8 @@ design go straight to the person's gate, and that gate is the design check.
   names the high-risk ones that leaves unchecked. For one without `## Rule and sites`,
   a site is a `path:line` it cites anywhere, the entry itself included, whose file is
   in the checkout or named in `## Changes`: a pitfall answered with the site that
-  handles it counts, and a made-up `nowhere/made_up.py:999` does not.
+  handles it counts, and a made-up `nowhere/made_up.py:999` does not. (Since dm-262 the
+  pitfalls are not checked at all: the card quotes the lines that cite each one.)
 
 ### The card
 
@@ -3038,10 +3039,10 @@ design mode, because nothing reads them; validation V7 refuses an unused knob.
 - `test_design_claims.py::test_a_bare_or_package_relative_path_names_its_one_tracked_file`
 - `test_design_scale.py::test_only_a_missing_or_empty_changes_section_sends_the_design_back`
 - `test_design_scale.py::test_a_light_design_passes_with_nothing_to_list`
-- `test_design_scale.py::test_a_light_design_names_the_high_risk_pitfalls_it_leaves_unchecked`
+- `test_design_scale.py::test_a_light_design_names_the_high_risk_pitfalls_it_never_mentions`
 - `test_design_scale.py::test_a_tracked_symlink_out_of_the_checkout_names_nothing`
-- `test_pitfalls.py::test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites`
-- `test_pitfalls.py::test_a_cited_site_counts_when_its_file_is_real_or_changed`
+- `test_pitfalls.py::test_the_gate_lists_quotes_and_names_high_risk_pitfalls_never_mentioned`
+- `test_pitfalls.py::test_a_design_without_an_anti_patterns_section_is_quoted_all_the_same`
 - `test_design_scale.py::test_every_scale_gets_one_rewrite_for_a_missing_section`
 - `test_design_contract_extensions.py::test_prompt_contract_requires_only_summary_changes_and_tests`
 - `test_design_contract_extensions.py::test_an_optional_section_left_out_is_not_checked`

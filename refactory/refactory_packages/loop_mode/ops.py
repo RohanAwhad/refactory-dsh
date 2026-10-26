@@ -172,9 +172,13 @@ def scheduler(ctx: Any) -> dict[str, Any]:
     a separate node and may be a separate process.
     """
     loop = _resumed(ctx)
+    # This epoch's counts, as the optimizer step reported them (its `proposed`,
+    # `accepted` and `refused` facts), so the summary agrees with the progress line.
     another = loop.scheduler(
         evaluated=sum(1 for candidate in loop.population if candidate.evaluated),
-        proposed=len(loop.read_pending()),
+        proposed=int(ctx.facts.get("proposed") or 0),
+        accepted=int(ctx.facts.get("accepted") or 0),
+        refused=int(ctx.facts.get("refused") or 0),
     )
     loop.close_epoch()
     ctx.write_json(SCHEDULER, {"another": another, "bound": loop.bound, "epoch": loop.epoch})

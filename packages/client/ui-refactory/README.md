@@ -24,6 +24,7 @@ The right Sidebar's picker tab type: choose a mode from the console's catalogue,
 
 - **The type** — `ctx.sidebarRightTabs.register(...)` with kind `refactory`, id `@deepseek-ai/dsh-client-ui-refactory`, band `builtin`, no patterns, and one guide entry (order 10, titled from the `sidebarRefactory` namespace) that opens the type.
 - **The body** — the keyed `sidebar.right.pane.tab` seat under that id: the picker, with its one control, reload, at the right of its header row.
+- **The page title** — the product's name, on every page this package is mounted in, the additive page (`./refactory-dsh --additive`) included, which keeps the upstream brand: the host half translates the initial HTML's `<title>` through `webServer.tapIndex`, and the browser half keeps the document title translated as the shell retitles it, replacing only the exact terminal `DeepSeek Harness` suffix so session titles stay (`src/title.ts`, `src/client/title.ts`). The observer disposes with the plugin; recheck it on upstream upgrades.
 
 Six source files under `src/client/`: `definition.ts` (the type), `store.ts` (what it keeps), `face.ts` (how it asks, Remote binding included), `RefactoryBody.tsx` (what it draws, with its failure-line helper), `locales.ts` (what it says), and `index.ts` (the wiring).
 
