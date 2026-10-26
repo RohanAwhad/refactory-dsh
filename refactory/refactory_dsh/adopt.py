@@ -188,7 +188,10 @@ def _score_basis(entries: list[dict[str, Any]], candidate_id: str, score: float)
                    and str(entry.get("id")) == candidate_id), {})
     raw = detail.get("raw_score")
     if not isinstance(raw, (int, float)) or isinstance(raw, bool):
-        return {"score_note": f"{_number(score)} with the cost penalty"}
+        # A journal from before the cost penalty: its score is the evaluator's own.
+        return {"score_note": f"{_number(score)} as the run recorded it; no raw score to compare"}
+    if round(float(raw) - float(score), 9) == 0:
+        return {"raw_score": raw, "score_note": f"{_number(score)} raw; the search took no cost penalty"}
     penalty = ""
     if isinstance(detail.get("parsimony"), (int, float)) and isinstance(detail.get("nodes"), int):
         penalty = f" ({_number(detail['parsimony'])} x {detail['nodes']} nodes)"

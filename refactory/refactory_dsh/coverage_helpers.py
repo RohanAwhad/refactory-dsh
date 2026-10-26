@@ -1,7 +1,7 @@
-"""Shared markdown-section helpers for pitfall and finding coverage checks.
+"""Shared markdown-section helpers for the finding coverage check.
 
-Extracted from pitfalls.py so both pitfalls.py and findings_coverage.py
-can import them without copying.
+Extracted from pitfalls.py, which no longer judges pitfall coverage: the approval card
+quotes where a design cites each pitfall instead (dm-262).
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def site_paths(text: str, source: str = "") -> list[str]:
     That section is optional. A design without it names its sites where it uses them:
     for such a design a site is any backticked ``path:line`` citation in it, the entry
     being checked included, whose file is in the checkout at *source* (the shared
-    resolver) or is named in ``## Changes``. So a pitfall answered with the site that
+    resolver) or is named in ``## Changes``. So a finding answered with the site that
     handles it (``tool.py:12``) counts, and a made-up ``nowhere/made_up.py:999`` names
     nothing. A file cited without a line is not a site.
     """

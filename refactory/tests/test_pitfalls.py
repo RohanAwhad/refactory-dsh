@@ -108,246 +108,87 @@ def _contract(body: str = "", anti: str = "") -> str:
     return base
 
 
-def test_pitfall_coverage_missing_when_no_anti_patterns_section():
-    addressed, set_aside, missing = pitfalls_mod.pitfall_coverage(
-        _contract(), [_pit()])
-    assert "PIT-001" in missing
+# ── where the design cites each pitfall (dm-262: quoted, never judged) ─────
+
+def _citations(design: str, *pits: dict) -> dict[str, list]:
+    return {entry["id"]: entry["quotes"]
+            for entry in pitfalls_mod.pitfall_citations(design, list(pits) or [_pit()])}
 
 
-def test_pitfall_coverage_set_aside_with_reason():
-    design = _contract(anti="- PIT-001: [set-aside: not applicable because the change does not touch this path]")
-    addressed, set_aside, missing = pitfalls_mod.pitfall_coverage(design, [_pit()])
-    assert "PIT-001" in set_aside
-    assert "PIT-001" not in missing
+def test_a_pitfall_the_design_never_cites_is_not_mentioned():
+    assert _citations(_contract()) == {"PIT-001": []}
+    entry = pitfalls_mod.pitfall_citations(_contract(), [_pit()])[0]
+    assert pitfalls_mod.citation_line(entry) == "PIT-001 (high): not mentioned"
 
 
-def test_pitfall_in_summary_only_fails():
-    """Correction test: a design mentioning PIT-001 only in its Summary fails."""
-    design = (
-        "# Do the thing\n\n"
-        "## Summary\n\nPIT-001 is important.\n\n"
-        "## Rule and sites\n\n"
-        "- `file.py:1` — **[changed]**\n\n"
-        "## Docs\n\n"
-        "- docs/models.md\n\n"
-        "## Changes\n\n"
-        "- file.py\n"
-    )
-    _, _, missing = pitfalls_mod.pitfall_coverage(design, [_pit()])
-    assert "PIT-001" in missing
+def test_every_line_citing_a_pitfall_is_quoted_under_its_heading_at_most_two():
+    design = _contract(body="### Notes\n\nPIT-001 is why the base is read twice.",
+                       anti="- **PIT-001** (high): addressed at `file.py:1`\n"
+                            "- PIT-001 again, a third mention")
+    assert _citations(design) == {"PIT-001": [
+        ("Notes", "PIT-001 is why the base is read twice."),
+        ("Anti-patterns to avoid", "PIT-001 (high): addressed at `file.py:1`")]}
+    entry = pitfalls_mod.pitfall_citations(design, [_pit()])[0]
+    assert pitfalls_mod.citation_line(entry) == (
+        "PIT-001 (high): \u00a7 Notes: \"PIT-001 is why the base is read twice.\"; "
+        "\u00a7 Anti-patterns to avoid: \"PIT-001 (high): addressed at `file.py:1`\"")
 
 
-def test_anti_patterns_entry_with_valid_site_passes():
-    """Correction test: an Anti-patterns entry naming a site that exists passes."""
-    design = _contract(anti="- PIT-001: addressed at `file.py:1`")
-    addressed, _, missing = pitfalls_mod.pitfall_coverage(design, [_pit()])
-    assert "PIT-001" in addressed
-    assert "PIT-001" not in missing
+def test_a_summary_mention_or_a_set_aside_is_quoted_like_any_other():
+    """Nothing is decided from the words: the person reads them."""
+    summary = _contract().replace("Fix it.", "PIT-001 is important.")
+    assert _citations(summary) == {"PIT-001": [("Summary", "PIT-001 is important.")]}
+    aside = _contract(anti="- PIT-001: **[set-aside: out of scope]**")
+    assert _citations(aside) == {"PIT-001": [("Anti-patterns to avoid",
+                                              "PIT-001: [set-aside: out of scope]")]}
 
 
-def test_anti_patterns_entry_with_invalid_heading_fails():
-    """Correction test: an entry naming a heading that does not exist fails."""
-    design = _contract(anti="- PIT-001: see § Nonexistent section")
-    _, _, missing = pitfalls_mod.pitfall_coverage(design, [_pit()])
-    assert "PIT-001" in missing
+def test_an_id_is_cited_only_as_itself_and_a_long_line_is_cut_around_it():
+    long = "word " * 60 + "PIT-001 is settled by reading the base once " + "more " * 40
+    design = _contract(anti="- PIT-0010 is another pitfall\n- " + long)
+    quotes = _citations(design)["PIT-001"]
+    assert len(quotes) == 1
+    text = quotes[0][1]
+    assert text.startswith("\u2026") and text.endswith("\u2026")
+    assert "PIT-001 is settled by reading the base once" in text
+    assert len(text) <= pitfalls_mod.QUOTE_LIMIT
 
 
-SUBSECTIONS = (
-    "### Regeneration of outputs\n\nRegenerate them.\n\n"
-    "### finding-sources.json attribution\n\nAttribute them.\n\n"
-    "### Keep it short, and plain\n\nKeep it.\n\n"
-    "#### Block-start predicate\n\nA block starts here.\n\n"
-    "```text\n### Example output\n```\n"
-)
+# ── gate_design_review: the card quotes, the advisory names what is never cited ──
 
-
-@pytest.mark.parametrize("entry", [
-    # Each from a lab design the check sent back though it named the section.
-    "- **PIT-001** (high) — Addressed by block-start rule 4. See § Changes rule 4.",
-    "- **PIT-001** (high): Addressed by §Changes item 2, where headings serve all roles.",
-    "- **PIT-001** (high): Addressed by § Changes → Regeneration command.",
-    "- **PIT-001** (high): Addressed by § Regeneration of outputs. No heading is added.",
-    "- **PIT-001** (high) — Addressed by joining with `'\\n'` (the list in § Changes).",
-    # A subsection whose name holds a dot or a comma, and one four levels deep.
-    "- **PIT-001** (high): Addressed by § finding-sources.json attribution, first rule.",
-    "- **PIT-001** (high): Addressed by § Keep it short, and plain.",
-    "- **PIT-001** (high): Addressed by § Block-start predicate.",
-    # A second § in the entry is read on its own.
-    "- **PIT-001** (high): unlike §4 of RFC 9110, handled by § Changes rule 2.",
-])
-def test_a_reference_that_names_a_section_and_says_where_in_it_is_addressed(entry):
-    design = _contract(body=SUBSECTIONS, anti=entry)
-    addressed, _, missing = pitfalls_mod.pitfall_coverage(design, [_pit()])
-    assert addressed == ["PIT-001"] and not missing
-
-
-@pytest.mark.parametrize("entry", [
-    "- PIT-001: see § Changesets",           # a longer word, not the Changes section
-    "- PIT-001: see § Regeneration later",   # no such heading or subsection
-    "- PIT-001: see Changes rule 4",         # no § reference at all
-    "- PIT-001: see § Changes2",             # a longer name, not the Changes section
-    "- PIT-001: see § Example output",       # a '###' line inside a code block
-])
-def test_a_reference_to_no_section_is_still_missing(entry):
-    design = _contract(body=SUBSECTIONS, anti=entry)
-    _, _, missing = pitfalls_mod.pitfall_coverage(design, [_pit()])
-    assert missing == ["PIT-001"]
-
-
-def test_gate_design_review_passes_a_pitfall_answered_by_section_and_rule(tmp_path):
-    """The dm-149 measurement's design answered PIT-001 with "See § Changes rule 4." and
-    was sent back for a whole design round as if it had not."""
-    ctx = nn.RunContext(tmp_path)
-    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0,
-                      "has_pitfalls_step": True})
-    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
-    ctx.write_text("reviews/design-review.md", "All confirmed.\n\nVERDICT: PASS\n")
-    ctx.write_text("design.md", _contract(
-        anti="- **PIT-001** (high) — Addressed by block-start rule 4. See § Changes rule 4."))
-    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
-    ctx.write_json("pitfalls.json", [_pit()])
+def _review(tmp_path, design: str, pits: list) -> nn.RunContext:
     import refactory_dsh.design_ops as ops
-    assert ops.gate_design_review(ctx) == "proceed"
-    assert "PIT-001 (high): addressed" in ctx.facts["pitfall_coverage"]
 
-
-def test_set_aside_bold_marker_recognised():
-    design = _contract(anti="- PIT-001: **[set-aside: out of scope]**")
-    _, set_aside, _ = pitfalls_mod.pitfall_coverage(design, [_pit()])
-    assert "PIT-001" in set_aside
-
-
-def test_set_aside_backtick_marker_recognised():
-    design = _contract(anti="- PIT-001: `[set-aside: out of scope]`")
-    _, set_aside, _ = pitfalls_mod.pitfall_coverage(design, [_pit()])
-    assert "PIT-001" in set_aside
-
-
-# ── gate_design_review pitfall check ───────────────────────────────────────
-
-def test_gate_design_review_lists_missing_high_pitfall(tmp_path):
-    """A design that omits a high pitfall id is listed for the person, not sent back."""
-    ctx = nn.RunContext(tmp_path)
-    ctx.facts.update({
-        "source": str(tmp_path),
-        "design_review_attempts_used": 0,
-        "has_pitfalls_step": True,
-    })
-    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
-    ctx.write_text("reviews/design-review.md",
-                   "All confirmed.\n\nVERDICT: PASS\n")
-    # A design whose Anti-patterns section leaves PIT-001 out.
-    ctx.write_text("design.md", _contract(anti="- PIT-009: addressed at § Changes"))
-    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
-    ctx.write_json("pitfalls.json", [_pit()])
-    import refactory_dsh.design_ops as ops
-    verdict = ops.gate_design_review(ctx)
-    assert verdict == "proceed"
-    assert "high-risk pitfall(s) not addressed in the design: PIT-001" in (
-        ctx.facts["design_review_advisory"])
-    assert "PIT-001 (high): MISSING" in ctx.facts["pitfall_coverage"]
-    # The section is optional: a design without it is not checked against the pitfalls,
-    # and the card says which high-risk pitfall that leaves unchecked.
-    ctx.write_text("design.md", _contract())
-    ctx.facts["design_review_attempts_used"] = 0
-    assert ops.gate_design_review(ctx) == "proceed"
-    advisory = ctx.facts["design_review_advisory"].splitlines()
-    assert [line for line in advisory if "pitfall" in line] == [
-        "- high-risk pitfall(s) not checked: the design has no ## Anti-patterns to avoid "
-        "section: PIT-001"]
-    assert "not checked" in ctx.facts["pitfall_coverage"]
-
-
-def _light(summary: str = "It prints.", changes: str = "- `tool.py` \u2014 print the name") -> str:
-    """A light design: no Rule and sites; its Anti-patterns entry is appended."""
-    return ("# Make the tool print\n\n"
-            f"## Summary\n\n{summary}\n\n"
-            f"## Changes\n\n{changes}\n\n"
-            "## Tests\n\n- `tests/test_tool.py::test_build` \u2014 it prints\n\n"
-            "## Anti-patterns to avoid\n\n")
-
-
-def test_a_pitfall_answered_by_a_cited_site_counts_without_rule_and_sites(tmp_path):
-    """Rule and sites is optional. A light design answers a pitfall with a site whose file
-    is named in its Changes or is in the checkout; that counts."""
-    (tmp_path / "helper.py").write_text("def guard():\n    pass\n")
-    light = _light(summary="`guard()` at `helper.py:1`: `def guard():` checks the input.",
-                   changes="- `tool.py:1` \u2014 print the name")
-    for entry in ("- PIT-001: guarded at `tool.py:1`",               # named in ## Changes
-                  "- **PIT-001** (high): handled by `helper.py:1`"):  # a file in the checkout
-        assert pitfalls_mod.pitfall_coverage(light + entry + "\n", [_pit()],
-                                             source=str(tmp_path)) == (["PIT-001"], [], []), entry
-    # Something that is not a site does not answer it.
-    for entry in ("- PIT-001: handled by `retry()`", "- PIT-001: guarded in tool.py",
-                  "- PIT-001: handled by `self.cache`"):
-        assert pitfalls_mod.pitfall_coverage(light + entry + "\n", [_pit()],
-                                             source=str(tmp_path)) == ([], [], ["PIT-001"]), entry
-    # Through the gate: addressed, and nothing listed for the person.
-    ctx = nn.RunContext(tmp_path)
-    ctx.facts.update({"source": str(tmp_path), "has_pitfalls_step": True})
-    ctx.write_text("design.md", light + "- PIT-001: guarded at `tool.py:1`\n")
-    ctx.write_json("pitfalls.json", [_pit()])
-    import refactory_dsh.design_ops as ops
-    assert ops.gate_design_review(ctx) == "proceed"
-    assert "PIT-001 (high): addressed" in ctx.facts["pitfall_coverage"]
-    assert ctx.facts["design_review_advisory"] == ""
-
-
-@pytest.mark.parametrize("summary, changes, entry, addressed", [
-    # The first review's case: the site that handles it, in a real file, cited in the entry
-    # (Changes names another file, so the checkout alone makes it a site).
-    ("It prints.", "- `other.py` \u2014 print the name", "- PIT-001: addressed at `tool.py:12`",
-     True),
-    # A file the design adds, named in ## Changes, cited in the entry.
-    ("It prints.", "- `new_tool.py` \u2014 a new module", "- PIT-001: guarded at `new_tool.py:3`",
-     True),
-    # The second review's case: a made-up site, cited only in the entry.
-    ("It prints.", None, "- PIT-001: addressed at `nowhere/made_up.py:999`", False),
-    # Cited outside the entry too, but no such file is in the checkout or in Changes.
-    ("See `nowhere/made_up.py:999`.", None, "- PIT-001: addressed at `nowhere/made_up.py:999`",
-     False),
-    # A file named without a line is not a site, though Changes names it.
-    ("It prints.", None, "- PIT-001: guarded in `tool.py`", False),
-], ids=["real-file-in-the-entry", "changed-file-in-the-entry", "made-up-only-in-the-entry",
-        "made-up-cited-elsewhere", "a-file-without-a-line"])
-def test_a_cited_site_counts_when_its_file_is_real_or_changed(
-        tmp_path, summary, changes, entry, addressed):
-    """Without Rule and sites, a backticked path:line anywhere in the design, the pitfall's
-    own entry included, is a site when its file is in the checkout or named in Changes."""
-    (tmp_path / "tool.py").write_text("x = 1\n" * 20)
-    design = (_light(summary=summary) if changes is None
-              else _light(summary=summary, changes=changes)) + entry + "\n"
-    expected = (["PIT-001"], [], []) if addressed else ([], [], ["PIT-001"])
-    assert pitfalls_mod.pitfall_coverage(design, [_pit()], source=str(tmp_path)) == expected
     ctx = nn.RunContext(tmp_path)
     ctx.facts.update({"source": str(tmp_path), "has_pitfalls_step": True})
     ctx.write_text("design.md", design)
-    ctx.write_json("pitfalls.json", [_pit()])
-    import refactory_dsh.design_ops as ops
-    assert ops.gate_design_review(ctx) == "proceed"
-    assert ctx.facts["design_review_advisory"] == (
-        "" if addressed else "- high-risk pitfall(s) not addressed in the design: PIT-001")
-
-
-def test_gate_design_review_passes_set_aside(tmp_path):
-    """A design that sets a pitfall aside with a reason passes."""
-    ctx = nn.RunContext(tmp_path)
-    ctx.facts.update({
-        "source": str(tmp_path),
-        "design_review_attempts_used": 0,
-        "has_pitfalls_step": True,
-    })
-    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
-    ctx.write_text("reviews/design-review.md",
-                   "All confirmed.\n\nVERDICT: PASS\n")
-    ctx.write_text("design.md",
-                   _contract(anti="- PIT-001: [set-aside: not applicable]"))
     ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
-    ctx.write_json("pitfalls.json", [_pit()])
-    import refactory_dsh.design_ops as ops
-    result = ops.gate_design_review(ctx)
-    assert result == "proceed"
-    assert "set aside" in ctx.facts.get("pitfall_coverage", "")
+    ctx.write_json("pitfalls.json", pits)
+    assert ops.gate_design_review(ctx) == "proceed"
+    return ctx
+
+
+def test_the_gate_lists_quotes_and_names_high_risk_pitfalls_never_mentioned(tmp_path):
+    ctx = _review(tmp_path, _contract(anti="- PIT-002: see \u00a7 Changes"),
+                  [_pit(), _pit("PIT-002", "low"), _pit("PIT-003", "medium")])
+    assert ctx.facts["pitfall_coverage"] == (
+        "Pitfall citations:\n"
+        "  PIT-001 (high): not mentioned\n"
+        "  PIT-002 (low): \u00a7 Anti-patterns to avoid: \"PIT-002: see \u00a7 Changes\"\n"
+        "  PIT-003 (medium): not mentioned")
+    # Only the high-risk one is advised on; nothing says addressed or missing.
+    assert [line for line in ctx.facts["design_review_advisory"].splitlines()
+            if "pitfall" in line] == ["- high-risk pitfall(s) the design does not mention: PIT-001"]
+    for verdict in ("addressed", "MISSING", "not checked"):
+        assert verdict not in ctx.facts["pitfall_coverage"] + ctx.facts["design_card"]
+
+
+def test_a_design_without_an_anti_patterns_section_is_quoted_all_the_same(tmp_path):
+    ctx = _review(tmp_path, _contract(body="Reads the base once, which settles PIT-001."), [_pit()])
+    assert ctx.facts["pitfall_coverage"] == (
+        "Pitfall citations:\n  PIT-001 (high): \u00a7 Changes: "
+        "\"Reads the base once, which settles PIT-001.\"")
+    assert "pitfall" not in ctx.facts["design_review_advisory"]
 
 
 def test_gate_design_review_skips_without_pitfalls_step(tmp_path):

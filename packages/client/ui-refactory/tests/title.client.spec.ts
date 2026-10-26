@@ -17,6 +17,8 @@ describe('the page title', () => {
   it('keeps session titles and provider names intact while following title changes', async () => {
     expect(productTitle('DeepSeek model — DeepSeek Harness')).toBe('DeepSeek model — Refactory')
     expect(productTitle('DeepSeek provider')).toBe('DeepSeek provider')
+    // Only the shell's suffix: a session that names the harness keeps its own words.
+    expect(productTitle('DeepSeek Harness notes \u2014 DeepSeek Harness')).toBe('DeepSeek Harness notes \u2014 Refactory')
     document.title = 'DeepSeek Harness'
     const dispose = installTitle(document)
     expect(document.title).toBe('Refactory')

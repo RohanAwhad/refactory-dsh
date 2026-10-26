@@ -233,10 +233,19 @@ class EpochSummary:
     best: float | None
     mean: float | None
     improved: bool
+    #: This epoch's proposals, every round of them: each was accepted or refused, so
+    #: ``proposed == accepted + refused``, as the progress line says (dm-265).
     proposed: int
+    #: This epoch's proposals accepted for evaluation.
     accepted: int
-    rejected: int
-    structural_accepted: int
+    #: This epoch's proposals refused.
+    refused: int
+    #: The candidates the run holds once the epoch is done, every epoch's together.
+    population: int
+    #: Refusals over the whole run so far.
+    refused_total: int
+    #: The structural candidates among `population`.
+    structural_in_population: int
 
 
 class Loop(OuterLoop):
@@ -1219,7 +1228,8 @@ class Loop(OuterLoop):
         return added
 
     # ── scheduler ──────────────────────────────────────────────────────────
-    def scheduler(self, *, evaluated: int = 0, proposed: int = 0) -> bool:
+    def scheduler(self, *, evaluated: int = 0, proposed: int = 0, accepted: int = 0,
+                  refused: int = 0) -> bool:
         """Close the epoch, and say whether there is another.
 
         The epoch is opened by the loop, not here: a resume has to know which
@@ -1235,9 +1245,11 @@ class Loop(OuterLoop):
             mean=(sum(scores) / len(scores)) if scores else None,
             improved=bool(self.loss.get("improved")),
             proposed=proposed,
-            accepted=len(self.population),
-            rejected=len(self.rejections),
-            structural_accepted=sum(1 for c in self.population if c.is_structural()),
+            accepted=accepted,
+            refused=refused,
+            population=len(self.population),
+            refused_total=len(self.rejections),
+            structural_in_population=sum(1 for c in self.population if c.is_structural()),
         )
         self.epochs.append(summary)
         self._write_state()
@@ -1626,7 +1638,8 @@ class Loop(OuterLoop):
         for candidate in kept:
             self.update(run, candidate)
         another = self.scheduler(
-            evaluated=evaluated, proposed=len(candidates) + len(rejections)
+            evaluated=evaluated, proposed=len(candidates) + len(rejections),
+            accepted=len(candidates), refused=len(rejections),
         )
         self.on_epoch_end(run)
         self.close_epoch()

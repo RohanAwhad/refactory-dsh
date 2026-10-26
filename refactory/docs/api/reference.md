@@ -355,7 +355,7 @@ The optimizer loop, named like one.
 
 | kind | name | signature |
 |---|---|---|
-| class | `EpochSummary` | `(epoch: 'int', evaluated: 'int', best: 'float \| None', mean: 'float \| None', improved: 'bool', proposed: 'int', accepted: 'int', rejected: 'int', structural_accepted: 'int') -> None` |
+| class | `EpochSummary` | `(epoch: 'int', evaluated: 'int', best: 'float \| None', mean: 'float \| None', improved: 'bool', proposed: 'int', accepted: 'int', refused: 'int', population: 'int', refused_total: 'int', structural_in_population: 'int') -> None` |
 | class | `Loop` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
 | class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, holdout: 'float' = 0.3, parsimony: 'float' = 0.01, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), intent: 'str' = '', knobs: 'dict[str, Any]' = <factory>, history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True, print_events: 'bool' = False, verbose: 'bool' = False, control_poll_s: 'float' = 1.0, strategy: 'str' = 'default', repeats: 'int' = 1, allowed_ops: 'tuple[str, ...]' = (), worker_backend: 'str' = 'dsh', provider: 'str' = '', model: 'str' = '', effort: 'str' = '', permission_mode: 'str' = 'skip', role_routes: 'dict[str, Any]' = <factory>, node_routes: 'dict[str, Any]' = <factory>, provider_config: 'dict[str, Any]' = <factory>, max_elapsed_s: 'float \| None' = None, max_tokens: 'int \| None' = None, validation_reserve_s: 'float' = 0, validation_reserve_tokens: 'int' = 0, resolved_profile: 'dict[str, Any]' = <factory>) -> None` |
 | class | `LoopError` | `` |
@@ -481,6 +481,7 @@ Discover, list and resolve packages of modes.
 | function | `packages_root` | `() -> 'Path'` |
 | function | `provenance` | `(name: 'str', project: 'Path \| None' = None) -> 'dict[str, Any]'` |
 | function | `record_smoke` | `(root: 'Path', status: 'str') -> 'None'` |
+| function | `recorded_smoke` | `(root: 'Path') -> 'str'` |
 | function | `remove` | `(project: 'Path', name: 'str', *, force: 'bool' = False) -> 'Path'` |
 | function | `render_catalogue` | `(project: 'Path') -> 'str'` |
 | function | `resolve` | `(project: 'Path', identifier: 'str') -> 'tuple[Package, type]'` |
@@ -507,12 +508,13 @@ Discover, list and resolve packages of modes.
 - **`missing_tools`** — The names of required tools this machine does not have, for a listing.
 - **`packages_root`** — The directory holding every package.
 - **`provenance`** — Where a package came from, as the writer recorded it.
-- **`record_smoke`** — Record a create or edit run's smoke in the package at ``root`` (`SMOKE`).
+- **`record_smoke`** — Record a smoke of the package at ``root`` (`SMOKE`).
+- **`recorded_smoke`** — `smoke_state` for the package at ``root``.
 - **`remove`** — Delete a workspace package, refusing to break a dependent.
 - **`render_catalogue`** — The grouped listing a user sees.
 - **`resolve`** — The package and mode class for ``<package>/<name>``.
 - **`smoke`** — Run one mode once, so a package can be checked rather than merely imported.
-- **`smoke_state`** — What a create or edit run recorded about its package's smoke (`SMOKE`).
+- **`smoke_state`** — What was recorded about a package's smoke (`SMOKE`): by the create or edit run that
 - **`tool_report`** — Every declared tool of every package, with its status on this machine.
 - **`tools`** — The tools a package declares, read without importing it.
 - **`verify`** — Import every mode of a package and say what is wrong with it.

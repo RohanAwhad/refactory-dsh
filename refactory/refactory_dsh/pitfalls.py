@@ -120,91 +120,67 @@ def validate_pitfalls(raw: str, source: str = "", run_dir: str = "") -> list[str
     return problems
 
 
-# ── coverage check ─────────────────────────────────────────────────────────
+# ── where the design cites each pitfall ────────────────────────────────────
 
-from refactory_dsh import coverage_helpers
-
-#: How many words of its own a line citing a pitfall needs to be a remedy (dm-262): a
-#: sentence saying what the design does about it ("Line counting uses `count('\n')`,
-#: never `splitlines()`"), not a bare pointer ("handled by `retry()`", "see Changes").
-REMEDY_WORDS = 5
-
-#: A pitfall id, with the title a design gives it right after (``PIT-002 (splitlines
-#: trap)``, ``**PIT-002** (weakened guard)``): neither is the design's remedy.
-_ID_AND_TITLE = re.compile(r"PIT-\d+\**\s*(?:\([^)]*\))?")
+#: How many lines citing one pitfall the approval card quotes, and how long each may be.
+QUOTES_PER_PITFALL = 2
+QUOTE_LIMIT = 160
 
 
-def _is_remedy(line: str) -> bool:
-    """Whether a line citing a pitfall says, in words of its own, what the design does
-    about it: at least `REMEDY_WORDS` words once its ids, their titles, its code spans
-    and its markup are gone. A word is a whitespace-separated token with a letter in it."""
-    text = _ID_AND_TITLE.sub(" ", re.sub(r"`[^`]*`", " ", line))
-    return sum(1 for token in text.split() if re.search(r"[^\W\d_]", token)) >= REMEDY_WORDS
+def _quote(line: str, pid: str) -> str:
+    """A design line as the card quotes it: its markdown bullet, heading marks and bold
+    dropped, its spacing collapsed, and at most `QUOTE_LIMIT` characters, cut at word
+    boundaries, starting a little before the id when the id comes late in the line."""
+    text = re.sub(r"^\s*(?:[-*+]|\d+[.)]|#{1,6})\s+", "", line).replace("**", "")
+    text = " ".join(text.split())
+    if len(text) <= QUOTE_LIMIT:
+        return text
+    at = text.find(pid)
+    if at > QUOTE_LIMIT // 2:
+        start = text.find(" ", at - QUOTE_LIMIT // 4) + 1
+        text = "\u2026" + text[start if 0 < start <= at else at:]
+    if len(text) > QUOTE_LIMIT:
+        cut = text.rfind(" ", 0, QUOTE_LIMIT)
+        text = text[:cut if cut > 0 else QUOTE_LIMIT - 1].rstrip() + "\u2026"
+    return text
 
 
-def _answer_lines(design_text: str) -> list[str]:
-    """The lines a design can answer a pitfall on: every line but its ``## Summary``,
-    which states the problem rather than what the design does about it."""
-    lines: list[str] = []
-    in_summary = False
+def pitfall_citations(
+    design_text: str, pitfalls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Where design.md cites each pitfall, for the approval card to quote (dm-262).
+
+    No verdict: whether a line answers its pitfall is the person's judgment, so the card
+    shows the lines, at most `QUOTES_PER_PITFALL`, each with the heading it sits under,
+    and says "not mentioned" only for an id the design never cites. One entry per pitfall
+    with an id, in order: ``{"id", "risk", "quotes": [(heading, text), ...]}``.
+    """
+    lines: list[tuple[str, str]] = []
+    heading = ""
+    fenced = False
     for line in design_text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("#"):
-            in_summary = stripped.lower() == "## summary"
-        if not in_summary:
-            lines.append(line)
-    return lines
-
-
-def pitfall_coverage(
-    design_text: str, pitfalls: list[dict[str, Any]], source: str = "",
-) -> tuple[list[str], list[str], list[str]]:
-    """Which pitfalls design.md answers, wherever it answers them.
-
-    A design answers a pitfall on a line that cites its id: an entry in ``## Anti-patterns
-    to avoid``, and also a ``## Changes`` bullet ("avoids PIT-002"), a test that pins it,
-    a paragraph ("per PIT-003") or a heading of the design. Its ``## Summary`` does not
-    count. Returns ``(addressed, set_aside, missing)``:
-
-    - *addressed*: the lines citing the id name a valid site or § heading, or one of them
-      is a remedy, a sentence of its own on what the design does (`_is_remedy`, dm-262).
-    - *set_aside*: a line citing the id has a ``[set-aside: <reason>]`` marker with a
-      non-empty reason.
-    - *missing*: no line cites the id, or none names a site, a heading or a remedy.
-
-    *source* is the checkout a design without ``## Rule and sites`` has its cited sites
-    checked against (`coverage_helpers.site_paths`).
-    """
-    lines = _answer_lines(design_text)
-    sites = coverage_helpers.site_paths(design_text, source=source)
-    hdgs = coverage_helpers.headings(design_text)
-
-    addressed: list[str] = []
-    set_aside: list[str] = []
-    missing: list[str] = []
-
-    for p in pitfalls:
-        pid = p.get("id", "")
+        if stripped.startswith(("```", "~~~")):
+            fenced = not fenced
+        lines.append((heading, line))
+        if not fenced and (found := re.match(r"#{1,6}\s+(.+)", stripped)):
+            heading = found[1].strip()
+    cited: list[dict[str, Any]] = []
+    for pitfall in pitfalls:
+        pid = str(pitfall.get("id") or "")
         if not pid:
             continue
+        mention = re.compile(rf"(?<![\w-]){re.escape(pid)}(?!\d)")
+        quotes = [(under, _quote(line, pid)) for under, line in lines if mention.search(line)]
+        cited.append({"id": pid, "risk": str(pitfall.get("risk") or "?"),
+                      "quotes": quotes[:QUOTES_PER_PITFALL]})
+    return cited
 
-        entry_lines = [ln for ln in lines if pid in ln]
-        if not entry_lines:
-            missing.append(pid)
-            continue
-        entry_text = "\n".join(entry_lines)
 
-        # Check for a set-aside marker with a non-empty reason.
-        sa_match = coverage_helpers.SET_ASIDE_RE.search(entry_text)
-        if sa_match and sa_match.group(1).strip():
-            set_aside.append(pid)
-            continue
-
-        # Not set-aside: a site or heading that exists, or a remedy in its own words.
-        if (coverage_helpers.has_valid_reference(entry_text, sites, hdgs)
-                or any(_is_remedy(line) for line in entry_lines)):
-            addressed.append(pid)
-        else:
-            missing.append(pid)
-
-    return (addressed, set_aside, missing)
+def citation_line(entry: dict[str, Any]) -> str:
+    """One pitfall as the card lists it: its quoted lines, or "not mentioned"."""
+    head = f"{entry['id']} ({entry['risk']})"
+    if not entry["quotes"]:
+        return f"{head}: not mentioned"
+    return head + ": " + "; ".join(
+        (f"\u00a7 {under}: " if under else "") + f"\"{text}\"" for under, text in entry["quotes"])

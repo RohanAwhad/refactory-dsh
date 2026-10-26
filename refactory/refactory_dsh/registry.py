@@ -227,21 +227,31 @@ def provenance(name: str, project: Path | None = None) -> dict[str, Any]:
 
 
 def smoke_state(name: str, project: Path | None = None) -> str:
-    """What a create or edit run recorded about its package's smoke (`SMOKE`).
+    """What was recorded about a package's smoke (`SMOKE`): by the create or edit run that
+    registered it, and by a later passing `package smoke`.
 
     `SMOKE_PASSED` when nothing was recorded: only a run that registered the package
     writes the key, so a package that never went through one has nothing to verify.
     """
     path = _origin_file(name, project)
+    return _smoke_in(path) if path is not None else SMOKE_PASSED
+
+
+def recorded_smoke(root: Path) -> str:
+    """`smoke_state` for the package at ``root``."""
+    return _smoke_in(Path(root) / ORIGIN)
+
+
+def _smoke_in(path: Path) -> str:
     try:
-        recorded = json.loads(path.read_text()) if path is not None else {}
+        recorded = json.loads(path.read_text()) if path.is_file() else {}
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         recorded = {}
     return str(recorded.get(SMOKE, SMOKE_PASSED)) if isinstance(recorded, dict) else SMOKE_PASSED
 
 
 def record_smoke(root: Path, status: str) -> None:
-    """Record a create or edit run's smoke in the package at ``root`` (`SMOKE`)."""
+    """Record a smoke of the package at ``root`` (`SMOKE`)."""
     path = Path(root) / ORIGIN
     try:
         recorded = json.loads(path.read_text()) if path.exists() else {}
@@ -389,6 +399,12 @@ def smoke(project: Path, identifier: str, *, model: bool = False) -> dict[str, A
         client = DshModelClient()
     with tempfile.TemporaryDirectory(prefix="refactory-smoke-") as tmp:
         result = mode.evaluate(Path(tmp), model=client)
+    # A person who fixed a package whose run's smoke failed clears the listing's mark by
+    # smoking it here; a package with nothing recorded is left as it is (dm-264).
+    if result.exit_ok and smoke_state(package.name, Path(project)) != SMOKE_PASSED:
+        root = where(package.name, Path(project))
+        if root is not None and (root / ORIGIN).is_file():
+            record_smoke(root, SMOKE_PASSED)
     return {
         "mode": identifier,
         "package": package.name,

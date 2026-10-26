@@ -35,8 +35,13 @@ def test_adopt_best_and_smoke_label_their_scores(tmp_path):
                                     "own score, without a search's cost penalty")
 
 
-def test_a_journal_without_raw_scores_still_says_the_penalty_is_in():
+def test_a_score_with_no_penalty_or_no_raw_score_does_not_claim_one():
     from refactory_dsh.adopt import _score_basis
 
-    entries = [{"event": "score", "id": "a", "score": 0.5}]
-    assert _score_basis(entries, "a", 0.5) == {"score_note": "0.5 with the cost penalty"}
+    old = [{"event": "score", "id": "a", "score": 0.5}]
+    assert _score_basis(old, "a", 0.5) == {
+        "score_note": "0.5 as the run recorded it; no raw score to compare"}
+    free = [{"event": "score", "id": "a", "score": 0.9, "raw_score": 0.9, "parsimony": 0.0,
+             "nodes": 8}]
+    assert _score_basis(free, "a", 0.9) == {
+        "raw_score": 0.9, "score_note": "0.9 raw; the search took no cost penalty"}

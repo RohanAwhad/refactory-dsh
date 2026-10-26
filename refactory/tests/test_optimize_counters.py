@@ -47,6 +47,20 @@ def test_the_seed_alone_is_not_an_improvement(tmp_path):
     assert loop.loss["best"] == loop._seed_score()
 
 
+def test_a_seed_that_did_not_run_gives_the_first_epoch_nothing_to_improve_on(tmp_path):
+    """A seed scored in an old journal without an outcome is kept but ineligible: its score
+    is not the point the search started from."""
+    loop = Loop(MODE, LoopConfig(optimizer="random", epochs=1, batch_size=2, seed=5,
+                                 runs_root=tmp_path), project=Path("."))
+    loop.init()
+    seed, other = loop.population[0], loop.population[1]
+    seed.evaluated, seed.exit_ok, seed.score = True, False, 0.1
+    other.evaluated, other.exit_ok, other.score = True, True, 0.5
+    loop.population = [seed, other]
+    assert loop._seed_score() is None
+    assert loop.loss_step()["improved"] is False
+
+
 def test_proposals_are_the_accepted_and_the_refused_of_the_epoch(tmp_path):
     _, records = _readme_search(tmp_path)
     lines = [r for r in records if r.get("step") == "optimizer"]
@@ -91,3 +105,17 @@ def test_the_line_names_the_epochs_codes_not_the_runs():
                           "refused": 0, "epoch_refusal_codes": {},
                           "refusal_codes": {"E-duplicate": 2}})
     assert line == "epoch 3 · proposals 4 this epoch: accepted 4 for evaluation, refused 0"
+
+
+def test_the_json_epoch_summary_counts_what_the_progress_line_counts(tmp_path):
+    """`optimize --json` said proposed 5, accepted 12, rejected 1 for the README's epoch 2:
+    12 was the population and 1 the run's total. Each count is now the epoch's own."""
+    report, records = _readme_search(tmp_path)
+    lines = {r["epoch"]: r for r in records if r.get("step") == "optimizer"}
+    keys = ("proposed", "accepted", "refused")
+    for summary in report["epochs_summary"]:
+        assert {k: summary[k] for k in keys} == {k: lines[summary["epoch"]][k] for k in keys}
+    second = report["epochs_summary"][1]
+    assert {k: second[k] for k in (*keys, "population", "refused_total")} == {
+        "proposed": 5, "accepted": 4, "refused": 1, "population": 12, "refused_total": 1}
+    assert not {"rejected", "structural_accepted"} & set(second), "the old, misleading keys"

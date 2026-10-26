@@ -89,6 +89,9 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     for package_name, modes in grouped.items():
         enabled = registry.is_enabled(project, package_name)
+        # `pending` while a package a create or edit run registered has not passed its
+        # smoke (`refactory list` marks it unverified); reported, not acted on (dm-264).
+        smoke = registry.smoke_state(package_name, project)
         for entry in modes:
             identifier = f"{package_name}/{entry['name']}"
             try:
@@ -101,6 +104,7 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
                     "enableable": entry.get("package_enabled", enabled),
                     "enabled": enabled,
                     "startable": False,
+                    "smoke": smoke,
                     "reason": str(error),
                 })
                 continue
@@ -117,6 +121,7 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
                 "startable": enabled,
                 "enabled": enabled,
                 "trust": package.trust,
+                "smoke": smoke,
                 "scored": mode.is_scored(),
                 # Which verb runs this mode. An unscored mode is an authoring mode:
                 # `start` refuses it, and a caller that has to fail to find that out

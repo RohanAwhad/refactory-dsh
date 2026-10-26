@@ -644,8 +644,12 @@ def smoke(
         "    mode.load_state_dict(state)\n"
         f"result = mode.evaluate(Path({str(Path(workdir))!r}){', ' + call if call else ''})\n"
         # The knob values the run used, so a comparison can say what differed (dm-263).
-        "knobs = {name: entry.get('value') for name, entry in"
+        # Reported after the run, so a mode that cannot report them still passes.
+        "try:\n"
+        "    knobs = {name: entry.get('value') for name, entry in"
         " (mode.state_dict().get('knobs') or {}).items() if isinstance(entry, dict)}\n"
+        "except Exception:\n"
+        "    knobs = None\n"
         "print(json.dumps({'exit_ok': result.exit_ok, 'error': result.error,"
         " 'score': result.score, 'iterations': result.iterations, 'knobs': knobs}, default=str))\n"
     )

@@ -1774,10 +1774,12 @@ def gate_smoke(ctx: Any) -> str:
 
     # Never let a previous successful smoke survive a failed new attempt: not in the
     # facts, and not on the package, which the listing marks until its smoke passes.
+    # `.origin.json` is in the hash a concurrent run's register compares, so it is
+    # written only when its record changes: once after registering, on a pass.
     ctx.set_fact("smoke_ok", False)
     package = Path(str(ctx.facts.get("package_path") or ""))
     registered = bool(ctx.facts.get("package_path")) and (package / registry.ORIGIN).is_file()
-    if registered:
+    if registered and registry.recorded_smoke(package) != registry.SMOKE_PENDING:
         registry.record_smoke(package, registry.SMOKE_PENDING)
     for name in ("smoke.json", "revision.json"):
         if ctx.exists(name):
@@ -1801,7 +1803,7 @@ def gate_smoke(ctx: Any) -> str:
         return (_repair if "repair_attempts" in ctx.knobs else repair)(ctx, [detail])
     for key, value in produced.items():
         ctx.set_fact(key, value)
-    if registered:
+    if registered and registry.recorded_smoke(package) != registry.SMOKE_PASSED:
         registry.record_smoke(package, registry.SMOKE_PASSED)
     evidence.record(ctx, {"status": "pass", "smoke": ctx.read_json("smoke.json", {}),
                           "revision": ctx.read_json("revision.json", None)})
@@ -1942,6 +1944,10 @@ def _revision(
         path = Path(package) / ".origin.json"
         current = json.loads(path.read_text()) if path.exists() else {}
         current.update({key: value for key, value in recorded.items() if key != "note"})
+        if not (regressed and not allowed):
+            # The smoke passed and the revision stands: recorded in this same write, so
+            # the file changes once after registering (`gate_smoke`).
+            current[registry.SMOKE] = registry.SMOKE_PASSED
         path.write_text(json.dumps(current, indent=2, default=str))
     if regressed and not allowed:
         raise ValueError(

@@ -109,3 +109,76 @@ def test_a_package_no_run_registered_is_not_marked(tmp_path):
     assert "unverified" not in listing
     (root / registry.ORIGIN).write_text("not json")
     assert registry.smoke_state("added_pkg_state", tmp_path) == "passed"
+
+
+def _runnable(project: Path, name: str, smoke: str) -> None:
+    """A workspace package with one mode that runs, as a create run left it."""
+    root = registry.workspace_root(project) / name
+    root.mkdir(parents=True)
+    (root / "__init__.py").write_text(
+        "from refactory_dsh.nn import Package\n"
+        "from refactory_packages.circle_packing.mode import CirclePacking\n\n"
+        f"PACKAGE = Package(name={name!r}, description='fixed by hand', modes=(CirclePacking,),\n"
+        "                  ops=('refactory_packages.circle_packing.ops',))\n")
+    (root / registry.ORIGIN).write_text(json.dumps({"origin": "create-mode", "trust": "generated",
+                                                    "smoke": smoke}))
+
+
+def test_a_passing_package_smoke_clears_the_mark(tmp_path):
+    """A person who fixes a package whose run's smoke failed, and smokes it, sees it verified."""
+    _runnable(tmp_path, "hand_fixed_pkg", "pending")
+    assert "unverified" in registry.render_catalogue(tmp_path)
+    result = registry.smoke(tmp_path, "hand_fixed_pkg/adaptive")
+    assert result["exit_ok"] is True
+    assert registry.smoke_state("hand_fixed_pkg", tmp_path) == "passed"
+    assert "unverified" not in registry.render_catalogue(tmp_path)
+
+
+def test_a_package_smoke_writes_nothing_for_a_package_with_no_record(tmp_path):
+    _runnable(tmp_path, "unrecorded_pkg", "passed")
+    origin = registry.workspace_root(tmp_path) / "unrecorded_pkg" / registry.ORIGIN
+    origin.write_text(json.dumps({"origin": "/elsewhere", "trust": "generated"}))
+    before = origin.read_bytes()
+    assert registry.smoke(tmp_path, "unrecorded_pkg/adaptive")["exit_ok"] is True
+    assert origin.read_bytes() == before, "a package nothing marked is not rewritten"
+
+
+def test_the_json_catalogue_carries_the_smoke_state(tmp_path):
+    """The GUI picker and the CEO read this catalogue; they can now see the mark."""
+    from refactory_dsh import console
+
+    _runnable(tmp_path, "catalogued_pkg", "pending")
+    entries = {entry["id"]: entry for entry in console.catalogue(project=tmp_path)}
+    assert entries["catalogued_pkg/adaptive"]["smoke"] == "pending"
+    assert entries["circle_packing/adaptive"]["smoke"] == "passed"
+    registry.record_smoke(registry.workspace_root(tmp_path) / "catalogued_pkg", "passed")
+    entries = {entry["id"]: entry for entry in console.catalogue(project=tmp_path)}
+    assert entries["catalogued_pkg/adaptive"]["smoke"] == "passed"
+
+
+def test_the_package_record_changes_once_after_registering(tmp_path, monkeypatch):
+    """`.origin.json` is in the hash a concurrent run's register compares: a passing smoke
+    changes it once, not twice (pending again, then passed)."""
+    project = _project(tmp_path, monkeypatch)
+    ctx = _registered(tmp_path, project)
+    writes = []
+    original = registry.record_smoke
+    monkeypatch.setattr(registry, "record_smoke", lambda root, status: (writes.append(status),
+                                                                        original(root, status)))
+    monkeypatch.setattr(create_ops, "smoke", lambda ctx: {"smoke_score": 1.0, "smoke_ok": True})
+    assert create_ops.gate_smoke(ctx) == "proceed"
+    assert writes == ["passed"]
+
+    # A revision's smoke records the pass in its own provenance write (`_revision`), so
+    # the gate writes nothing more.
+    def revised(ctx):
+        registry.record_smoke(Path(ctx.facts["package_path"]), "pending")  # set up, not counted
+        writes.clear()
+        origin = Path(ctx.facts["package_path"]) / registry.ORIGIN
+        origin.write_text(json.dumps({**json.loads(origin.read_text()), "smoke": "passed",
+                                      "revision_of": "circle_packing/adaptive"}))
+        return {"smoke_score": 1.0, "smoke_ok": True}
+
+    monkeypatch.setattr(create_ops, "smoke", revised)
+    assert create_ops.gate_smoke(ctx) == "proceed"
+    assert writes == [] and registry.smoke_state(NAME, project) == "passed"

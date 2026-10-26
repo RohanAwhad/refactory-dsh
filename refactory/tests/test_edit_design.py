@@ -897,6 +897,54 @@ def test_the_sandboxed_smoke_reports_the_knob_values_it_ran_with(tmp_path):
         **{name: entry["value"] for name, entry in defaults.items()}, "budget": 5}
 
 
+def test_a_mode_that_cannot_report_its_knobs_still_passes_its_smoke(tmp_path):
+    """The knob report runs after the mode has run; it cannot turn a pass into a failure."""
+    from refactory_dsh import sandbox
+
+    root = registry.workspace_root(tmp_path) / "stateless_pkg"
+    root.mkdir(parents=True)
+    (root / "__init__.py").write_text(
+        "from refactory_dsh.nn import Package\n"
+        "from refactory_packages.circle_packing.mode import CirclePacking\n\n\n"
+        "class Stateless(CirclePacking):\n"
+        "    ran = False\n\n"
+        "    def evaluate(self, *args, **kwargs):\n"
+        "        result = super().evaluate(*args, **kwargs)\n"
+        "        type(self).ran = True\n"
+        "        return result\n\n"
+        "    def state_dict(self):\n"
+        "        if type(self).ran:\n"
+        "            raise RuntimeError('no state after the run')\n"
+        "        return super().state_dict()\n\n\n"
+        "PACKAGE = Package(name='stateless_pkg', description='x', modes=(Stateless,),\n"
+        "                  ops=('refactory_packages.circle_packing.ops',))\n")
+    result = sandbox.smoke("stateless_pkg/adaptive", tmp_path / "smoke", project=tmp_path)
+    assert result.ok, result.problem()
+    assert result.payload["exit_ok"] is True and result.payload["knobs"] is None
+
+
+def test_a_revision_records_its_passing_smoke_in_its_provenance(tmp_path, monkeypatch):
+    """One write: the revision's provenance and the pass together; a refused one stays pending."""
+    from refactory_dsh.run import run_node
+
+    package = tmp_path / "revised"
+    package.mkdir()
+    origin = package / registry.ORIGIN
+    origin.write_text(json.dumps({"origin": "create-mode", "smoke": "pending"}))
+    workdir = _smoke_run(tmp_path, monkeypatch, package_path=package, scores={
+        "circle_packing/adaptive": 1.0, "counting_pack/fixed_step": 0.9})
+    run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+    recorded = json.loads(origin.read_text())
+    assert (recorded["smoke"], recorded["revision_of"]) == ("passed", "counting_pack/fixed_step")
+
+    origin.write_text(json.dumps({"origin": "create-mode", "smoke": "pending"}))
+    regressed = _smoke_run(tmp_path / "again", monkeypatch, package_path=package, scores={
+        "circle_packing/adaptive": 0.4, "counting_pack/fixed_step": 0.9})
+    with pytest.raises(ValueError, match="not an improvement"):
+        run_node("refactory_dsh.create_ops:smoke", workdir=regressed, node_id="smoke")
+    assert json.loads(origin.read_text())["smoke"] == "pending"
+
+
 def test_a_revision_of_an_unscored_mode_is_recorded_as_uncompared(tmp_path, monkeypatch):
     """There is no number to compare against, and saying so beats inventing one."""
     from refactory_dsh.run import run_node
