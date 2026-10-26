@@ -236,16 +236,22 @@ def test_a_check_that_stops_the_run_is_recorded_once_and_raised_after_the_review
 
 def test_prepare_check_sends_back_before_the_reviews_when_last_attempts_failures_remain(
         tmp_path, monkeypatch):
-    from refactory_dsh import failfast, repo_change
+    from refactory_dsh import failfast, repo_change, test_selection
+    from types import SimpleNamespace
 
     ctx = _ctx(tmp_path)
     monkeypatch.setattr(repo_change, "prepare_attempt", lambda ctx, timeout: [])
-    # The self-check (b41a) reports what it ran and what failed, not only that it stopped.
-    stop = failfast.PrepassResult(
-        ran=True, early_stop=True, targeted_command="pytest t.py::x", check_mode="targeted",
-        result=None, digest_text="t.py::x failed", selection=["t.py::x"], ran_ids=["t.py::x"],
-        failing_ids=["t.py::x"], commands=["pytest t.py::x"])
-    monkeypatch.setattr(failfast, "targeted_prepass", lambda *a, **k: stop)
+    # The first self-check (b48a) runs the full check command, not targeted_prepass.
+    # Give test_selection.select a non-empty selection so the full command runs.
+    monkeypatch.setattr(test_selection, "select",
+                        lambda *a, **k: test_selection.Selection(tests=["t.py"]))
+    # Mock run_check to return a failing result for the first self-check.
+    _fail = SimpleNamespace(
+        ok=False, returncode=1,
+        stdout="FAILED t.py::x - AssertionError\n1 failed in 0.01s\n",
+        stderr="", timed_out=False, elapsed_s=0.1, timeout_s=60)
+    _fail.problem = lambda: "exit code 1"
+    monkeypatch.setattr(repo_change, "run_check", lambda *a, **kw: _fail)
     early_stops = []
     monkeypatch.setattr(design_ops, "_early_stop", lambda ctx, prepass, prev, base: (
         early_stops.append(prepass.failing_ids) or nn.Verdict("reloop", "still failing")))
@@ -259,6 +265,7 @@ def test_prepare_check_sends_back_before_the_reviews_when_last_attempts_failures
     assert early_stops == [] and not ctx.facts.get("attempts_used")
     assert not ctx.exists(CHECK_PREP)  # no review starts on this attempt
     assert not ctx.exists(CHECK_VERDICT)
+    # Second call: fix-up self-check uses targeted_prepass (b48a).
     go = failfast.PrepassResult(
         ran=True, early_stop=False, targeted_command="pytest t.py::x", check_mode="full",
         result=None, digest_text="", selection=["t.py::x"], ran_ids=["t.py::x"],

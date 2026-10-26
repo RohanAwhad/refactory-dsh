@@ -113,6 +113,11 @@ QA_JUDGE_PROMPT = (
     "finding's format, an example or a review rule is not a finding, and neither is a "
     "reviewer's tally of its own findings. The check has already passed on this attempt "
     "and stays binding; do not run it again.\n\n"
+    "A test that was updated to pass after failing \u2014 one whose assertions were "
+    "removed, weakened, or made trivially true \u2014 is a must-fix unless the update "
+    "legitimately follows an ask or correction that retires the pinned behaviour. "
+    "The updated-tests section of qa-synthesized.md lists which tests were modified "
+    "after failing.\n\n"
     + _JUDGE_RULE
     + "A finding that is wrong (it does not hold against the code) is dismissed, with the "
     "reason. Two reviewers reporting the same defect is one must_fix item.\n\n"

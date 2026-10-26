@@ -588,13 +588,14 @@ def test_repair_feedback_includes_left_sites_and_broken_guarantees(tmp_path):
             if test_file and test_file not in changed_files:
                 guarantee_lines.append(
                     f"Broken guarantee: {failure} passes on the base but "
-                    "fails on this attempt — the attempt must not break it."
+                    "fails on this attempt."
                 )
 
     assert left_lines, "should have at least one [left] site"
     assert any("the safety check is correct" in line for line in left_lines)
     assert guarantee_lines, "should have at least one broken guarantee"
     assert any("test_guard" in line for line in guarantee_lines)
+    assert any("passes on the base but fails on this attempt" in line for line in guarantee_lines)
 
 
 def test_vitest_broken_guarantee_detected(tmp_path):
