@@ -205,14 +205,18 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
       .map(e => [e.target, e.condition ?? ''] as [string, string]).sort()
   }
 
-  /** Walk to `until`, answering the scale gates with `scale` and every other gate proceed. */
+  /** Walk to `until`, answering the scale gates with `scale` and every other gate proceed.
+   *  route_refine_design always gets 'proceed' because these tests test the full design path. */
   function advance(s: Spine, until: string, scale: 'proceed' | 'scoped'): string[] {
     const visited: string[] = []
     while (!ids(s).includes(until)) {
       for (const n of ids(s)) {
         visited.push(n)
         const view = s.view(n)
-        if (view._type === 'GateNode') s.verdict(n, n.startsWith('route_') ? scale : 'proceed')
+        if (view._type === 'GateNode') {
+          if (n === 'route_refine_design') s.verdict(n, 'proceed')
+          else s.verdict(n, n.startsWith('route_') ? scale : 'proceed')
+        }
         else s.complete(n)
       }
     }
