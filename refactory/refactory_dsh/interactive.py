@@ -343,6 +343,15 @@ def run(
             # built for and this run says which items to read instead.
             write_source(workdir, source_path=source, source_format=source_format or "directory")
         if not resume and model_context is None:
+            # First-run auto-detection: when no explicit provider/model and no stored
+            # choice, try to detect from the credential store.  Must happen before
+            # DshModelClient() so the stored choice is present when __init__ reads it.
+            if not provider and not model:
+                from refactory_dsh.dsh_profile import first_run_choice
+                try:
+                    first_run_choice(interactive=not headless)
+                except Exception:
+                    pass  # The entry-point or DSH-side refusal handles it.
             from refactory_dsh.model import DshModelClient
             timeout_kwargs = {"timeout_s": model_timeout_s} if model_timeout_s is not None else {}
             model_context = DshModelClient(project=Path(project or project_root()), provider=provider, model=model, worker_backend=worker_backend,
@@ -635,6 +644,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import ModelChoiceError
+    # First-run auto-detection at the CLI entry point.  If no stored choice and
+    # no explicit --provider/--model, first_run_choice either auto-detects (one
+    # key) or refuses.  This is the authoritative Python-side refusal: run()
+    # itself does not refuse, so library callers and tests can proceed without a
+    # stored choice when they mock the model runtime.
+    if not args.provider and not args.model and not args.resume:
+        from refactory_dsh.dsh_profile import first_run_choice
+        try:
+            first_run_choice(interactive=not args.headless)
+        except ModelChoiceError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     workdir = Path(args.workdir) if args.workdir else None
     try:
         code = run(

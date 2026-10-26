@@ -102,6 +102,8 @@ def test_interactive_main_parses_model_timeout(monkeypatch):
     # Prevent the real require_build / dsh_profile.require from running.
     # Accept **kw so the mock matches the real require_build(root, *, check_only, gui_mode) signature.
     monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda **kw: None)
+    # Bypass first-run model choice detection so the test reaches run().
+    monkeypatch.setattr("refactory_dsh.dsh_profile.first_run_choice", lambda **kw: {"provider": "test", "model": "test"})
 
     from refactory_dsh import interactive
 

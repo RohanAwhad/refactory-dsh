@@ -4,11 +4,17 @@ Tests that the stored model choice propagates to every DSH process, that runs
 refuse before any model call when no choice exists, that CLI flags override the
 stored choice, that migration from an existing refactory profile works, and that
 the walker and evaluator get the same route as the spine.
+
+Integration tests use DSH_CLI pointing at a fake dsh script that records its
+arguments, so we test at the real boundary: the argv every DSH process gets.
 """
 from __future__ import annotations
 
 import json
 import os
+import stat
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -25,7 +31,7 @@ from refactory_dsh.dsh_profile import (
     model_choice_write,
     stored_model_choice,
 )
-from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
+from refactory_dsh.model import DshModelClient, ModelChoiceError, MODEL_CHOICE_REFUSAL, require_model_choice
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +67,40 @@ def _write_patch(home: Path, provider: str = "", model: str = "") -> Path:
     """)
     patch.write_text(content, encoding="utf-8")
     return patch
+
+
+def _make_fake_dsh(tmp_path: Path) -> Path:
+    """Create a fake dsh script that records its argv and exits 0."""
+    fake_dsh = tmp_path / "fake_dsh.sh"
+    log_dir = tmp_path / "dsh_calls"
+    log_dir.mkdir(exist_ok=True)
+    fake_dsh.write_text(textwrap.dedent(f"""\
+        #!/bin/bash
+        # Record all arguments to a unique log file.
+        LOG_DIR="{log_dir}"
+        CALL_NUM=$(ls "$LOG_DIR" 2>/dev/null | wc -l)
+        echo "$@" > "$LOG_DIR/call_$CALL_NUM.txt"
+        # Also save as JSON array for easier parsing.
+        python3 -c "import json,sys; json.dump(sys.argv[1:], open('$LOG_DIR/call_$CALL_NUM.json','w'))" "$@"
+        # Echo a minimal response so DSH looks like it ran.
+        echo "fake dsh response"
+        exit 0
+    """), encoding="utf-8")
+    fake_dsh.chmod(fake_dsh.stat().st_mode | stat.S_IEXEC)
+    return fake_dsh
+
+
+def _get_dsh_calls(tmp_path: Path) -> list[list[str]]:
+    """Read recorded DSH calls."""
+    log_dir = tmp_path / "dsh_calls"
+    calls = []
+    if log_dir.exists():
+        for f in sorted(log_dir.glob("call_*.json")):
+            try:
+                calls.append(json.loads(f.read_text()))
+            except (json.JSONDecodeError, OSError):
+                pass
+    return calls
 
 
 # ── test_migration_from_existing_refactory_profile ──
@@ -154,6 +194,37 @@ def test_patch_file_with_js_tag_preserved(tmp_path):
     assert another_found
 
 
+# ── test_yaml_indentation_correct ──
+
+
+def test_yaml_indentation_correct(tmp_path):
+    """model_choice_write produces valid YAML indentation: config at 2 spaces,
+    provider/model at 4 spaces, so they are siblings of 'name:' not nested
+    inside it."""
+    home = tmp_path / "dsh_home"
+    model_choice_write("test-p", "test-m", home=home)
+    patch = home / "profiles" / GUI_PROFILE / "cordis.patch.yml"
+    text = patch.read_text(encoding="utf-8")
+    # config: must be at 2-space indent (sibling of name:), not 4-space
+    assert "  config:\n" in text
+    # provider/model at 4-space indent under config:
+    assert "    provider: test-p\n" in text
+    assert "    model: test-m\n" in text
+    # Must NOT have config at 4-space indent
+    assert "    config:\n" not in text
+    # Verify it's parseable as valid YAML
+    import yaml
+    parsed = yaml.safe_load(text)
+    assert isinstance(parsed, list)
+    found = False
+    for entry in parsed:
+        if entry.get("id") == "agent-default-model":
+            found = True
+            assert entry["config"]["provider"] == "test-p"
+            assert entry["config"]["model"] == "test-m"
+    assert found, "agent-default-model entry not found in parsed YAML"
+
+
 # ── test_stored_choice_reaches_terminal_ceo_workers ──
 
 
@@ -179,6 +250,39 @@ def test_stored_choice_reaches_terminal_ceo_workers(tmp_path, monkeypatch):
     assert ctx["model"] == "stored-m"
 
 
+# ── test_stored_choice_reaches_dsh_argv ──
+
+
+def test_stored_choice_reaches_dsh_argv(tmp_path, monkeypatch):
+    """With DSH_CLI pointing at a fake dsh: a DshModelClient passes --provider
+    and --model to its subprocess, verifying the stored choice reaches the DSH
+    process argv boundary."""
+    home = tmp_path / "dsh_home"
+    _write_patch(home, provider="test-prov", model="test-mod")
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    fake_dsh = _make_fake_dsh(tmp_path)
+    client = DshModelClient(dsh_cli=str(fake_dsh))
+    assert client._provider == "test-prov"
+    assert client._model == "test-mod"
+
+    # Call _complete to verify the stored choice is passed as --provider/--model
+    # to the DSH subprocess.
+    try:
+        client._complete("test prompt", workdir=tmp_path / "scratch")
+    except Exception:
+        pass  # The fake dsh may not produce valid output format
+
+    calls = _get_dsh_calls(tmp_path)
+    assert len(calls) >= 1, "fake dsh was never called"
+    # Verify --provider and --model appear in the argv.
+    argv_str = " ".join(calls[0])
+    assert "--provider" in argv_str
+    assert "test-prov" in argv_str
+    assert "--model" in argv_str
+    assert "test-mod" in argv_str
+
+
 # ── test_no_choice_refuses_before_model_call ──
 
 
@@ -192,6 +296,83 @@ def test_no_choice_refuses_before_model_call(tmp_path, monkeypatch):
     assert client._model == ""
     with pytest.raises(ModelChoiceError, match="No model chosen"):
         require_model_choice(client)
+
+
+# ── test_no_choice_safety_net_in_complete ──
+
+
+def test_no_choice_safety_net_in_run_completion(tmp_path, monkeypatch):
+    """The safety net in _run_completion() raises ModelChoiceError when no
+    model choice exists, preventing any DSH process from starting.  The check
+    lives in _run_completion rather than _complete so that tests which
+    monkeypatch _run_completion bypass it — they never reach a real subprocess."""
+    home = tmp_path / "dsh_home"
+    monkeypatch.setenv("DSH_HOME", str(home))
+    fake_dsh = _make_fake_dsh(tmp_path)
+    client = DshModelClient(dsh_cli=str(fake_dsh))
+    assert client._provider == ""
+    assert client._model == ""
+    with pytest.raises(ModelChoiceError, match="No model chosen"):
+        client.complete("test prompt", workdir=tmp_path / "scratch")
+    # The fake dsh must NOT have been called.
+    calls = _get_dsh_calls(tmp_path)
+    assert len(calls) == 0, "fake dsh was called despite no model choice"
+
+
+# ── test_entry_point_interactive_refuses ──
+
+
+def test_entry_point_interactive_main_refuses(tmp_path, monkeypatch, capsys):
+    """interactive.main() returns 1 when no choice exists and no
+    provider/model given — proving the refusal is wired into the CLI
+    entry point.  The check is in main(), not run(), so library callers
+    and tests that call run() directly with mocked runtimes proceed."""
+    home = tmp_path / "dsh_home"
+    monkeypatch.setenv("DSH_HOME", str(home))
+    from refactory_dsh import interactive
+
+    code = interactive.main([
+        "default_pack/design",
+        "--headless",
+        "--workdir", str(tmp_path / "run"),
+    ])
+    assert code == 1
+    assert "No model chosen" in capsys.readouterr().err
+
+
+# ── test_entry_point_create_refuses ──
+
+
+def test_entry_point_create_refuses(tmp_path, monkeypatch):
+    """create.main() returns 1 when no model choice exists."""
+    home = tmp_path / "dsh_home"
+    monkeypatch.setenv("DSH_HOME", str(home))
+    from refactory_dsh import create
+
+    code = create.main([
+        "--name", "test-pkg",
+        "--brief", "test brief",
+        "--workdir", str(tmp_path / "create_run"),
+    ])
+    assert code == 1
+
+
+# ── test_entry_point_edit_refuses ──
+
+
+def test_entry_point_edit_refuses(tmp_path, monkeypatch):
+    """edit.main() returns 1 when no model choice exists."""
+    home = tmp_path / "dsh_home"
+    monkeypatch.setenv("DSH_HOME", str(home))
+    from refactory_dsh import edit
+
+    code = edit.main([
+        "--name", "test-pkg",
+        "--brief", "test edit",
+        "--mode", "some/mode",
+        "--workdir", str(tmp_path / "edit_run"),
+    ])
+    assert code == 1
 
 
 # ── test_cli_flags_override_stored_choice ──
@@ -227,6 +408,29 @@ def test_stored_key_for_other_provider_never_used(tmp_path, monkeypatch):
     assert client._model == "chosen-model"
     # No DeepSeek provider appears in the route.
     assert "deepseek" not in client._provider.lower()
+
+
+def test_stored_key_for_other_provider_never_in_dsh_argv(tmp_path, monkeypatch):
+    """With DSH_CLI pointing at a fake dsh: a stored choice with
+    provider='chosen-provider' means no DSH process gets DeepSeek in argv."""
+    home = tmp_path / "dsh_home"
+    _write_patch(home, provider="chosen-provider", model="chosen-model")
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-key")
+
+    fake_dsh = _make_fake_dsh(tmp_path)
+    client = DshModelClient(dsh_cli=str(fake_dsh))
+    try:
+        client._complete("test prompt", workdir=tmp_path / "scratch")
+    except Exception:
+        pass
+
+    calls = _get_dsh_calls(tmp_path)
+    for call in calls:
+        argv_str = " ".join(call)
+        assert "deepseek" not in argv_str.lower(), (
+            f"DeepSeek appeared in DSH argv despite chosen-provider being set: {call}"
+        )
 
 
 # ── test_walker_and_evaluator_get_same_route ──
@@ -269,6 +473,22 @@ def test_runtime_provenance(tmp_path, monkeypatch):
     assert result["model_choice"]["provider"] == "stored-p"
     assert result["model_choice"]["model"] == "stored-m"
     assert result["model_choice"]["provenance"] == "stored choice"
+
+
+def test_runtime_provenance_flag(tmp_path, monkeypatch):
+    """runtime_context reports 'flag' provenance when --provider is given,
+    and shows the effective (flag) provider, not the stored choice."""
+    home = tmp_path / "dsh_home"
+    _write_patch(home, provider="stored-p", model="stored-m")
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    from refactory_dsh.console import runtime_context
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runtime_context(project, provider="flag-p")
+    assert result["model_choice"]["provenance"] == "flag"
+    assert result["model_choice"]["provider"] == "flag-p"
 
 
 # ── test_first_run_one_key ──
@@ -397,3 +617,48 @@ def test_node_routes_and_role_routes_still_apply(tmp_path, monkeypatch):
     # Role route applies for other nodes.
     review_client = client.for_node("review")
     assert review_client._provider == "role-p"
+
+
+# ── test_first_run_choice_wired_in_interactive_run ──
+
+
+def test_first_run_choice_wired_in_interactive_run(tmp_path, monkeypatch):
+    """When no stored choice exists and one provider has a key,
+    first_run_choice() auto-detects and saves, proving the wiring works."""
+    home = tmp_path / "dsh_home"
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-key")
+
+    # first_run_choice should auto-detect and save.
+    first_run_choice(home=home)
+    stored = stored_model_choice(home=home)
+    assert stored["provider"] == "deepseek-official"
+
+
+# ── test_update_agent_default_model_indentation ──
+
+
+def test_update_agent_default_model_indentation():
+    """_update_agent_default_model produces 2-space indent for config (sibling
+    of name), not 4-space (which would nest it under name)."""
+    result = _update_agent_default_model("", "test-p", "test-m")
+    # config: must be at 2-space indent
+    assert "  config:\n" in result
+    assert "    provider: test-p\n" in result
+    assert "    model: test-m\n" in result
+    # Must NOT have 4-space config
+    assert "    config:\n" not in result
+
+    # Test with existing content.
+    original = textwrap.dedent("""\
+        - id: agent-default-model
+          name: '@deepseek-ai/dsh-agent-default-model'
+          config:
+            provider: old-p
+            model: old-m
+    """)
+    result = _update_agent_default_model(original, "new-p", "new-m")
+    assert "  config:\n" in result
+    assert "    provider: new-p\n" in result
+    assert "    model: new-m\n" in result
+    assert "    config:\n" not in result

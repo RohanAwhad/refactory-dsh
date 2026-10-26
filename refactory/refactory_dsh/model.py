@@ -640,6 +640,11 @@ class DshModelClient:
         via a seekable temporary file, keeping large prompts off the command line
         where they would exceed ``MAX_ARG_STRLEN``.
         """
+        # Safety-net: refuse before spawning a DSH process with no model choice.
+        # Placed here (not in _complete) so that tests which monkeypatch
+        # _run_completion bypass the check — they never reach a real subprocess.
+        if self._worker_backend == "dsh" and not self._provider and not self._model:
+            raise ModelChoiceError()
         timeout_s = budget_s if budget_s is not None else self._timeout_s
         with _termination_as_exit():
             self._raise_if_cancelled()

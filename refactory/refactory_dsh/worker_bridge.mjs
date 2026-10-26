@@ -13,9 +13,11 @@ export function apply(ctx) {
   void (async () => {
     await ctx.get('loader')?.await()
     const startup = ctx.get('headlessStartup')
-    const selection = ctx.get('agentDefaultModel').currentSelection()
-    const provider = startup.provider || selection.provider
-    const model = startup.model || selection.model
+    // Only use the startup's explicit provider/model — never fall back to
+    // the profile's own default (selection.provider).  The Python launcher
+    // passes --provider/--model explicitly when a stored choice exists.
+    const provider = startup.provider || ''
+    const model = startup.model || ''
     if (!provider && !model) {
       process.stderr.write('dsh: No model chosen: pick one in Settings → Models or with `refactory model set --provider <provider> --model <model>`.\n')
       ctx.get('appExit')(1)

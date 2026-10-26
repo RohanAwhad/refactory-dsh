@@ -1712,18 +1712,24 @@ def runtime_context(project: Path, *, provider: str = "", model: str = "") -> di
     from refactory_dsh.worker_config import effective
     from refactory_dsh.dsh_profile import stored_model_choice
     _stored = stored_model_choice()
-    # Determine provenance of the model route.
+    # Determine provenance of the model route and show effective values.
     if provider:
         _provenance = "flag"
+        _eff_provider = provider
+        _eff_model = model or context.get("model", "")
     elif _stored.get("provider") and context.get("provider") == _stored["provider"]:
         _provenance = "stored choice"
+        _eff_provider = _stored.get("provider", "")
+        _eff_model = _stored.get("model", "")
     else:
         _provenance = "runtime default"
+        _eff_provider = context.get("provider", "")
+        _eff_model = context.get("model", "")
     return {
         "worker_configuration": effective(project),
         "model_choice": {
-            "provider": _stored.get("provider", ""),
-            "model": _stored.get("model", ""),
+            "provider": _eff_provider,
+            "model": _eff_model,
             "provenance": _provenance,
         },
         "project": str(project.resolve()),
@@ -1945,6 +1951,14 @@ def main(argv: list[str] | None = None) -> int:
             mc = {key: getattr(args, key) for key in ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes", "provider_config") if getattr(args, key)}
             if model_timeout_s is not None:
                 mc["timeout_s"] = model_timeout_s
+            # First-run auto-detection for GUI open path.
+            if not mc.get("provider") and not mc.get("model"):
+                from refactory_dsh.dsh_profile import first_run_choice
+                from refactory_dsh.model import ModelChoiceError as _MCE
+                try:
+                    first_run_choice(interactive=False)
+                except _MCE:
+                    pass  # The refusal check in _open_mode will raise
             payload = _open_mode(
                 args.mode,
                 project=project,
@@ -2040,6 +2054,12 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, ConsoleError, LoopError, PackageError, AdoptionError, SteeringError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stdout)
         return 2
+    except Exception as _mce:
+        # ModelChoiceError propagates from _open_mode or forwarded commands.
+        if type(_mce).__name__ == 'ModelChoiceError':
+            print(json.dumps({"error": str(_mce)}), file=sys.stdout)
+            return 1
+        raise
     if isinstance(payload, dict) and payload.get("ok") is False:
         # The forwarded call failed and said why; the caller gets the reason at the top
         # level as well, because that is where every console consumer looks for it.

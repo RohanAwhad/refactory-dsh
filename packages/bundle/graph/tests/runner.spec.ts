@@ -157,7 +157,7 @@ async function bench(options: {
     ctx.provide(GRAPH_STARTUP_SERVICE, {
       mode: options.mode ?? 'probe', taskName: 'circle_packing', budget: 7,
       workdir: runDir, graph: {}, commandEnv: {},
-      task: 'drive it', provider: options.provider, model: options.model, pythonBin: '/venv/bin',
+      task: 'drive it', provider: options.provider ?? 'test-provider', model: options.model ?? 'test-model', pythonBin: '/venv/bin',
       chat: options.chat ?? false,
     } as GraphStartupValues)
   }

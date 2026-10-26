@@ -303,9 +303,11 @@ async function run(ctx: Context, io: Io): Promise<void> {
   const sessions = ctx.get('sessions')
   if (startup === undefined || agents === undefined || defaultModel === undefined || sessions === undefined) return
 
-  const selection = defaultModel.currentSelection()
-  const provider = startup.provider || selection.provider
-  const model = startup.model || selection.model
+  // Only use the startup's explicit provider/model — never fall back to
+  // the profile's own default (selection.provider).  The Python launcher
+  // passes --provider/--model explicitly when a stored choice exists.
+  const provider = startup.provider ?? ''
+  const model = startup.model ?? ''
   if (!provider && !model) {
     io.stderr.write('dsh: No model chosen: pick one in Settings → Models or with `refactory model set --provider <provider> --model <model>`.\n')
     io.exit(1)

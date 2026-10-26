@@ -364,7 +364,7 @@ def test_completion_timeout_stops_owned_runtime_and_records_reason(tmp_path):
     script.write_text(f'#!{sys.executable}\nimport signal,time\nfrom pathlib import Path\ndef stop(*args):\n Path("stopped").write_text("yes")\n raise SystemExit(0)\nsignal.signal(signal.SIGTERM,stop)\nPath("started").write_text("yes")\ntime.sleep(30)\n')
     script.chmod(0o700)
     with pytest.raises(RuntimeError, match='timed out'):
-        DshModelClient(dsh_cli=str(script), timeout_s=1, attempts=1).complete('ignored', workdir=tmp_path)
+        DshModelClient(dsh_cli=str(script), timeout_s=1, attempts=1, provider='test', model='test').complete('ignored', workdir=tmp_path)
     assert (tmp_path/'stopped').read_text() == 'yes'
     receipt = json.loads(next((tmp_path/'.refactory/workers').glob('*.json')).read_text())
     assert receipt['state'] == 'timed_out'
@@ -922,7 +922,7 @@ def test_walker_optional_branch_settles_its_pending_marker(tmp_path, concurrent)
         dsh = tmp_path / 'dsh'
         dsh.write_text('#!/bin/sh\nif grep -q Verify; then exec sleep 60; fi\necho ok\n')
         dsh.chmod(0o755)
-        ctx.model = DshModelClient(worker_backend='dsh', dsh_cli=str(dsh), attempts=1)
+        ctx.model = DshModelClient(worker_backend='dsh', dsh_cli=str(dsh), attempts=1, provider='test', model='test')
     else:
         ctx.model = _TimesOutFor('verifier')
     executor = Executor(_walker_review_fork(), ctx)

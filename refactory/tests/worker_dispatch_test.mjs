@@ -36,7 +36,7 @@ for (const backend of ['codex', 'claude_code']) {
     loader: { await: async () => {} },
     agentDefaultModel: { currentSelection: () => ({ provider: 'unused', model: 'unused' }) },
     agents: { create: async () => ({ agent: parent, dispose: async () => {} }) },
-    headlessStartup: { task: 'write answer.txt with 42' },
+    headlessStartup: { task: 'write answer.txt with 42', provider: 'test-provider', model: 'test-model' },
     subagents: { start: async (name, request) => {
       dispatches.push(name)
       return providers.get(name).start(request)

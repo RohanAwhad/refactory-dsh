@@ -869,7 +869,7 @@ def model_choice_write(provider: str, model: str, home: str | Path | None = None
 
 def _update_agent_default_model(text: str, provider: str, model: str) -> str:
     """Replace or append the agent-default-model entry's config block."""
-    new_config = f"    config:\n      provider: {provider}\n      model: {model}\n"
+    new_config = f"  config:\n    provider: {provider}\n    model: {model}\n"
     lines = text.splitlines(keepends=True)
     result: list[str] = []
     i = 0
