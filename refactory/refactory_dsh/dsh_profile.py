@@ -25,13 +25,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
+
+import yaml
 
 from refactory_dsh.paths import REPO_ROOT, dsh_root
 
@@ -756,12 +760,414 @@ def require(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str 
         raise ProfileError(problem)
 
 
+# ── the run model: one choice ───────────────────────────────────────────────
+#
+# Every refactory run uses one model choice (dm-258). It lives where Settings → Models
+# already writes it: the `agent-default-model` entry of the GUI profile's patch,
+# `$DSH_HOME/profiles/refactory/cordis.patch.yml`. Refactory reads it, `refactory model
+# set` writes it, and every DSH process a run starts is handed it as `--provider` and
+# `--model`. The `graph` and `headless` profiles' own defaults are never consulted: a
+# terminal run used to read them and send a person's code to whichever provider the
+# harness ships as its default.
+
+#: The patch entry that holds the choice, and the plugin it configures.
+MODEL_CHOICE_ENTRY = "agent-default-model"
+MODEL_CHOICE_PLUGIN = "@deepseek-ai/dsh-agent-default-model"
+
+#: What a run with no choice says, wherever it is refused.
+NO_MODEL_CHOICE_MESSAGE = (
+    "No model chosen: pick one in Settings → Models or with "
+    "`refactory model set --provider <provider> --model <model>`."
+)
+
+_NO_CHOICE = {"provider": "", "model": ""}
+
+
+class _TolerantLoader(yaml.SafeLoader):
+    """A safe loader that reads any tag it does not know (`!!js`, `!secret`) as nothing.
+
+    The profile patch is DSH's file, and its other entries may carry `!!js` expressions
+    a plain safe load refuses. Reading the one entry this module owns must not depend
+    on understanding the rest.
+    """
+
+
+_TolerantLoader.add_constructor(None, lambda _loader, _node: None)  # type: ignore[arg-type]
+
+
+def model_choice_path(home: str | Path | None = None) -> Path:
+    """The file the one model choice lives in: the GUI profile's patch in the DSH home.
+
+    A named home wins. Otherwise it is the model home a nested command was told about
+    (`REFACTORY_MODEL_DSH_HOME`, which survives the HOME rewrite a sandboxed command
+    runs under), else `DSH_HOME`, else ``~/.dsh`` — the person's home, where Settings →
+    Models writes.
+    """
+    named = str(home).strip() if home is not None else ""
+    chosen = named or (os.environ.get("REFACTORY_MODEL_DSH_HOME") or "").strip()
+    return dsh_home(chosen or None) / "profiles" / GUI_PROFILE / "cordis.patch.yml"
+
+
+def _entries(text: str) -> list[object]:
+    loaded = yaml.load(text, Loader=_TolerantLoader)  # noqa: S506 - a SafeLoader subclass
+    if loaded is None:
+        return []
+    if not isinstance(loaded, list):
+        raise ValueError("a profile patch is a list of entries")
+    return loaded
+
+
+def _choice_in(entries: list[object]) -> dict[str, str]:
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("id") != MODEL_CHOICE_ENTRY or entry.get("disabled"):
+            continue
+        config = entry.get("config")
+        if not isinstance(config, dict):
+            return dict(_NO_CHOICE)
+        provider, model = config.get("provider"), config.get("model")
+        if isinstance(provider, str) and isinstance(model, str) and provider.strip() and model.strip():
+            return {"provider": provider.strip(), "model": model.strip()}
+        return dict(_NO_CHOICE)
+    return dict(_NO_CHOICE)
+
+
+def stored_model_choice(home: str | Path | None = None) -> dict[str, str]:
+    """The stored run model, ``{"provider", "model"}``; both empty when there is none.
+
+    A half-written entry (a provider without a model) is no choice: a run given half a
+    route would have the harness fill the other half from its own default.
+    """
+    try:
+        text = model_choice_path(home).read_text(encoding="utf-8")
+    except OSError:
+        return dict(_NO_CHOICE)
+    try:
+        return _choice_in(_entries(text))
+    except (yaml.YAMLError, ValueError):
+        return dict(_NO_CHOICE)
+
+
+#: A value that can be written as a plain YAML scalar and reads back as itself.
+_PLAIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/+-]*")
+
+
+def _scalar(value: str) -> str:
+    if _PLAIN.fullmatch(value) and yaml.safe_load(value) == value:
+        return value
+    return json.dumps(value)  # a double-quoted YAML scalar
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _content(line: str) -> bool:
+    """Whether a line carries YAML content, rather than being blank or a comment."""
+    stripped = line.strip()
+    return bool(stripped) and not stripped.startswith("#")
+
+
+def _items(lines: list[str]) -> list[tuple[int, int]]:
+    """The top-level list items, as ``[start, end)`` line ranges."""
+    starts = [index for index, line in enumerate(lines) if line.startswith("-") and _content(line)]
+    bounds: list[tuple[int, int]] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        # An item ends at the first column-0 content line that is not part of it.
+        for index in range(start + 1, end):
+            if _content(lines[index]) and _indent(lines[index]) == 0:
+                end = index
+                break
+        bounds.append((start, end))
+    return bounds
+
+
+def _keys(lines: list[str], start: int, end: int) -> tuple[int, dict[str, int]]:
+    """An item's key indent and where each of its own keys starts."""
+    first = lines[start]
+    if _content(first[1:]):
+        key_indent = 1 + _indent(first[1:])
+    else:  # "-" alone on its line: the keys start on the next one
+        key_indent = next((_indent(lines[index]) for index in range(start + 1, end) if _content(lines[index])), 2)
+    keys: dict[str, int] = {}
+    for index in range(start, end):
+        line = lines[index] if index > start else " " * key_indent + first[key_indent:]
+        if not _content(line) or _indent(line) != key_indent:
+            continue
+        match = re.match(r"\s*([A-Za-z_][\w-]*)\s*:", line)
+        if match:
+            keys.setdefault(match.group(1), index)
+    return key_indent, keys
+
+
+def _block_end(lines: list[str], index: int, indent: int, end: int) -> int:
+    """The end of the value that starts on ``lines[index]`` at ``indent``."""
+    after = index + 1
+    while after < end and (not _content(lines[after]) or _indent(lines[after]) > indent):
+        after += 1
+    # Trailing blank or comment lines belong to whatever follows.
+    while after > index + 1 and not _content(lines[after - 1]):
+        after -= 1
+    return after
+
+
+def _with_model_choice(text: str, provider: str, model: str) -> str:
+    """``text`` with only the model choice entry changed (or added)."""
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    values = {"provider": _scalar(provider), "model": _scalar(model)}
+    for start, end in _items(lines):
+        key_indent, keys = _keys(lines, start, end)
+        id_line = keys.get("id")
+        if id_line is None:
+            continue
+        id_text = lines[id_line] if id_line > start else " " * key_indent + lines[start][key_indent:]
+        if re.match(r"\s*id\s*:\s*(['\"]?)" + re.escape(MODEL_CHOICE_ENTRY) + r"\1\s*(#.*)?$", id_text) is None:
+            continue
+        child = key_indent + 2
+        if "config" in keys and re.match(r"\s*config\s*:\s*(#.*)?$", lines[keys["config"]]):
+            # A block mapping: replace the two values in place, add whichever is missing.
+            config = keys["config"]
+            stop = _block_end(lines, config, key_indent, end)
+            children = [index for index in range(config + 1, stop) if _content(lines[index])]
+            if children:
+                child = _indent(lines[children[0]])
+            replaced: list[str] = []
+            index = config + 1
+            seen: set[str] = set()
+            while index < stop:
+                line = lines[index]
+                match = re.match(r"\s*(provider|model)\s*:", line) if _content(line) and _indent(line) == child else None
+                if match:
+                    name = match.group(1)
+                    seen.add(name)
+                    replaced.append(" " * child + f"{name}: {values[name]}\n")
+                    index = _block_end(lines, index, child, stop)
+                    continue
+                replaced.append(line)
+                index += 1
+            missing = [" " * child + f"{name}: {values[name]}\n" for name in ("provider", "model") if name not in seen]
+            lines[config + 1:stop] = missing + replaced if not seen else replaced + missing
+        else:
+            block = [" " * key_indent + "config:\n"] + [" " * child + f"{name}: {values[name]}\n" for name in ("provider", "model")]
+            if "config" in keys:
+                # A flow or tagged value: the entry is ours, so its config becomes a block.
+                config = keys["config"]
+                lines[config:_block_end(lines, config, key_indent, end)] = block
+            else:
+                last = max(index for index in range(start, end) if _content(lines[index]))
+                lines[last + 1:last + 1] = block
+        return "".join(lines)
+    entry = [
+        f"- id: {MODEL_CHOICE_ENTRY}\n",
+        f'  name: "{MODEL_CHOICE_PLUGIN}"\n',
+        "  config:\n",
+        f"    provider: {values['provider']}\n",
+        f"    model: {values['model']}\n",
+    ]
+    content = [index for index, line in enumerate(lines) if _content(line)]
+    if len(content) == 1 and re.match(r"\[\s*\]\s*(#.*)?$", lines[content[0]].strip()):
+        lines[content[0]:content[0] + 1] = entry
+    elif any(_indent(lines[index]) == 0 and not lines[index].startswith("-") for index in content):
+        raise ValueError("the profile patch is not a list of entries")
+    else:
+        lines.extend(entry)
+    return "".join(lines)
+
+
+def _yaml_problem(error: Exception) -> str:
+    """A YAML error as its problem and position only, without the source it quotes."""
+    if isinstance(error, yaml.MarkedYAMLError):
+        mark = error.problem_mark or error.context_mark
+        where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+        return f"{error.problem or error.context or 'invalid YAML'}{where}"
+    if isinstance(error, yaml.YAMLError):
+        return "invalid YAML"
+    return str(error)  # this module's own messages, which quote nothing from the file
+
+
+def model_choice_write(provider: str, model: str, home: str | Path | None = None) -> dict[str, str]:
+    """Store the run model, changing only its own entry, atomically.
+
+    The file belongs to DSH's settings page, and its other entries can carry `!!js`
+    expressions a YAML round trip would fail on or rewrite. So the file is never loaded
+    and dumped back: the entry's two lines are edited in place (or the entry added),
+    every other byte is kept, the result is checked to read back as exactly the old
+    entries plus this choice, and it replaces the file by rename.
+    """
+    provider, model = str(provider).strip(), str(model).strip()
+    for name, value in (("provider", provider), ("model", model)):
+        if not value or any(ord(character) < 32 for character in value):
+            raise ValueError(f"the model choice needs a {name} on one line, got {value!r}")
+    path = model_choice_path(home)
+    try:
+        original = path.read_text(encoding="utf-8")
+        mode = path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        original, mode = "", 0o600
+    try:
+        before = _entries(original)
+    except (yaml.YAMLError, ValueError) as error:
+        # The problem and where, never the parser's quote of the line: a profile patch
+        # can carry credentials in headers (an `Authorization:` value, say).
+        raise ValueError(f"{path} is not a readable profile patch ({_yaml_problem(error)}), "
+                         "so it was left alone") from None
+    unplaced = f"{path} could not be edited in place; set the model in Settings → Models instead"
+    updated = _with_model_choice(original, provider, model)
+    try:
+        after = _entries(updated)
+    except (yaml.YAMLError, ValueError):
+        raise ValueError(unplaced) from None
+
+    def others(entries: list[object]) -> list[object]:
+        return [entry for entry in entries
+                if not (isinstance(entry, dict) and entry.get("id") == MODEL_CHOICE_ENTRY)]
+
+    if others(after) != others(before) or _choice_in(after) != {"provider": provider, "model": model}:
+        raise ValueError(unplaced)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=str(path.parent), prefix=".cordis.patch.", suffix=".tmp", delete=False,
+    )
+    try:
+        with handle:
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(handle.name, mode)
+        os.replace(handle.name, path)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
+    return {"provider": provider, "model": model}
+
+
+def keyed_providers(home: str | Path | None = None) -> list[dict[str, str]] | None:
+    """The providers whose key the credential store holds, each with its default model.
+
+    Asked through the installed DSH services, the same describe-only path `doctor`'s
+    credential check takes (`model_readiness.mjs`): the store says whether a key is
+    set and never what it is. A provider's default model is the first one its route
+    lists, or ``""`` when the route lists none. ``None`` when the store could not be
+    asked, which is never read as "no keys".
+    """
+    probe = Path(__file__).with_name("model_readiness.mjs")
+    selected = model_home(home)
+    env = {**os.environ, "DSH_HOME": str(selected), "REFACTORY_MODEL_DSH_HOME": str(selected)}
+    from refactory_dsh.paths import node_bin
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="refactory-keys-") as work:
+            proc = subprocess.run([node_bin(), str(probe), str(dsh_root()), "--keyed-providers"],
+                                  env=env, capture_output=True, text=True, timeout=60, cwd=work)
+        answer = json.loads(proc.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not isinstance(answer, dict) or answer.get("status") != "keyed-providers":
+        return None
+    keyed = []
+    for row in answer.get("providers") or []:
+        if isinstance(row, dict) and isinstance(row.get("provider"), str) and row["provider"]:
+            model = row.get("model")
+            keyed.append({"provider": row["provider"], "model": model if isinstance(model, str) else ""})
+    return keyed
+
+
+def first_run_plan(home: str | Path | None = None) -> tuple[list[dict[str, str]] | None, str]:
+    """What a first run with no stored choice would do, without doing it.
+
+    Returns the keyed providers and a refusal (``""`` when one provider would be used).
+    """
+    keyed = keyed_providers(home)
+    if keyed is None:
+        return None, f"{NO_MODEL_CHOICE_MESSAGE} (The credential store could not be asked which providers have a key.)"
+    if not keyed:
+        return keyed, NO_MODEL_CHOICE_MESSAGE
+    if len(keyed) == 1 and not keyed[0]["model"]:
+        only = keyed[0]["provider"]
+        return keyed, (f"No model chosen: {only} is the only provider with a key, but its route lists no "
+                       f"default model; choose one with `refactory model set --provider {only} --model <model>`.")
+    if len(keyed) > 1:
+        names = ", ".join(row["provider"] for row in keyed)
+        return keyed, (f"No model chosen, and several providers have a key: {names}. Pick one with "
+                       "`refactory model set --provider <provider> --model <model>`, or in Settings → Models.")
+    return keyed, ""
+
+
+def _store_first_choice(provider: str, model: str, home: str | Path | None) -> dict[str, str]:
+    """Store a first-run choice; a file that cannot take it refuses the run, it does not crash it."""
+    from refactory_dsh.model import ModelChoiceError
+
+    try:
+        return model_choice_write(provider, model, home)
+    except (ValueError, OSError) as error:
+        raise ModelChoiceError(f"No model chosen: {provider}/{model} could not be stored ({error}); "
+                               "pick one in Settings → Models.") from None
+
+
+def first_run_choice(
+    home: str | Path | None = None,
+    *,
+    interactive: bool = False,
+    ask: Callable[[str], str] | None = None,
+) -> dict[str, str]:
+    """The stored choice, or the visible first-run choice when there is none.
+
+    A stored choice is returned as it is: this never replaces one. Without one, the
+    credential store decides, and nothing switches silently:
+
+    * one provider has a key: that provider and its default model are stored, and a
+      line says so (once; the next run reads the stored choice and says nothing);
+    * several have keys: at a terminal (``interactive``) the person is asked once and
+      the answer is stored; otherwise the run is refused with the list;
+    * none has a key: the run is refused with the instruction.
+
+    Raises :class:`refactory_dsh.model.ModelChoiceError` on a refusal.
+    """
+    from refactory_dsh.model import ModelChoiceError
+
+    stored = stored_model_choice(home)
+    if stored["provider"]:
+        return stored
+    keyed, refusal = first_run_plan(home)
+    if keyed and len(keyed) > 1 and interactive:
+        print("No model chosen yet. These providers have a key:", file=sys.stderr)
+        for number, row in enumerate(keyed, 1):
+            print(f"  {number}. {row['provider']}" + (f" ({row['model']})" if row["model"] else ""), file=sys.stderr)
+        try:
+            answer = (ask or input)(f"Which one should runs use? [1-{len(keyed)}] ").strip()
+        except (EOFError, OSError):
+            answer = ""
+        chosen = next((row for number, row in enumerate(keyed, 1)
+                       if answer in (str(number), row["provider"])), None)
+        if chosen is None:
+            raise ModelChoiceError(f"No model chosen: {answer!r} is not one of the listed providers. "
+                                   "Pick one with `refactory model set --provider <provider> --model <model>`.")
+        if not chosen["model"]:
+            raise ModelChoiceError(f"No model chosen: {chosen['provider']}'s route lists no default model; choose one "
+                                   f"with `refactory model set --provider {chosen['provider']} --model <model>`.")
+        choice = _store_first_choice(chosen["provider"], chosen["model"], home)
+        print(f"Using {choice['provider']}/{choice['model']}; change it with `refactory model set`", file=sys.stderr)
+        return choice
+    if refusal:
+        raise ModelChoiceError(refusal)
+    assert keyed is not None and len(keyed) == 1
+    choice = _store_first_choice(keyed[0]["provider"], keyed[0]["model"], home)
+    print(f"Using {choice['provider']}/{choice['model']}, the only provider with a key; "
+          "change it with `refactory model set`", file=sys.stderr)
+    return choice
+
+
 __all__ = [
     "GRAPH_BUNDLE",
     "GRAPH_PROFILE",
     "GUI_PROFILE",
     "LAYERS",
     "MARTTY_PROFILE",
+    "MODEL_CHOICE_ENTRY",
+    "MODEL_CHOICE_PLUGIN",
+    "NO_MODEL_CHOICE_MESSAGE",
     "PRESETS_BUNDLE",
     "ProfileError",
     "ProvisionStep",
@@ -780,12 +1186,17 @@ __all__ = [
     "declared_bundles",
     "declared_bundles_in",
     "dsh_home",
+    "first_run_choice",
+    "first_run_plan",
+    "keyed_providers",
     "model_home",
     "init_command",
     "is_ready",
     "layer_bundle",
     "migration_command",
     "missing_bundles",
+    "model_choice_path",
+    "model_choice_write",
     "profile_dir",
     "provision_plan",
     "readiness_gaps",
@@ -796,5 +1207,6 @@ __all__ = [
     "retired_bundles",
     "retired_reason",
     "stale_mutations",
+    "stored_model_choice",
     "target",
 ]

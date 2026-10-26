@@ -2594,32 +2594,54 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resolved-config", default="", help="exact resolved snapshot prepared by the console")
     args = parser.parse_args(argv)
     project = Path(args.project)
-    try:
+    from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
+
+    def settle() -> dict[str, Any]:
         if args.resolved_config:
             snapshot = json.loads(Path(args.resolved_config).read_text())
             if snapshot.get("mode") != args.mode:
                 raise profiles.ProfileError("resolved snapshot belongs to another mode")
-        else:
-            overrides = {key: value for key, value in vars(args).items()
-                         if (key in profiles.defaults() or key == "knob") and value is not None}
-            prior_path = Path(args.runs_root) / "config.json"
-            if args.resume and not args.profile and prior_path.exists():
-                previous = json.loads(prior_path.read_text())
-                if previous.get("mode") != args.mode:
-                    raise profiles.ProfileError("the resume directory belongs to another mode")
-                previous_settings = {k: v for k, v in previous.items() if k in profiles.defaults()}
-                snapshot = profiles.refresh(project, args.mode, profiles.normalize({**previous_settings, **overrides}), previous.get("resolved_profile") or {})
-            else:
-                snapshot = profiles.resolve(project, args.mode, name=args.profile,
-                                            version=args.profile_version, overrides=overrides)
+            return snapshot
+        overrides = {key: value for key, value in vars(args).items()
+                     if (key in profiles.defaults() or key == "knob") and value is not None}
+        prior_path = Path(args.runs_root) / "config.json"
+        if args.resume and not args.profile and prior_path.exists():
+            previous = json.loads(prior_path.read_text())
+            if previous.get("mode") != args.mode:
+                raise profiles.ProfileError("the resume directory belongs to another mode")
+            previous_settings = {k: v for k, v in previous.items() if k in profiles.defaults()}
+            return profiles.refresh(project, args.mode, profiles.normalize({**previous_settings, **overrides}), previous.get("resolved_profile") or {})
+        return profiles.resolve(project, args.mode, name=args.profile,
+                                version=args.profile_version, overrides=overrides)
+
+    def client(snapshot: dict[str, Any]) -> DshModelClient:
         settings = snapshot["settings"]
-        from refactory_dsh.model import DshModelClient
-        model = DshModelClient(routes_resolved=True, routing_provenance=(snapshot.get("worker_configuration") or {}).get("provenance"), **{key: settings[key] for key in
+        return DshModelClient(routes_resolved=True, routing_provenance=(snapshot.get("worker_configuration") or {}).get("provenance"), **{key: settings[key] for key in
             ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes", "provider_config")
             })
+
+    try:
+        snapshot = settle()
+        model = client(snapshot)
+        # A search whose graph or optimizer calls a model settles its route before the
+        # first candidate runs (dm-258); one that calls none (`--evaluator walker` over
+        # deterministic nodes, a random optimizer) needs no choice at all.
+        if ((snapshot.get("evaluation_context") or {}).get("routing") or {}).get("status") \
+                != "no_model_required_by_current_graph_or_optimizer":
+            gated = require_model_choice(model, interactive=sys.stdin.isatty())
+            if gated.route() != model.route() and not args.resolved_config:
+                # The first-run choice was just stored: resolve again, so the search's
+                # recorded context names the route its candidates run on.
+                snapshot = settle()
+                gated = client(snapshot)
+            model = gated
+        settings = snapshot["settings"]
         config = LoopConfig.from_dict({**settings, "runs_root": args.runs_root,
                                       "print_events": True, "verbose": args.verbose,
                                       "resume": args.resume, "resolved_profile": snapshot})
+    except ModelChoiceError as exc:
+        print(f"refactory: {exc}", file=sys.stderr)
+        return 1
     except (profiles.ProfileError, ValueError, OSError) as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2

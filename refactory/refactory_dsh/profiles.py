@@ -254,13 +254,10 @@ def runtime_identity(settings: dict[str, Any], project: Path, *, uses_models: bo
     model = model_client if callable(getattr(model_client, "route", None)) and callable(getattr(model_client, "readiness", None)) else DshModelClient(routes_resolved=True, **{key: settings[key] for key in
         ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes")
         })
-    readiness = model.readiness(workdir=project, require_ready=False)
+    # The route is the one the client holds: a flag, a route map or the one stored
+    # choice. A provider or model a readiness probe reports is never taken into it —
+    # that was the profile default, the source a run must not use (dm-258).
     route = model.route()
-    for key in ("provider", "model"):
-        value = readiness.get(key)
-        if (not route.get(key) and readiness.get("status") != "diagnostic-unavailable"
-                and isinstance(value, str) and value.strip() and value != "(runtime default)"):
-            route[key] = value
     resolved = bool(route.get("model")) and (route["worker_backend"] != "dsh" or bool(route.get("provider")))
     context = model.context() if callable(getattr(model, "context", None)) else {}
     # Runtime/credential-store location can change a default route or executable.

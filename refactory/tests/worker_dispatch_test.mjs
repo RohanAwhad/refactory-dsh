@@ -23,7 +23,7 @@ for (const backend of ['codex', 'claude_code']) {
   assert.equal(provider.config.providerName, 'refactory-worker')
   assert.ok(provider.name.includes(backend === 'codex' ? 'subagent-codex' : 'subagent-claude-code'))
   if (backend !== 'codex') continue
-  const providers = new Map(), spawns = [], dispatches = []
+  const providers = new Map(), spawns = [], dispatches = [], created = []
   const native = await import(pathToFileURL(provider.name).href)
   native.apply({
     subagents: { registerProvider: value => providers.set(value.name, value) },
@@ -34,8 +34,9 @@ for (const backend of ['codex', 'claude_code']) {
   const settled = Promise.withResolvers()
   const services = {
     loader: { await: async () => {} },
-    agentDefaultModel: { currentSelection: () => ({ provider: 'unused', model: 'unused' }) },
-    agents: { create: async () => ({ agent: parent, dispose: async () => {} }) },
+    // The headless profile's default model is never the route (dm-258): reading it fails the test.
+    agentDefaultModel: { currentSelection: () => { throw new Error('the bridge read the profile default model') } },
+    agents: { create: async request => { created.push(request.agentOptions); return { agent: parent, dispose: async () => {} } } },
     headlessStartup: { task: 'write answer.txt with 42' },
     subagents: { start: async (name, request) => {
       dispatches.push(name)
@@ -47,6 +48,7 @@ for (const backend of ['codex', 'claude_code']) {
   bridge.apply({ get: key => services[key], on() {} })
   assert.equal(await settled.promise, 1) // intercepted, never a product/model turn
   assert.deepEqual(dispatches, ['refactory-worker'])
+  assert.deepEqual(created, [{}]) // no route named, so the parent takes none
   assert.equal(spawns.length, 1)
   assert.ok(spawns[0].argv.includes('app-server'))
   assert.ok(spawns[0].argv.some(value => value.includes('codex')))

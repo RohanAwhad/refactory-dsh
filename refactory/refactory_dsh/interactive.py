@@ -57,6 +57,67 @@ def with_knobs(state: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
     return state
 
 
+def calls_models(state: Any) -> bool:
+    """Whether a mode's graph has an agent node anywhere, nested bodies included."""
+    if isinstance(state, dict):
+        return state.get("kind") == "agent" or any(calls_models(value) for value in state.values())
+    if isinstance(state, list):
+        return any(calls_models(value) for value in state)
+    return False
+
+
+def require_route(model_context: dict[str, Any], *, interactive: bool = False) -> dict[str, Any]:
+    """``model_context`` with a complete DSH route, or ``ModelChoiceError`` (dm-258).
+
+    A route a flag, the environment, the project file or the stored choice completed
+    passes unchanged; an empty one gets the visible first-run choice or is refused.
+    Another worker backend keeps its native settings.
+    """
+    if model_context.get("worker_backend", "dsh") != "dsh":
+        return model_context
+    from refactory_dsh.model import complete_route
+
+    provider, model = complete_route(str(model_context.get("provider") or ""), str(model_context.get("model") or ""),
+                                     interactive=interactive, home=model_context.get("dsh_home") or None)
+    return {**model_context, "provider": provider, "model": model}
+
+
+#: What an OpenShell run says about its model, once, at launch (dm-258).
+OPENSHELL_MODEL_NOTE = (
+    "refactory: an openshell run's model is the OpenShell gateway's verified claude-code "
+    "provider, inside the sandbox; the stored model choice does not apply to it"
+)
+
+
+def ceo_route(model_context: dict[str, Any], *, interactive: bool = False, required: bool = True) -> tuple[str, str]:
+    """The DSH route the CEO runs on, passed to it as ``--provider``/``--model``.
+
+    A DSH run's own route. With an external worker backend (Codex, Claude Code) the
+    workers keep their native settings, but the CEO is still a local DSH agent, so it
+    runs on the one choice rather than on the graph profile's default.
+
+    An OpenShell run is the exception, and out of the one choice's scope: its whole
+    graph command runs in the sandbox, whose only inference path is the gateway's
+    `claude-code` provider (verified at dispatch; credentials never enter the
+    sandbox). No route is passed in, and none can fall back silently: the dispatch
+    refuses a gateway without that provider, and the graph runner refuses a CEO
+    launched with no route.
+    """
+    backend = model_context.get("worker_backend", "dsh")
+    if backend == "openshell":
+        return "", ""
+    if backend == "dsh":
+        return str(model_context.get("provider") or ""), str(model_context.get("model") or "")
+    from refactory_dsh.dsh_profile import stored_model_choice
+    from refactory_dsh.model import complete_route
+
+    home = model_context.get("dsh_home") or None
+    stored = stored_model_choice(home)
+    if stored["provider"] or not required:
+        return stored["provider"], stored["model"]
+    return complete_route("", "", interactive=interactive, home=home)
+
+
 def prepare(
     identifier: str,
     *,
@@ -97,6 +158,16 @@ def prepare(
                       if headless or name in given]
         if violations:
             raise ValueError(f"refactory: {violations[0][1]}")
+        from refactory_dsh.model import DshModelClient
+        routing_context = dict(model_context or {})
+        if resource_limits:
+            routing_context.pop('budget_ledger', None)
+        # Persist a concrete policy before lowering, including console/API opens. A run
+        # whose workers call a model has its route complete before anything is written:
+        # every lowered node then names the provider and model it runs on (dm-258).
+        model_context = DshModelClient(project=project, **routing_context).context()
+        if calls_models(state):
+            model_context = require_route(model_context)
     with ownership(workdir):
         if resume:
             if knobs or intent or model_context:
@@ -111,12 +182,7 @@ def prepare(
         # graph started, on the default root that is relative by design.
         workdir.mkdir(parents=True, exist_ok=True)
         from refactory_dsh import invocations, workers
-        from refactory_dsh.model import DshModelClient
-        routing_context = dict(model_context or {})
-        if resource_limits:
-            routing_context.pop('budget_ledger', None)
-        # Persist a concrete policy before lowering, including console/API opens.
-        model_context = DshModelClient(project=project, **routing_context).context()
+        assert model_context is not None
         if resource_limits:
             from refactory_dsh.budgets import LEDGER, ResourceLimits
             ResourceLimits.from_dict(resource_limits)
@@ -293,6 +359,27 @@ def run(
         except Exception:
             pass
     dsh_profile.require(name=_profile_name, checkout=_pin_checkout_for_check)
+    # The run's model, settled before the run directory exists (dm-258). A live run
+    # talks to the CEO and a run with agent nodes dispatches workers, so either one
+    # needs a model: the route a flag, a route map or the stored choice gives, else
+    # the visible first-run choice, else a refusal. A headless run of deterministic
+    # nodes needs none; if its graph still needs the CEO, the graph runner refuses.
+    interactive = not headless and sys.stdin.isatty()
+    if not resume:
+        route_project = Path(project or project_root())
+        if model_context is None:
+            from refactory_dsh.model import DshModelClient
+            timeout_kwargs = {"timeout_s": model_timeout_s} if model_timeout_s is not None else {}
+            model_context = DshModelClient(project=route_project, provider=provider, model=model, worker_backend=worker_backend,
+                                           effort=effort, permission_mode=permission_mode,
+                                           role_routes=role_routes, node_routes=node_routes, **timeout_kwargs).context()
+        needed = not headless or calls_models(with_knobs(registry.resolve(route_project, identifier)[1]().state_dict(),
+                                                        list(knobs or [])))
+        if needed:
+            model_context = require_route(model_context, interactive=interactive)
+        provider, model = ceo_route(model_context, interactive=interactive, required=not headless)
+        if model_context.get("worker_backend") == "openshell":
+            print(OPENSHELL_MODEL_NOTE, file=sys.stderr)
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes or model_timeout_s is not None:
@@ -325,6 +412,14 @@ def run(
                                                role_routes={}, node_routes={}).context()
             else:
                 model_context = {**model_context, 'permission_mode': model_context.get('permission_mode') or 'default'}
+            # A run saved before there was a choice resumes on the stored one, never on the
+            # profile default it used to get (dm-258). Without one nothing is guessed: the
+            # graph runner and each worker refuse an empty route.
+            if (model_context.get('worker_backend', 'dsh') == 'dsh'
+                    and not model_context.get('provider') and not model_context.get('model')):
+                from refactory_dsh.dsh_profile import stored_model_choice
+                model_context = {**model_context, **stored_model_choice(model_context.get('dsh_home') or None)}
+            provider, model = ceo_route(model_context, required=False)
             # When pinned, rewrite runtime_root and python_bin so workers
             # use the pin's venv, not the original checkout's.
             _driver_rec = saved.get('driver', {})
@@ -342,21 +437,11 @@ def run(
             # The harness's input port, fed at run time: the mode keeps the Task it was
             # built for and this run says which items to read instead.
             write_source(workdir, source_path=source, source_format=source_format or "directory")
-        if not resume and model_context is None:
-            from refactory_dsh.model import DshModelClient
-            timeout_kwargs = {"timeout_s": model_timeout_s} if model_timeout_s is not None else {}
-            model_context = DshModelClient(project=Path(project or project_root()), provider=provider, model=model, worker_backend=worker_backend,
-                                           effort=effort, permission_mode=permission_mode,
-                                           role_routes=role_routes, node_routes=node_routes, **timeout_kwargs).context()
-        # The graph's own argv names the CEO route, and it must be the route the
-        # resolved context selected -- from a project file, a saved run or a
-        # caller's model_context -- not the empty CLI flags a person left unset.
-        # Without this the CEO ran the runtime's default provider while every
-        # node dispatch honored the project's selection.
-        if model_context is not None:
-            provider = model_context.get('provider', '')
-            model = model_context.get('model', '')
-            worker_backend = model_context.get('worker_backend', 'dsh')
+        # The graph's own argv names the CEO route (`provider`, `model` above), and it is
+        # the route the resolved context selected -- from a flag, a project file, a saved
+        # run or the stored choice -- not the empty CLI flags a person left unset.
+        # Without this the CEO ran the runtime's default provider while every node
+        # dispatch honored the project's selection.
         if not resume:
             name, graphs = prepare(
                 identifier, workdir=workdir, intent=intent, project=project, knobs=knobs, model_context=model_context, resource_limits=resource_limits, headless=headless,
@@ -377,8 +462,7 @@ def run(
                 dict(str(pair).split("=", 1) for pair in knobs or [] if "=" in str(pair)), workdir)
         argv = command(
             identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
-            provider=provider if worker_backend == "dsh" else "",
-            model=model if worker_backend == "dsh" else "", headless=headless,
+            provider=provider, model=model, headless=headless,
         )
         # stdin is inherited on purpose: the graph profile chats on it -- and its answerer
         # reads a gate's answer from it -- while a captured stdin is not a person.
@@ -606,11 +690,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for the person")
     parser.add_argument(
         "--provider", default="",
-        help="provider route for this run's model (default: the settings default)",
+        help="provider route for this run's model (default: the stored choice; see `refactory model set`)",
     )
     parser.add_argument(
         "--model", default="",
-        help="model id for this run, e.g. deepseek-v4-pro (default: the settings default)",
+        help="model id for this run, e.g. deepseek-v4-pro (default: the stored choice; see `refactory model set`)",
     )
     parser.add_argument(
         "--headless", action="store_true", default=False,
@@ -634,6 +718,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validation-reserve-tokens", type=int, default=0)
     args = parser.parse_args(argv)
 
+    from refactory_dsh.model import ModelChoiceError
+
     workdir = Path(args.workdir) if args.workdir else None
     try:
         code = run(
@@ -656,6 +742,9 @@ def main(argv: list[str] | None = None) -> int:
                              "validation_reserve_tokens": args.validation_reserve_tokens}
             if args.max_elapsed_s is not None or args.max_tokens is not None else None,
         )
+    except ModelChoiceError as exc:  # no model to run on: the message says how to choose one
+        print(f"refactory: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:  # a failed run must be a message, not a traceback
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 2

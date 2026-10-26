@@ -886,13 +886,18 @@ def main(argv: list[str] | None = None) -> int:
         if not args.brief:
             parser.error("--brief is required when not resuming")
 
-    from refactory_dsh.model import DshModelClient
+    from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
     from refactory_dsh.paths import project_root
 
-    client = DshModelClient(
-        project=None if args.resume else project_root(),
-        timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
-    )
+    try:
+        # Every agent node calls a model, so the route is settled before anything runs (dm-258).
+        client = require_model_choice(DshModelClient(
+            project=None if args.resume else project_root(),
+            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
+        ), interactive=sys.stdin.isatty())
+    except ModelChoiceError as exc:
+        print(f"refactory: {exc}", file=sys.stderr)
+        return 1
     if args.resume:
         workdir = Path(args.resume)
         fast = args.fast

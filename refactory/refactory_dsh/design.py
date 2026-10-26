@@ -1093,11 +1093,17 @@ def main(argv: list[str] | None = None) -> int:
                 fast = run_config.get('fast', fast)
             except (json.JSONDecodeError, OSError):
                 pass
-        client = DshModelClient(
-            project=None,
-            timeout_s=int(args.model_timeout_s) if args.model_timeout_s else DEFAULT_TIMEOUT_S,
-            model=args.model, provider=args.provider,
-        )
+        from refactory_dsh.model import ModelChoiceError, require_model_choice
+
+        try:
+            client = require_model_choice(DshModelClient(
+                project=None,
+                timeout_s=int(args.model_timeout_s) if args.model_timeout_s else DEFAULT_TIMEOUT_S,
+                model=args.model, provider=args.provider,
+            ), interactive=sys.stdin.isatty())
+        except ModelChoiceError as exc:  # dm-258
+            print(f"refactory: {exc}", file=sys.stderr)
+            return 1
         from refactory_dsh.run_ownership import ownership
 
         try:
@@ -1152,11 +1158,17 @@ def main(argv: list[str] | None = None) -> int:
     verdicts = parse_verdicts(args.verdict)
     workdir = Path(args.workdir or f".factory/design/{args.name}")
     mode_name = "design_fast" if args.fast else "design"
-    client = DshModelClient(
-        project=project_root(),
-        timeout_s=int(args.model_timeout_s) if args.model_timeout_s else DEFAULT_TIMEOUT_S,
-        model=args.model, provider=args.provider,
-    )
+    from refactory_dsh.model import ModelChoiceError, require_model_choice
+
+    try:
+        client = require_model_choice(DshModelClient(
+            project=project_root(),
+            timeout_s=int(args.model_timeout_s) if args.model_timeout_s else DEFAULT_TIMEOUT_S,
+            model=args.model, provider=args.provider,
+        ), interactive=sys.stdin.isatty())
+    except ModelChoiceError as exc:  # dm-258
+        print(f"refactory: {exc}", file=sys.stderr)
+        return 1
     from refactory_dsh.run_ownership import ownership
     from refactory_dsh.nn.executor import GateStop, HaltStop
 

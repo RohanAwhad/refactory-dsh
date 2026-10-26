@@ -7,6 +7,7 @@ import pytest
 from refactory_dsh import console, interactive, profiles
 from refactory_dsh.model import DshModelClient
 from refactory_dsh.worker_config import FILENAME, resolve
+from tests_support import TEST_MODEL_CHOICE
 
 
 @pytest.fixture(autouse=True)
@@ -32,8 +33,11 @@ def test_project_default_and_explicit_dsh(tmp_path, backend, monkeypatch):
     assert selected.route()['permission_mode'] == 'skip'
     if backend != 'dsh':
         assert selected.route()['provider'] == ''
+        # Switching back to DSH clears the other product's route; the environment's does
+        # not come back, and the unset DSH route is the one stored choice (dm-258).
         explicit = DshModelClient(project=tmp_path, worker_backend='dsh')
-        assert explicit.route()['model'] == explicit.route()['provider'] == ''
+        assert (explicit.route()['provider'], explicit.route()['model']) == (
+            TEST_MODEL_CHOICE['provider'], TEST_MODEL_CHOICE['model'])
     assert selected.context()['routing_provenance']['file']['loaded']
     assert resolve(tmp_path)['settings']['worker_backend'] == backend
 

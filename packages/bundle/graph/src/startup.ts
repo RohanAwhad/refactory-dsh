@@ -73,9 +73,9 @@ export interface GraphStartupValues {
   taskName: string
   /** The eval budget, passed to the ops as SRF_BUDGET. */
   budget: number
-  /** The CEO model route, for the runner's agent creation (absent = runtime default). */
+  /** The CEO model route, for the runner's agent creation; a CEO launch without one is refused (dm-258). */
   provider: string | undefined
-  /** The CEO model id override, when the user named one. */
+  /** The CEO model id; required with the provider, never taken from the profile's default. */
   model: string | undefined
   /** The directory of the Python that has refactory_dsh installed. */
   pythonBin: string
@@ -109,8 +109,8 @@ function graphCommand(): Command {
     .requiredOption('-m, --mode <mode>', 'the SRF mode (e.g. gepa, best_of_n)')
     .requiredOption('-t, --task <task>', 'the SRF task (e.g. circle_packing)')
     .option('-b, --budget <n>', 'eval budget', '10')
-    .option('-p, --provider <provider>', 'provider route for the CEO model (default: the runtime default)')
-    .option('--model <model>', 'model id for the CEO (defaults to the provider route default)')
+    .option('-p, --provider <provider>', 'provider route for the CEO model (refactory passes the run\'s route; a CEO run without one is refused)')
+    .option('--model <model>', 'model id for the CEO (required with --provider; never the profile default)')
     .option('--graphs <dir>', 'directory of <mode>.graph.json', DEFAULT_GRAPHS_DIR)
     .option('--workdir <dir>', 'working directory for the run')
     .option('--python-bin <dir>', 'directory of the python with srf+factory installed', DEFAULT_VENV_BIN)
