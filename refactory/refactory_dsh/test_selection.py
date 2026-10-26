@@ -345,7 +345,9 @@ def estimated_costs(tests: list[str], root: Path, known: dict[str, float],
     file of ``bounds`` has only a lower bound, which is no rate it ran at: it costs the
     higher of its bound and its size estimate, so a bound never lowers an estimate. A
     file stopped near the limit has a small bound; costed by that alone, it would run
-    early the next time and cut everything behind it.
+    early the next time and cut everything behind it. With no finished file there is no
+    rate, and sizes stay in bytes, which a bound in seconds cannot be weighed against:
+    the files with only a bound then go last, in the order of their bounds.
     """
     lower = set(bounds)
     timed = [name for name in tests if name in known and name not in lower]
@@ -354,6 +356,10 @@ def estimated_costs(tests: list[str], root: Path, known: dict[str, float],
     costs = {name: known.get(name, _size(root, name) * rate) for name in tests}
     for name in lower & costs.keys():
         costs[name] = max(costs[name], _size(root, name) * rate)
+    if not timed:
+        last = max((cost for name, cost in costs.items() if name not in lower), default=0.0)
+        for name in lower & costs.keys():
+            costs[name] = last + known.get(name, 0.0)
     return costs
 
 

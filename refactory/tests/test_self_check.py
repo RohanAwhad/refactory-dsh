@@ -1551,6 +1551,38 @@ def test_a_small_slow_file_stopped_beside_another_runs_alone_then_after_the_chea
         ([], []), ([], [slow, beside]), ([slow], [slow, beside])]
 
 
+def test_a_file_with_only_a_bound_runs_last_while_nothing_in_its_tier_has_finished(
+        tmp_path, monkeypatch):
+    """dm-247 when no file of the cheapest-first tier has finished: with no measured rate
+    the others cost their size in bytes, which a bound in seconds cannot be weighed
+    against, so the file that has only a bound runs after them instead of first.
+
+    Ten files, each importing a module of its own (no hub), none touched, a 10 s limit:
+    the smallest takes 60 s, the others 0.5 s. Self-check 1 stops it beside test_f1.py,
+    self-check 2 stops it alone (a 10 s bound), and self-check 3 cuts only it."""
+    names = ["a_slow", *(f"f{n}" for n in range(1, 10))]
+    files = {**{f"m_{name}.py": "X = 1\n" for name in names},
+             **{f"tests/test_{name}.py": f"import m_{name}\n{'#' * 20 * n}\n\n\ndef test_{name}():\n"
+                                         f"    assert m_{name}\n" for n, name in enumerate(names)}}
+    repo = _target(tmp_path / "repo", files)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500071", self_check_timeout_s=10)
+    runner = _Clocked(lambda name: 60.0 if "test_a_slow" in name else 0.5, monkeypatch)
+    real = repo_change.run_check
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, command, timeout, **kwargs: (
+        runner(command, timeout) if "pytest" in command else real(ctx, command, timeout, **kwargs)))
+    for n in (2, 3, 4):
+        _emit(run, render({f"m_{name}.py": f"X = {n}\n" for name in names}), monkeypatch)
+        code, out, err = _prepare(run, monkeypatch)
+        assert code == 0 and out.strip() == "proceed", err
+    first, second, third = _records(run)
+    slow, others = "tests/test_a_slow.py", [f"tests/test_{name}.py" for name in names[1:]]
+    assert first["selection"] == second["selection"] == [slow, *others]
+    assert first["cut"] == second["cut"] == [slow, *others]
+    assert test_selection.lower_bounds([first, second]) == [slow]
+    assert not test_selection.costs_from_record([first, second], tmp_path).keys() - {slow}
+    assert third["selection"] == [*others, slow] and third["cut"] == [slow]
+
+
 def test_run_alone_holds_a_stopped_chunks_files_until_a_chunk_finishes_each():
     x, y, z = "tests/test_x.py", "tests/test_y.py", "tests/test_z.py"
     stopped = {"timings": [{"tests": [x, y], "s": 9.0, "timed_out": True, "counted": True}]}
@@ -1595,6 +1627,11 @@ def test_a_lower_bound_never_lowers_a_size_estimate_and_sets_no_rate(tmp_path):
                                            ["tests/test_big.py", "tests/test_tiny_slow.py"])
     assert costs == pytest.approx({"tests/test_done.py": 1.0, "tests/test_big.py": 1.0,
                                    "tests/test_tiny_slow.py": 30.0, "tests/test_untimed.py": 1.0})
+    # With no finished file there is no rate: sizes stay in bytes, and the bounds go last.
+    unmeasured = test_selection.estimated_costs(tests[1:], repo, known,
+                                                ["tests/test_big.py", "tests/test_tiny_slow.py"])
+    assert sorted(unmeasured, key=unmeasured.get) == [
+        "tests/test_untimed.py", "tests/test_big.py", "tests/test_tiny_slow.py"]
 
 
 def test_costs_from_record_multi_file_chunk_without_durations_keeps_estimates(tmp_path):

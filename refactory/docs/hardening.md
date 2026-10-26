@@ -2110,7 +2110,9 @@ The engine reads the repository's own imports; it names no test or file.
   seconds only a chunk of one file times that file; a chunk of several times none of
   them. A time is a lower bound when the chunk was stopped at the limit or ran only
   some of the file's tests, by id: a finished time beats it, a higher bound replaces
-  it, and it never puts a file's cost below its size estimate.
+  it, and it never puts a file's cost below its size estimate. While no file there has
+  finished, sizes have no rate in seconds to weigh a bound against, so the files with
+  only a bound run after the others.
 
 Only tests the check's pytest steps collect are selected (their path arguments),
 and the hubs are counted among them. A TypeScript runner gets only the spec files
