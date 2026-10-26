@@ -1313,7 +1313,7 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "action": "acknowledge",
         "run": "/tmp/example-run"
       },
-      "explanation": "Acknowledge an executing or failed checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the checkpoint."
+      "explanation": "Acknowledge an executing, failed or paused checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the checkpoint."
     },
     {
       "arguments": {

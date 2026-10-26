@@ -433,7 +433,8 @@ def test_rerun_from_deferred_preview_records_deferred_nodes(tmp_path):
         'deferred_redo_plans': {'a': {'nodes': ['a', 'join', 'end']}},
         'redo_plans': {},
     }))
-    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    saved = json.loads(checkpoint.read_text())
+    revision = saved.get('graph_revision') or hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     receipt = graph_control.request(tmp_path, 'rerun', node='a', revision=revision)
     assert receipt['status'] == 'queued'
     assert receipt['deferred_nodes'] == ['a', 'join', 'end']
@@ -452,7 +453,8 @@ def test_rerun_of_failed_run_refused_without_acknowledge(tmp_path):
         'status': 'failed',
         'redo_plans': {'a': {'nodes': ['a']}},
     }))
-    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    saved = json.loads(checkpoint.read_text())
+    revision = saved.get('graph_revision') or hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match='acknowledge_failure'):
         graph_control.request(tmp_path, 'rerun', node='a', revision=revision)
 
@@ -467,7 +469,8 @@ def test_rerun_of_failed_run_queues_control_then_starts_owner(monkeypatch, tmp_p
         'status': 'failed',
         'redo_plans': {'a': {'nodes': ['a']}},
     }))
-    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    saved = json.loads(checkpoint.read_text())
+    revision = saved.get('graph_revision') or hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     start_calls = []
     def mock_start(root, *, acknowledge_failed=False):
         # Verify control file exists BEFORE start is called
@@ -587,7 +590,8 @@ def test_console_main_graph_control_acknowledge_failure(monkeypatch, tmp_path):
         'status': 'failed',
         'redo_plans': {'a': {'nodes': ['a']}},
     }))
-    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    saved = json.loads(checkpoint.read_text())
+    revision = saved.get('graph_revision') or hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     captured = {}
     def mock_request(root, action, **kwargs):
         captured.update(kwargs)
