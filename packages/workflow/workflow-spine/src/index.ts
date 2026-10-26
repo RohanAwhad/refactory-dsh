@@ -1133,7 +1133,8 @@ export function apply(ctx: Context, config: Config): void {
       if (existsSync(join(dir, 'run-config.json'))) paths.add('.refactory/run-config.json')
       const file_fingerprints = Object.fromEntries([...paths].map(path => [path, fingerprint(resolve(workdir, path))]))
       writeFileSync(`${checkpoint}.tmp`, JSON.stringify({ ...saved, status, owner_pid: process.pid,
-        file_fingerprints, materialised: materialised.get(spine) ?? null, run_id: resolve(workdir) }))
+        file_fingerprints, materialised: materialised.get(spine) ?? null, run_id: resolve(workdir),
+        graph_revision: computeGraphRevision(saved) }))
       renameSync(`${checkpoint}.tmp`, checkpoint)
       appendFileSync(join(dir, 'events.jsonl'), JSON.stringify({ ...record, kind: 'graph_state' }) + '\n')
 
@@ -1153,6 +1154,49 @@ export function apply(ctx: Context, config: Config): void {
     } catch {
       return undefined
     }
+  }
+
+  /**
+   * Stable stringify replacer: recursively sorts object keys for deterministic
+   * JSON serialization. Arrays are preserved in order; primitives pass through.
+   */
+  function stableStringify(_key: string, value: unknown): unknown {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
+    }
+    return value
+  }
+
+  /**
+   * Compute a SHA-256 of the graph-structural fields of a checkpoint.
+   * Runtime metadata (owner_pid, status, file_fingerprints, materialised,
+   * run_id) and ephemeral state (pause_before, halted, log, skip_provenance,
+   * pending_skip_receipts) are excluded so that the revision is stable across
+   * owner restarts and pause/resume cycles.
+   */
+  function computeGraphRevision(saved: Record<string, unknown>): string {
+    const state = saved.state as Record<string, unknown>
+    const structural = {
+      schema_version: saved.schema_version,
+      source_graph: saved.source_graph,
+      graph: saved.graph,
+      afters_map: saved.afters_map,
+      successors: saved.successors,
+      redo_plans: saved.redo_plans,
+      deferred_redo_plans: saved.deferred_redo_plans,
+      cursor: state.cursor,
+      completed: state.completed,
+      skipped: state.skipped,
+      gate_verdicts: state.gate_verdicts,
+      iterations: state.iterations,
+      feedback: state.feedback,
+      gate_reasons: state.gate_reasons,
+      prompts: state.prompts,
+      pass: state.pass,
+    }
+    return createHash('sha256')
+      .update(JSON.stringify(structural, stableStringify))
+      .digest('hex')
   }
 
   /** The full status record {@link recordStatus} last wrote, or undefined when absent. */
@@ -1181,9 +1225,13 @@ export function apply(ctx: Context, config: Config): void {
         if (request.run_id !== resolve(workdir) || request.invocation !== invocation) throw new Error('control belongs to another run invocation')
         const state = spine.state()
         if (request.action === 'pause') {
-          const cursor = state.cursor as string[]
-          const targets = cursor.length ? cursor : spine.passOf() ? [spine.passOf()!.node] : []
-          for (const node of targets) spine.pauseBefore(node, true)
+          if (typeof request.target === 'string' && request.target !== '') {
+            spine.pauseBefore(String(request.target), true)
+          } else {
+            const cursor = state.cursor as string[]
+            const targets = cursor.length ? cursor : spine.passOf() ? [spine.passOf()!.node] : []
+            for (const node of targets) spine.pauseBefore(node, true)
+          }
         }
         else if (request.action === 'resume') for (const node of state.pause_before as string[]) spine.pauseBefore(node, false)
         else if (request.action === 'stop') { spine.stopAtBoundary(); receipt.message = 'Stopped at graph boundary; no further nodes will dispatch.' }
@@ -1215,9 +1263,13 @@ export function apply(ctx: Context, config: Config): void {
             }
             // Plan check passed — skip the revision check for deferred controls.
           } else {
-            // Non-deferred: the checkpoint revision must still match.
-            const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-            if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
+            // Non-deferred: compare the recomputed graph revision from the
+            // live spine's checkpoint and state. Never compare against a
+            // stored field; drop the byte-hash fallback so a pre-upgrade
+            // preview is refused with the existing "preview again" message.
+            const liveSaved = spine.checkpoint()
+            const liveRevision = computeGraphRevision(liveSaved)
+            if (liveRevision !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
           }
           const plan = spine.planRedo(target, isCommandCorrection ? { commandCorrection: true } : undefined)
           const nodes = (spine.checkpoint().graph as WorkflowGraph).nodes
@@ -1232,6 +1284,11 @@ export function apply(ctx: Context, config: Config): void {
             spine.redoCommandCorrection(target)
           } else {
             spine.redo(target)
+          }
+          // dm-227: when a rerun is applied to a paused spine, arm a pause
+          // before the redo's start node so the run holds there until resumed.
+          if (spine.isPaused() || (state.pause_before as string[]).length > 0) {
+            spine.pauseBefore(plan.start, true)
           }
           const gateReason = spine.gateReasonFor(target)
           const rerunText = typeof request.text === 'string' && request.text.trim() !== '' ? request.text.trim() : ''

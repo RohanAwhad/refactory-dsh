@@ -201,6 +201,13 @@ def main() -> int:
                 reviews_dir.mkdir(parents=True, exist_ok=True)
                 (reviews_dir / f'{node_id}-missing.txt').write_text(
                     f'{type(error).__name__}: {error}\n')
+                # dm-232: settle the pending delivery marker at the point
+                # the branch is recorded missing, so it never goes stale.
+                try:
+                    from refactory_dsh.agent_delivery import invalidate as _invalidate
+                    _invalidate(workdir, [node_id], f'optional branch missing: {error}')
+                except Exception:
+                    pass
                 print(json.dumps({'node': node_id, 'status': 'missing'}))
                 return 0
             raise

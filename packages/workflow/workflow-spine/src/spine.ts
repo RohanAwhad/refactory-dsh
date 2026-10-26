@@ -1292,7 +1292,6 @@ export class Spine {
 
   /** Describe invalidation before the runtime archives and clears current facts. */
   planRedo(node: string, opts?: { deferred?: boolean; commandCorrection?: boolean }): RedoPlan {
-    if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before reopening work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') {

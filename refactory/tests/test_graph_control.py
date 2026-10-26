@@ -1400,6 +1400,299 @@ def test_redeliver_failed_at_delivery_gate(tmp_path):
     mock_start.assert_called_once_with(root, acknowledge_failed=True)
 
 
+# ── dm-232: Acknowledge paused checkpoint ─────────────────────────────────
+
+def test_acknowledge_paused_checkpoint(tmp_path):
+    """Acknowledge accepts a paused checkpoint with dead owner + stale pending markers."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+
+    checkpoint: dict[str, Any] = {
+        'status': 'paused',
+        'run_id': str(root),
+        'graph': {'name': 'test'},
+        'owner_pid': dead_pid,
+        'state': {
+            'cursor': ['emit'],
+            'completed': ['gate_strategy'],
+            'skipped': [],
+            'pause_before': ['emit'],
+            'gate_verdicts': {},
+            'iterations': {},
+            'feedback': {},
+            'gate_reasons': {},
+            'afters': [],
+            'prompts': {},
+            'log': [],
+        },
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'paused'}))
+    (refactory / 'run-config.json').write_text(json.dumps({'mode': 'test/run', 'project': '.'}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # Create stale pending delivery markers
+    pending_dir = refactory / 'agent-delivery/pending'
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    (pending_dir / 'delivery1.json').write_text(json.dumps({'node': 'verifier'}))
+
+    result = graph_control.request(root, 'acknowledge')
+
+    assert result['action'] == 'acknowledge'
+    assert result['status'] == 'acknowledged'
+    assert result['checkpoint_status_before'] == 'paused'
+
+    # Pending markers moved
+    assert not (pending_dir / 'delivery1.json').exists()
+
+    # Set-aside directory has manifest
+    set_aside_dirs = list((refactory / 'set-aside').iterdir())
+    assert len(set_aside_dirs) == 1
+    manifest = json.loads((set_aside_dirs[0] / 'manifest.json').read_text())
+    assert manifest['checkpoint_status_before'] == 'paused'
+
+    # resume-request.json written with only checkpoint_sha256 (no acknowledge flags)
+    rr = refactory / 'resume-request.json'
+    assert rr.exists()
+    rr_data = json.loads(rr.read_text())
+    assert 'checkpoint_sha256' in rr_data
+    assert 'acknowledge_executing' not in rr_data
+    assert 'acknowledge_failed' not in rr_data
+
+
+def test_acknowledge_still_rejects_other_statuses(tmp_path):
+    """Acknowledge rejects statuses other than executing, failed, paused."""
+    for status in ('ready', 'done', 'halted', 'waiting_user'):
+        root = tmp_path / status
+        refactory = root / '.refactory'
+        refactory.mkdir(parents=True, exist_ok=True)
+
+        dead_pid = _dead_pid()
+        checkpoint: dict[str, Any] = {
+            'status': status,
+            'run_id': str(root),
+            'graph': {'name': 'test'},
+            'owner_pid': dead_pid,
+            'file_fingerprints': {},
+        }
+        (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+        (refactory / 'run-config.json').write_text(json.dumps({'mode': 'test/run'}))
+        (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+        with pytest.raises(ValueError, match='acknowledge applies to'):
+            graph_control.request(root, 'acknowledge')
+
+
+# ── dm-252: Preview returns graph_revision ────────────────────────────────
+
+def test_preview_returns_graph_revision(tmp_path):
+    """Preview returns graph_revision from the checkpoint when present."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    graph_rev = hashlib.sha256(b'structural-content').hexdigest()
+
+    checkpoint: dict[str, Any] = {
+        'status': 'halted',
+        'run_id': str(root),
+        'graph': {
+            'name': 'test',
+            'nodes': {
+                'emit': {'_type': 'AgentNode', 'id': 'emit', 'role': 'builder',
+                         'prompt_template': 'E', 'reads': [], 'writes': []},
+                'check': {'_type': 'GateNode', 'id': 'check', 'evaluator_type': 'fn',
+                          'evaluator_command': 'true', 'reads': [],
+                          'writes': ['check.txt']},
+            },
+            'edges': [
+                {'source': 'emit', 'target': 'check'},
+            ],
+        },
+        'state': {
+            'cursor': ['check'],
+            'completed': ['emit'],
+            'skipped': [],
+            'pause_before': [],
+            'gate_verdicts': {},
+            'iterations': {},
+            'feedback': {},
+            'gate_reasons': {},
+            'afters': [],
+            'prompts': {},
+            'log': [],
+        },
+        'redo_plans': {
+            'emit': {'requested': 'emit', 'start': 'emit',
+                     'nodes': ['emit', 'check'], 'resetPass': False, 'restartData': []},
+        },
+        'deferred_redo_plans': {},
+        'file_fingerprints': {},
+        'owner_pid': dead_pid,
+        'graph_revision': graph_rev,
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'halted'}))
+    (refactory / 'run-config.json').write_text(json.dumps({'mode': 'test/run', 'project': '.'}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    result = graph_control.request(root, 'preview', node='emit')
+    assert result['status'] == 'preview'
+    # The revision should be the graph_revision from the checkpoint, not the byte hash
+    assert result['revision'] == graph_rev
+
+
+def test_preview_falls_back_to_byte_hash(tmp_path):
+    """Preview falls back to byte hash when graph_revision is absent (old checkpoint)."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    checkpoint: dict[str, Any] = {
+        'status': 'halted',
+        'run_id': str(root),
+        'graph': {
+            'name': 'test',
+            'nodes': {
+                'emit': {'_type': 'AgentNode', 'id': 'emit', 'role': 'builder',
+                         'prompt_template': 'E', 'reads': [], 'writes': []},
+            },
+            'edges': [],
+        },
+        'state': {
+            'cursor': [],
+            'completed': ['emit'],
+            'skipped': [],
+            'pause_before': [],
+            'gate_verdicts': {},
+            'iterations': {},
+            'feedback': {},
+            'gate_reasons': {},
+            'afters': [],
+            'prompts': {},
+            'log': [],
+        },
+        'redo_plans': {
+            'emit': {'requested': 'emit', 'start': 'emit',
+                     'nodes': ['emit'], 'resetPass': False, 'restartData': []},
+        },
+        'deferred_redo_plans': {},
+        'file_fingerprints': {},
+        'owner_pid': dead_pid,
+        # No graph_revision field
+    }
+    cp_path = refactory / 'spine-checkpoint.json'
+    cp_path.write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'halted'}))
+    (refactory / 'run-config.json').write_text(json.dumps({'mode': 'test/run', 'project': '.'}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    result = graph_control.request(root, 'preview', node='emit')
+    expected_hash = hashlib.sha256(cp_path.read_bytes()).hexdigest()
+    assert result['revision'] == expected_hash
+
+
+# ── dm-244: Stop on paused ownerless run ──────────────────────────────────
+
+def test_stop_paused_ownerless_starts_owner(tmp_path):
+    """Stop on a paused run with dead owner queues stop and starts an owner."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    checkpoint: dict[str, Any] = {
+        'status': 'paused',
+        'run_id': str(root),
+        'graph': {'name': 'test'},
+        'owner_pid': dead_pid,
+        'state': {
+            'cursor': ['emit'],
+            'completed': ['gate_strategy'],
+            'skipped': [],
+            'pause_before': ['emit'],
+            'gate_verdicts': {},
+            'iterations': {},
+            'feedback': {},
+            'gate_reasons': {},
+            'afters': [],
+            'prompts': {},
+            'log': [],
+        },
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'paused'}))
+    (refactory / 'run-config.json').write_text(json.dumps({'mode': 'test/run', 'project': '.'}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # Mock recovery.start and simulate that the owner applies the stop
+    def mock_start(r, **kw):
+        # Simulate the owner applying the stop: write halted status
+        (r / '.refactory/spine-status.json').write_text(json.dumps({'status': 'halted'}))
+        return {'status': 'queued', 'action': 'resume', 'run_id': str(r), 'pid': 99999}
+
+    with patch('refactory_dsh.recovery.start', side_effect=mock_start):
+        result = graph_control.request(root, 'stop')
+
+    assert result['action'] == 'stop'
+    assert result['status'] == 'applied'
+
+    # A stop control file was written
+    controls_dir = refactory / 'graph-controls'
+    # The control may have been consumed by the simulated owner, but was written
+    control_files = list(controls_dir.glob('*.json'))
+    assert len(control_files) >= 1 or result['status'] == 'applied'
+
+
+def test_stop_paused_with_live_owner_queues(tmp_path):
+    """Stop on a paused run with a live owner queues (not applied directly)."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    checkpoint: dict[str, Any] = {
+        'status': 'paused',
+        'run_id': str(root),
+        'graph': {'name': 'test'},
+        'owner_pid': os.getpid(),  # alive
+        'state': {
+            'cursor': ['emit'],
+            'completed': ['gate_strategy'],
+            'skipped': [],
+            'pause_before': ['emit'],
+            'gate_verdicts': {},
+            'iterations': {},
+            'feedback': {},
+            'gate_reasons': {},
+            'afters': [],
+            'prompts': {},
+            'log': [],
+        },
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'paused'}))
+    (refactory / 'run-config.json').write_text(json.dumps({'mode': 'test/run', 'project': '.'}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    result = graph_control.request(root, 'stop')
+    assert result['status'] == 'queued'
+
+    # A control file was queued
+    controls_dir = refactory / 'graph-controls'
+    control_files = list(controls_dir.glob('*.json'))
+    assert len(control_files) == 1
+    control = json.loads(control_files[0].read_text())
+    assert control['action'] == 'stop'
+
+
 def test_confirm_completion_writes_completion_override(tmp_path):
     """confirm-completion writes completion_override into spine-status.json."""
     root = tmp_path

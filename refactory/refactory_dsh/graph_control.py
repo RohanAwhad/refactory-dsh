@@ -50,10 +50,11 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
     # ── stop on a terminal run with a live owner: signal directly ──
     if action == 'stop':
         from refactory_dsh import run_state
+        from refactory_dsh.run_state import is_alive as _alive
         spine_stat = read(root / '.refactory/spine-status.json').get('status', '')
         if spine_stat in run_state.TERMINAL:
             pid = saved.get('owner_pid')
-            if isinstance(pid, int) and run_state.is_alive(pid):
+            if isinstance(pid, int) and _alive(pid):
                 import signal as _sig
                 try:
                     os.kill(pid, _sig.SIGTERM)
@@ -61,17 +62,29 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
                     pass
                 return {'action': 'stop', 'status': 'signalled', 'pid': pid,
                         'message': f'Graph is {spine_stat}; sent SIGTERM to lingering owner {pid}.'}
+        # dm-244: stop on a paused run whose owner is dead — queue stop and
+        # start an owner via recovery.start so its drain applies the stop.
+        if spine_stat == 'paused':
+            pid = saved.get('owner_pid')
+            if not isinstance(pid, int) or not _alive(pid):
+                _write_control_file(root, 'stop', saved)
+                from refactory_dsh import recovery as _rec
+                _rec.start(root)
+                return _wait_for_halted(root)
 
     if action == 'preview':
+        graph_revision = saved.get('graph_revision')
+        if graph_revision is None:
+            graph_revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
         plan = saved.get('redo_plans', {}).get(node)
         deferred_plan = saved.get('deferred_redo_plans', {}).get(node)
         if isinstance(plan, dict):
-            return {'action': action, 'target': node, 'status': 'preview', 'revision': current_revision,
+            return {'action': action, 'target': node, 'status': 'preview', 'revision': graph_revision,
                     'run_id': str(root),
                     'invalidated': plan.get('nodes', []),
                     'message': 'Prior evidence will be archived. Confirm this revision to queue replay.'}
         if isinstance(deferred_plan, dict):
-            return {'action': action, 'target': node, 'status': 'deferred', 'revision': current_revision,
+            return {'action': action, 'target': node, 'status': 'deferred', 'revision': graph_revision,
                     'run_id': str(root),
                     'invalidated': deferred_plan.get('nodes', []),
                     'message': 'Replay will apply after concurrent work joins; confirm to queue.'}
@@ -168,7 +181,10 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
                     'inspected the side effects and want to rerun from this state'
                 )
             restart_owner = True
-        if not revision or revision != current_revision:
+        rerun_graph_revision = saved.get('graph_revision')
+        if rerun_graph_revision is None:
+            rerun_graph_revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+        if not revision or revision != rerun_graph_revision:
             raise ValueError('preview the current invalidation plan before confirming rerun')
         if not isinstance(immediate_plan, dict) and not isinstance(deferred_plan, dict):
             raise ValueError('node is not safely replayable')
@@ -218,6 +234,41 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
     return result
 
 
+def _write_control_file(root: Path, action: str, saved: dict[str, Any]) -> Path:
+    """Write a graph-control file for ``action`` and return its path."""
+    identifier = f'{time.time_ns():020d}-{uuid.uuid4().hex}'
+    invocation_data = read(root / '.refactory/invocation.json')
+    payload = {
+        'id': identifier, 'action': action, 'target': '',
+        'run_id': str(root),
+        'invocation': invocation_data.get('id'),
+        'status': 'queued',
+    }
+    directory = root / '.refactory/graph-controls'
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f'{identifier}.json'
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(payload))
+    tmp.replace(path)
+    return path
+
+
+def _wait_for_halted(root: Path, timeout: float = 30.0) -> dict[str, Any]:
+    """Poll spine-status.json until it reads 'halted', with a bounded wait."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            status = read(root / '.refactory/spine-status.json').get('status', '')
+            if status == 'halted':
+                return {'action': 'stop', 'status': 'applied',
+                        'message': 'Stop applied; the run is halted.'}
+        except (OSError, json.JSONDecodeError):
+            pass
+        time.sleep(0.2)
+    return {'action': 'stop', 'status': 'stopping',
+            'message': 'Stop control queued; an owner is applying it.'}
+
+
 # ── acknowledge ────────────────────────────────────────────────────────────
 
 def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[str, Any]:
@@ -234,11 +285,11 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     from refactory_dsh.run_state import is_alive as _is_alive
     from refactory_dsh.recovery import fingerprint as _fp
 
-    # 1. Verify checkpoint is executing or failed
-    if saved.get('status') not in ('executing', 'failed'):
+    # 1. Verify checkpoint is executing, failed, or paused
+    if saved.get('status') not in ('executing', 'failed', 'paused'):
         raise ValueError(
             f"checkpoint status is {saved.get('status')!r}; "
-            "acknowledge applies to an executing or failed checkpoint whose owner died"
+            "acknowledge applies to an executing, failed, or paused checkpoint whose owner died"
         )
 
     # 2. Verify owner is dead
@@ -330,8 +381,11 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     }
     if checkpoint_status == 'failed':
         request_data['acknowledge_failed'] = True
-    else:
+    elif checkpoint_status == 'executing':
         request_data['acknowledge_executing'] = True
+    # For paused checkpoints: only checkpoint_sha256 is needed — paused is
+    # already in the allowed set for recovery.prepare() and restoreRequested()
+    # clears pause_before for any status.
     tmp = request_path.with_suffix('.tmp')
     tmp.write_text(json.dumps(request_data))
     tmp.replace(request_path)
@@ -449,7 +503,7 @@ def _amend_command(root: Path, checkpoint: Path, saved: dict[str, Any], *,
         'target': target_node,
         'source': 'amend-command',
         'text': '',
-        'revision': hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        'revision': saved.get('graph_revision') or hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
         'run_id': str(root),
         'invocation': invocation_data.get('id'),
         'status': 'queued',
@@ -584,12 +638,14 @@ def _redeliver(root: Path, saved: dict[str, Any], current_revision: str) -> dict
                 f'redeliver works only when the failure is at the deliver node'
             )
 
+    redeliver_revision = saved.get('graph_revision') or current_revision
+
     # Queue a rerun control file targeting the deliver node
     identifier = f'{time.time_ns():020d}-{uuid.uuid4().hex}'
     invocation_data = read(root / '.refactory/invocation.json')
     result: dict[str, Any] = {
         'id': identifier, 'action': 'rerun', 'target': deliver_node_id,
-        'source': 'redeliver', 'text': '', 'revision': current_revision,
+        'source': 'redeliver', 'text': '', 'revision': redeliver_revision,
         'run_id': str(root), 'invocation': invocation_data.get('id'),
         'status': 'queued',
         'message': 'Redeliver: merge current main, regenerate, re-check and push.',
