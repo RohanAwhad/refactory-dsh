@@ -401,36 +401,75 @@ def build_what_changed(
     return (items, mismatches)
 
 
+def changed_file(path: str, diff_files: list[str]) -> str | None:
+    """The file of ``diff_files`` that ``path`` names, or None (`_site_matches_diff`)."""
+    return _site_matches_diff(f"`{path}`", diff_files)
+
+
+#: A token that names a file by its path: a directory and an extension.
+_PATH = re.compile(r"^[^\s`]+/[^\s`]*\.\w+$")
+
+
+def _named_files(bullet: str, tracked: set[str]) -> list[str]:
+    """The files a ``## Changes`` bullet names: its leading path and its backticked tokens
+    that are paths (`_PATH`) or files the repository tracks. ``Core: the tokenizer…`` and
+    ``tool --list`` name none."""
+    tokens = [_extract_file_path(bullet), *re.findall(r"`([^`]+)`", bullet)]
+    names: list[str] = []
+    for token in tokens:
+        token = re.sub(r":\d+(-\d+)?$", "", token.strip())
+        if token and (_PATH.match(token) or token in tracked) and token not in names:
+            names.append(token)
+    return names
+
+
 def describe_changes(
-    parsed: DesignContract, diff_files: list[str],
+    parsed: DesignContract, diff_files: list[str], tracked: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[list[str], list[str]]:
-    """The pull request's "Changes": one line per file in the diff, in the design's words.
+    """The pull request's "Changes" (dm-191): the design's ``## Changes`` bullets, one per
+    behaviour, as written (each cut to 300 characters), then each file in the diff that no
+    kept bullet names, as `build_what_changed` gives it (its ``[changed]`` sites'
+    descriptions, or its name).
 
-    A ``## Changes`` bullet names its file first (`` `path` — what changes``,
-    `prompt_contract`); each file in the diff takes the text of the bullets that name it,
-    each cut to 300 characters. A file no bullet describes takes what
-    `build_what_changed` gives it: its ``[changed]`` sites' descriptions, or its name.
+    A bullet is left out only when it names files (`_named_files`; ``tracked`` is the
+    repository's files) and the branch changes none of them: what it describes is not in
+    the branch. A bullet that names no file -- "Core: the tokenizer…" or "Behaviour
+    change: ``tool --list`` prints…" -- is a behaviour, and is kept.
 
-    Returns ``(items, mismatches)``: ``mismatches`` names the files a bullet or a
-    ``[changed]`` site names that the diff does not change. A bullet that names no file
-    (a test plan's line, say) is neither listed nor a mismatch.
+    Returns ``(items, mismatches)``: ``mismatches`` names the files a left-out bullet or a
+    ``[changed]`` site names that the diff does not change.
     """
-    items, mismatches = build_what_changed(parsed, diff_files)
-    described: dict[str, list[str]] = {}
+    by_sites, mismatches = build_what_changed(parsed, diff_files)
+    kept: list[str] = []
+    described: set[str] = set()
     for bullet in parsed.changes:
-        named = _site_matches_diff(bullet, diff_files)
-        if named is None:
-            path = _extract_file_path(bullet)
-            if path and " " not in path and ("/" in path or "." in path):
-                mismatches.append(path)
+        names = _named_files(bullet, set(tracked) | set(diff_files))
+        changed = [match for match in (changed_file(name, diff_files) for name in names) if match]
+        if names and not changed:
+            mismatches.extend(names)
             continue
-        what = re.sub(r"^(?:`[^`]*`|\S+)[\s—–:\-]*", "", bullet.strip(), count=1).strip()
-        if what:
-            what = " ".join(what.split())
-            described.setdefault(named, []).append(what if len(what) <= 300 else what[:299].rstrip() + "…")
-    return ([f"{path} — {'; '.join(described[path])}" if path in described else item
-             for path, item in zip(diff_files, items)],
+        described.update(changed)
+        text = " ".join(bullet.split())
+        kept.append(text if len(text) <= 300 else text[:299].rstrip() + "…")
+    return ([*kept, *(item for path, item in zip(diff_files, by_sites) if path not in described)],
             list(dict.fromkeys(mismatches)))
+
+
+#: The sections a design may write for the pull request itself (dm-191), each carried into
+#: its description under the same heading.
+PR_SECTIONS = ("Core", "Behaviour changes", "Behavior changes")
+
+
+def pr_sections(text: str) -> list[tuple[str, str]]:
+    """The design's ``## Core`` and ``## Behaviour changes`` sections, as written, for the
+    pull request: ``(heading, text)`` for each the design has with something under it."""
+    lines = text.splitlines()
+    found: list[tuple[str, str]] = []
+    for heading in PR_SECTIONS:
+        body = "\n".join(_section_lines(lines, heading)).strip()
+        if body:
+            found.append((heading, body))
+    return found
 
 
 def test_names(text: str) -> list[str]:
@@ -544,6 +583,9 @@ def prompt_contract() -> str:
         "§ section that handles it, or `[set-aside: <reason>]`.\n"
         "- `## Docs` — the docs that describe the changed behaviour, and the update "
         "each needs.\n"
+        "- `## Core` and `## Behaviour changes` — when the brief asks the pull request for "
+        "them: the core of the change, and each behaviour a user will see change. Delivery "
+        "carries both into the pull request's description as written.\n"
         "- `## Runtime coverage` — which runtimes run the changed code, and how each "
         "is covered.\n"
     )

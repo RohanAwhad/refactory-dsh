@@ -671,7 +671,7 @@ class DesignMode(Mode):
             notes="settle the commit the check and the reviews see, and run the tests the "
                   "change can break first: a failure goes back to emit as a fix-up, "
                   "spending no attempt and running no review; a limit stop with an "
-                  "applied commit goes to the report as a draft",
+                  "applied commit and current check evidence goes to the report as a draft",
         ))
         graph.add(Node(
             "check", "op", call=f"{OPS}:check_beside_reviews", role="validation",
@@ -835,8 +835,8 @@ class DesignMode(Mode):
             reads=(judges.QA_JUDGE, "reviews/health-check.md", "reviews/code-review.md",
                    "reviews/qa.md", "changed-functions.json"),
             writes=("reviews/qa-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
-            produces=("qa_gate", "qa_judge_rereads", "qa_judge_reread", "draft_delivery",
-                      "unresolved_findings"),
+            produces=("qa_gate", "qa_judge_rereads", "qa_judge_reread", "qa_draft",
+                      "qa_unresolved"),
             knobs=("judge_rereads",),
             max_iterations=5,
             notes="route on the QA judge's verdict: a redo for what holds the change back goes "
@@ -872,7 +872,7 @@ class DesignMode(Mode):
             reads=(judges.OVERWATCH_VERDICT, "correction-audit.json"),
             writes=("reviews/overwatch-gate.txt", "reviews/follow-ups.json", "reviews/follow-ups.md"),
             produces=("overwatch_review", "overwatch_rereads", "overwatch_reread", "draft_delivery",
-                      "unresolved_findings"),
+                      "overwatch_unresolved"),
             knobs=("judge_rereads",),
             max_iterations=4,
             notes="route on the overwatch's verdict: an unmet correction or a redo for what "

@@ -2786,16 +2786,21 @@ the fact and the stop takes its own way to the report:
 |---|---|---|
 | The check fails at its limit, or at the overall attempts limit | `prepare_check`, `gate_check` | `draft`: straight to the report, marked check failing; the QA judge and the overwatch judge only a change whose check passed |
 | The review limit, or the overall attempts limit, at the QA judge | `gate_qa` | `proceed`: on through the correction audit and the overwatch |
-| The same at the overwatch | `gate_overwatch` | `proceed`: to the report; after the QA judge's stop its items join the draft and no attempt is spent |
+| The same at the overwatch | `gate_overwatch` | `proceed`: to the report; after the QA judge's stop its items join that draft and no attempt is spent |
 | The refusal bound | `design_materialise`, then `prepare_check` | `draft`: to the report, marked check failing when that commit's check failed |
 
 The unresolved items are what each judge left unresolved as of its latest
-verdict (`unresolved_findings`, kept by `gate_qa` and `gate_overwatch`). A
+verdict (`qa_unresolved`, kept by `gate_qa`, and `overwatch_unresolved`, kept by
+`gate_overwatch`). gate_qa keeps its stop in `qa_draft`, which only it produces, and
+gate_overwatch folds it into `draft_delivery`, so a redo of the overwatch keeps the
+QA judge's draft. A
 refused emission writes its reason to `check.txt`, and a failing check adds its
 triage there after its evidence is recorded; `authoring_evidence.restore_receipts`
 puts the recorded `check.txt` back from the evidence's validation history
-before the draft is decided. A run with no applied commit, or none with
-current evidence, still stops, and opens no pull request. The run ends done.
+before the draft is decided. A stop with an applied commit and current check
+evidence ends in a draft pull request, and the run ends done; any other stop still
+ends the run with no pull request (a stop whose latest commit has no current
+evidence is dm-272).
 
 ### Why
 

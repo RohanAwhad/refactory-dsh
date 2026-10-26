@@ -12,8 +12,8 @@ What delivery may do is settled before anything is built. `prepare` plans it
 (`gate_strategy`) reads, so the person approves the pull request, or the repository it
 creates, together with the design. The `deliver` step runs after `report`, so only for
 a run whose reviews passed, or for a draft: a run whose build loop stopped at a limit
-with an applied commit (the `draft_delivery` fact, `design_ops._draft_for_stop`), whose
-pull request is a draft listing what is unresolved. It plans again and does at most
+with an applied commit and current check evidence (the `draft_delivery` fact,
+`design_ops._draft_for_stop`), whose pull request is a draft listing what is unresolved. It plans again and does at most
 what was approved; anything else keeps the work on the local branch and says why, as a
 run warning. A run that fails never reaches it, so it opens no pull request and creates
 no repository, and neither does a run whose branch changes nothing (`_same_tree`).
@@ -1150,6 +1150,9 @@ def _open_draft(path: Path, slug: str, branch: str, into: str, title: str, body:
         if "draft pull request" not in str(refused).lower():
             raise
         said = str(refused)
+    if body.is_file():
+        # Its section now says delivery put the title's prefix on, not that it made a draft.
+        body.write_text(_restated(body.read_text(), "titled"))
     opened = _open(path, slug, branch, into, DRAFT_TITLE + title, body)
     return opened, (f"GitHub refused a draft pull request ({said}), so it was opened ready for review, "
                     f"its title starting {DRAFT_TITLE.strip()}")
@@ -1159,11 +1162,14 @@ def _open_draft(path: Path, slug: str, branch: str, into: str, title: str, body:
 CHECK_FAILING_TITLE = "[check failing] "
 
 
-def _bare_title(title: str) -> str:
-    """``title`` without the prefixes delivery puts on a draft's."""
-    while title.startswith((DRAFT_TITLE, CHECK_FAILING_TITLE)):
-        title = title.removeprefix(DRAFT_TITLE).removeprefix(CHECK_FAILING_TITLE)
-    return title
+def _ours_off(title: str, state: str | None) -> str:
+    """``title`` without the prefixes delivery put on it (`_draft_state`): ``[draft] `` only
+    where it put that there itself, and ``[check failing] ``; a person's own stay."""
+    if state is None:
+        return title
+    if state == "titled":
+        title = title.removeprefix(DRAFT_TITLE)
+    return title.removeprefix(CHECK_FAILING_TITLE)
 
 
 def _describe(ctx: Any, url: str, draft_delivery: dict[str, Any] | None) -> str:
@@ -1172,49 +1178,58 @@ def _describe(ctx: Any, url: str, draft_delivery: dict[str, Any] | None) -> str:
 
     Of the description only what delivery wrote is changed (dm-212, dm-246): its sections,
     between `BODY_START` and `BODY_END`, are replaced by the ones this delivery wrote to
-    `BODY`, and a draft's section, between `DRAFT_START` and `DRAFT_END`, is put first, or
-    taken out when this delivery is not a draft. A person's text outside the markers stays.
-    A description with no `BODY_START` (every pull request opened before the markers) keeps
-    its text, and the note says it was not updated. A draft delivery makes the pull request
-    a draft (`gh pr ready --undo`), or, where GitHub refuses, says so in the note and in its
-    title's ``[draft] `` prefix, as `_open_draft` does; one that is not a draft takes the
-    prefixes off and marks ready for review (`gh pr ready`) a draft that a delivery made
-    (its description had the draft section), never a person's own. Nothing is edited when
+    `BODY`, and a draft's section is put first, or taken out when this delivery is not a
+    draft. A person's text outside the markers stays, to the byte. A description with no
+    `BODY_START` (every pull request opened before the markers) keeps its text, and the
+    note says so. A draft delivery makes a ready pull request a draft (`gh pr ready
+    --undo`), or, where GitHub refuses, says so in the note and in its title's ``[draft] ``
+    prefix, as `_open_draft` does; its section records which (`_draft_state`). One that is
+    not a draft takes the prefixes delivery put on the title off, and marks ready for
+    review only a draft that delivery made, never a person's own. Nothing is edited when
     nothing differs, so delivering the same run again changes nothing.
     """
     shown = json.loads(_gh("pr", "view", url, "--json", "body,title,isDraft"))
     old_body, old_title = str(shown.get("body") or ""), str(shown.get("title") or "")
     is_draft = bool(shown.get("isDraft"))
+    was = _draft_state(old_body)
     notes: list[str] = []
     ours = _BODY_SECTION.search((Path(ctx.workdir) / BODY).read_text())
     body = old_body
-    if ours is not None and _BODY_SECTION.search(body):
+    legacy = ours is not None and not _BODY_SECTION.search(body)
+    if ours is not None and not legacy:
         body = _BODY_SECTION.sub(lambda _found: ours.group(0), body, count=1)
-    elif ours is not None:
-        notes.append(f"the description of {url} was not updated: it has no delivery markers, "
-                     "so all of it is kept as written")
-    body = _with_draft_section(body, draft_delivery) if draft_delivery else _without_draft_section(body)
-    if body != old_body:
-        sent = Path(ctx.workdir) / BODY
-        sent.write_text(body)
-        _gh("pr", "edit", url, "--body-file", str(sent))
-    if draft_delivery and not is_draft:
+    state = ""
+    if draft_delivery and is_draft:
+        # A draft delivery made it one before, or it is a draft of a person's own.
+        state = "made" if was == "made" else ""
+    elif draft_delivery:
         try:
             _gh("pr", "ready", "--undo", url)
-            is_draft = True
+            is_draft, state = True, "made"
         except NotDelivered as refused:
+            state = "titled"
             notes.append(f"{url} could not be converted to a draft ({refused}), so it stays ready "
                          "for review")
-    elif not draft_delivery and is_draft and _DRAFT_SECTION.search(old_body):
+    elif is_draft and was == "made":
         try:
             _gh("pr", "ready", url)
         except NotDelivered as refused:
             notes.append(f"{url} could not be marked ready for review ({refused}); it is still a "
                          "draft")
-    title = _bare_title(old_title)
+    body = (_with_draft_section(body, draft_delivery, state) if draft_delivery
+            else _without_draft_section(body))
+    if legacy:
+        notes.append(f"the description of {url} was not updated: it has no delivery markers, so "
+                     + ("its text is kept as written, with the draft's section put above it"
+                        if draft_delivery else "all of it is kept as written"))
+    if body != old_body:
+        sent = Path(ctx.workdir) / BODY
+        sent.write_text(body)
+        _gh("pr", "edit", url, "--body-file", str(sent))
+    title = _ours_off(old_title, was)
     if draft_delivery and draft_delivery.get("check_failing"):
         title = CHECK_FAILING_TITLE + title
-    if draft_delivery and not is_draft:
+    if draft_delivery and state == "titled":
         title = DRAFT_TITLE + title
     if title != old_title:
         _gh("pr", "edit", url, "--title", title)
@@ -1817,38 +1832,56 @@ def _suite_counts(output: str) -> str:
 
 
 def _guardedness(ctx: Any) -> str:
-    """Whether the new tests fail without the change (`base_check.compute_test_guardedness`):
-    the run's own revert check, on one line, or ``""`` when it has none."""
+    """Whether the new test files fail without the change (`base_check.compute_test_guardedness`):
+    the run's own revert check, on one line, counted by file throughout, or ``""`` when it
+    has none. A file is guarding when any of its tests fails on the base."""
     record = None
     if ctx.exists("test-guardedness.json"):
         try:
             record = json.loads(ctx.read_text("test-guardedness.json"))
         except ValueError:
             record = None
-    if isinstance(record, dict) and record.get("unavailable"):
+    if not isinstance(record, dict):
+        return ""
+    if record.get("unavailable"):
         reason = _shorten(_public(str(record["unavailable"])).replace("\n", " "), 300)
         return f"New tests on the base: not run: {reason}."
-    if isinstance(record, dict) and record.get("summary", {}).get("total_new_tests"):
-        summary = record["summary"]
-        return (f"{summary.get('guarding', 0)} of {summary['total_new_tests']} new tests fail "
-                "without the change"
-                + (f"; {summary['not_guarding']} pass there, so they do not guard it"
-                   if summary.get("not_guarding") else "")
-                + (f"; {summary['cannot_run_on_base']} cannot run on the base"
-                   if summary.get("cannot_run_on_base") else "")
-                + ".")
-    return ""
+    files = [entry for entry in record.get("results") or [] if isinstance(entry, dict)]
+    if not files:
+        return ""
+    guarding = sum(1 for entry in files if entry.get("guarding"))
+    cannot = sum(1 for entry in files if entry.get("file_level") == "cannot_run_on_base")
+    passing = len(files) - guarding - cannot
+    return (f"{guarding} of {len(files)} new test files fail without the change"
+            + (f"; {passing} pass there, so they do not guard it" if passing else "")
+            + (f"; {cannot} cannot run on the base" if cannot else "")
+            + ".")
 
 
-def _changes(parsed: Any, diff_files: list[str]) -> list[str]:
-    """The ``## Changes`` bullets (`design_contract.describe_changes`, dm-191); a file the
-    design names that the branch does not change is left out, and named in a run warning."""
+def _changes(parsed: Any, diff_files: list[str], tracked: set[str]) -> list[str]:
+    """The ``## Changes`` bullets (`design_contract.describe_changes`, dm-191); a bullet that
+    names only files the branch does not change is left out, and named in a run warning."""
     from refactory_dsh import design_contract
 
-    items, mismatches = design_contract.describe_changes(parsed, diff_files)
+    items, mismatches = design_contract.describe_changes(parsed, diff_files, tracked)
     if mismatches:
         target_guard.warn(f"design sites marked [changed] but not in the diff: {', '.join(mismatches)}")
     return items
+
+
+def _follow_ups(ctx: Any) -> list[str]:
+    """Every recorded follow-up once, each with the gates that let it through: an item the
+    QA judge and the overwatch both name is one follow-up, not two."""
+    from refactory_dsh.create_ops import FOLLOW_UPS
+
+    recorded = ctx.read_json(FOLLOW_UPS, {}) if ctx.exists(FOLLOW_UPS) else {}
+    sources: dict[str, list[str]] = {}
+    for source, findings in (recorded.items() if isinstance(recorded, dict) else ()):
+        for finding in findings if isinstance(findings, list) else ():
+            key = " ".join(str(finding).split())
+            if source not in sources.setdefault(key, []):
+                sources[key].append(source)
+    return [f"{finding} ({', '.join(gates)})" for finding, gates in sources.items()]
 
 
 def _correction_items(ctx: Any) -> list[str]:
@@ -1951,9 +1984,11 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     """The pull request's description, as delivery writes it: short (the person, 2026-10-26).
 
     ``## Summary``: the design's, the problem and the fix (else the brief's first lines).
-    ``## Changes``: one bullet per changed file, as the design's ``## Changes`` describes
-    it (`_changes`, dm-191). ``## Tests``: the design's tests by name, then whether the new
-    tests fail without the change (`_guardedness`). ``## Verification``: one line on the
+    ``## Core`` and ``## Behaviour changes``: the design's own, when it has them (dm-191).
+    ``## Changes``: the design's ``## Changes`` bullets, one per behaviour, then each changed
+    file none of them names (`_changes`, dm-191). ``## Tests``: the design's tests whose file
+    the branch changes, by name, then whether the new test files fail without the change
+    (`_guardedness`). ``## Verification``: one line on the
     check with its suite counts (`_check_line`) and one on the reviews (`_reviews_line`),
     and a line each for an uncommitted base and for advisories, when there are any.
     ``## Follow-ups`` and ``## Corrections given at approval``: a short bullet each. All of
@@ -1964,7 +1999,6 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
 
     from refactory_dsh import authoring_evidence as evidence
     from refactory_dsh import design_contract
-    from refactory_dsh.create_ops import follow_ups
 
     design_text = ctx.read_text("design.md") if ctx.exists("design.md") else ""
     parsed = design_contract.parse(design_text, str(ctx.facts.get("name") or ""))
@@ -1972,13 +2006,18 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     summary = parsed.summary or _shorten(" ".join(str(ctx.facts.get("brief") or "").split()), 600)
     if summary:
         sections.append(f"## Summary\n\n{_public(summary)}")
+    for heading, text in design_contract.pr_sections(design_text):
+        sections.append(f"## {heading}\n\n{_public(text)}")
     diff_files = sorted(line for line in worktree.git(
         Path(found.path), "diff", "--name-only", "--diff-filter=d", found.base, found.head,
     ).splitlines() if line)
-    changes = _changes(parsed, diff_files)
+    tracked = set(worktree.git(Path(found.path), "ls-tree", "-r", "--name-only", found.head).splitlines())
+    changes = _changes(parsed, diff_files, tracked)
     if changes:
         sections.append("## Changes\n\n" + "\n".join(f"- {_public(item)}" for item in changes))
-    tests = [f"`{name}`" for name in design_contract.test_names(design_text)]
+    # Only tests the branch has: a design can name a test that was never written.
+    tests = [f"`{name}`" for name in design_contract.test_names(design_text)
+             if design_contract.changed_file(name.split("::", 1)[0], diff_files)]
     guarded = _guardedness(ctx)
     if tests or guarded:
         sections.append("## Tests\n\n" + "\n".join(f"- {line}" for line in (*tests, guarded) if line))
@@ -1989,7 +2028,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         ev_data = None
     check_passed = (isinstance(ev_data, dict) and isinstance(ev_data.get("validation"), dict)
                     and ev_data["validation"].get("status") == "pass")
-    left = follow_ups(ctx)
+    left = _follow_ups(ctx)
     lines = [_check_line(ctx, found, ev_data, merge)]
     uncommitted = worktree.uncommitted_record(found)
     if uncommitted:
@@ -2198,6 +2237,15 @@ CHECK_FAILING_HEADING = "## Check failing"
 #: heading at all -- survives any number of draft deliveries.
 DRAFT_START = "<!-- delivery:draft -->"
 DRAFT_END = "<!-- /delivery:draft -->"
+#: The opener when delivery itself made the pull request a draft -- opened it as one, or
+#: converted it -- so a later delivery that is not a draft marks it ready again. A draft
+#: section under `DRAFT_START` is on a pull request that was a draft already: a person's,
+#: which delivery leaves a draft.
+DRAFT_MADE = "<!-- delivery:draft made -->"
+#: The opener when GitHub refused a draft and delivery put `DRAFT_TITLE` on the title
+#: instead, so a later delivery that is not a draft takes that prefix off again.
+DRAFT_TITLED = "<!-- delivery:draft titled -->"
+_DRAFT_OPENER = re.compile(r"<!-- delivery:draft(?: (made|titled))? -->")
 
 #: The markers around the sections delivery writes (`_body`). A later delivery, a refine
 #: among them, replaces only what is between them (dm-212, `_describe`).
@@ -2205,26 +2253,37 @@ BODY_START = "<!-- delivery:body -->"
 BODY_END = "<!-- /delivery:body -->"
 
 #: A section between its markers, with the blank line after it.
-_DRAFT_SECTION = re.compile(re.escape(DRAFT_START) + r".*?" + re.escape(DRAFT_END)
+_DRAFT_SECTION = re.compile(_DRAFT_OPENER.pattern + r".*?" + re.escape(DRAFT_END)
                             + r"[ \t]*(?:\r?\n)?(?:[ \t]*\r?\n)?", re.S)
 _BODY_SECTION = re.compile(re.escape(BODY_START) + r".*?" + re.escape(BODY_END), re.S)
 
 
+#: Any of delivery's markers, in any of their states.
+_ANY_MARKER = re.compile(r"<!-- /?delivery:(?:draft|body)\b[^>]*-->")
+
+
 def _unmarked(text: str) -> str:
     """``text`` with any of delivery's markers taken out, so no value can end a section early."""
-    for marker in (DRAFT_START, DRAFT_END, BODY_START, BODY_END):
-        text = text.replace(marker, "")
-    return text
+    return _ANY_MARKER.sub("", text)
 
 
-def _draft_preamble(draft_delivery: dict[str, Any]) -> str:
+def _draft_state(body: str) -> str | None:
+    """How delivery left the pull request when it wrote the draft section in ``body``:
+    ``"made"`` (it made it a draft), ``"titled"`` (it put `DRAFT_TITLE` on the title), or
+    ``""`` (it was a draft already); None when ``body`` has no draft section."""
+    found = _DRAFT_SECTION.search(body)
+    return (_DRAFT_OPENER.match(found.group(0))[1] or "") if found else None
+
+
+def _draft_preamble(draft_delivery: dict[str, Any], state: str = "made") -> str:
     """The draft's section, between `DRAFT_START` and `DRAFT_END`: first in its description.
 
     ``## Check failing`` and what the check said, when it fails on the draft's head; then
     ``## Unresolved review findings``: the stop's reason and each item the judges left
     unresolved, with its source and the attempts that named it. Every value in it reaches
     GitHub, so each goes through ``_flat``: credential values hidden as in the rest of the
-    description, and one line per item, so no item can start a heading of its own.
+    description, and one line per item, so no item can start a heading of its own. Its
+    opener records ``state`` (`_draft_state`).
     """
     def value(text: Any) -> str:
         return _unmarked(_flat(text))
@@ -2247,19 +2306,27 @@ def _draft_preamble(draft_delivery: dict[str, Any]) -> str:
         inner.append("".join(parts))
     if not items and draft_delivery.get("check_failing"):
         inner.append("No review judged this head: its check failed first.")
-    return DRAFT_START + "\n" + "\n".join(inner).rstrip("\n") + "\n" + DRAFT_END
+    opener = {"made": DRAFT_MADE, "titled": DRAFT_TITLED}.get(state, DRAFT_START)
+    return opener + "\n" + "\n".join(inner).rstrip("\n") + "\n" + DRAFT_END
 
 
-def _with_draft_section(body: str, draft_delivery: dict[str, Any]) -> str:
+def _with_draft_section(body: str, draft_delivery: dict[str, Any], state: str = "made") -> str:
     """``body`` with the draft section first, in place of any section an earlier delivery wrote."""
     rest = _without_draft_section(body)
-    section = _draft_preamble(draft_delivery)
+    section = _draft_preamble(draft_delivery, state)
     return f"{section}\n\n{rest}" if rest else f"{section}\n"
 
 
 def _without_draft_section(body: str) -> str:
-    """``body`` without the section a draft delivery wrote; everything else as it was."""
-    return _DRAFT_SECTION.sub("", body).lstrip("\r\n")
+    """``body`` without the section a draft delivery wrote; everything else, to the byte,
+    as it was."""
+    return _DRAFT_SECTION.sub("", body)
+
+
+def _restated(body: str, state: str) -> str:
+    """``body`` with its draft section's opener recording ``state`` instead."""
+    opener = {"made": DRAFT_MADE, "titled": DRAFT_TITLED}.get(state, DRAFT_START)
+    return _DRAFT_OPENER.sub(opener, body, count=1)
 
 
 def _prepend_draft_preamble(ctx: Any, draft_delivery: dict[str, Any]) -> None:
@@ -2354,9 +2421,7 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
     # would not convert), or delivery left an existing description alone, the record says so.
     if outcome.get("draft_note"):
         record["draft_note" if draft_delivery else "note"] = outcome["draft_note"]
-    from refactory_dsh.create_ops import follow_ups
-
-    left = follow_ups(ctx)
+    left = _follow_ups(ctx)
     if left:
         record["follow_ups"] = left
     _record(ctx, record)

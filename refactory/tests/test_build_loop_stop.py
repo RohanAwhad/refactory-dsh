@@ -216,7 +216,9 @@ def test_consecutive_refusals_end_the_build_loop(tmp_path):
 
 
 def test_interleaved_refusals_and_successes_converge(tmp_path):
-    """Refusals interleaved with applied emissions converge: the counter resets."""
+    """Refusals interleaved with applied emissions converge: the counter resets. Attempt 1's
+    check fails, its repeat is refused, and attempt 2 passes: the run is delivered whole,
+    no draft, with the refusal count back at 0."""
     from refactory_dsh.design import DesignMode
     from tests_support import FakeModel, render, RESEARCH_ANSWER, PITFALLS_ANSWER
     from tests_support import DESIGN_DOC_ANSWER, REVIEW_ANSWERS, VERIFICATION_ANSWER
@@ -225,9 +227,10 @@ def test_interleaved_refusals_and_successes_converge(tmp_path):
     repo = git_repo(tmp_path / "repo")
     run = tmp_path / "run"
 
-    # First emission: valid. Second: identical (refused). Third: different (valid, passes check).
-    emit1 = render({"tool.py": "print('v1')\n"})
-    emit2 = render({"tool.py": "print('v1')\n"})  # same as emit1 → refused
+    # First emission: applied, its check fails. Second: identical (refused). Third: different
+    # (applied, passes check).
+    emit1 = render({"tool.py": "raise SystemExit(1)\n"})
+    emit2 = render({"tool.py": "raise SystemExit(1)\n"})  # same as emit1 → refused
     emit3 = render({"tool.py": "print(1)\n"})  # different → applied, passes check "python tool.py"
 
     answers = [
@@ -247,12 +250,12 @@ def test_interleaved_refusals_and_successes_converge(tmp_path):
               "target": str(repo)},
     )
 
-    # The run should succeed (or at least not stop on refusals)
-    # The counter resets on each applied emission
-    if not result.exit_ok:
-        assert "emissions refused" not in (result.error or ""), (
-            f"Run should not have stopped on refusals: {result.error}"
-        )
+    assert result.exit_ok, result.error
+    assert "draft_delivery" not in result.facts
+    assert not result.facts.get("consecutive_refusals")
+    assert sum(1 for prompt in model.prompts if "Write the artifact `" in prompt) == 3
+    assert "materialise could not apply emit.txt" in model.prompts[
+        [i for i, prompt in enumerate(model.prompts) if "Write the artifact `" in prompt][2]]
 
 
 # ── cross-process refusal bound ──────────────────────────────────────────
@@ -740,3 +743,54 @@ def test_a_stop_whose_commit_has_no_current_evidence_is_not_a_draft(tmp_path, mo
     assert design_ops._draft_for_stop(context(), BuildLoopStop("limit")) is not None
     (run / "design.md").write_text("# A design approved after the check ran\n")
     assert design_ops._draft_for_stop(context(), BuildLoopStop("limit")) is None
+
+
+def test_the_overall_limit_at_gate_qa_goes_on_as_a_draft_on_the_spine(tmp_path, monkeypatch):
+    run = _spine_attempt(tmp_path, monkeypatch, "true", check_attempts=1, review_attempts=3)
+    _walk_on_the_spine(run, monkeypatch, *_ATTEMPT)
+    steps = (("refactory_dsh.design_ops:gate_qa", "gate_qa", "gate"),
+             ("refactory_dsh.design_ops:gate_overwatch", "gate_overwatch", "gate"), _REPORT)
+    assert _walk_on_the_spine(run, monkeypatch, *steps) == [
+        ("gate_qa", 0, "proceed"), ("gate_overwatch", 0, "proceed"), ("report", 0, "")]
+    facts = json.loads((run / "facts.json").read_text())
+    assert facts["draft_delivery"]["reason"] == "authoring unresolved after 1 attempt(s)"
+    assert "check_failing" not in facts["draft_delivery"]
+
+
+def test_the_refusal_bound_after_a_failing_check_is_a_check_failing_draft_on_the_spine(tmp_path, monkeypatch):
+    run = _spine_attempt(tmp_path, monkeypatch, "exit 1", check_attempts=3, refusal_attempts=2)
+    assert _walk_on_the_spine(run, monkeypatch, *_ATTEMPT)[-1] == ("gate_check", 0, "reloop")
+    bad = "===EDIT: missing.py===\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n"
+    (run / "emit.txt").write_text(bad)
+    assert _walk_on_the_spine(run, monkeypatch, *_ATTEMPT[:2])[-1] == ("prepare_check", 0, "reloop")
+    (run / "emit.txt").write_text(bad)
+    assert _walk_on_the_spine(run, monkeypatch, *_ATTEMPT[:2], _REPORT) == [
+        ("materialise", 0, ""), ("prepare_check", 0, "draft"), ("report", 0, "")]
+    fact = json.loads((run / "facts.json").read_text())["draft_delivery"]
+    assert fact["check_failing"] is True and fact["reason"].startswith("emissions refused 2")
+
+
+def test_a_redo_of_the_overwatch_keeps_the_qa_judges_draft(tmp_path, monkeypatch):
+    """gate_qa's limit made the run a draft; a CEO redo of the overwatch resets gate_overwatch's
+    facts, draft_delivery among them. gate_qa's stop is its own fact, so the redone
+    gate_overwatch folds it back in, spending no attempt, and the report takes the draft."""
+    from refactory_dsh import items
+
+    run = _spine_attempt(tmp_path, monkeypatch, "true", review_attempts=1)
+    _walk_on_the_spine(run, monkeypatch, *_ATTEMPT)
+    gates = (("refactory_dsh.design_ops:gate_qa", "gate_qa", "gate"),
+             ("refactory_dsh.design_ops:gate_overwatch", "gate_overwatch", "gate"))
+    _walk_on_the_spine(run, monkeypatch, *gates)
+    assert json.loads((run / "facts.json").read_text())["draft_delivery"]
+    items.command_reset(run, {"nodes": ["overwatch", "gate_overwatch", "report", "pick_corrections",
+                                        "deliver", "delivery_gate", "done"],
+                              "start": "overwatch", "preserveAttemptFacts": True})
+    facts = json.loads((run / "facts.json").read_text())
+    assert "draft_delivery" not in facts and facts["qa_draft"]
+    assert _walk_on_the_spine(run, monkeypatch, gates[1], _REPORT) == [
+        ("gate_overwatch", 0, "proceed"), ("report", 0, "")]
+    facts = json.loads((run / "facts.json").read_text())
+    assert facts["draft_delivery"]["reason"] == "review reloop limit reached after 1 review cycle(s)"
+    assert facts["review_attempts_used"] == 1
+    assert "QA gate" in {item["source"] for item in facts["draft_delivery"]["unresolved"]}
+    assert json.loads((run / "design.json").read_text())["draft"] is True

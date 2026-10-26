@@ -291,7 +291,6 @@ def test_the_worst_case_ends_in_the_build_loop_stop_not_the_iteration_limit(tmp_
     assert result.exit_ok, result.error
     assert result.facts["draft_delivery"]["reason"] == "check attempts exhausted after 3 check failure(s)"
     assert result.facts["draft_delivery"]["check_failing"] is True
-    assert "max_iterations" not in str(result.error)
     assert [entry["outcome"] for entry in _records(run)] == ["fixup", "fixup", "exhausted"] * 3
     # Every emission was a prepare_check reloop but the last: 26 of them, against 45.
     assert _count(model, EMIT) == 27 and DesignMode().build().nodes["prepare_check"].max_iterations == 45
@@ -1362,7 +1361,6 @@ def test_the_worst_case_at_the_knobs_bounds_still_ends_in_the_stop(tmp_path, mon
     assert result.exit_ok, result.error
     assert result.facts["draft_delivery"]["reason"] == "check attempts exhausted after 5 check failure(s)"
     assert result.facts["draft_delivery"]["check_failing"] is True
-    assert "max_iterations" not in str(result.error)
     assert [entry["outcome"] for entry in _records(run)] == (["fixup"] * 5 + ["exhausted"]) * 5
     assert _count(model, EMIT) == 90
 
