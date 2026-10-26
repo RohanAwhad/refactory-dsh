@@ -425,6 +425,7 @@ def _named_files(bullet: str, tracked: set[str]) -> list[str]:
 
 def describe_changes(
     parsed: DesignContract, diff_files: list[str], tracked: set[str] | frozenset[str] = frozenset(),
+    deleted: list[str] | tuple[str, ...] = (),
 ) -> tuple[list[str], list[str]]:
     """The pull request's "Changes" (dm-191): the design's ``## Changes`` bullets, one per
     behaviour, as written (each cut to 300 characters), then each file in the diff that no
@@ -432,8 +433,8 @@ def describe_changes(
     descriptions, or its name).
 
     A bullet is left out only when it names files (`_named_files`; ``tracked`` is the
-    repository's files) and the branch changes none of them: what it describes is not in
-    the branch. A bullet that names no file -- "Core: the tokenizer…" or "Behaviour
+    repository's files) and the branch neither changes nor deletes (``deleted``) any of
+    them: what it describes is not in the branch. A bullet that names no file -- "Core: the tokenizer…" or "Behaviour
     change: ``tool --list`` prints…" -- is a behaviour, and is kept.
 
     Returns ``(items, mismatches)``: ``mismatches`` names the files a left-out bullet or a
@@ -443,8 +444,9 @@ def describe_changes(
     kept: list[str] = []
     described: set[str] = set()
     for bullet in parsed.changes:
-        names = _named_files(bullet, set(tracked) | set(diff_files))
-        changed = [match for match in (changed_file(name, diff_files) for name in names) if match]
+        names = _named_files(bullet, set(tracked) | set(diff_files) | set(deleted))
+        touched = [*diff_files, *deleted]
+        changed = [match for match in (changed_file(name, touched) for name in names) if match]
         if names and not changed:
             mismatches.extend(names)
             continue

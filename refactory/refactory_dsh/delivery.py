@@ -1858,15 +1858,47 @@ def _guardedness(ctx: Any) -> str:
             + ".")
 
 
-def _changes(parsed: Any, diff_files: list[str], tracked: set[str]) -> list[str]:
+def _changes(parsed: Any, diff_files: list[str], tracked: set[str], deleted: list[str]) -> list[str]:
     """The ``## Changes`` bullets (`design_contract.describe_changes`, dm-191); a bullet that
-    names only files the branch does not change is left out, and named in a run warning."""
+    names only files the branch does not change or delete is left out, and named in a run
+    warning."""
     from refactory_dsh import design_contract
 
-    items, mismatches = design_contract.describe_changes(parsed, diff_files, tracked)
+    items, mismatches = design_contract.describe_changes(parsed, diff_files, tracked, deleted)
     if mismatches:
         target_guard.warn(f"design sites marked [changed] but not in the diff: {', '.join(mismatches)}")
     return items
+
+
+#: A pytest test function's definition, and a vitest test's title, in a test file.
+_PY_TEST = r"^[ \t]*(?:async[ \t]+)?def[ \t]+{name}[ \t]*\("
+_VITEST_TEST = r"\b(?:it|test)(?:\.\w+)*\(\s*(['\"`]){title}\1"
+
+
+def _written(found: worktree.Worktree, test_id: str, diff_files: list[str]) -> bool:
+    """Whether the branch has the test ``test_id`` the design names: its file is one the
+    branch changes, and at the branch's head that file defines it -- a ``def`` (or ``async
+    def``) of a pytest id's last name, ``[...]`` parameters aside, or an ``it(``/``test(``
+    with a vitest id's last title (``file > describe > title``). A file named alone counts
+    when the branch changes it."""
+    from refactory_dsh import design_contract
+
+    if "::" in test_id:
+        path, name = test_id.split("::", 1)[0], test_id.rsplit("::", 1)[1]
+        pattern = _PY_TEST.format(name=re.escape(re.sub(r"\[.*\]$", "", name.strip())))
+    elif " > " in test_id:
+        path, title = test_id.split(" > ", 1)[0], test_id.rsplit(" > ", 1)[1]
+        pattern = _VITEST_TEST.format(title=re.escape(title.strip()))
+    else:
+        path, pattern = test_id, ""
+    changed = design_contract.changed_file(path.strip(), diff_files)
+    if changed is None or not pattern:
+        return changed is not None
+    try:
+        text = worktree.git(Path(found.path), "show", f"{found.head}:{changed}")
+    except ValueError:
+        return False
+    return re.search(pattern, text, re.M) is not None
 
 
 def _follow_ups(ctx: Any) -> list[str]:
@@ -2012,12 +2044,15 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         Path(found.path), "diff", "--name-only", "--diff-filter=d", found.base, found.head,
     ).splitlines() if line)
     tracked = set(worktree.git(Path(found.path), "ls-tree", "-r", "--name-only", found.head).splitlines())
-    changes = _changes(parsed, diff_files, tracked)
+    deleted = [line for line in worktree.git(
+        Path(found.path), "diff", "--name-only", "--diff-filter=D", found.base, found.head,
+    ).splitlines() if line]
+    changes = _changes(parsed, diff_files, tracked, deleted)
     if changes:
         sections.append("## Changes\n\n" + "\n".join(f"- {_public(item)}" for item in changes))
     # Only tests the branch has: a design can name a test that was never written.
     tests = [f"`{name}`" for name in design_contract.test_names(design_text)
-             if design_contract.changed_file(name.split("::", 1)[0], diff_files)]
+             if _written(found, name, diff_files)]
     guarded = _guardedness(ctx)
     if tests or guarded:
         sections.append("## Tests\n\n" + "\n".join(f"- {line}" for line in (*tests, guarded) if line))

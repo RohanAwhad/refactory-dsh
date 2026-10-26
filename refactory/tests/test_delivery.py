@@ -1707,16 +1707,85 @@ def test_the_designs_core_and_behaviour_changes_sections_reach_the_pull_request(
     assert "## Behaviour changes\n\n- `tool --list` prints one name per line\n" in body
 
 
+def _repo_pair(tmp_path, base_files: dict[str, str], head_files: dict[str, str],
+               removed: tuple[str, ...] = ()) -> tuple[Path, str, str]:
+    """A repository whose base commit holds ``base_files`` and whose head writes
+    ``head_files`` and removes ``removed``: (repository, base, head)."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    for files in (base_files, head_files):
+        if files is head_files:
+            for name in removed:
+                git(repo, "rm", "-q", name)
+        for name, text in files.items():
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text(text)
+        git(repo, "add", "-A")
+        git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "c")
+        if files is base_files:
+            base = git(repo, "rev-parse", "HEAD")
+    return repo, base, git(repo, "rev-parse", "HEAD")
+
+
+def _pair_body(repo: Path, base: str, head: str, design: str) -> str:
+    from types import SimpleNamespace
+    ctx = _TitleCtx(facts={"brief": "b", "check": "pytest", "name": "t"}, files={"design.md": design})
+    return delivery._body(ctx, SimpleNamespace(path=str(repo), base=base, head=head, branch="b"))
+
+
 def test_the_tests_section_names_only_tests_the_change_has(tmp_path):
-    """A design can name a test that was never written: the PR lists only tests whose file
-    the branch changes."""
-    design = ("# T\n\n## Summary\n\nS.\n\n## Changes\n\n- `tool.py` — t\n\n## Tests\n\n"
+    """A design can name a test that was never written: the PR lists a pytest id only when
+    the branch changes its file and that file defines it at the head (parameters aside),
+    and a vitest id only when its spec has an it() or test() of that title."""
+    repo, base, head = _repo_pair(tmp_path, {"a.txt": "a\n"}, {
+        "tests/test_tool.py": ("import pytest\n\n\ndef test_prints():\n    pass\n\n\n"
+                               "@pytest.mark.parametrize('x', [1])\nasync def test_lists(x):\n    pass\n"),
+        "web/tool.spec.ts": "describe('tool', () => {\n  it('lists one name per line', () => {})\n})\n"})
+    design = ("# T\n\n## Summary\n\nS.\n\n## Changes\n\n- `tests/test_tool.py` — t\n\n## Tests\n\n"
               "- `tests/test_tool.py::test_prints` — it prints\n"
-              "- `tests/test_tool.py::test_lists` — it lists\n"
-              "- `tests/test_never.py::test_never_written` — it prints\n")
-    body = _a_body(tmp_path, design, "tool.py", "tests/test_tool.py")
-    assert "## Tests\n\n- `tests/test_tool.py::test_prints`\n- `tests/test_tool.py::test_lists`\n" in body
-    assert "test_never_written" not in body
+              "- `tests/test_tool.py::test_lists[1]` — it lists\n"
+              "- `web/tool.spec.ts > tool > lists one name per line` — the spec\n"
+              "- `web/tool.spec.ts > tool > never written either` — no such it()\n"
+              "- `tests/test_never.py::test_never_written` — no such file\n")
+    body = _pair_body(repo, base, head, design)
+    assert ("## Tests\n\n- `tests/test_tool.py::test_prints`\n- `tests/test_tool.py::test_lists[1]`\n"
+            "- `web/tool.spec.ts > tool > lists one name per line`\n") in body, body
+    assert "never written" not in body
+
+
+def test_a_test_the_design_names_in_a_changed_file_but_never_wrote_is_not_listed(tmp_path):
+    repo, base, head = _repo_pair(tmp_path, {"a.txt": "a\n"},
+                                  {"tests/test_tool.py": "def test_real():\n    assert True\n"})
+    design = ("# T\n\n## Summary\n\nS.\n\n## Changes\n\n- `tests/test_tool.py` — tests\n\n"
+              "## Tests\n\n- `tests/test_tool.py::test_real` — real\n"
+              "- `tests/test_tool.py::test_never_written` — never written\n")
+    body = _pair_body(repo, base, head, design)
+    assert "test_real" in body
+    assert "test_never_written" not in body, body
+
+
+def test_a_bullet_about_a_deleted_file_is_kept(tmp_path):
+    repo, base, head = _repo_pair(tmp_path, {"old/legacy.py": "x = 1\n", "a.txt": "a\n"},
+                                  {"a.txt": "b\n"}, removed=("old/legacy.py",))
+    design = ("# T\n\n## Summary\n\nS.\n\n## Changes\n\n"
+              "- `old/legacy.py` — deleted: nothing imports it any more\n")
+    body = _pair_body(repo, base, head, design)
+    assert "nothing imports it any more" in body, body
+
+
+def test_a_backticked_path_inside_a_bullet_is_the_file_it_names(tmp_path, capsys):
+    """A path anywhere in a bullet names a file: it ties the bullet to a changed file, which
+    is then not listed again, or leaves out a bullet about a file the branch does not change."""
+    repo, base, head = _repo_pair(tmp_path, {"src/parse.py": "a\n", "old/shim.py": "s\n"},
+                                  {"src/parse.py": "b\n"})
+    design = ("# T\n\n## Summary\n\nS.\n\n## Changes\n\n"
+              "- Fix the parser in `src/parse.py`, so empty input is refused\n"
+              "- Drop the shim in `old/shim.py`\n")
+    body = _pair_body(repo, base, head, design)
+    changes = body.split("## Changes\n\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert changes == ["- Fix the parser in `src/parse.py`, so empty input is refused"], changes
+    assert "old/shim.py" in capsys.readouterr().err
 
 
 def test_a_refine_keeps_backslashes_in_the_sections_it_writes(tmp_path, monkeypatch):
@@ -1962,6 +2031,19 @@ def test_a_refine_keeps_a_persons_own_draft_title_prefix(tmp_path, monkeypatch):
     pr = _describing(monkeypatch, tmp_path, "Mine.\n", title="[draft] my idea", draft=True)
     delivery._describe(nn.RunContext(tmp_path, enforce_writes=False), "u", None)
     assert pr["title"] == "[draft] my idea" and not [args for args in pr["calls"] if "--title" in args]
+
+
+def test_a_persons_draft_title_prefix_stays_on_their_draft_with_deliverys_section(tmp_path, monkeypatch):
+    """A person's draft, titled "[draft] …", that a draft delivery touched (its section says
+    the pull request was a draft already): a later full delivery takes the section out but
+    leaves their title and their draft alone."""
+    (tmp_path / delivery.BODY).write_text(OURS)
+    section = delivery._draft_preamble(DRAFT_FACT, "")
+    pr = _describing(monkeypatch, tmp_path, f"{section}\n\nMine.\n\n{OURS}", title="[draft] my idea",
+                     draft=True)
+    delivery._describe(nn.RunContext(tmp_path, enforce_writes=False), "u", None)
+    assert pr["title"] == "[draft] my idea" and pr["draft"] is True
+    assert pr["body"] == f"Mine.\n\n{OURS}"
 
 
 def test_delivery_markers_inside_a_value_cannot_end_a_section(tmp_path):
