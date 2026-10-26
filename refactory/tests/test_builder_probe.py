@@ -706,6 +706,102 @@ def test_warm_probe_subprocess_reuse(tmp_path):
     assert len(remaining) == 0, "sweep_warm_clones should remove the warm clone"
 
 
+@pytest.mark.skipif(shutil.which("npm") is None, reason="npm not available")
+def test_warm_probe_install_record_cleared_on_reset(tmp_path):
+    """Fix 1: install records deleted on warm reset so install re-runs.
+
+    A target with package.json whose postinstall writes an ignored gen.json.
+    The first probe passes (postinstall runs, gen.json created, test reads it).
+    The second (warm) probe must also pass: git clean removes gen.json, the
+    fix deletes the install record so npm install re-runs the postinstall.
+
+    Without the fix (builder_probe.py ~447-453 reverted), the second probe
+    fails: the install record persists, ensure_environment skips npm install,
+    gen.json is missing, and the test that reads it errors.
+    """
+    run, repo, found = _make_probe_run(tmp_path)
+
+    # Overwrite package.json with a postinstall that writes gen.json
+    (repo / "package.json").write_text(json.dumps({
+        "name": "test-probe-install",
+        "version": "1.0.0",
+        "scripts": {
+            "postinstall": "node postinstall.js"
+        }
+    }))
+    # postinstall.js writes gen.json (an ignored file outside node_modules)
+    (repo / "postinstall.js").write_text(
+        'var fs = require("fs");\n'
+        'fs.writeFileSync("gen.json", JSON.stringify({v: 1}));\n'
+    )
+    (repo / ".gitignore").write_text("gen.json\nnode_modules/\n")
+    # conftest.py so imports from the repo root work
+    (repo / "conftest.py").write_text(
+        "import sys, os\n"
+        "sys.path.insert(0, os.path.dirname(__file__))\n"
+    )
+    # Test that reads gen.json — fails when gen.json is missing
+    (repo / "test_gen.py").write_text(
+        "import json, pathlib\n"
+        "def test_gen():\n"
+        "    data = json.loads(pathlib.Path('gen.json').read_text())\n"
+        "    assert data['v'] == 1\n"
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "add postinstall and test",
+         env={**os.environ, "GIT_AUTHOR_NAME": "test",
+              "GIT_AUTHOR_EMAIL": "t@t.com",
+              "GIT_COMMITTER_NAME": "test",
+              "GIT_COMMITTER_EMAIL": "t@t.com"})
+
+    new_head = _git(repo, "rev-parse", "HEAD")
+    _write_json(run / ".refactory" / "slot" / "run-test.json", {
+        "target": str(repo), "path": str(repo), "branch": found.branch,
+        "base": found.base, "head": new_head, "run": str(run),
+    })
+    from refactory_dsh.invocations import WORKTREE_RECORD
+    _write_json(run / WORKTREE_RECORD, {
+        "target": str(repo), "path": str(repo), "branch": found.branch,
+        "base": found.base, "head": new_head, "run": str(run),
+    })
+    found = Worktree(target=str(repo), path=str(repo), branch=found.branch,
+                     base=found.base, head=new_head, run=str(run))
+    (run / "facts.json").write_text(json.dumps({
+        "name": "test-probe-install",
+        "brief": "test",
+        "check": f"{sys.executable} -m pytest -q",
+    }))
+
+    # First probe: npm install → postinstall → gen.json → test passes
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 1\n")
+    result1 = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_gen.py::test_gen", "--timeout", "90"],
+        capture_output=True, text=True, timeout=180,
+    )
+    output1 = json.loads(result1.stdout)
+    assert output1["status"] == "pass", (
+        f"first probe should pass (gen.json written by postinstall): "
+        f"{result1.stderr}")
+
+    # Second probe (warm hit): gen.json cleaned → fix deletes install record →
+    # npm install re-runs → postinstall re-creates gen.json → test passes
+    (run / "emit.txt").write_text("===FILE: helper.py===\nVALUE = 2\n")
+    result2 = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.builder_probe",
+         "--workdir", str(run), "--emission", "emit.txt",
+         "--test", "test_gen.py::test_gen", "--timeout", "90"],
+        capture_output=True, text=True, timeout=180,
+    )
+    output2 = json.loads(result2.stdout)
+    assert output2["status"] == "pass", (
+        f"second (warm) probe must pass — install re-runs after fix 1: "
+        f"{result2.stderr}")
+
+    sweep_warm_clones(run)
+
+
 def test_warm_probe_concurrent_subprocess(tmp_path):
     """Two concurrent probe subprocesses serialised by the flock, both pass.
 
