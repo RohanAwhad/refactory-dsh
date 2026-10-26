@@ -381,6 +381,17 @@ def run_node(
                 reviews_dir.mkdir(parents=True, exist_ok=True)
                 (reviews_dir / f"{node_id}-missing.txt").write_text(
                     f"{type(retry_exc).__name__}: {retry_exc}\n")
+                # dm-232: settle the pending delivery marker at the point
+                # the branch is recorded missing, so it never goes stale.
+                try:
+                    from refactory_dsh.agent_delivery import invalidate as _ad_invalidate
+                    _ad_invalidate(directory, [node_id], f"optional branch missing: {retry_exc}")
+                except Exception as settle_error:
+                    # The branch stays missing either way; a marker left pending only
+                    # makes the next resume ask for `graph-control acknowledge`.
+                    print(f"refactory: run warning: could not settle the delivery marker of "
+                          f"optional {node_id}: {type(settle_error).__name__}: {settle_error}; "
+                          f"a later resume asks for graph-control acknowledge", file=sys.stderr)
                 return {}
             raise
     if isinstance(produced, dict):

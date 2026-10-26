@@ -113,11 +113,17 @@ uv run refactory graph-control stop --run /absolute/run
 uv run refactory graph-control skip --run /absolute/run --node check
 ```
 
+- `pause --node NODE` arms the pause before that node only: every node before it runs, and a route that never reaches it never holds.
+- `stop` on a paused run whose owner has exited starts an owner, as `resume` does, and that owner applies the stop before it dispatches anything. The command reports `applied` once the run reads `halted`, and `stopping` if that takes longer.
+- When a control needs an owner and recovery refuses to start one (`stop` on a paused run, `rerun --acknowledge-failure`, `amend-command --acknowledge-failure`, `redeliver`), the control is withdrawn, not left queued, so a later owner never applies it unasked. The refusal says what to do, typically `acknowledge` first.
+
 Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of the run's current owner process (from the console launch record, or from the spine checkpoint when the launch record is absent or stale, matching how `refactory status` determines `owner_alive`). Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
 
 A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. A failed control stops being reported to the person once a later control on the same run succeeds, because the receipt file is overwritten with `status: applied`. The failure remains in the journal for audit; only the display is replaced by the later success. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins. `refactory status` lists the queued controls, so a person sees what a next owner would apply. Every graph-control confirmation includes the run's name.
 
 To change completed work, choose a completed node and prompt correction, press **Preview affected results**, inspect the invalidated nodes, then **Confirm correction and rerun**. The console equivalent is `graph-control preview --node NODE`, followed by `graph-control rerun --node NODE --text "CORRECTION" --revision REVISION` with the returned revision and the same `--run`. The owner refuses a stale preview. Prior evidence is archived and dependent results invalidated before execution; a note alone does not silently rewrite completed work. Unsafe replay plans, including unsettled concurrent work, are refused.
+
+The revision is the graph revision the spine stores with its checkpoint. It covers the graph's structure and progress, not its owner, status or pauses, so an acknowledge, a pause or an owner restart keeps a preview current; the owner recomputes it from the live graph to compare. A rerun applies behind a person's pause, and the run then holds before the reopened node until it is resumed. The CEO's own redo still refuses while a person's pause holds.
 
 ## Resuming after the driver moved
 
@@ -251,7 +257,7 @@ retried with the new one, without anyone editing the checkpoint.
 Follow with `refactory graph-control resume --run /absolute/run` to start a new
 owner. For a failed checkpoint, add `--acknowledge-failure` to the amend-command.
 
-### Acknowledge an executing or failed checkpoint
+### Acknowledge an executing, failed or paused checkpoint
 
 When the owner dies while nodes are running, the checkpoint stays `executing`.
 When a run is stopped during an agent node, the checkpoint may be `failed` with
@@ -282,6 +288,13 @@ acknowledge moves the pending dispatches to set-aside and writes
 checkpoint, it writes `acknowledge_executing: true` as before. Both are
 SHA-bound. After acknowledge, `resume` continues the run without passing the
 flag again.
+
+A `paused` checkpoint whose owner has exited is acknowledged the same way, when
+a pending dispatch makes recovery refuse it (dm-232): the markers are set aside
+and the acknowledgement carries only the checkpoint's SHA, since a pause needs
+no failure acknowledged. An optional fork branch that is recorded missing, a
+verifier past its time limit say, settles its own marker on both runtimes, so
+that case no longer needs it.
 
 Acknowledge refuses while the owner or the supervisor is alive. When the
 supervisor stops on the dm-70 refusal, `start-failure.json` and
