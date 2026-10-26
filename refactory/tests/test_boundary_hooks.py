@@ -349,7 +349,8 @@ def test_stale_install_raises():
         client._routing_provenance = {}
         client._timeout_s = 30
         client._attempts = 1
-        client._backoff_s = 1.0
+        client._backoff_s = None
+        client._retry_window_s = 60.0
         client._dsh_cli = ""
         client._python_bin = Path(sys.executable)
         client._permission_mode = "skip"

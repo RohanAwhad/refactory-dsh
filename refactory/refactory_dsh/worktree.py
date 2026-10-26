@@ -111,6 +111,33 @@ INVOCATION = Path(".refactory") / "invocation.json"
 #: The per-worktree record of files copied from the person's uncommitted working tree.
 UNCOMMITTED_RECORD = "uncommitted-files.json"
 
+#: Where a run's own artifacts go. One a step writes into the worktree -- a reviewer's
+#: findings, say -- is never part of an attempt: b40a once committed
+#: ``.refactory/verifier-findings.md`` onto its branch (dm-242).
+RUN_ARTIFACTS = ".refactory"
+
+
+def run_artifact(relative: Path | str) -> bool:
+    """Whether ``relative`` is under the worktree's top-level ``.refactory/``, in any case.
+
+    Only the top-level one: a run's state lives there, and a nested ``.refactory/`` (say
+    ``docs/.refactory/``) is the project's own.
+    """
+    parts = Path(relative).parts
+    return bool(parts) and parts[0].lower() == RUN_ARTIFACTS
+
+
+def _unstage_run_artifacts(path: Path) -> None:
+    """Unstage whatever is staged under the top-level ``.refactory/``, in any case (dm-242).
+
+    Named one by one rather than by a pathspec, which `git` here reads literally, so
+    ``.Refactory/`` on a case-insensitive disk is unstaged too.
+    """
+    staged = [name for name in git(path, "diff", "--cached", "--name-only", "--no-renames", "-z").split("\0")
+              if name and run_artifact(name)]
+    if staged:
+        git(path, "reset", "-q", "--", *staged)
+
 
 class AttemptRefused(ValueError):
     """An attempt's files cannot be applied as they were emitted.
@@ -673,11 +700,23 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     With ``amending``, the files are staged the same way and folded into the last attempt
     through `amend`, the one path every amendment takes: a self-check fix-up finishes
     the attempt it was sent back from (b41a).
+
+    A path under ``.refactory/`` is a run artifact, not a file of the change: it is left
+    out, with a warning, and never written or staged, and an emission of nothing else is
+    refused, saying so (dm-242).
     """
     found = recorded(run)
     if found is None:
         raise ValueError("this run has no worktree")
     path = Path(found.path)
+    artifacts = sorted(str(name) for name in (*files, *deletes) if run_artifact(name))
+    if artifacts:
+        from refactory_dsh import target_guard
+
+        files = {name: content for name, content in files.items() if not run_artifact(name)}
+        deletes = tuple(name for name in deletes if not run_artifact(name))
+        target_guard.warn(f"run artifacts under {RUN_ARTIFACTS}/ are never part of an attempt, so these "
+                          f"were left out of it: {target_guard._named(artifacts)}")
     for relative in (*files, *deletes):
         if any(part.lower() == ".git" for part in relative.parts):
             raise AttemptRefused(f"{relative} is inside git's own state, not a file of the artifact; leave it out")
@@ -701,6 +740,9 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
         merge_in_progress = True
     except ValueError:
         merge_in_progress = False
+    if artifacts and not files and not deletes and not merge_in_progress:
+        raise AttemptRefused(f"the emission names only run artifacts under {RUN_ARTIFACTS}/, which are never "
+                             "part of an attempt: emit the change's own files")
     if not merge_in_progress:
         restored = _restore(found, frozenset(died.get("files", [])))
         if restored:
@@ -751,6 +793,9 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
                 "against the commit it builds on. Fix what failed without reverting the change; "
                 "if part of the change is wrong, change that part"
             )
+    if merge_in_progress:
+        # `_restore` did not run, so nothing else has cleared the index of a run artifact.
+        _unstage_run_artifacts(path)
     try:
         if amending:
             amend(found, run, [str(name) for name in files], message)
@@ -1249,7 +1294,8 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None, *,
 
     When ``commit_lockfiles`` is False the installs still run but lockfiles are not
     amended into the attempt.  Delivery uses this for the merged tree, where amending
-    would corrupt the worktree record.
+    would corrupt the worktree record, and base preparation
+    (`base_check._ensure_base_worktree`) for the base, whose commit must not move (dm-188).
     """
     from refactory_dsh import sandbox
 
@@ -1322,10 +1368,14 @@ def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktre
     run would end there; kept, the attempt goes to its check and its reviews, which judge
     a change that does nothing. A fix-up's own emission that does this is refused before
     it gets here (`commit_attempt`).
+
+    A run artifact under ``.refactory/`` is never amended in, whether it is named here or
+    something else staged it: it is unstaged before the commit (dm-242).
     """
     path = Path(found.path)
     if paths:
         git(path, "add", "-f", "--", *paths)
+    _unstage_run_artifacts(path)
     how = ("-m", message)
     if found.head != found.base:
         how = ("--amend", "--no-edit", *(("--allow-empty",) if _staged_as_parent(path) else ()))

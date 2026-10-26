@@ -7677,11 +7677,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "emit"
     },
     {
-      "condition": "draft",
-      "source": "gate_check",
-      "target": "report"
-    },
-    {
       "condition": "proceed",
       "source": "gate_check",
       "target": "synthesize_qa"
@@ -7800,11 +7795,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": "proceed",
       "source": "prepare_check",
       "target": "fork_qa"
-    },
-    {
-      "condition": "draft",
-      "source": "prepare_check",
-      "target": "report"
     },
     {
       "condition": null,
@@ -8083,7 +8073,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "gate_strategy",
       "kind": "gate",
       "knobs": [],
-      "notes": "{{design_review_status}}\n\nApprove the design before the artifact is written? It is in design.md in the run directory. Then, {{delivery}}; delivery.md there says more. Answer proceed to build and deliver it that way, or reloop to have the plan redone.\n\n## Unresolved design review findings\n{{design_review_findings}}",
+      "notes": "{{design_card}}\n\nApprove the design before the artifact is written? It is in design.md in the run directory. Then, {{delivery}}; delivery.md there says more. Answer proceed to build and deliver it that way, or reloop to have the plan redone.",
       "role": "ceo"
     },
     {
@@ -8103,7 +8093,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.design_ops:design_materialise",
+      "call": "refactory_dsh.repo_change:materialise",
       "id": "materialise",
       "kind": "op",
       "knobs": [
@@ -8577,7 +8567,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "e7248e07409e820edb21fc6b7a0641af46512c4222bdd734e4d0efc5780a5963"
+    "reviewed_schema": "4015f77672454abea6e3e4d12ccc0517b3eb53a9a764550f4ddda6e595d6aa92"
   }
 }
 ```

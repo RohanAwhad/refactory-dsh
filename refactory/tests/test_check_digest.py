@@ -332,3 +332,37 @@ def test_build_probe_command_unrecognised_refused():
     )
     assert cmd == ""
     assert "no recognised" in refusal
+
+
+def test_build_probe_command_vitest_bare_spec_file():
+    """A bare .test.ts path is accepted and routed to vitest, not refused.
+
+    Revert check: removing the _SCRIPT_TEST_FILE.search(tid) branch causes
+    bare spec files to fall into node_ids, returning the refusal
+    "targeting node's test runner is not supported".
+    """
+    # Bare .test.ts file — should be routed to vitest
+    cmd, refusal = build_probe_command(
+        "npx vitest run", ["src/component.test.ts"],
+    )
+    assert refusal is None, f"bare .test.ts should not be refused: {refusal}"
+    assert "vitest" in cmd
+    assert "component.test.ts" in cmd
+    # File appears as a positional arg (no -t flag, since there are no
+    # " > " IDs and no whole_files)
+    assert "-t" not in cmd
+
+    # Bare .spec.mts — covers the [cm]? group in the regex
+    cmd2, refusal2 = build_probe_command(
+        "npx vitest run", ["src/utils.spec.mts"],
+    )
+    assert refusal2 is None, f"bare .spec.mts should not be refused: {refusal2}"
+    assert "utils.spec.mts" in cmd2
+
+    # Non-test file — should still fall to node_ids and be refused
+    cmd3, refusal3 = build_probe_command(
+        "npx vitest run", ["src/utils.ts"],
+    )
+    assert cmd3 == ""
+    assert refusal3 is not None
+    assert "node" in refusal3.lower() or "not supported" in refusal3.lower()

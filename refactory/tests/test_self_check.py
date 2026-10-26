@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import io
 import json
+import shlex
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -130,6 +132,67 @@ def _facts(run: Path) -> dict:
     return json.loads((run / "facts.json").read_text())
 
 
+class _Chunks:
+    """The self-check's chunks (`repo_change.run_check` with ``prepared``), answered at once as
+    pytest and the sandbox would answer them, on a clock of their own (``failfast.time``).
+
+    A chunk that names a file of ``slow`` runs past the time it is given and is stopped
+    there, as the sandbox stops it: the clock moves by that time and the result is the
+    sandbox's timeout. Any other chunk fails the ids of ``fails`` that it names, or whose
+    file it names, and passes the rest. With ``emissions``, ``fails`` follows the emission
+    under test instead: the n-th commit the self-check runs on fails ``emissions[n]``. The
+    whole check and the base's runs still run for real.
+    `test_a_self_check_that_says_nothing_goes_on_with_no_fixup` stops a real chunk at a real
+    limit; the tests of pytest's own output (junit seconds, a not-found id, a module that
+    does not import, a parametrized id) run real chunks.
+    """
+
+    def __init__(self, monkeypatch, *, fails=(), slow=(), emissions=None):
+        self.fails, self.slow, self.now = set(fails), set(slow), 0.0
+        self.commits: list[str] = []
+        monkeypatch.setattr(failfast, "time", SimpleNamespace(monotonic=lambda: self.now))
+        real = repo_change.run_check
+
+        def run_check(ctx, command, timeout, **kwargs):
+            if not kwargs.get("prepared"):
+                return real(ctx, command, timeout, **kwargs)
+            commit = str(ctx.facts.get("commit"))
+            if commit not in self.commits:
+                self.commits.append(commit)
+                if emissions is not None:
+                    self.fails = set(emissions[len(self.commits) - 1])
+            return self(command, timeout)
+
+        monkeypatch.setattr(repo_change, "run_check", run_check)
+
+    def __call__(self, command: str, timeout: float):
+        from refactory_dsh.sandbox import SandboxResult
+
+        named = [word for word in shlex.split(command) if word.endswith(".py") or ".py::" in word]
+        if any(name.split("::")[0] in self.slow for name in named):
+            self.now += timeout
+            return SandboxResult(ok=False, returncode=124, timed_out=True, timeout_s=int(timeout),
+                                 elapsed_s=timeout, stderr=f"timed out after {int(timeout)}s")
+        failed = sorted(test_id for test_id in self.fails
+                        if test_id in named or test_id.split("::")[0] in named)
+        if failed:
+            return SandboxResult(ok=False, returncode=1, elapsed_s=0.1, stdout="".join(
+                f"FAILED {test_id} - AssertionError\n" for test_id in failed)
+                + f"{len(failed)} failed in 0.10s")
+        return SandboxResult(ok=True, returncode=0, stdout=f"{len(named)} passed in 0.10s",
+                             elapsed_s=0.1)
+
+
+def _unwatched(monkeypatch) -> None:
+    """No snapshot of the target around each agent visit (`target_guard.watch`). In a loop of
+    many emissions the snapshots' git calls take most of the time. The loops that use this
+    never reach the reviews, so nothing runs beside an agent for the guard to catch;
+    test_target_guard and test_design_worktree walk runs with it."""
+    from refactory_dsh import target_guard
+
+    monkeypatch.setattr(target_guard, "watch", lambda workdir, node: None)
+
+
 # ── the loop, on the walker, through the real design graph ────────────────────
 
 
@@ -184,9 +247,11 @@ def test_a_clean_emission_goes_straight_on(tmp_path):
     assert not result.facts.get("total_self_check_fixups_used")
 
 
-def test_the_bound_then_the_early_stop_spends_one_attempt(tmp_path):
+def test_the_bound_then_the_early_stop_spends_one_attempt(tmp_path, monkeypatch):
     """A pinned test that keeps failing gets two fix-ups; the third failure is the early
-    stop, which spends the attempt. No review runs until an attempt passes."""
+    stop, which spends the attempt. No review runs until an attempt passes. The self-checks
+    are `_Chunks`' answers, failing the pinned test until the fourth emission."""
+    _Chunks(monkeypatch, emissions=[{PIN}, {PIN}, {PIN}, set()])
     repo = _target(tmp_path / "repo", PINNED)
     still_broken = [render({"tool.py": f"VERSION = {n}\n"}) for n in (2, 3, 4)]
     fixed = render({"tool.py": "VERSION = 5\n",
@@ -206,10 +271,14 @@ def test_the_bound_then_the_early_stop_spends_one_attempt(tmp_path):
     assert _commits(run) == [f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
 
 
-def test_the_worst_case_ends_in_the_build_loop_stop_not_the_iteration_limit(tmp_path):
+def test_the_worst_case_ends_in_the_build_loop_stop_not_the_iteration_limit(tmp_path, monkeypatch):
     """Two refusals before every applied emission, and every applied emission fails its
     self-check: fix-ups, early stops and refusals all reloop prepare_check, and the run
-    still ends in b39b's stop, past the old limit of 8 and under the new one."""
+    still ends in b39b's stop, past the old limit of 8 and under the new one. The pinned
+    test's failure is `_Chunks`' answer, and the target is not watched (`_unwatched`): the
+    loop is what is under test."""
+    _Chunks(monkeypatch, fails={PIN})
+    _unwatched(monkeypatch)
     repo = _target(tmp_path / "repo", PINNED)
     refused = "===EDIT: tool.py===\n<<<<<<< SEARCH\nnot in the file\n=======\nx\n>>>>>>> REPLACE\n"
     emits = [emission for n in range(9) for emission in (refused, refused,
@@ -268,9 +337,10 @@ def test_round_one_sends_back_the_changes_failure_and_not_the_bases(tmp_path, mo
 
 def test_the_checks_own_base_result_answers_first(tmp_path, monkeypatch):
     """When the check has compared with the base already, its cached result answers, and
-    the base is not prepared again."""
+    the base is not prepared again. The chunks are `_Chunks`' answers."""
     from refactory_dsh import base_check
 
+    _Chunks(monkeypatch, fails={PIN, ENV_FAILURE})
     repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500011")
     _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
@@ -305,13 +375,18 @@ def test_a_failure_the_last_check_inherited_is_not_sent_back():
 
 
 def test_a_base_that_runs_out_of_time_lets_nothing_be_inherited(tmp_path, monkeypatch):
-    """A base run stopped at its limit is unavailable: its failure goes back to the builder."""
-    slow_on_the_base = ("import os, time\nimport tool\n\n\ndef test_env():\n"
-                        "    if not os.path.exists('attempt.flag'):\n        time.sleep(30)\n"
-                        "    assert False\n")
-    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": slow_on_the_base})
+    """A base run stopped at its limit is unavailable: its failure goes back to the builder.
+    The base run is given the self-check's limit and answered as the sandbox answers a run
+    it stopped there (`test_a_self_check_that_says_nothing_goes_on_with_no_fixup` stops a
+    real run at a real limit)."""
+    from refactory_dsh.sandbox import SandboxResult
+
+    repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500002", self_check_timeout_s=10)
-    _emit(run, render({"tool.py": "VERSION = 1\nMARK = 1\n", "attempt.flag": "x\n"}), monkeypatch)
+    _emit(run, render({"tool.py": "VERSION = 1\nMARK = 1\n"}), monkeypatch)
+    limits: list[float] = []
+    _base_runs(monkeypatch, SandboxResult(ok=False, returncode=124, timed_out=True, timeout_s=10,
+                                          elapsed_s=10.0, stderr="timed out after 10s"), limits)
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0, err
     assert "self-check fix-up 1 of 2" in out
@@ -319,6 +394,7 @@ def test_a_base_that_runs_out_of_time_lets_nothing_be_inherited(tmp_path, monkey
     assert record["failing_ids"] == [ENV_FAILURE] and record["inherited_filtered"] == []
     assert record["base"].startswith("unavailable, so nothing is inherited: the base run of 1 test(s) "
                                      "was stopped at its 10 s limit")
+    assert limits == [10.0]
 
 
 # ── the cut, and what does not count ──────────────────────────────────────────
@@ -327,7 +403,8 @@ def test_a_base_that_runs_out_of_time_lets_nothing_be_inherited(tmp_path, monkey
 def test_the_cut_keeps_a_finished_chunks_failure(tmp_path, monkeypatch):
     """A selection larger than the limit: the first chunk fails fast, the second is
     still running at the limit. The second is stopped and the rest never starts, and the
-    first chunk's failure still goes back as a fix-up."""
+    first chunk's failure still goes back as a fix-up. The chunks are `_Chunks`' answers."""
+    _Chunks(monkeypatch, fails={"tests/test_a.py::test_a"}, slow={"tests/test_b.py"})
     repo = _target(tmp_path / "repo", {
         "tool.py": "VERSION = 1\n",
         "tests/test_a.py": "import tool\n\n\ndef test_a():\n    assert tool.VERSION == 1\n",
@@ -390,18 +467,25 @@ def test_a_chunk_holds_at_most_four_tests():
 
 def test_a_self_check_that_says_nothing_goes_on_with_no_fixup(tmp_path, monkeypatch):
     """Its only chunk runs past the limit: inconclusive, so the attempt goes on to the
-    reviews and the whole check, with nothing spent and nothing sent back."""
+    reviews and the whole check, with nothing spent and nothing sent back.
+
+    The file's one real limit: the sandbox stops a real pytest chunk at 3 s, the shortest
+    limit the knobs allow (a third of check_timeout_s at its floor of 10). The other tests
+    of the limit take `_Chunks`' answers."""
     repo = _target(tmp_path / "repo", {
         "tool.py": "VERSION = 1\n",
         "tests/test_slow.py": "import time\nimport tool\n\n\ndef test_slow():\n    time.sleep(60)\n",
     })
-    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500004", self_check_timeout_s=10)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500004", self_check_timeout_s=10,
+                     check_timeout_s=10)
     _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
     code, out, err = _prepare(run, monkeypatch)
     assert code == 0 and out.strip() == "proceed", err
     [record] = _records(run)
     assert record["outcome"] == "inconclusive" and record["ran"] == []
     assert record["cut"] == ["tests/test_slow.py"]
+    # Stopped at the self-check's limit, not at the check's 10 s.
+    assert record["limit_s"] == 3 and record["duration_s"] < 2 * record["limit_s"]
     assert (run / CHECK_PREP).exists()
     facts = _facts(run)
     assert not facts.get("self_check_fixup_count") and not facts.get("attempts_used")
@@ -427,7 +511,9 @@ def test_on_the_spine_the_fixups_carry_across_processes_and_the_bound_spends_the
         tmp_path, monkeypatch):
     """materialise and prepare_check as separate processes sharing facts.json: each
     failing self-check reloops to emit spending nothing, the count survives each process,
-    each fix-up is amended into the attempt, and at the bound the attempt is spent."""
+    each fix-up is amended into the attempt, and at the bound the attempt is spent. The
+    pinned test's failure is `_Chunks`' answer."""
+    _Chunks(monkeypatch, fails={PIN})
     repo = _target(tmp_path / "repo", PINNED)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500006", check_attempts=2)
     for number in (1, 2):
@@ -461,6 +547,7 @@ def test_on_the_spine_the_fixups_carry_across_processes_and_the_bound_spends_the
 
 def test_the_run_cap_on_fixups_ends_them_for_the_run(tmp_path, monkeypatch):
     """Fix-ups are bounded per run too: self_check_fixups x check_attempts."""
+    _Chunks(monkeypatch, fails={PIN})
     repo = _target(tmp_path / "repo", PINNED)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500007", check_attempts=3)
     _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
@@ -570,9 +657,12 @@ GENERATED = {
 }
 
 
-def test_a_fixup_that_undoes_the_whole_attempt_is_refused_not_a_crash(tmp_path):
+def test_a_fixup_that_undoes_the_whole_attempt_is_refused_not_a_crash(tmp_path, monkeypatch):
     """The builder answers the pinned test by reverting its change: the amend would empty
-    the attempt, which git refuses. It is a refused emission instead, and the run goes on."""
+    the attempt, which git refuses. It is a refused emission instead, and the run goes on.
+    The self-checks are `_Chunks`' answers: the first applied emission fails the pinned
+    test, the second passes."""
+    _Chunks(monkeypatch, emissions=[{PIN}, set()])
     repo = _target(tmp_path / "repo", PINNED)
     model = FakeModel(_answers(BREAKS, UNDOES, PIN_FIXED))
     run = tmp_path / "run"
@@ -585,22 +675,62 @@ def test_a_fixup_that_undoes_the_whole_attempt_is_refused_not_a_crash(tmp_path):
     assert git(Path(worktree.recorded(run).path), "show", "HEAD:tool.py") == "VERSION = 2"
 
 
-def test_a_fixup_that_generate_turns_into_no_change_is_kept_not_a_crash(tmp_path):
+def test_an_empty_diff_attempt_is_sent_back_as_a_fixup(tmp_path, monkeypatch):
     """The fix-up reverts the source but not the file generate wrote from it; generate then
-    writes that file back too, so its amend would empty the attempt. It is kept, as an
-    attempt that changes nothing, and goes on to its check and reviews."""
+    writes that file back too, so the attempt's tree equals its parent's.  It is detected
+    as an empty-diff and sent back as a fix-up, not forwarded to the reviews. The
+    self-checks are `_Chunks`' answers: the first emission fails the pinned test, the last
+    passes (the emptied one runs none)."""
+    _Chunks(monkeypatch, emissions=[{PIN}, set()])
     repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
-    model = FakeModel(_answers(BREAKS, UNDOES))
+    # Three emissions: BREAKS triggers self-check fixup, UNDOES is the fix-up that
+    # generate empties, FIXES_BOTH actually fixes both tool.py and the test.
+    fixes_both = render({"tool.py": "VERSION = 2\n",
+                         "tests/test_pin.py": "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 2\n"})
+    model = FakeModel(_answers(BREAKS, UNDOES, fixes_both))
     run = tmp_path / "run"
-    result = _design(run, model, repo, generate="python gen.py")
+    result = _design(run, model, repo, _mode(self_check_fixups=3), generate="python gen.py")
     assert result.exit_ok, result.error
-    assert [entry["outcome"] for entry in _records(run)] == ["fixup", "pass"]
+    outcomes = [entry["outcome"] for entry in _records(run)]
+    assert outcomes == ["fixup", "empty_diff_fixup", "pass"]
+    # The empty-diff fix-up routed back to emit (a third emission prompt exists).
+    emits = [prompt for prompt in model.prompts if EMIT in prompt]
+    assert len(emits) == 3 and "generate put back everything" in emits[2]
+    # Fix-up count incremented.
     found = worktree.recorded(run)
     assert _commits(run) == [f"{NAME}: attempt 1"]
-    assert git(Path(found.path), "diff", "--stat", found.base, "HEAD") == ""
+
+
+def test_an_empty_diff_on_second_attempt_is_detected(tmp_path, monkeypatch):
+    """An emptied second attempt (parent = attempt 1) is also detected as an empty-diff
+    fix-up, verifying the parent-tree comparison (<head>^{tree} vs <head>~1^{tree}). The
+    self-checks are `_Chunks`' answers: attempt 1 passes, the break fails the pinned test,
+    and the emptied fix-up would pass, were it run."""
+    _Chunks(monkeypatch, emissions=[set(), {PIN}, set()])
+    repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500050")
+    facts = _facts(run)
+    (run / "facts.json").write_text(json.dumps({**facts, "generate": "python gen.py"}))
+    # First attempt: a clean emission that passes (adds NAME to tool.py).
+    attempt1_tool = "VERSION = 1\nNAME = 'tool'\n"
+    _emit(run, render({"tool.py": attempt1_tool}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and out.strip() == "proceed", err
+    # Second attempt: emit breaks, self-check sends it back.
+    _emit(run, BREAKS, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    # Fix-up: revert to attempt 1's tool.py, which generate then empties too.
+    _emit(run, render({"tool.py": attempt1_tool}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and out.strip().endswith("reloop"), err
+    assert "generate put back everything" in out
+    records = _records(run)
+    assert records[-1]["outcome"] == "empty_diff_fixup"
 
 
 def test_on_the_spine_a_fixup_that_undoes_the_attempt_is_a_counted_refusal(tmp_path, monkeypatch):
+    _Chunks(monkeypatch, fails={PIN})
     repo = _target(tmp_path / "repo", PINNED)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500012")
     _emit(run, BREAKS, monkeypatch)
@@ -637,7 +767,9 @@ def test_a_module_that_does_not_import_goes_back_with_the_chunks_other_failures(
 
 def test_a_slow_file_at_the_cut_does_not_hide_cheap_failures_after_it(tmp_path, monkeypatch):
     """The rest of the selection runs cheapest first, so the slow (big) file is the one the
-    limit cuts, and the cheap failing file behind it in name order still reports."""
+    limit cuts, and the cheap failing file behind it in name order still reports. The chunks
+    are `_Chunks`' answers."""
+    _Chunks(monkeypatch, fails={"tests/test_e_fails.py::test_e"}, slow={"tests/test_a_slow.py"})
     slow = "import time\nimport m1\n" + "# padding\n" * 400 + "\n\ndef test_a():\n    time.sleep(60)\n"
     files = {"tests/test_a_slow.py": slow,
              **{f"tests/test_{c}.py": f"import m{n}\n\n\ndef test_{c}():\n    assert m{n}\n"
@@ -655,6 +787,7 @@ def test_a_slow_file_at_the_cut_does_not_hide_cheap_failures_after_it(tmp_path, 
 
 
 def test_a_fixup_runs_the_last_self_checks_failures_first(tmp_path, monkeypatch):
+    _Chunks(monkeypatch, fails={PIN})
     repo = _target(tmp_path / "repo", PINNED)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500015")
     _emit(run, BREAKS, monkeypatch)
@@ -666,8 +799,293 @@ def test_a_fixup_runs_the_last_self_checks_failures_first(tmp_path, monkeypatch)
     assert second["selection"][0] == PIN and second["how_selected"]["first"] == [PIN]
 
 
+def test_empty_diff_fixup_exhausts_the_budget(tmp_path, monkeypatch):
+    """When the fix-up budget is already spent, an empty-diff attempt is exhausted. The
+    self-checks are `_Chunks`' answers: the pinned test fails on the first emission and
+    would pass on the emptied one, were it run."""
+    _Chunks(monkeypatch, emissions=[{PIN}, set()])
+    repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500051", self_check_fixups=1)
+    facts = _facts(run)
+    (run / "facts.json").write_text(json.dumps({**facts, "generate": "python gen.py"}))
+    # First emission breaks the pin.
+    _emit(run, BREAKS, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 1" in out, err
+    # Fix-up: UNDOES, which generate empties. Budget is 1, already used 1.
+    _emit(run, UNDOES, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0, err
+    records = _records(run)
+    assert records[-1]["outcome"] == "exhausted"
+    assert _facts(run)["attempts_used"] == 1
+
+
+def test_a_timed_out_chunk_records_its_elapsed_time_as_a_lower_bound(tmp_path, monkeypatch):
+    """A chunk stopped at the time limit records a timing entry with timed_out: True,
+    its files appear in cut_ids, and the entry has counted: True. The chunks are
+    `_Chunks`' answers, so the stopped chunk took the 10 s it was given on their clock."""
+    _Chunks(monkeypatch, slow={"tests/test_b.py"})
+    repo = _target(tmp_path / "repo", {
+        "tool.py": "VERSION = 1\n",
+        "tests/test_a.py": "import tool\n\n\ndef test_a():\n    assert tool\n",
+        "tests/test_b.py": "import time\nimport tool\n\n\ndef test_b():\n    time.sleep(60)\n",
+    })
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500052", self_check_timeout_s=10)
+    _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and out.strip() == "proceed", err
+    [record] = _records(run)
+    assert record["outcome"] == "inconclusive"
+    # Find the timed_out timing entry.
+    timed_out_entries = [t for t in record["timings"] if t.get("timed_out")]
+    assert len(timed_out_entries) >= 1
+    entry = timed_out_entries[0]
+    assert entry["s"] > 0 and entry["counted"] is True
+    # The chunk's files are in cut.
+    for test in entry["tests"]:
+        assert test in record["cut"]
+
+
+def test_costs_from_record_does_not_split_by_size_and_handles_timed_out(tmp_path):
+    """costs_from_record uses per-file durations when available, and a non-timed_out
+    entry always wins over a timed_out entry."""
+    repo = _target(tmp_path / "repo", {
+        "tests/test_big.py": "# padding\n" * 500 + "\ndef test_big():\n    pass\n",
+        "tests/test_small.py": "\ndef test_small():\n    pass\n",
+    })
+    # (a) Two-file counted chunk with per-test durations: each gets its own time.
+    entries_a = [{"timings": [{"tests": ["tests/test_big.py", "tests/test_small.py"],
+                                "s": 10.0, "counted": True,
+                                "durations": [
+                                    {"test_id": "tests/test_big.py::test_big", "seconds": 8.0},
+                                    {"test_id": "tests/test_small.py::test_small", "seconds": 2.0},
+                                ]}]}]
+    costs_a = test_selection.costs_from_record(entries_a, repo)
+    assert costs_a["tests/test_big.py"] == 8.0
+    assert costs_a["tests/test_small.py"] == 2.0
+
+    # (b) A timed_out chunk at 120 s: its files get 120.0 when no other entry exists.
+    entries_b = [{"timings": [{"tests": ["tests/test_big.py"], "s": 120.0,
+                                "counted": True, "timed_out": True}]}]
+    costs_b = test_selection.costs_from_record(entries_b, repo)
+    assert costs_b["tests/test_big.py"] == 120.0
+
+    # (c) A timed_out entry at 120 s followed by a non-timed_out entry at 5.0 with
+    # durations: the non-timed_out wins (stays 5.0).
+    entries_c = [{"timings": [{"tests": ["tests/test_big.py"], "s": 120.0,
+                                "counted": True, "timed_out": True},
+                               {"tests": ["tests/test_big.py"], "s": 5.0,
+                                "counted": True,
+                                "durations": [
+                                    {"test_id": "tests/test_big.py::test_big", "seconds": 5.0},
+                                ]}]}]
+    costs_c = test_selection.costs_from_record(entries_c, repo)
+    assert costs_c["tests/test_big.py"] == 5.0
+
+
+def test_a_missing_test_id_is_dropped_and_the_rest_of_the_chunk_runs(tmp_path, monkeypatch):
+    """pytest exits 4 on an id that is not there and runs nothing else in the command. The
+    chunk's missing id is dropped and the rest of the chunk runs again: the rerun's failure
+    is reported, its tests count as run, and a note says so. pytest names the missing id
+    from the path's ``tests/…`` and without its ``[…]``, so the chunk's
+    ``refactory/tests/…::test_gone[2.5]`` is matched by path suffix and bracket prefix."""
+    repo = _target(tmp_path / "repo", {
+        "tool.py": "VERSION = 1\n",
+        "refactory/__init__.py": "",
+        "refactory/tests/__init__.py": "",
+        "refactory/tests/test_other.py": "def test_here():\n    pass\n",
+        "refactory/tests/test_real.py": "import tool\n\n\ndef test_real():\n    assert tool.VERSION == 1\n",
+        **{f"refactory/tests/test_f{n}.py": f"def test_f{n}():\n    pass\n" for n in range(5)},
+    })
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500053")
+    _emit(run, render({"tool.py": "VERSION = 2\n"}), monkeypatch)
+    gone, real = "refactory/tests/test_other.py::test_gone[2.5]", "refactory/tests/test_real.py"
+    others = [f"refactory/tests/test_f{n}.py" for n in range(5)]
+    real_select = test_selection.select
+
+    def seven_tests(*args, **kwargs):
+        selection = real_select(*args, **kwargs)
+        selection.tests = [gone, real, *others]
+        return selection
+
+    monkeypatch.setattr(test_selection, "select", seven_tests)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0, err
+    [record] = _records(run)
+    # Seven tests make chunks of two: the missing id and test_real.py share the first, which
+    # runs again without the id.
+    assert record["commands"][:2] == [f"python -m pytest -q {real} {shlex.quote(gone)}",
+                                      f"python -m pytest -q {real}"]
+    assert record["failing_ids"] == [f"{real}::test_real"]
+    assert real in record["ran"] and gone not in record["ran"] and set(others) <= set(record["ran"])
+    assert [note for note in record["notes"] if "not-found" in note] == [
+        "chunk 1: dropped not-found ids ['tests/test_other.py::test_gone'], reran the rest"]
+
+
+def test_fixup_first_ids_do_not_duplicate_with_engine_or_touched_tier(tmp_path):
+    """BUG-3: A parametrized first-id does not block its file from running whole later;
+    a whole-file first-id deduplicates against the touched tier."""
+    repo = _target(tmp_path / "repo", {
+        "m.py": "X = 1\n",
+        "tests/test_a.py": "import m\n\n\ndef test_x():\n    pass\n\ndef test_y():\n    pass\n",
+    })
+    files = test_selection.repository_files(repo)
+
+    # Case (a): first=["tests/test_a.py::test_x"] with test_a.py touched.
+    sel_a = test_selection.select(["m.py", "tests/test_a.py"], repo, {},
+                                  check_command=CHECK, files=files,
+                                  first=["tests/test_a.py::test_x"])
+    # test_x runs first AND test_a.py still runs whole later.
+    assert sel_a.tests[0] == "tests/test_a.py::test_x"
+    assert "tests/test_a.py" in sel_a.tests
+    # Both present: the parametrized id does not block the whole file.
+    assert sel_a.tests.count("tests/test_a.py::test_x") == 1
+    assert sel_a.tests.count("tests/test_a.py") == 1
+
+    # Case (b): first=["tests/test_a.py"] with test_a.py touched.
+    sel_b = test_selection.select(["m.py", "tests/test_a.py"], repo, {},
+                                  check_command=CHECK, files=files,
+                                  first=["tests/test_a.py"])
+    # test_a.py appears exactly once (deduped).
+    assert sel_b.tests.count("tests/test_a.py") == 1
+
+
+def test_N10_timings_from_earlier_self_checks_flow_to_selection_ordering(tmp_path, monkeypatch):
+    """The second self-check's selection orders files by their measured time, not by size.
+    Kills mutant N10 (costs=test_selection.costs_from_record -> costs={}).
+
+    Deterministic: after the first self-check, synthetic timings with durations are
+    injected into the record, so the ordering does not depend on real elapsed time. The
+    chunks are `_Chunks`' answers."""
+    _Chunks(monkeypatch)
+    # big_fast: large file (lots of padding) that runs instantly
+    big_fast = "import m1\n" + "# pad\n" * 200 + "\ndef test_fast():\n    pass\n"
+    # small_slow: tiny file that runs instantly too (no real sleep)
+    small_slow = "import m2\n\ndef test_slow():\n    pass\n"
+    repo = _target(tmp_path / "repo", {
+        "m1.py": "X = 1\n", "m2.py": "X = 1\n",
+        "tests/test_fast.py": big_fast,
+        "tests/test_slow.py": small_slow,
+    })
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500054")
+    # First emission: both tests run and are timed.
+    _emit(run, render({"m1.py": "X = 2\n", "m2.py": "X = 2\n"}), monkeypatch)
+    _prepare(run, monkeypatch)
+    first_record = _records(run)[0]
+    assert first_record["timings"]
+    # Inject synthetic durations into the record: test_fast.py = 0.1 s, test_slow.py = 10.0 s
+    record_path = run / SELF_CHECK_RECORD
+    modified = dict(first_record)
+    modified["timings"] = [
+        {"tests": ["tests/test_fast.py", "tests/test_slow.py"],
+         "s": 10.1, "counted": True,
+         "durations": [
+             {"test_id": "tests/test_fast.py::test_fast", "seconds": 0.1},
+             {"test_id": "tests/test_slow.py::test_slow", "seconds": 10.0},
+         ]}
+    ]
+    record_path.write_text(json.dumps(modified) + "\n")
+    # Second emission: the selection should use the synthetic timings.
+    _emit(run, render({"m1.py": "X = 3\n", "m2.py": "X = 3\n"}), monkeypatch)
+    _prepare(run, monkeypatch)
+    second_record = _records(run)[-1]
+    importers = [t for t in second_record["selection"]
+                 if t in ("tests/test_fast.py", "tests/test_slow.py")]
+    assert len(importers) == 2, f"expected both files in selection, got {importers}"
+    assert importers == ["tests/test_fast.py", "tests/test_slow.py"], \
+        f"expected timing-based order [fast, slow], got {importers}"
+
+
+def test_N12_base_prepared_flag_after_base_worktree_removed_triggers_repreparation(
+        tmp_path, monkeypatch):
+    """When the base worktree directory is removed after preparation, the base is
+    re-prepared on the next comparison.  Kills mutant N12: dropping ``_at(...)`` at
+    base_check.py skips re-preparation, runs the test in an empty directory, and the
+    base is unavailable, so the base's own failure would go back as the change's.
+
+    The second emission introduces a new module and test so ``missing`` is non-empty:
+    the ``if missing:`` block at base_check.py is entered and ``_at`` is checked. The
+    chunks are `_Chunks`' answers; the base runs are real."""
+    from refactory_dsh import base_check
+
+    chunks = _Chunks(monkeypatch, fails={PIN, ENV_FAILURE})
+    repo = _target(tmp_path / "repo", {
+        **PINNED, "tests/test_env.py": ALWAYS_FAILS,
+        "extra.py": "E = 1\n",
+        "tests/test_extra.py": "import extra\n\n\ndef test_extra():\n    assert extra.E\n",
+    })
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500055")
+    # First emission: only changes tool.py; test_extra.py is not selected.
+    _emit(run, BREAKS, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 2" in out, err
+    # Remove the base worktree, as the check's base run does after a crash; the targeted
+    # cache still says the base was prepared.
+    found = worktree.recorded(run)
+    run_id = Path(found.path).name.removeprefix("run-")
+    base_path = base_check._base_worktree_path(Path(found.target), run_id)
+    assert base_check._at(base_path, found.base)
+    base_check.remove_base_worktree(Path(found.target), run_id)
+    assert not base_path.exists()
+    # Second emission: changes both tool.py and extra.py, bringing test_extra into
+    # the selection; its test id has not been learned on the base, so ``missing`` is
+    # non-empty and the ``if missing:`` block is entered.
+    chunks.fails.add("tests/test_extra.py::test_extra")
+    _emit(run, render({"tool.py": "VERSION = 2\nMARK = 1\n", "extra.py": "E = 0\n"}),
+          monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0, err
+    records = _records(run)
+    assert len(records) == 2
+    # The base was prepared again at its commit, the new test ran there, and the base's
+    # failure is recognised as inherited, not sent back.
+    assert base_check._at(base_path, found.base)
+    assert records[1]["base"] == "compared with a run of 1 test(s) on the base"
+    assert records[1]["inherited_filtered"] == ["tests/test_env.py::test_env"]
+    assert records[1]["outcome"] == "fixup"
+    assert "tests/test_extra.py::test_extra" in records[1]["failing_ids"]
+
+
+def test_N17_collection_error_file_ids_in_base_guardedness_classification(tmp_path, monkeypatch):
+    """A new test file that imports a module only the attempt introduces is classified
+    as cannot_run_on_base by compute_test_guardedness via _parse_collection_errors.
+    Driven through the whole check, as a node visit (check_artifact → _full_check →
+    compute_test_guardedness → _parse_collection_errors).
+    Kills mutant N17: replacing _parse_collection_errors with lambda _: (set(), False)
+    changes the classification from cannot_run_on_base to fail."""
+    repo = _target(tmp_path / "repo", {
+        "tool.py": "VERSION = 1\n",
+        "tests/test_pin.py": "import tool\n\n\ndef test_pin():\n    assert tool.VERSION == 1\n",
+    })
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500056")
+    # Emit code that introduces a new module and a test that imports it.
+    # The test passes on the attempt (module exists) but cannot be collected
+    # on the base (module does not exist → ModuleNotFoundError).
+    _emit(run, render({
+        "new_module.py": "FEATURE = True\n",
+        "tests/test_new_module.py": (
+            "import new_module\n\n"
+            "def test_feature():\n"
+            "    assert new_module.FEATURE\n"
+        ),
+    }), monkeypatch)
+    code, _, err = _node(run, f"{design_ops.__name__}:check_artifact", "check", "op", monkeypatch)
+    assert code == 0, err
+    guardedness = json.loads((run / "test-guardedness.json").read_text())
+    # The new test file should be classified as cannot_run_on_base because
+    # new_module does not exist on the base → collection error on import.
+    found_results = [r for r in guardedness.get("results", [])
+                     if r["file"] == "tests/test_new_module.py"]
+    assert found_results, (
+        f"tests/test_new_module.py not in guardedness results: {guardedness}")
+    assert found_results[0].get("file_level") == "cannot_run_on_base", (
+        f"expected cannot_run_on_base, got {found_results[0]}")
+
+
 def test_timed_costs_order_the_rest(tmp_path):
-    """A file an earlier self-check timed costs what it took; untimed files cost their size."""
+    """A file an earlier self-check timed costs what it took; untimed files cost their size;
+    a chunk that did not count times nothing."""
     repo = _target(tmp_path / "repo", {
         "m1.py": "X = 1\n", "m2.py": "X = 1\n",
         "tests/test_big_fast.py": "import m1\n" + "# padding\n" * 300 + "\n\ndef test_a():\n    pass\n",
@@ -676,8 +1094,10 @@ def test_timed_costs_order_the_rest(tmp_path):
     files = test_selection.repository_files(repo)
     by_size = test_selection.select(["m1.py", "m2.py"], repo, {}, check_command=CHECK, files=files)
     assert by_size.tests == ["tests/test_small_slow.py", "tests/test_big_fast.py"]
-    earlier = [{"timings": [{"tests": ["tests/test_small_slow.py"], "s": 30.0, "counted": True},
-                            {"tests": ["tests/test_big_fast.py::test_a"], "s": 0.5, "counted": True},
+    earlier = [{"timings": [{"tests": ["tests/test_small_slow.py"], "s": 30.0, "counted": True,
+                             "durations": [{"test_id": "tests/test_small_slow.py::test_b",
+                                            "seconds": 30.0}]},
+                            {"tests": ["tests/test_big_fast.py"], "s": 0.5, "counted": True},
                             {"tests": ["tests/test_big_fast.py"], "s": 99.0, "counted": False}]}]
     costs = test_selection.costs_from_record(earlier, repo)
     assert costs == {"tests/test_small_slow.py": 30.0, "tests/test_big_fast.py": 0.5}
@@ -686,12 +1106,31 @@ def test_timed_costs_order_the_rest(tmp_path):
     assert timed.tests == ["tests/test_big_fast.py", "tests/test_small_slow.py"]
 
 
-def test_the_full_check_still_runs_and_binds_after_a_self_check_cut_at_the_limit(tmp_path):
+def test_a_chunk_that_ran_only_some_ids_of_a_file_is_a_lower_bound_for_it(tmp_path):
+    """A not-found rerun or a check of several steps writes no per-test seconds: a chunk of
+    one file that ran only some of its tests by id says how long those took, not the file,
+    so it is a lower bound, as it is with per-test seconds."""
+    some = {"tests": ["tests/test_b.py::test_x"], "s": 0.4, "counted": True}
+    stopped = {"tests": ["tests/test_b.py"], "s": 50.0, "counted": True, "timed_out": True}
+    timed = {"tests": ["tests/test_b.py::test_x"], "s": 0.4, "counted": True,
+             "durations": [{"test_id": "tests/test_b.py::test_x", "seconds": 0.3}]}
+    for chunk in (some, timed):
+        assert test_selection.lower_bounds([{"timings": [chunk]}]) == ["tests/test_b.py"]
+        # A later, higher bound raises it; a finished time would not be.
+        assert test_selection.costs_from_record([{"timings": [chunk, stopped]}], tmp_path) == {
+            "tests/test_b.py": 50.0}
+
+
+def test_the_full_check_still_runs_and_binds_after_a_self_check_cut_at_the_limit(
+        tmp_path, monkeypatch):
     """The self-check's limit stops it before the failing test: it says nothing, and the
-    whole check beside the reviews still finds the failure and sends the attempt back."""
+    whole check beside the reviews still finds the failure and sends the attempt back.
+    test_a_slow.py is slow only to the self-check, whose chunks are `_Chunks`' answers:
+    the whole check runs it, for real, at once."""
+    _Chunks(monkeypatch, slow={"tests/test_a_slow.py"})
     repo = _target(tmp_path / "repo", {
         "tool.py": "VERSION = 1\n",
-        "tests/test_a_slow.py": "import time\nimport tool\n\n\ndef test_a():\n    time.sleep(15)\n",
+        "tests/test_a_slow.py": "import tool\n\n\ndef test_a():\n    assert tool\n",
         "tests/test_z_pin.py": "import tool\n\n\ndef test_z():\n    assert tool.VERSION == 1\n",
     })
     fixed = render({"tests/test_z_pin.py": "import tool\n\n\ndef test_z():\n    assert tool.VERSION == 2\n"})
@@ -707,8 +1146,9 @@ def test_the_full_check_still_runs_and_binds_after_a_self_check_cut_at_the_limit
     assert _count(model, HEALTH) == 2
 
 
-def _base_runs(monkeypatch, result=None):
-    """Count the base runs the self-check makes, and answer them with ``result`` if given."""
+def _base_runs(monkeypatch, result=None, limits=None):
+    """Count the base runs the self-check makes, and answer them with ``result`` if given.
+    ``limits``, if given, collects the time limit each base run is given."""
     from refactory_dsh import base_check
 
     runs = []
@@ -717,6 +1157,8 @@ def _base_runs(monkeypatch, result=None):
     def run_command(command, *, workdir, **kw):
         if Path(workdir).name.startswith(base_check.BASE_WORKTREE_PREFIX):
             runs.append((command, kw.get("home")))
+            if limits is not None:
+                limits.append(kw.get("timeout_s"))
             if result is not None:
                 return result
         return real(command, workdir=workdir, **kw)
@@ -729,6 +1171,7 @@ def test_a_base_run_that_names_no_failure_is_unavailable(tmp_path, monkeypatch):
     from refactory_dsh import base_check
     from refactory_dsh.sandbox import SandboxResult
 
+    _Chunks(monkeypatch, fails={ENV_FAILURE})
     repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500016")
     _emit(run, render({"tool.py": "VERSION = 1\nMARK = 1\n"}), monkeypatch)
@@ -762,6 +1205,7 @@ def test_a_parametrized_failure_the_parser_cuts_is_still_compared_with_the_base(
 
 
 def test_a_base_whose_generate_fails_is_unavailable(tmp_path, monkeypatch):
+    _Chunks(monkeypatch, fails={ENV_FAILURE})
     repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500017")
     facts = _facts(run)
@@ -778,6 +1222,7 @@ def test_a_base_whose_generate_fails_is_unavailable(tmp_path, monkeypatch):
 def test_a_preparation_failure_during_a_fixup_ends_the_fixups(tmp_path, monkeypatch):
     """A fix-up whose emission breaks the generate step is judged by the whole check, which
     spends the attempt: the next emission is a new attempt, not an amendment."""
+    _Chunks(monkeypatch, fails={PIN})
     repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500018")
     facts = _facts(run)
@@ -794,6 +1239,7 @@ def test_a_preparation_failure_during_a_fixup_ends_the_fixups(tmp_path, monkeypa
 
 
 def test_the_exhausted_early_stop_keeps_the_bases_failures_out(tmp_path, monkeypatch):
+    _Chunks(monkeypatch, fails={PIN, ENV_FAILURE})
     repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS})
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500019", self_check_fixups=0)
     _emit(run, BREAKS, monkeypatch)
@@ -808,6 +1254,7 @@ def test_the_exhausted_early_stop_keeps_the_bases_failures_out(tmp_path, monkeyp
 def test_what_was_learned_on_another_base_is_not_reused(tmp_path, monkeypatch):
     from refactory_dsh import base_check
 
+    _Chunks(monkeypatch, fails={PIN})
     repo = _target(tmp_path / "repo", PINNED)
     run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500020")
     _emit(run, BREAKS, monkeypatch)
@@ -839,9 +1286,11 @@ def test_the_base_runs_with_its_own_home(tmp_path, monkeypatch):
 
 def test_the_base_is_prepared_once_for_its_key(tmp_path, monkeypatch):
     """A fix-up whose self-check needs the base again runs the new tests there without
-    preparing the base a second time."""
+    preparing the base a second time. The chunks are `_Chunks`' answers; the base runs are
+    real."""
     from refactory_dsh import base_check
 
+    chunks = _Chunks(monkeypatch, fails={PIN, ENV_FAILURE})
     other = "import tool\n\n\ndef test_other():\n    assert not hasattr(tool, 'BROKEN')\n"
     repo = _target(tmp_path / "repo", {**PINNED, "tests/test_env.py": ALWAYS_FAILS,
                                        "tests/test_other.py": other})
@@ -853,6 +1302,7 @@ def test_the_base_is_prepared_once_for_its_key(tmp_path, monkeypatch):
     runs = _base_runs(monkeypatch)
     _emit(run, BREAKS, monkeypatch)
     assert "self-check fix-up 1 of 2" in _prepare(run, monkeypatch)[1]
+    chunks.fails.add("tests/test_other.py::test_other")
     _emit(run, render({"tool.py": "VERSION = 2\nBROKEN = 1\n"}), monkeypatch)
     assert "self-check fix-up 2 of 2" in _prepare(run, monkeypatch)[1]
     first, second = _records(run)
@@ -890,9 +1340,13 @@ def test_prepare_checks_limit_follows_the_knobs_to_their_bounds():
     assert capped.graph().nodes["prepare_check"].max_iterations == (20 + 25 + 1) * 2 + 25 + 20 + 1
 
 
-def test_the_worst_case_at_the_knobs_bounds_still_ends_in_the_stop(tmp_path):
+def test_the_worst_case_at_the_knobs_bounds_still_ends_in_the_stop(tmp_path, monkeypatch):
     """Five attempts of five fix-ups each, two refusals before every applied emission: 89
-    reloops of prepare_check, under its limit of 102 and twice the old fixed 45."""
+    reloops of prepare_check, under its limit of 102 and twice the old fixed 45. The pinned
+    test's failure is `_Chunks`' answer, and the target is not watched (`_unwatched`): the
+    loop is what is under test."""
+    _Chunks(monkeypatch, fails={PIN})
+    _unwatched(monkeypatch)
     repo = _target(tmp_path / "repo", PINNED)
     refused = "===EDIT: tool.py===\n<<<<<<< SEARCH\nnot in the file\n=======\nx\n>>>>>>> REPLACE\n"
     emits = [emission for n in range(30) for emission in (refused, refused,
@@ -1081,6 +1535,573 @@ def test_whole_test_files_go_to_their_own_runner_only():
     # Ids alone build what they always did.
     assert build_probe_command(REPOSITORY_CHECK, [f"{spec} > suite > case"], root=REPO_ROOT) == (
         f"pnpm test {spec} -t case", None)
+
+
+def test_replay_measure5_structural_cuts_no_more_than_main(tmp_path, monkeypatch):
+    """measure5-structural's self-checks 1-3 (dm-247), replayed through this branch's own
+    selection, chunking and record: main cut 3, 2 and 4 files there; here self-check 2
+    cuts at most 2 and self-check 3 at most 4.
+
+    The fixture holds the run's records and what `test_selection.select` reads of the tree
+    at each commit: select runs on a stand-in tree (each test file at its size) with the
+    fixture's imports, and its tiers must be the run's. Each chunk takes a + b times its
+    tests' junit seconds, fitted on self-check 1's recorded chunks, on `_Clocked`'s clock.
+    Self-check 1 has no earlier timing, so it must come out as the run had it: the same
+    selection, cut at the same chunk."""
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "measure5_replay.json").read_text())
+    records, check = fixture["records"], fixture["check"]
+    seconds = {**fixture["file_durations"], **fixture["id_durations"]}
+    # What select reads of a test file's imports: its hubs and changed modules, and how
+    # many it imports in all (the others stand in as modules no other file imports).
+    imports = {test: {*modules, *(f"{test}#{n}" for n in range(count - len(modules)))}
+               for test, (count, modules) in fixture["imports"].items()}
+    xs = [sum(seconds[name] for name in chunk["tests"]) for chunk in records[0]["timings"]]
+    ys = [chunk["s"] for chunk in records[0]["timings"]]
+    mean_x, mean_y = sum(xs) / len(xs), sum(ys) / len(ys)
+    b = (sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+         / sum((x - mean_x) ** 2 for x in xs))
+    runner = _Clocked(seconds.__getitem__, monkeypatch, startup=mean_y - b * mean_x, scale=b)
+    earlier: list[dict] = []
+    selections, cuts = [], []
+    for number, record in enumerate(records):
+        root = tmp_path / f"tree{number}"
+        for test, size in {**fixture["sizes"], **record["sizes"]}.items():
+            (root / test).parent.mkdir(parents=True, exist_ok=True)
+            (root / test).write_text("#" * (size - 1) + "\n")
+        last = record["how_selected"]["last_failures"]
+        prev = ({"status": "fail", "runners": [{"failures": [{"test_id": test_id} for test_id in last]}]}
+                if last else {})
+        selection = test_selection.select(
+            record["touched"], root, prev, check_command=check, imports=imports,
+            first=record["how_selected"]["first"],
+            costs=test_selection.costs_from_record(earlier, root),
+            bounds=test_selection.lower_bounds(earlier), alone=test_selection.run_alone(earlier))
+        for tier in ("first", "engine", "hubs_changed", "touched_tests", "last_failures"):
+            assert getattr(selection, tier) == record["how_selected"][tier], tier
+        prepass = failfast.targeted_prepass(
+            prev, check, runner, 1800, root=str(root), selection=selection.tests,
+            self_check_timeout_s=fixture["limit_s"], alone=selection.alone)
+        earlier.append({"timings": prepass.timings})
+        selections.append(selection.tests)
+        cuts.append(prepass.cut_ids)
+    assert selections[0] == records[0]["selection"] and cuts[0] == records[0]["cut"]
+    assert len(cuts[1]) <= 2, cuts[1]
+    assert len(cuts[2]) <= 4, cuts[2]
+
+
+class _Clocked:
+    """A runner whose chunks take scripted seconds on a fake clock, as the sandbox runs them.
+
+    A chunk takes ``startup`` plus ``scale`` times its tests' seconds. One that needs longer
+    than it is given is stopped there and, its runner killed, writes no junit; one that
+    finishes writes ``scale`` times each test's seconds to the self-check's ``--junitxml``.
+    """
+
+    def __init__(self, seconds, monkeypatch, *, startup: float = 0.0, scale: float = 1.0):
+        self.seconds, self.startup, self.scale = seconds, startup, scale
+        self.now = 0.0
+        monkeypatch.setattr(failfast, "time", SimpleNamespace(monotonic=lambda: self.now))
+
+    def __call__(self, command: str, timeout: float):
+        from refactory_dsh.sandbox import SandboxResult
+
+        words = shlex.split(command)
+        names = [word for word in words if word.endswith(".py") or ".py::" in word]
+        junit = next((word.split("=", 1)[1] for word in words if word.startswith("--junitxml=")),
+                     None)
+        took = self.startup + self.scale * sum(self.seconds(name) for name in names)
+        if took > timeout:
+            self.now += timeout
+            return SandboxResult(ok=False, returncode=-9, timed_out=True, elapsed_s=timeout)
+        self.now += took
+        if junit:
+            Path(junit).write_text("<testsuite>" + "".join(
+                f'<testcase classname="{name.split("::")[0][:-3].replace("/", ".")}" '
+                f'name="{name.split("::")[1] if "::" in name else "test_all"}" '
+                f'time="{self.scale * self.seconds(name):.3f}"/>' for name in names) + "</testsuite>")
+        return SandboxResult(ok=True, returncode=0, stdout=f"{len(names)} passed", elapsed_s=took)
+
+
+def test_a_small_slow_file_stopped_beside_another_runs_alone_then_after_the_cheap_files(
+        tmp_path, monkeypatch):
+    """dm-247: a chunk stopped at the limit writes no junit, so a small but slow file stopped
+    beside another has no time of its own and would run first again, cutting everything
+    behind it. The stopped chunk's files run one per chunk on the next self-check, where the
+    slow file gets a lower bound of its own; the self-check after that runs it after the
+    cheap files, so it is the only file cut. It still runs alone there: it has only a bound.
+
+    test_a_slow.py takes 60 s against a 20 s limit; every other file takes 0.5 s."""
+    # Each test imports a module of its own, so no module is a hub; the change touches them all.
+    sizes = {"a_slow": 0, "t1": 300, "t2": 300, **{c: 10 * n for n, c in enumerate("bcdef", start=4)}}
+    files = {**{f"m_{name}.py": "X = 1\n" for name in sizes},
+             **{f"tests/test_{name}.py": f"import m_{name}\n{'#' * size}\n\n\ndef test_{name}():\n"
+                                         f"    assert m_{name}\n" for name, size in sizes.items()}}
+    repo = _target(tmp_path / "repo", files)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500070", self_check_timeout_s=20)
+    runner = _Clocked(lambda name: 60.0 if "test_a_slow" in name else 0.5, monkeypatch)
+    real = repo_change.run_check
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, command, timeout, **kwargs: (
+        runner(command, timeout) if "pytest" in command else real(ctx, command, timeout, **kwargs)))
+    asked = []
+    real_select = test_selection.select
+
+    def select(*args, **kwargs):
+        asked.append(kwargs)
+        return real_select(*args, **kwargs)
+
+    monkeypatch.setattr(test_selection, "select", select)
+    for n in (2, 3, 4):  # three attempts, each touching two cheap tests and changing every module
+        _emit(run, render({**{f"m_{name}.py": f"X = {n}\n" for name in sizes},
+                           **{f"tests/test_{t}.py": files[f"tests/test_{t}.py"] + f"# {n}\n"
+                              for t in ("t1", "t2")}}), monkeypatch)
+        code, out, err = _prepare(run, monkeypatch)
+        assert code == 0 and out.strip() == "proceed", err
+    first, second, third = _records(run)
+    slow, beside = "tests/test_a_slow.py", "tests/test_b.py"
+    cheap = [f"tests/test_{c}.py" for c in "cdef"]
+    # 1: the slow file is the smallest, so it runs first of the rest, beside test_b.py. Their
+    # chunk is stopped: no junit, so no time for either file.
+    assert first["selection"] == ["tests/test_t1.py", "tests/test_t2.py", slow, beside, *cheap]
+    assert [chunk["tests"] for chunk in first["timings"] if chunk.get("timed_out")] == [[slow, beside]]
+    assert first["cut"] == [slow, beside, *cheap]
+    assert test_selection.lower_bounds([first]) == []
+    # 2: the two run one per chunk. The slow one, still first, is stopped alone: a bound.
+    assert second["how_selected"]["alone"] == [slow, beside] and second["selection"] == first["selection"]
+    assert [chunk["tests"] for chunk in second["timings"] if chunk.get("timed_out")] == [[slow]]
+    assert test_selection.lower_bounds([first, second]) == [slow]
+    # 3: it runs after the cheap files, alone, and only it is cut.
+    assert third["selection"] == ["tests/test_t1.py", "tests/test_t2.py", beside, *cheap, slow]
+    assert third["how_selected"]["alone"] == [slow, beside]
+    assert third["cut"] == [slow] and third["ran"] == third["selection"][:-1]
+    # prepare_check hands select what the run's record says: its bounds and its lone files.
+    assert [(kwargs["bounds"], kwargs["alone"]) for kwargs in asked] == [
+        ([], []), ([], [slow, beside]), ([slow], [slow, beside])]
+
+
+def test_a_file_with_only_a_bound_runs_last_while_nothing_in_its_tier_has_finished(
+        tmp_path, monkeypatch):
+    """dm-247 when no file of the cheapest-first tier has finished: with no measured rate
+    the others cost their size in bytes, which a bound in seconds cannot be weighed
+    against, so the file that has only a bound runs after them instead of first.
+
+    Ten files, each importing a module of its own (no hub), none touched, a 10 s limit:
+    the smallest takes 60 s, the others 0.5 s. Self-check 1 stops it beside test_f1.py,
+    self-check 2 stops it alone (a 10 s bound), and self-check 3 cuts only it."""
+    names = ["a_slow", *(f"f{n}" for n in range(1, 10))]
+    files = {**{f"m_{name}.py": "X = 1\n" for name in names},
+             **{f"tests/test_{name}.py": f"import m_{name}\n{'#' * 20 * n}\n\n\ndef test_{name}():\n"
+                                         f"    assert m_{name}\n" for n, name in enumerate(names)}}
+    repo = _target(tmp_path / "repo", files)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500071", self_check_timeout_s=10)
+    runner = _Clocked(lambda name: 60.0 if "test_a_slow" in name else 0.5, monkeypatch)
+    real = repo_change.run_check
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, command, timeout, **kwargs: (
+        runner(command, timeout) if "pytest" in command else real(ctx, command, timeout, **kwargs)))
+    for n in (2, 3, 4):
+        _emit(run, render({f"m_{name}.py": f"X = {n}\n" for name in names}), monkeypatch)
+        code, out, err = _prepare(run, monkeypatch)
+        assert code == 0 and out.strip() == "proceed", err
+    first, second, third = _records(run)
+    slow, others = "tests/test_a_slow.py", [f"tests/test_{name}.py" for name in names[1:]]
+    assert first["selection"] == second["selection"] == [slow, *others]
+    assert first["cut"] == second["cut"] == [slow, *others]
+    assert test_selection.lower_bounds([first, second]) == [slow]
+    assert not test_selection.costs_from_record([first, second], tmp_path).keys() - {slow}
+    assert third["selection"] == [*others, slow] and third["cut"] == [slow]
+
+
+def test_run_alone_holds_a_stopped_chunks_files_until_a_chunk_finishes_each():
+    x, y, z = "tests/test_x.py", "tests/test_y.py", "tests/test_z.py"
+    stopped = {"timings": [{"tests": [x, y], "s": 9.0, "timed_out": True, "counted": True}]}
+    assert test_selection.run_alone([stopped]) == [x, y]
+    # A finished time frees y; x, stopped again alone, has only a bound and stays.
+    second = {"timings": [{"tests": [y], "s": 1.0, "counted": True},
+                          {"tests": [x], "s": 5.0, "timed_out": True, "counted": True}]}
+    assert test_selection.run_alone([stopped, second]) == [x]
+    # Some of x's tests by id are no time for x, and a chunk that did not count says nothing.
+    by_id = {"timings": [{"tests": [f"{x}::test_a"], "s": 0.5, "counted": True},
+                         {"tests": [x], "s": 0.5, "counted": False}]}
+    assert test_selection.run_alone([stopped, second, by_id]) == [x]
+    # Per-test seconds for x, run whole beside another file, are.
+    together = {"timings": [{"tests": [x, z], "s": 2.0, "counted": True, "durations": [
+        {"test_id": f"{x}::test_a", "seconds": 1.0}, {"test_id": f"{z}::test_b", "seconds": 0.5}]}]}
+    assert test_selection.run_alone([stopped, second, by_id, together]) == []
+    # A file stopped alone runs alone next time too.
+    assert test_selection.run_alone([{"timings": [
+        {"tests": [z], "s": 3.0, "timed_out": True, "counted": True}]}]) == [z]
+
+
+def test_a_file_that_runs_alone_shares_its_chunk_with_no_other_file():
+    names = [f"tests/test_{n}.py" for n in range(10)]
+    selection = [*names[:3], f"{names[3]}::test_a", f"{names[3]}::test_b", *names[4:]]
+    chunks = failfast._chunks(selection, alone=[names[3], names[6]])
+    assert chunks == [names[:2], [names[2]], [f"{names[3]}::test_a", f"{names[3]}::test_b"],
+                      names[4:6], [names[6]], names[7:9], [names[9]]]
+    assert failfast._chunks(selection) == [selection[n:n + 2] for n in range(0, 11, 2)]
+
+
+def test_a_lower_bound_never_lowers_a_size_estimate_and_sets_no_rate(tmp_path):
+    """A file stopped near the limit has a small bound: it costs its size estimate when that
+    is higher. A bound is no rate a file ran at, so a small file's 30 s bound does not make
+    every untimed file dear."""
+    repo = _target(tmp_path / "repo", {
+        "tests/test_done.py": "#" * 999 + "\n", "tests/test_big.py": "#" * 999 + "\n",
+        "tests/test_tiny_slow.py": "#" * 9 + "\n", "tests/test_untimed.py": "#" * 999 + "\n"})
+    tests = ["tests/test_done.py", "tests/test_big.py", "tests/test_tiny_slow.py",
+             "tests/test_untimed.py"]
+    known = {"tests/test_done.py": 1.0, "tests/test_big.py": 0.2, "tests/test_tiny_slow.py": 30.0}
+    costs = test_selection.estimated_costs(tests, repo, known,
+                                           ["tests/test_big.py", "tests/test_tiny_slow.py"])
+    assert costs == pytest.approx({"tests/test_done.py": 1.0, "tests/test_big.py": 1.0,
+                                   "tests/test_tiny_slow.py": 30.0, "tests/test_untimed.py": 1.0})
+    # With no finished file there is no rate: sizes stay in bytes, and the bounds go last.
+    unmeasured = test_selection.estimated_costs(tests[1:], repo, known,
+                                                ["tests/test_big.py", "tests/test_tiny_slow.py"])
+    assert sorted(unmeasured, key=unmeasured.get) == [
+        "tests/test_untimed.py", "tests/test_big.py", "tests/test_tiny_slow.py"]
+
+
+def test_costs_from_record_multi_file_chunk_without_durations_keeps_estimates(tmp_path):
+    """A finished multi-file chunk without ``durations`` (e.g. a vitest chunk) leaves
+    each file's existing estimate unchanged.  A single-file chunk without durations
+    assigns its elapsed time to that file."""
+    repo = _target(tmp_path / "repo", {
+        "tests/test_a.py": "\ndef test_a():\n    pass\n",
+        "tests/test_b.py": "\ndef test_b():\n    pass\n",
+    })
+    # Pre-existing size estimate for test_b.
+    initial = [{"timings": [{"tests": ["tests/test_b.py"], "s": 0.1, "counted": True}]}]
+    costs_before = test_selection.costs_from_record(initial, repo)
+    assert costs_before["tests/test_b.py"] == 0.1
+
+    # A two-file chunk at 60 s without durations: both files keep their estimates.
+    entries = [{"timings": [{"tests": ["tests/test_b.py"], "s": 0.1, "counted": True},
+                            {"tests": ["tests/test_a.py", "tests/test_b.py"],
+                             "s": 60.0, "counted": True}]}]
+    costs = test_selection.costs_from_record(entries, repo)
+    assert costs["tests/test_b.py"] == 0.1, (
+        f"multi-file chunk without durations changed test_b to {costs['tests/test_b.py']}")
+    assert "tests/test_a.py" not in costs, (
+        f"test_a should not have a cost from a multi-file chunk without durations")
+
+    # A single-file chunk at 60 s without durations: the file gets 60.0.
+    entries_single = [{"timings": [{"tests": ["tests/test_a.py"], "s": 60.0, "counted": True}]}]
+    costs_single = test_selection.costs_from_record(entries_single, repo)
+    assert costs_single["tests/test_a.py"] == 60.0
+
+
+def test_costs_from_record_lower_bound_never_overwrites_finished_time(tmp_path):
+    """A lower bound never lowers a finished time; max is always used."""
+    repo = _target(tmp_path / "repo", {
+        "tests/test_x.py": "\ndef test_x():\n    pass\n",
+    })
+    # (a) Non-timed-out at 5.0 s, then timed-out at 120 s: stays 5.0.
+    entries_a = [{"timings": [
+        {"tests": ["tests/test_x.py"], "s": 5.0, "counted": True,
+         "durations": [{"test_id": "tests/test_x.py::test_x", "seconds": 5.0}]},
+        {"tests": ["tests/test_x.py"], "s": 120.0, "counted": True, "timed_out": True},
+    ]}]
+    costs_a = test_selection.costs_from_record(entries_a, repo)
+    assert costs_a["tests/test_x.py"] == 5.0
+
+    # (b) Two timed-out entries: 120 s then 80 s → max = 120.
+    entries_b = [{"timings": [
+        {"tests": ["tests/test_x.py"], "s": 120.0, "counted": True, "timed_out": True},
+        {"tests": ["tests/test_x.py"], "s": 80.0, "counted": True, "timed_out": True},
+    ]}]
+    costs_b = test_selection.costs_from_record(entries_b, repo)
+    assert costs_b["tests/test_x.py"] == 120.0
+
+    # (c) Two non-timed-out entries: 10 s then 5 s → max = 10.
+    entries_c = [{"timings": [
+        {"tests": ["tests/test_x.py"], "s": 10.0, "counted": True,
+         "durations": [{"test_id": "tests/test_x.py::test_x", "seconds": 10.0}]},
+        {"tests": ["tests/test_x.py"], "s": 5.0, "counted": True,
+         "durations": [{"test_id": "tests/test_x.py::test_x", "seconds": 5.0}]},
+    ]}]
+    costs_c = test_selection.costs_from_record(entries_c, repo)
+    assert costs_c["tests/test_x.py"] == 10.0
+
+
+def test_a_real_pytest_chunk_records_its_tests_seconds_from_junit_outside_the_worktree(
+        tmp_path, monkeypatch):
+    """The self-check adds ``--junitxml`` to a chunk's pytest command, so the record holds
+    each test's seconds. The file is written outside the worktree, never inside it even for
+    a moment, and removed afterwards. A check of several steps gets no ``--junitxml``: it
+    would reach the last step, which need not be pytest."""
+    from refactory_dsh.sandbox import SandboxResult
+
+    repo = _target(tmp_path / "repo", PINNED)
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500060")
+    sent = []
+    real = repo_change.run_check
+
+    def recording(ctx, command, timeout, **kwargs):
+        sent.append(command)
+        return real(ctx, command, timeout, **kwargs)
+
+    monkeypatch.setattr(repo_change, "run_check", recording)
+    _emit(run, render({"tool.py": "VERSION = 1\nNAME = 'tool'\n"}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and out.strip() == "proceed", err
+    [record] = _records(run)
+    [timing] = record["timings"]
+    assert [entry["test_id"] for entry in timing["durations"]] == [PIN]
+    assert timing["durations"][0]["seconds"] >= 0
+    [command] = [command for command in sent if "pytest" in command]
+    assert command.startswith(record["commands"][0] + " --junitxml=")
+    junit = Path(command.split("--junitxml=", 1)[1])
+    found = worktree.recorded(run)
+    assert junit.is_absolute() and not junit.exists()
+    assert not junit.resolve().is_relative_to(Path(found.path).resolve())
+    assert not git(Path(found.path), "status", "--porcelain").strip()
+
+    several = []
+
+    def run_fn(command, timeout):
+        several.append(command)
+        return SandboxResult(ok=True, returncode=0, stdout="1 passed", elapsed_s=0.1)
+
+    failfast.targeted_prepass({}, "python -m pytest -q tests && python tools/lint.py", run_fn, 180,
+                              root=str(repo), selection=["tests/test_pin.py"], self_check_timeout_s=60)
+    assert several == ["python -m pytest -q tests/test_pin.py && python tools/lint.py"]
+
+
+def test_two_consecutive_empty_diff_fixups_with_fixups_1_exhausts(tmp_path, monkeypatch):
+    """Two emptied attempts in a row with ``self_check_fixups=1`` must end exhausted.
+
+    The first emission changes ``generated.txt``; generate puts it back →
+    ``empty_diff_fixup`` (count goes 0→1).  The second emission does the same;
+    generate restores it again, but now count=1 ≥ allowed=1 → ``exhausted``.
+
+    Remove line 1293 (``ctx.set_fact("self_check_fixup_count", used + 1)``)
+    and the second empty-diff sees used=0 < allowed=1 → fixups again instead
+    of exhausting → test fails."""
+    repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500061", self_check_fixups=1)
+    facts = _facts(run)
+    (run / "facts.json").write_text(json.dumps({**facts, "generate": "python gen.py"}))
+
+    # First emission: changes generated.txt; generate puts it back → empty_diff_fixup.
+    _emit(run, render({"generated.txt": "version 99\n"}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0, err
+    records = _records(run)
+    assert records[-1]["outcome"] == "empty_diff_fixup"
+    assert _facts(run)["self_check_fixup_count"] == 1
+    assert _facts(run)["total_self_check_fixups_used"] == 1
+
+    # Second emission: same change; generate restores again → exhausted.
+    _emit(run, render({"generated.txt": "version 99\n"}), monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0, err
+    records = _records(run)
+    assert records[-1]["outcome"] == "exhausted"
+
+
+def test_parse_junitxml_handles_class_based_tests(tmp_path):
+    """``_parse_junitxml`` correctly maps class-based test classnames to file paths.
+
+    For ``tests.test_failfast.TestNotFoundIds::test_method``, the classname is
+    ``tests.test_failfast.TestNotFoundIds``; the file path must be
+    ``tests/test_failfast.py``, not ``tests/test_failfast/TestNotFoundIds.py``."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<testsuite name="pytest">
+  <testcase classname="tests.test_failfast.TestNotFoundIds" name="test_dropped" time="0.123"/>
+  <testcase classname="tests.test_failfast.TestNotFoundIds" name="test_suffix" time="0.456"/>
+  <testcase classname="tests.test_failfast" name="test_module_level" time="0.789"/>
+</testsuite>
+"""
+    xml_path = tmp_path / "junit.xml"
+    xml_path.write_text(xml_content)
+    durations = failfast._parse_junitxml(str(xml_path))
+    assert durations is not None
+    by_id = {d["test_id"]: d["seconds"] for d in durations}
+    # Class-based tests: classname "tests.test_failfast.TestNotFoundIds" → file "tests/test_failfast.py"
+    assert "tests/test_failfast.py::test_dropped" in by_id
+    assert "tests/test_failfast.py::test_suffix" in by_id
+    assert by_id["tests/test_failfast.py::test_dropped"] == pytest.approx(0.123)
+    assert by_id["tests/test_failfast.py::test_suffix"] == pytest.approx(0.456)
+    # Module-level test: classname "tests.test_failfast" → file "tests/test_failfast.py"
+    assert "tests/test_failfast.py::test_module_level" in by_id
+    assert by_id["tests/test_failfast.py::test_module_level"] == pytest.approx(0.789)
+    # Verify NO wrong path like "tests/test_failfast/TestNotFoundIds.py"
+    wrong_paths = [d["test_id"] for d in durations if "TestNotFoundIds" in d["test_id"]]
+    assert not wrong_paths, f"Class name leaked into test_id: {wrong_paths}"
+
+
+def test_parse_junitxml_keeps_a_capitalised_package_directory(tmp_path):
+    """Only trailing class names leave the path, so a capitalised package directory stays
+    (``src/MyPkg/tests/test_x.py``, not ``src.py``)."""
+    xml_path = tmp_path / "junit.xml"
+    xml_path.write_text(
+        '<testsuite>'
+        '<testcase classname="src.MyPkg.tests.test_x" name="test_a" time="1.5"/>'
+        '<testcase classname="src.MyPkg.tests.test_x.TestK.TestInner" name="test_b" time="2"/>'
+        '<testcase classname="tests.test_y" name="test_c" time="3"/>'
+        '</testsuite>')
+    ids = [entry["test_id"] for entry in failfast._parse_junitxml(str(xml_path))]
+    assert ids == ["src/MyPkg/tests/test_x.py::test_a", "src/MyPkg/tests/test_x.py::test_b",
+                   "tests/test_y.py::test_c"]
+
+
+def test_empty_diff_check_skipped_when_head_equals_base(tmp_path, monkeypatch):
+    """When head == base (no emission committed), the empty-diff check is skipped.
+
+    The base has a parent with the same tree (via ``--allow-empty``).  Without
+    the ``found.head != found.base`` guard, ``tree(head) == tree(head~1)``
+    would falsely trigger ``empty_diff_fixup``.  With the guard, head == base
+    so the comparison is skipped and the normal flow (``nothing selected``)
+    proceeds.  Removing the guard fails this test."""
+    repo = _target(tmp_path / "repo", PINNED)
+    # Add an empty commit so tree(HEAD) == tree(HEAD~1).
+    git(repo, "commit", "--allow-empty", "-m", "empty")
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500063")
+    found = worktree.recorded(run)
+    assert found.head == found.base  # no emission committed
+    # Set "commit" fact so prepare_attempt's _restored_attempt does not crash.
+    facts = _facts(run)
+    facts["commit"] = found.head
+    (run / "facts.json").write_text(json.dumps(facts))
+    # Call prepare_check without emitting: prepare_attempt returns []
+    # (nothing to prepare), code falls through to the empty-diff check.
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0, err
+    records = _records(run)
+    assert records[-1]["outcome"] not in ("empty_diff_fixup", "exhausted")
+
+
+def test_rerun_with_zero_remaining_records_lower_bound(tmp_path, monkeypatch):
+    """When a not-found rerun has no time left (remaining_for_rerun < 1), a
+    timed_out timing entry is recorded and the chunk is cut.
+
+    Exercises the guard at failfast.py lines 296-305.  Removing those lines
+    lets the rerun proceed with nearly zero time — this test fails because
+    ``run_fn`` is called a second time."""
+    import time as _time
+    from refactory_dsh.sandbox import SandboxResult
+
+    exit4_output = "ERROR: not found: /abs/path/tests/test_x.py::test_gone\n"
+    exit4 = SandboxResult(ok=False, returncode=4, stdout=exit4_output, stderr="",
+                          timed_out=False, elapsed_s=9.5)
+
+    # Force both items into one chunk so rest_of_chunk is non-empty after
+    # dropping the not-found id.
+    monkeypatch.setattr(failfast, "SELF_CHECK_CHUNKS", 1)
+
+    calls = []
+    elapsed = [0.0]
+
+    def mock_monotonic():
+        return 1000.0 + elapsed[0]
+
+    monkeypatch.setattr(_time, "monotonic", mock_monotonic)
+
+    def run_fn(cmd, timeout):
+        calls.append(cmd)
+        elapsed[0] = 9.5  # simulate nearly the full 10 s limit consumed
+        return exit4
+
+    prepass = failfast.targeted_prepass(
+        {}, CHECK, run_fn, 180,
+        selection=["tests/test_x.py::test_gone", "tests/test_x.py"],
+        self_check_timeout_s=10,
+    )
+    # run_fn was called once (the loop-level guard did not cut first).
+    assert len(calls) == 1
+    # The chunk was cut.
+    assert prepass.cut_ids
+    # The note specifically mentions "no time left for a rerun".
+    assert any("no time left" in n for n in prepass.notes)
+
+
+def test_rerun_handles_module_import_error(tmp_path, monkeypatch):
+    """When the rerun's output contains ``_INTERRUPTED``, broken modules are in ran
+    and remaining tests are re-queued.  Exercises the rerun-specific _INTERRUPTED
+    check at failfast.py lines 321-332 (not the normal chunk path at line 350)."""
+    from refactory_dsh.sandbox import SandboxResult
+
+    # Force all items into one chunk so the exit-4 chunk has remaining items
+    # for a rerun (with SELF_CHECK_CHUNKS=6 and 3 items, chunk_size=1 puts each
+    # item in its own chunk, and the exit-4 chunk has no remaining items).
+    monkeypatch.setattr(failfast, "SELF_CHECK_CHUNKS", 1)
+
+    exit4_output = "ERROR: not found: /abs/path/tests/test_x.py::test_gone\n"
+    exit4 = SandboxResult(ok=False, returncode=4, stdout=exit4_output, stderr="",
+                          timed_out=False, elapsed_s=0.1)
+    interrupted_output = (
+        "ERROR tests/test_y.py - ModuleNotFoundError: No module named 'missing'\n"
+        "Interrupted: 1 error during collection\n"
+        "1 error in 0.10s"
+    )
+    interrupted = SandboxResult(ok=False, returncode=2, stdout=interrupted_output, stderr="",
+                                timed_out=False, elapsed_s=0.1)
+    pass_result = SandboxResult(ok=True, returncode=0, stdout="1 passed in 0.10s", stderr="",
+                                timed_out=False, elapsed_s=0.1)
+
+    call_count = [0]
+    def run_fn(cmd, timeout):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return exit4
+        if call_count[0] == 2:
+            return interrupted
+        return pass_result
+
+    prepass = failfast.targeted_prepass(
+        {}, CHECK, run_fn, 180,
+        selection=["tests/test_x.py::test_gone", "tests/test_y.py", "tests/test_z.py"],
+        self_check_timeout_s=300,
+    )
+    # test_y.py did not import; it should be in ran (from the rerun _INTERRUPTED path).
+    assert "tests/test_y.py" in prepass.ran_ids
+    # test_z.py should have been re-queued and run separately (not via ran.extend).
+    assert "tests/test_z.py" in prepass.ran_ids
+    # Verify the re-queue path was taken: test_z.py ran in a third call.
+    assert call_count[0] >= 3, "test_z.py must be re-queued and run separately"
+    assert any("did not import" in n for n in prepass.notes)
+
+
+def test_exhausted_empty_diff_does_not_call_targeted_prepass(tmp_path, monkeypatch):
+    """When the empty-diff fixup budget is exhausted, ``targeted_prepass`` is not called:
+    a ``PrepassResult`` is built directly. The self-checks are `_Chunks`' answers: the
+    pinned test fails on the first emission and would pass on the emptied one, were it run."""
+    _Chunks(monkeypatch, emissions=[{PIN}, set()])
+    repo = _target(tmp_path / "repo", {**PINNED, **GENERATED})
+    run = _spine_run(repo, tmp_path, monkeypatch, "abcdef500064", self_check_fixups=1)
+    facts = _facts(run)
+    (run / "facts.json").write_text(json.dumps({**facts, "generate": "python gen.py"}))
+
+    # Monkeypatch targeted_prepass to raise if called with selection=[].
+    from refactory_dsh import failfast as ff
+    real_tp = ff.targeted_prepass
+    called_empty = []
+
+    def guarded_tp(*args, **kwargs):
+        sel = kwargs.get("selection")
+        if sel is not None and sel == []:
+            called_empty.append(True)
+            raise AssertionError("targeted_prepass called with selection=[]")
+        return real_tp(*args, **kwargs)
+
+    monkeypatch.setattr(ff, "targeted_prepass", guarded_tp)
+
+    # First emission: BREAKS → self-check fixup.
+    _emit(run, BREAKS, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0 and "self-check fix-up 1 of 1" in out, err
+
+    # Second emission: UNDOES → generate empties → empty_diff detected.
+    # Budget: used=1 >= allowed=1 → exhausted path.
+    # The exhausted path must NOT call targeted_prepass(selection=[]).
+    _emit(run, UNDOES, monkeypatch)
+    code, out, err = _prepare(run, monkeypatch)
+    assert code == 0, err
+    assert not called_empty, "targeted_prepass was called with selection=[]"
+    records = _records(run)
+    assert records[-1]["outcome"] == "exhausted"
+    assert _facts(run)["attempts_used"] == 1
 
 
 def test_the_limit_is_the_knob_and_never_more_than_a_third_of_the_check():

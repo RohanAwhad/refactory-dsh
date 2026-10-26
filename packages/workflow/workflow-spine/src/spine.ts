@@ -485,6 +485,19 @@ export class Spine {
     return typeof declared === 'number' ? declared : this.maxIterations
   }
 
+  /**
+   * The reloops a gate has spent of its cap, and the node a reloop goes back to; undefined
+   * for a gate without a counted reloop edge. A reloop past the cap halts the run.
+   * @param gate - the gate node id.
+   * @returns what is spent and allowed, and the reloop's target.
+   */
+  reloops(gate: string): { used: number; cap: number; target: string } | undefined {
+    const edge = this.outgoing(gate).find(candidate =>
+      candidate.condition != null && label(candidate.condition) === RELOOP)
+    if (edge === undefined || !this.retryEdges().has(retryKey(gate, edge.target, edge.condition))) return undefined
+    return { used: this.iterations[gate] ?? 0, cap: this.reloopCap(gate), target: edge.target }
+  }
+
   /** Un-complete `target` and its unconditional downstream up to `gate`. */
   private uncompleteBetween(target: string, gate: string): void {
     const seen = new Set<string>()

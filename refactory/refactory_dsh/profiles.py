@@ -265,7 +265,8 @@ def runtime_identity(settings: dict[str, Any], project: Path, *, uses_models: bo
     context = model.context() if callable(getattr(model, "context", None)) else {}
     # Runtime/credential-store location can change a default route or executable.
     # Keep this nonsecret context, but never bind evidence to a per-run ledger path.
-    context = {key: context[key] for key in ("dsh_home", "runtime_root", "dsh_cli", "python_bin", "timeout_s", "attempts", "backoff_s") if key in context}
+    context = {key: context[key] for key in ("dsh_home", "runtime_root", "dsh_cli", "python_bin", "timeout_s", "attempts", "backoff_s",
+                                     "retry_window_s") if key in context}
     return {"status": "configured_unverified" if resolved else "runtime_defaults_unresolved", "route": route,
             "client_context": context}
 

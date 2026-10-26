@@ -470,7 +470,8 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
             "failing tests pass with your change.\n\n"
             "**Do not apply or test your change directly in the target or the "
             "run's worktree.** The probe runs in a throwaway clone that is "
-            "deleted afterwards. It is not an attempt.\n\n"
+            "cleaned up when the builder's turn ends (materialise) or at the "
+            "run's end. It is not an attempt.\n\n"
             "To run the probe:\n"
             "```bash\n"
             f"{python} -m refactory_dsh.builder_probe "
@@ -755,9 +756,15 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
     already in the last attempt -- does not end the run: it is recorded as
     ``emission_refused``, and the check sends the reason back to emit.
     """
-    # Sweep dead probes before proceeding
-    from refactory_dsh.builder_probe import sweep_dead_probes
+    # Sweep dead probes and warm clones before proceeding. A warm clone left on
+    # disk is named in a warning; it does not stop the attempt.
+    from refactory_dsh.builder_probe import CloneNotRemoved, sweep_dead_probes, sweep_warm_clones
     sweep_dead_probes(ctx.workdir)
+    try:
+        sweep_warm_clones(ctx.workdir)
+    except CloneNotRemoved as exc:
+        import logging
+        logging.getLogger(__name__).warning("materialise: %s", exc)
     try:
         found = worktree.recorded(ctx.workdir)
         # Cleared only once set, so a run whose graph predates the fact still materialises.

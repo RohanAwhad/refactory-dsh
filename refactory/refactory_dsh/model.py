@@ -96,6 +96,20 @@ def node_session_budget_s(attempts: int, timeout_s: int) -> int:
 #: work — so the client retries, and only a client that keeps failing fails the node.
 DEFAULT_ATTEMPTS = 3
 
+#: How long the waits between those attempts add up to, in seconds, however many attempts
+#: there are. A DNS or network blip lasts up to about a minute; retries one and two
+#: seconds apart all landed inside one and failed the run (dm-218).
+RETRY_WINDOW_S = 60.0
+
+
+def retry_delays(attempts: int, window_s: float = RETRY_WINDOW_S) -> list[float]:
+    """The wait before each retry of ``attempts``: each twice the last, together ``window_s``."""
+    retries = max(0, int(attempts) - 1)
+    if retries == 0:
+        return []
+    unit = max(0.0, float(window_s)) / (2 ** retries - 1)
+    return [unit * 2 ** index for index in range(retries)]
+
 
 #: What the child says when the failure was on the wire rather than in the model.
 #:
@@ -156,8 +170,11 @@ class DshModelClient:
     """One-shot completions through ``dsh --profile headless``.
 
     Implements ``factory.outer_loop.optimizers.ModelClient``. A completion that fails
-    on the wire is retried, bounded, with a backoff; one that fails for any other
-    reason is raised straight away with the cause named.
+    on the wire is retried, up to ``attempts`` in all, with waits that double and add up
+    to ``retry_window_s`` (`retry_delays`); one that fails for any other reason is raised
+    straight away with the cause named. ``backoff_s`` is the schedule a saved worker spec
+    or run configuration from before ``retry_window_s`` carries: when it is given, the
+    first wait is ``backoff_s`` and each next one doubles, as it was then.
     """
 
     def __init__(
@@ -166,7 +183,8 @@ class DshModelClient:
         model: str = "",
         provider: str = "",
         attempts: int = DEFAULT_ATTEMPTS,
-        backoff_s: float = 1.0,
+        backoff_s: float | None = None,
+        retry_window_s: float = RETRY_WINDOW_S,
         dsh_home: str | Path | None = None,
         runtime_root: str | Path | None = None,
         dsh_cli: str | None = None,
@@ -252,7 +270,8 @@ class DshModelClient:
         from refactory_dsh.dsh_profile import model_home
         self._dsh_home = model_home(dsh_home)
         self._attempts = max(1, int(attempts)) if self._worker_backend == "dsh" else 1
-        self._backoff_s = max(0.0, float(backoff_s))
+        self._backoff_s = None if backoff_s is None else max(0.0, float(backoff_s))
+        self._retry_window_s = max(0.0, float(retry_window_s))
         self._cancellations: tuple[threading.Event, ...] = ()
         validate_route(self.route())
 
@@ -310,7 +329,8 @@ class DshModelClient:
         return {
             "routes_resolved": True, "routing_provenance": copy.deepcopy(self._routing_provenance),
             "dsh_home": str(self._dsh_home), "provider": self._provider, "model": self._model,
-            "timeout_s": self._timeout_s, "attempts": self._attempts, "backoff_s": self._backoff_s,
+            "timeout_s": self._timeout_s, "attempts": self._attempts, "retry_window_s": self._retry_window_s,
+            **({} if self._backoff_s is None else {"backoff_s": self._backoff_s}),
             "runtime_root": str(self._runtime_root), "dsh_cli": self._dsh_cli,
             "python_bin": str(self._python_bin),
             "worker_backend": self._worker_backend, "effort": self._effort,
@@ -517,6 +537,8 @@ class DshModelClient:
         if wall is not None and wall < budget_s:
             budget_s = wall
             stop_at = time.monotonic() + budget_s
+        delays = (retry_delays(self._attempts, self._retry_window_s) if self._backoff_s is None
+                  else [self._backoff_s * 2 ** index for index in range(self._attempts - 1)])
         for attempt in range(1, self._attempts + 1):
             self._raise_if_cancelled()
             self._checkpoint()
@@ -544,7 +566,7 @@ class DshModelClient:
                     )
                 last = cause or f"exit {proc.returncode}"
             if attempt < self._attempts:
-                delay = self._backoff_s * (2 ** (attempt - 1))
+                delay = delays[attempt - 1]
                 if not self._cancellations:
                     time.sleep(delay)
                 else:

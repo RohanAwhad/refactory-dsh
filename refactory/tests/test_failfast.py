@@ -312,6 +312,36 @@ class TestRecordCheckHistory:
         assert len(facts["check_blocker_history"]) == 1
 
 
+# ── _not_found_ids unit tests ───────────────────────────────────────────
+
+
+class TestNotFoundIds:
+
+    def test_standard_not_found_line(self):
+        from refactory_dsh.failfast import _not_found_ids
+
+        output = ("ERROR: not found: /abs/path/tests/test_foo.py::test_bar\n"
+                  "(no match in any of [<Module test_foo.py>])")
+        assert _not_found_ids(output) == {"tests/test_foo.py::test_bar"}
+
+    def test_collecting_prefix(self):
+        from refactory_dsh.failfast import _not_found_ids
+
+        output = "collecting ... ERROR: not found: /abs/path/tests/test_x.py::test_y"
+        assert _not_found_ids(output) == {"tests/test_x.py::test_y"}
+
+    def test_no_match(self):
+        from refactory_dsh.failfast import _not_found_ids
+
+        assert _not_found_ids("1 passed") == set()
+
+    def test_file_or_directory_not_found_is_different(self):
+        from refactory_dsh.failfast import _not_found_ids
+
+        output = "ERROR: file or directory not found: tests/nonexistent.py::test_x"
+        assert _not_found_ids(output) == set()
+
+
 # ── pnpm targeting unit tests ───────────────────────────────────────────
 
 class TestPnpmTargeting:
