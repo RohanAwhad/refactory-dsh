@@ -5,7 +5,7 @@
  * nodes due together, checking five invariants on each run.
  */
 import { describe, expect, it } from 'vitest'
-import { shapes, crossContainerReloopGraph } from './graph-shapes.ts'
+import { shapes, crossContainerReloopGraph, designGraphRefineLightRelooped } from './graph-shapes.ts'
 import { allOrders, seededOrders, driveToEnd } from './shape-driver.ts'
 import {
   checkCompletedOncePerVisit, checkJoinAfterBranches, checkNoDueDrop,
@@ -44,6 +44,31 @@ describe('graph shape invariants', () => {
       })
     })
   }
+})
+
+// ─── A light refine relooped at its approval gate ────────────────
+
+describe('designGraphRefineLightRelooped', () => {
+  const shape = designGraphRefineLightRelooped
+  const research = ['research_director', 'record_findings', 'gate_research', 'classify_scale',
+    'pitfalls_researcher', 'gate_pitfalls', 'route_strategy', 'strategy_director']
+
+  seededOrders(shape, 42, 20).forEach((result, i) => {
+    it(`ordering ${i}: the reloop replans and redesigns, and research never runs`, () => {
+      checkCompletedOncePerVisit(result)
+      checkJoinAfterBranches(result)
+      checkNoDueDrop(result)
+      checkDoneAndEnds(result, shape)
+      const order = result.completedOrder
+      const first = order.indexOf('gate_strategy')
+      const second = order.indexOf('gate_strategy', first + 1)
+      expect(order.slice(0, 3)).toEqual(['prepare', 'route_refine_design', 'design_doc'])
+      expect(second).toBeGreaterThan(first)
+      expect(order.slice(first + 1, second)).toEqual(
+        ['synthesize_strategy', 'design_doc', 'check_design_claims', 'gate_design_review'])
+      for (const skipped of research) expect(order).not.toContain(skipped)
+    })
+  })
 })
 
 // ─── Redo refusal for non-redoable types ─────────────────────────

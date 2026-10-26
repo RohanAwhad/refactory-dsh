@@ -599,6 +599,22 @@ def resolve(ref: str, *, target: Path | None = None) -> dict[str, Any]:
             "target": str(root)}
 
 
+def base_tip(pull: dict[str, Any]) -> str:
+    """Where the base branch of a pull request `resolve` read is on GitHub now, in its clone.
+
+    Read by URL and fetched when the clone lacks it, as `resolve` fetches the head, so the
+    clone's remote-tracking branches, under whatever remote name and however stale, are
+    neither read nor moved. A failure is :class:`NotDelivered`.
+    """
+    root, slug, branch = Path(str(pull["target"])), str(pull["repo"]), str(pull["into"])
+    tip = _heads(root, slug).get(f"refs/heads/{branch}")
+    if not tip:
+        raise NotDelivered(f"GitHub has no branch {branch} in {slug}")
+    if not _present(root, {tip}):
+        _fetch(root, slug, f"refs/heads/{branch}")
+    return tip
+
+
 def _clone_of(slug: str, url: str) -> Path:
     """The registered project a pull request belongs to: the one whose run opened it, or the one clone."""
     registered = projects.load()["projects"]

@@ -285,7 +285,7 @@ class DesignMode(Mode):
                       "deliverable_kind", "review_instructions", "verification_methods",
                       *repo_change.produces(), "delivery", "delivery_plan",
                       "has_pitfalls_step", "pitfalls", "pitfalls_review",
-                      "claims_check_feedback", "design_review_status"),
+                      "claims_check_feedback", "design_review_status", "refine_context"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -301,7 +301,7 @@ class DesignMode(Mode):
             produces=("research", "findings_recorded", "research_review",
                       "research_attempts_used", "research_advisory",
                       "pitfalls", "pitfalls_review", "pitfalls_attempts_used",
-                      "pitfalls_advisory", "strategy_plan", "strategy"),
+                      "pitfalls_advisory", "strategy_plan", "strategy", "refine_context"),
             max_iterations=2,
             notes="on a light refine, skip research and strategy and go straight to design_doc",
         ))
@@ -504,6 +504,8 @@ class DesignMode(Mode):
                 "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\n"
                 "The check, run from {{check_root}}:\n    {{check}}\n\n"
                 "## The plan\n{{strategy}}\n\n"
+                # Empty except on a light refine: the pull request it follows up.
+                "{{refine_context}}"
                 "## Pitfalls\n{{pitfalls}}\n\n"
                 "## What the design checks found\n{{design_review_feedback}}\n\n"
                 + _ACCEPTANCE_BASELINE
@@ -1008,8 +1010,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="keep the work on the run's local branch instead of opening a pull request")
     parser.add_argument("--refine", default="", metavar="PR",
                         help="follow up an open pull request: start from its branch and update it")
-    parser.add_argument("--refine-design", default="light", choices=["light", "full"],
-                        help="on a refine: light (default) skips research and strategy; "
+    parser.add_argument("--refine-design", default=None, choices=["light", "full"],
+                        help="with --refine: light (default) skips research and strategy; "
                              "full walks the whole design phase")
     parser.add_argument("--review-comments", action="store_true",
                         help="with --refine: add the pull request's reviews and comments to the steering")
@@ -1045,6 +1047,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.fast and delivered:
         parser.error(f"--fast does not take {', '.join(delivered)}: design_fast has no approval gate, so it "
                      "opens no pull request, and its work stays on the run's branch")
+    if args.refine_design and not args.refine:
+        parser.error("--refine-design goes with --refine: it says how a refine designs its change")
 
     from refactory_dsh.model import DshModelClient
     from refactory_dsh.paths import project_root
@@ -1111,7 +1115,7 @@ def main(argv: list[str] | None = None) -> int:
         state["knobs"]["pr"]["value"] = False
     if args.review_comments:
         state["knobs"]["review_comments"]["value"] = True
-    if not args.fast and args.refine_design:
+    if args.refine_design:
         state["knobs"]["refine_design"]["value"] = args.refine_design
     mode.load_state_dict(state)
     from refactory_dsh.create import parse_verdicts

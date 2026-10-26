@@ -343,15 +343,25 @@ export const designGraphScoped: ShapeEntry = {
 }
 
 /** A light refine: skips research and strategy, goes straight to design_doc.
- *  gate_strategy is not relooped in this shape because its reloop target
- *  (synthesize_strategy) is unreachable on the light path and would never
- *  be re-completed on a redo, failing the redo invariant's static forward
- *  closure check. */
+ *  gate_strategy is not relooped here, because the redo invariant cannot hold
+ *  for its reloop: the only way into synthesize_strategy on the light route is
+ *  the person's reloop, and a redo (which never reloops) of prepare rightly
+ *  takes the light route again and leaves the plan to the person. The reloop is
+ *  driven through the ordering invariants by designGraphRefineLightRelooped. */
 export const designGraphRefineLight: ShapeEntry = {
   ...designGraph,
   name: 'designGraphRefineLight',
   gatesWithReloop: ['gate_design_review', 'prepare_check', 'gate_check', 'gate_qa', 'gate_overwatch'],
   fixedVerdicts: { route_refine_design: 'light', route_strategy: 'proceed' },
+}
+
+/** The light refine with the person relooping once at gate_strategy as well. Not
+ *  in `shapes`, which also checks the redo invariant (see designGraphRefineLight):
+ *  graph-set.spec drives it through the ordering invariants on its own. */
+export const designGraphRefineLightRelooped: ShapeEntry = {
+  ...designGraphRefineLight,
+  name: 'designGraphRefineLightRelooped',
+  gatesWithReloop: [...designGraphRefineLight.gatesWithReloop, 'gate_strategy'],
 }
 
 // ─── Shape 13: crossContainerReloop (constructor-refused) ────────

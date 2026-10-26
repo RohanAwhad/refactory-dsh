@@ -759,7 +759,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "refine": "https://github.com/owner/repository/pull/12",
         "review_comments": true
       },
-      "explanation": "Follow up an open pull request: the run starts from its branch, goes through the full review, and pushes onto that branch, fast-forward only. The pull request's title and description are left as they are."
+      "explanation": "Follow up an open pull request: the run starts from its branch, designs straight from the pull request (its description and diff; no research or strategy step, unless refine_design=full), goes through the full review, and pushes onto that branch, fast-forward only. The pull request's title and description are left as they are."
     }
   ],
   "interfaces": {
@@ -4549,7 +4549,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "review_comments": true,
         "what": "rename the --json flag to --format json, as the review asked"
       },
-      "explanation": "Follow up an open pull request: a new run starts from its branch, goes through the full review, and pushes onto that branch, fast-forward only, leaving its title and description alone."
+      "explanation": "Follow up an open pull request: a new run starts from its branch, designs straight from the pull request (its description and diff; no research or strategy step, unless --refine-design full), goes through the full review, and pushes onto that branch, fast-forward only, leaving its title and description alone."
     },
     {
       "arguments": {
@@ -4769,7 +4769,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     },
     "refine_design": {
-      "default": "light",
+      "default": null,
       "description": "design only, with --refine: light (default) skips research and strategy; full walks the whole design phase",
       "enum": [
         "light",
@@ -4980,7 +4980,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "de75e9029a10ccea7e2b07ee02f42cdd2bde13cca2ffc47f192e95c35d417ef9"
+  "reviewed_schema": "3902398310a6273664b11e2f428b3477347d6b54204466a6947b61d6727a7ff5"
 }
 ```
 
@@ -7630,7 +7630,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step, and a refine by default (`refine_design=light`) skips research and pitfalls too: its design starts from the pull request's description and diff. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).
 
 ```json
 {
@@ -8607,7 +8607,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         }
       },
       {
-        "explanation": "Follow up an open pull request: start from its branch, run the full review, and push onto it, fast-forward only.",
+        "explanation": "Follow up an open pull request: start from its branch, design straight from the pull request (its description and diff; no research or strategy step, unless refine_design=full), run the full review, and push onto it, fast-forward only.",
         "knobs": {
           "brief": "Rename the --json flag to --format json, as the review asked",
           "check": "python -m pytest -q",
@@ -8621,7 +8621,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. Research, strategy and the design go straight to the approval gate, with no design reviewer: the design is written once to a light template (Summary, Changes, Tests), a claims check lists what it cannot confirm, and only a design with no ## Changes goes back for a rewrite (`design_review_attempts`, default 1); everything else is shown on the approval card. A scoped change (a refine, or one whose research footprint is small) skips the perspectives step, and a refine by default (`refine_design=light`) skips research and pitfalls too: its design starts from the pull request's description and diff. Before the reviews start, a self-check runs the tests the change can break and sends a failure back to the builder without spending an attempt (`self_check_fixups` times an attempt, within `self_check_timeout_s`). The command runs in that worktree beside the separate QA reviews (on the commit both see) and stays binding; a QA judge then reads the reviews and decides whether the build goes on or back, and Overwatch judges acceptance with an audit of the person's gate corrections as evidence; final current validation evidence is required. Only an ask, a correction, a failed health check or a critical or high defect sends the build back, and a correction Overwatch finds unmet always does; other findings are listed on the pull request as follow-ups. A judge whose verdict cannot be read is asked again once (`judge_rereads`), with no builder round. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
     "reviewed_schema": "283968912463758c61d0a5440750a970c8bd705bcd1d7d396f4cf3b43b632699"
   }
 }

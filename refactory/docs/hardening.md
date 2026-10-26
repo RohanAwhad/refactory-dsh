@@ -2634,29 +2634,45 @@ A design-mode refine (`--refine <PR>`) follows up an open pull request.  By
 default (`refine_design=light`), the `route_refine_design` gate skips the
 research, pitfalls and strategy phases and goes from `prepare` straight to
 `design_doc`.  The gate writes sentinel facts and files — research, pitfalls,
-strategy_plan, strategy (including the PR description, diff stat and
-changed-file list from the worktree) — so every downstream node finds its
-declared inputs on disk on the spine.  With `refine_design=full`, or on any
-non-refine run, the gate returns `proceed` and the existing pipeline runs
-unchanged.
+strategy_plan, strategy — so every downstream node finds its declared inputs on
+disk on the spine, and gives `design_doc` the pull request as `refine_context`:
+its description, framed as other people's words and capped at 6,000
+characters, and its diff stat and changed files from where its head left its
+base branch, with the base read from GitHub by URL (never from a
+remote-tracking branch, nor from the run's worktree, whose base is the pull
+request's head).  When the base cannot be read the design is told the diff is
+unavailable, never that it is empty, and a warning says why.  With
+`refine_design=full`, or on any non-refine run, the gate returns `proceed` and
+the existing pipeline runs unchanged.
+
+Prepare knows a refine by the pull request `delivery.refine_task` resolved.
+On the spine `refine` is a knob and a node's task names only the node, so the
+task's `refine` key, which the first version read, never fired there: every
+refine walked the full phase, and `classify_scale`'s refine shortcut never ran.
 
 The `refine_design` knob is frozen: it cannot change after the run starts.
-The default is `light`.  The CLI flag is `--refine-design light|full`.
+The default is `light`.  The CLI flag is `--refine-design light|full`, which
+is refused without `--refine`.
 
 If the person reloops at `gate_strategy`, the existing reloop edge goes to
-`synthesize_strategy`, which works from the light sentinels and the person's
-note.  The run reaches `design_doc` and the gate again without running
+`synthesize_strategy`, which gets the pull request block as its
+`strategy_plan` along with the person's note.  The run reaches `design_doc`,
+which still gets `refine_context`, and the gate again, without running
 research, pitfalls or `strategy_director`.
 
 #### Tests that hold it
 
-- `test_design_refine.py::test_light_refine_skips_research_and_strategy`
-- `test_design_refine.py::test_full_refine_walks_all_agents`
+- `test_design_refine_spine.py::test_the_spine_takes_the_light_route_when_refine_is_a_knob`
+- `test_design_refine.py::test_a_light_refine_designs_from_the_pull_request_and_delivers_onto_it`
+- `test_design_refine.py::test_a_light_refine_says_the_diff_is_unavailable_when_the_base_cannot_be_read`
+- `test_design_refine.py::test_a_light_refine_frames_the_pull_requests_description_and_caps_it`
+- `test_design_refine.py::test_a_light_refine_relooped_at_its_gate_keeps_the_pull_request_in_the_next_design`
+- `test_design_refine.py::test_a_full_refine_walks_the_design_phase_with_no_pull_request_block`
 - `test_design_refine.py::test_non_refine_unchanged`
-- `test_design_refine.py::test_light_refine_reloop_at_gate_strategy`
-- `test_design_refine.py::test_route_refine_design_unit`
-- `test_design_refine_spine.py::test_spine_route_refine_design_light`
-- `test_design_refine_spine.py::test_spine_route_refine_design_proceed_on_non_refine`
+- `test_delivery.py::test_the_command_line_hands_refine_design_to_the_run`
+- `test_delivery.py::test_the_design_command_applies_refine_design_and_refuses_it_without_refine`
+- `graph-set.spec.ts`: `designGraphRefineLight`, and `designGraphRefineLightRelooped` for the
+  person's reloop
 
 **Tests.** `test_check_beside_reviews.py`: the graph and the lowered workflow; what the
 reviews read and see; scripted runs whose check passes, and whose first check fails
