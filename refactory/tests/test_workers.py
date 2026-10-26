@@ -707,6 +707,122 @@ def test_worker_node_optional_exits_zero_on_failure(tmp_path, monkeypatch, capsy
     assert 'RuntimeError' in missing_file.read_text()
 
 
+def test_worker_node_optional_settles_pending_marker(tmp_path, monkeypatch, capsys):
+    """dm-232: optional worker that fails settles the pending delivery marker."""
+    import hashlib
+    import sys
+    from refactory_dsh import worker_node
+
+    node_id = 'verifier'
+    spec = {
+        'schema_version': 1,
+        'node_id': node_id,
+        'optional': True,
+        'reads': [],
+        'writes': [],
+        'prompt': 'test',
+        'model_context': {},
+    }
+    spec_path = tmp_path / 'spec.json'
+    spec_path.write_text(json.dumps(spec))
+
+    # Create a pending delivery marker
+    pending_hash = hashlib.sha256(node_id.encode()).hexdigest()
+    delivery_id = 'test-delivery-001'
+    pending_dir = tmp_path / '.refactory' / 'agent-delivery' / 'pending'
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    pending_file = pending_dir / f'{pending_hash}.json'
+    pending_file.write_text(json.dumps({'id': delivery_id, 'node': node_id}))
+
+    # Create the receipt file that invalidate() will update
+    receipt_dir = tmp_path / '.refactory' / 'agent-delivery' / delivery_id
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    receipt_file = receipt_dir / 'receipt.json'
+    receipt_file.write_text(json.dumps({
+        'node': node_id, 'status': 'pending',
+        'started': '2026-01-01T00:00:00Z', 'artifacts': {},
+    }))
+
+    monkeypatch.setattr(sys, 'argv', ['worker_node', str(spec_path)])
+    monkeypatch.chdir(tmp_path)
+
+    def _failing_execute(s, w):
+        raise RuntimeError('deliberate test error')
+    monkeypatch.setattr(worker_node, 'execute', _failing_execute)
+
+    exit_code = worker_node.main()
+    assert exit_code == 0, f'optional worker must exit 0, got {exit_code}'
+
+    # The pending marker should be invalidated (removed)
+    assert not pending_file.exists(), 'pending marker should be invalidated after optional branch recorded missing'
+
+    # The receipt should be updated to superseded
+    updated = json.loads(receipt_file.read_text())
+    assert updated['status'] == 'superseded', f'receipt status should be superseded, got {updated["status"]}'
+
+
+def test_run_node_optional_settles_pending_marker(tmp_path, monkeypatch):
+    """dm-232: run_node for optional op settles the pending delivery marker."""
+    import hashlib
+    from refactory_dsh import run as run_mod
+
+    workdir = tmp_path / 'run'
+    workdir.mkdir()
+    refactory_dir = workdir / '.refactory'
+    refactory_dir.mkdir()
+
+    node_id = 'verifier'
+    (refactory_dir / 'declarations.json').write_text(json.dumps({
+        node_id: {
+            'reads': [],
+            'writes': ['reviews/verification.md'],
+            'produces': ['verification'],
+            'optional': True,
+        }
+    }))
+    (workdir / 'facts.json').write_text('{}')
+
+    # Create a pending delivery marker
+    pending_hash = hashlib.sha256(node_id.encode()).hexdigest()
+    delivery_id = 'test-delivery-002'
+    pending_dir = refactory_dir / 'agent-delivery' / 'pending'
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    pending_file = pending_dir / f'{pending_hash}.json'
+    pending_file.write_text(json.dumps({'id': delivery_id, 'node': node_id}))
+
+    # Create receipt
+    receipt_dir = refactory_dir / 'agent-delivery' / delivery_id
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    receipt_file = receipt_dir / 'receipt.json'
+    receipt_file.write_text(json.dumps({
+        'node': node_id, 'status': 'pending',
+        'started': '2026-01-01T00:00:00Z', 'artifacts': {},
+    }))
+
+    call_count = 0
+    def _always_fail(ctx):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError('deliberate test failure')
+
+    monkeypatch.setattr(run_mod, 'resolve', lambda target: _always_fail)
+    monkeypatch.setenv('REFACTORY_PROJECT', str(tmp_path))
+
+    result = run_mod.run_node(
+        'test_module:always_fail',
+        workdir=workdir,
+        node_id=node_id,
+    )
+    assert result == {}, f'optional op must return empty dict, got {result!r}'
+
+    # Pending marker should be invalidated (removed)
+    assert not pending_file.exists(), 'pending marker should be invalidated'
+
+    # Receipt should be updated to superseded
+    updated = json.loads(receipt_file.read_text())
+    assert updated['status'] == 'superseded'
+
+
 def test_worker_node_non_optional_exits_one_on_failure(tmp_path, monkeypatch, capsys):
     """A worker spec without optional still exits 1 when execute raises."""
     import sys

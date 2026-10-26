@@ -10,7 +10,6 @@
  * the graph object itself.
  */
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -719,9 +718,10 @@ describe('applyControls integration', () => {
     await call(ctx, 'wf_next')
     // Complete 'a'.
     await call(ctx, 'wf_done', { node: 'a' })
-    // Read the checkpoint (written by the first wf_next) and compute its revision.
-    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // wf_next writes the checkpoint with the post-completion state.
+    await call(ctx, 'wf_next')
+    // Read the checkpoint's graph_revision.
+    const revision = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     // Queue a rerun control with text.
     writeRerunControl(workdir, 'a', { revision, text: 'one-shot fix' })
     // The next wf_next triggers applyControls at its first boundary.
@@ -763,9 +763,8 @@ describe('applyControls integration', () => {
     })
     await call(ctx, 'wf_next')
     // Node 'a' is auto-completed by the shell (dispatch_command exits with code 0).
-    // Read checkpoint and compute its revision (written after 'a' completed).
-    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Read checkpoint's graph_revision (written after 'a' completed).
+    const revision = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     // Queue a rerun control with text.
     writeRerunControl(workdir, 'a', { revision, text: 'MARKER-dm110-fix-this' })
     // The next wf_next triggers applyControls which sets feedback, then drain writes the sidecar.
@@ -947,9 +946,8 @@ describe('applyControls integration', () => {
     expect(v1.some(p => p.includes('Feedback for this visit'))).toBe(false)
     expect(v1.some(p => p.includes('Build it.'))).toBe(true)
 
-    // Get checkpoint revision and queue a rerun with text.
-    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Get checkpoint graph_revision and queue a rerun with text.
+    const revision = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     writeRerunControl(workdir, 'a', { revision, text: 'MARKER-dm110-cross-boundary-fix' })
 
     // Visit 2: dispatch with feedback.
@@ -1023,10 +1021,9 @@ describe('applyControls integration', () => {
     await call(ctx, 'wf_done', { node: 'p' })
     // wf_next writes a checkpoint with p completed and q still pending.
     await call(ctx, 'wf_next')
-    // Read checkpoint to get revision and deferred plan.
-    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes).digest('hex')
-    const cp = JSON.parse(cpBytes.toString())
+    // Read checkpoint to get graph_revision and deferred plan.
+    const cp = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8'))
+    const revision = cp.graph_revision
     const deferredNodes = cp.deferred_redo_plans?.p?.nodes as string[]
     expect(deferredNodes).toBeDefined()
     // Queue a deferred rerun control for 'p'.
@@ -1085,10 +1082,9 @@ describe('applyControls integration', () => {
     await call(ctx, 'wf_done', { node: 'p' })
     // 5. wf_next writes checkpoint with p completed, q and r still due.
     await call(ctx, 'wf_next')
-    // 6. Read checkpoint to get revision and deferred plan.
-    const cpBytes1 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes1).digest('hex')
-    const cp = JSON.parse(cpBytes1.toString())
+    // 6. Read checkpoint to get graph_revision and deferred plan.
+    const cp = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8'))
+    const revision = cp.graph_revision
     const deferredNodes = cp.deferred_redo_plans?.p?.nodes as string[]
     expect(deferredNodes).toBeDefined()
     // 7. Queue a deferred rerun control for 'p' with this revision.
@@ -1101,10 +1097,9 @@ describe('applyControls integration', () => {
     // 10. wf_next — checkpoint rewritten (q completed), r still due, control deferred.
     await call(ctx, 'wf_next')
     expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(true)
-    // 11. Capture the checkpoint revision after q finished. It must differ from
+    // 11. Capture the graph_revision after q finished. It must differ from
     //     the original revision, proving the revision check would have rejected.
-    const cpBytes2 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revisionAfterQ = createHash('sha256').update(cpBytes2).digest('hex')
+    const revisionAfterQ = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     expect(revisionAfterQ).not.toBe(revision)
     // 12. Complete r.
     await call(ctx, 'wf_done', { node: 'r' })
@@ -1401,8 +1396,7 @@ describe('applyControls integration', () => {
     const statusFile = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
     expect(statusFile.status).toBe('failed')
     // Queue a rerun control (simulates graph-control rerun --acknowledge-failure)
-    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    const revision = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     writeRerunControl(workdir, 'a', { revision })
     // Next wf_next: applyControls processes the rerun, redo reopens 'a', drain re-runs it
     const initialCount = callCount
@@ -1496,8 +1490,7 @@ describe('applyControls integration', () => {
     expect(status1.status).toBe('failed')
     await expect(call(ctx, 'wf_redo', { node: 'a' })).rejects.toThrow(/CEO redo cannot/)
     writeFileSync(flag, '')
-    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    const revision = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     writeRerunControl(workdir, 'a', { revision })
     let after = await call(ctx, 'wf_next') as { status: string; nodes?: Array<{ id: string }> }
     for (let i = 0; i < 3 && after.status === 'ready' && !(after.nodes ?? []).some(n => n.id === 'c'); i++) {
@@ -1552,8 +1545,7 @@ describe('applyControls integration', () => {
     await call(ctx, 'wf_done', { node: 'p' })
     // wf_next writes checkpoint with p completed, q still pending.
     await call(ctx, 'wf_next')
-    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    const revision = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8')).graph_revision
     // Queue a deferred rerun control with a stale deferred_nodes list that
     // does NOT match what planRedo('p') will return after the join — simulating
     // the scenario where the graph expanded between preview and apply.

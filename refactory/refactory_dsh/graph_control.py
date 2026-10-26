@@ -67,7 +67,7 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         if spine_stat == 'paused':
             pid = saved.get('owner_pid')
             if not isinstance(pid, int) or not _alive(pid):
-                _write_control_file(root, 'stop', saved)
+                _write_control_file(root, 'stop')
                 from refactory_dsh import recovery as _rec
                 _rec.start(root)
                 return _wait_for_halted(root)
@@ -234,7 +234,7 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
     return result
 
 
-def _write_control_file(root: Path, action: str, saved: dict[str, Any]) -> Path:
+def _write_control_file(root: Path, action: str) -> Path:
     """Write a graph-control file for ``action`` and return its path."""
     identifier = f'{time.time_ns():020d}-{uuid.uuid4().hex}'
     invocation_data = read(root / '.refactory/invocation.json')

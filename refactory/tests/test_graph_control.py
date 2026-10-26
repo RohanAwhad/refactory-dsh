@@ -1648,7 +1648,7 @@ def test_stop_paused_ownerless_starts_owner(tmp_path):
     controls_dir = refactory / 'graph-controls'
     # The control may have been consumed by the simulated owner, but was written
     control_files = list(controls_dir.glob('*.json'))
-    assert len(control_files) >= 1 or result['status'] == 'applied'
+    assert len(control_files) >= 1
 
 
 def test_stop_paused_with_live_owner_queues(tmp_path):

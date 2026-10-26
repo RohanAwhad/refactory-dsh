@@ -1264,16 +1264,12 @@ export function apply(ctx: Context, config: Config): void {
             // Plan check passed — skip the revision check for deferred controls.
           } else {
             // Non-deferred: compare the recomputed graph revision from the
-            // live spine's checkpoint and state, with byte-hash fallback for
-            // backward compatibility with previews that used the checkpoint
-            // file hash.
+            // live spine's checkpoint and state. Never compare against a
+            // stored field; drop the byte-hash fallback so a pre-upgrade
+            // preview is refused with the existing "preview again" message.
             const liveSaved = spine.checkpoint()
             const liveRevision = computeGraphRevision(liveSaved)
-            if (liveRevision !== request.revision) {
-              const checkpointBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-              const byteHash = createHash('sha256').update(checkpointBytes).digest('hex')
-              if (byteHash !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
-            }
+            if (liveRevision !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
           }
           const plan = spine.planRedo(target, isCommandCorrection ? { commandCorrection: true } : undefined)
           const nodes = (spine.checkpoint().graph as WorkflowGraph).nodes
