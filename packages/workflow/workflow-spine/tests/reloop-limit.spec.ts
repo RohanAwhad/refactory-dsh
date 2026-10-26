@@ -44,8 +44,8 @@ async function run(ctx: Context, name: string, args: unknown): Promise<unknown> 
   return definition.execute(args, {} as never)
 }
 
-/** A run whose person reloops the design gate every time it is asked. */
-async function relooping(workdir: string, asked: string[]): Promise<Context> {
+/** A run whose person gives `answer` at the design gate every time it is asked. */
+async function answering(workdir: string, asked: string[], answer = 'reloop'): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -53,7 +53,7 @@ async function relooping(workdir: string, asked: string[]): Promise<Context> {
   ctx.on('user-questions/request', request => Promise.resolve({
     answers: request.questions.map(question => {
       asked.push(question.question)
-      return { id: question.id, selected: ['reloop'], custom: '' }
+      return { id: question.id, selected: [answer], custom: '' }
     }),
   }))
   await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 9, workdir })
@@ -73,16 +73,16 @@ describe('the reloop limit at a user gate', () => {
     const workdir = mkdtempSync(join(tmpdir(), 'dsh-spine-reloop-limit-'))
     dirs.push(workdir)
     const asked: string[] = []
-    const ctx = await relooping(workdir, asked)
+    const ctx = await answering(workdir, asked)
 
     expect(await askOnce(ctx)).not.toHaveProperty('halted')
     expect(await askOnce(ctx)).not.toHaveProperty('halted')
     const last = await askOnce(ctx)
 
     expect(asked).toHaveLength(3)
-    expect(asked[0]).toBe('Approve the design?\n\nReloops left: 2 of 2.')
-    expect(asked[1]).toBe('Approve the design?\n\nReloops left: 1 of 2.')
-    expect(asked[2]).toBe('Approve the design?\n\nReloops left: 0 of 2. '
+    expect(asked[0]).toBe('Approve the design? Reloops left: 2 of 2.')
+    expect(asked[1]).toBe('Approve the design? Reloops left: 1 of 2.')
+    expect(asked[2]).toBe('Approve the design? Reloops left: 0 of 2. '
       + 'A reloop now stops the run instead of going back to design_doc.')
 
     // The limit holds: the third reloop stops the run, and says why and what to do.
@@ -102,5 +102,20 @@ describe('the reloop limit at a user gate', () => {
     const view = presentResult('verdict', { gate: 'gate_strategy' },
       { isError: false, meta: presentationMeta('verdict', last) })
     expect(view).toEqual({ card: 'generic', title: 'Reloop limit reached: the run stopped at gate_strategy' })
+  })
+
+  it('says nothing about a limit when the person stops the run', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'dsh-spine-reloop-limit-'))
+    dirs.push(workdir)
+    const ctx = await answering(workdir, [], 'halt')
+    const stopped = await askOnce(ctx)
+    expect(stopped).toMatchObject({ status: 'routed', verdict: 'halt', answered_by: 'user', halted: true })
+    expect(stopped).not.toHaveProperty('message')
+    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
+    expect(recorded.status).toBe('halted')
+    expect(recorded).not.toHaveProperty('error')
+    const view = presentResult('verdict', { gate: 'gate_strategy' },
+      { isError: false, meta: presentationMeta('verdict', stopped) })
+    expect(view).toEqual({ card: 'generic', title: 'You stopped the run' })
   })
 })

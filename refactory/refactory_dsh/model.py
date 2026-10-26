@@ -171,8 +171,10 @@ class DshModelClient:
 
     Implements ``factory.outer_loop.optimizers.ModelClient``. A completion that fails
     on the wire is retried, up to ``attempts`` in all, with waits that double and add up
-    to ``backoff_s`` (`retry_delays`); one that fails for any other reason is raised
-    straight away with the cause named.
+    to ``retry_window_s`` (`retry_delays`); one that fails for any other reason is raised
+    straight away with the cause named. ``backoff_s`` is the schedule a saved worker spec
+    or run configuration from before ``retry_window_s`` carries: when it is given, the
+    first wait is ``backoff_s`` and each next one doubles, as it was then.
     """
 
     def __init__(
@@ -181,7 +183,8 @@ class DshModelClient:
         model: str = "",
         provider: str = "",
         attempts: int = DEFAULT_ATTEMPTS,
-        backoff_s: float = RETRY_WINDOW_S,
+        backoff_s: float | None = None,
+        retry_window_s: float = RETRY_WINDOW_S,
         dsh_home: str | Path | None = None,
         runtime_root: str | Path | None = None,
         dsh_cli: str | None = None,
@@ -267,7 +270,8 @@ class DshModelClient:
         from refactory_dsh.dsh_profile import model_home
         self._dsh_home = model_home(dsh_home)
         self._attempts = max(1, int(attempts)) if self._worker_backend == "dsh" else 1
-        self._backoff_s = max(0.0, float(backoff_s))
+        self._backoff_s = None if backoff_s is None else max(0.0, float(backoff_s))
+        self._retry_window_s = max(0.0, float(retry_window_s))
         self._cancellations: tuple[threading.Event, ...] = ()
         validate_route(self.route())
 
@@ -325,7 +329,8 @@ class DshModelClient:
         return {
             "routes_resolved": True, "routing_provenance": copy.deepcopy(self._routing_provenance),
             "dsh_home": str(self._dsh_home), "provider": self._provider, "model": self._model,
-            "timeout_s": self._timeout_s, "attempts": self._attempts, "backoff_s": self._backoff_s,
+            "timeout_s": self._timeout_s, "attempts": self._attempts, "retry_window_s": self._retry_window_s,
+            **({} if self._backoff_s is None else {"backoff_s": self._backoff_s}),
             "runtime_root": str(self._runtime_root), "dsh_cli": self._dsh_cli,
             "python_bin": str(self._python_bin),
             "worker_backend": self._worker_backend, "effort": self._effort,
@@ -532,7 +537,8 @@ class DshModelClient:
         if wall is not None and wall < budget_s:
             budget_s = wall
             stop_at = time.monotonic() + budget_s
-        delays = retry_delays(self._attempts, self._backoff_s)
+        delays = (retry_delays(self._attempts, self._retry_window_s) if self._backoff_s is None
+                  else [self._backoff_s * 2 ** index for index in range(self._attempts - 1)])
         for attempt in range(1, self._attempts + 1):
             self._raise_if_cancelled()
             self._checkpoint()

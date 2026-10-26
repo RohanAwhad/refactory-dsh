@@ -431,6 +431,20 @@ def test_a_transport_blip_is_ridden_out_over_about_a_minute(monkeypatch):
         DshModelClient().complete("hello")
     assert waits == pytest.approx([20.0, 40.0])
 
+    # The window is a setting of its own, and it travels in the context a worker is built from.
+    configured = DshModelClient(retry_window_s=6)
+    assert "backoff_s" not in configured.context()
+    answers[:] = [Blip(), Blip(), Ok()]
+    waits.clear()
+    assert DshModelClient(**configured.context()).complete("hello") == "done\n"
+    assert waits == pytest.approx([2.0, 4.0])
+
+    # A spec saved before the window existed keeps the schedule it was saved with.
+    answers[:] = [Blip(), Blip(), Ok()]
+    waits.clear()
+    assert DshModelClient(backoff_s=1.0).complete("hello") == "done\n"
+    assert waits == pytest.approx([1.0, 2.0])
+
 
 def test_the_model_client_returns_stdout(monkeypatch):
     import subprocess

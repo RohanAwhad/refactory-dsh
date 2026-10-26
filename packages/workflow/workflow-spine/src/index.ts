@@ -368,6 +368,20 @@ function recordedStep(
 }
 
 /**
+ * A gate prompt as the question card puts it: its last paragraph is the ask, the title
+ * the card shows on one line, and the paragraphs before it are the detail the card
+ * renders as text (dm-163). A prompt of one paragraph has no detail.
+ * @param prompt - the gate's prompt, its facts filled.
+ * @returns the ask, and the detail when there is one.
+ */
+export function splitGatePrompt(prompt: string): { ask: string; detail?: string } {
+  const paragraphs = prompt.trim().split(/\n[ \t]*\n/u)
+  const ask = paragraphs.pop()!.trim()
+  const detail = paragraphs.join('\n\n').trim()
+  return detail === '' ? { ask } : { ask, detail }
+}
+
+/**
  * A gate's prompt with the run's facts filled in, as refactory fills `{{name}}` in an
  * agent node's prompt (`render`): a fact the run has not produced is left as written.
  *
@@ -1836,10 +1850,14 @@ export function apply(ctx: Context, config: Config): void {
     const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
     try {
       recordStatus(spine, workdir, 'waiting_user')
-      // Build the question text, appending CEO notes if available.
-      let questionText = withFacts(view.gate_prompt ?? '', workdir) || `Gate ${gate}`
+      // The question card shows `question` as a one-line title and renders `detail` as
+      // text, so the question is the gate's ask -- the prompt's last paragraph -- with the
+      // reloops left, and what comes before it (design mode's card) and the CEO's notes
+      // are the detail (dm-163, dm-141).
+      const { ask, detail } = splitGatePrompt(withFacts(view.gate_prompt ?? '', workdir) || `Gate ${gate}`)
       const left = reloopsLeft(spine, gate)
-      if (left !== undefined) questionText += `\n\n${left}`
+      const questionText = left === undefined ? ask : `${ask} ${left}`
+      const details = detail === undefined ? [] : [detail]
       if (config.steerCommand !== '' && workdir !== undefined) {
         try {
           const steerResult = spawnSync(config.steerCommand, [...config.steerArgs, workdir], {
@@ -1852,7 +1870,7 @@ export function apply(ctx: Context, config: Config): void {
               .filter((e: any) => e?.source === 'ceo' && typeof e?.text === 'string')
               .map((e: any) => e.text)
             if (ceoNotes.length > 0) {
-              questionText += '\n\n--- CEO observations (not requirements) ---\n' + ceoNotes.join('\n\n')
+              details.push('--- CEO observations (not requirements) ---\n' + ceoNotes.join('\n\n'))
             }
           }
         } catch { /* guard: do not block the gate */ }
@@ -1862,6 +1880,7 @@ export function apply(ctx: Context, config: Config): void {
           id: gate,
           header: 'Workflow gate',
           question: questionText,
+          ...(details.length === 0 ? {} : { detail: details.join('\n\n') }),
           ...(labels.length === 0 ? {} : { options: labels.map(label => ({ label })) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),

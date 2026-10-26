@@ -724,8 +724,10 @@ def design_card(facts: dict, design_text: str = "") -> str:
     ``PASS, nothing blocks the build`` or what is unresolved, the scale, then the
     advisories, unverified claims first); then ``Pitfalls: N`` with one
     ``- PIT-001 (high): addressed`` line each, or the one line saying why they were not
-    checked. Everything the card listed under its old markdown heading is here, once, and
-    a section a line names is named without its ``##``.
+    checked. Everything the card listed under its old markdown heading is here, once.
+
+    Each item and the ``- `` lines under it are one paragraph, set apart by a blank line,
+    so the question card, which renders it as text, keeps the lines apart.
     """
     status = design_review_status(facts)
     if not status:
@@ -749,7 +751,13 @@ def design_card(facts: dict, design_text: str = "") -> str:
             lines.extend(f"- {entry}" for entry in entries)
         else:
             lines.append(f"Pitfalls: {coverage}")
-    return "\n".join(_re.sub(r"(?<!\S)#{1,6} ", "", line) for line in lines)
+    paragraphs: list[list[str]] = []
+    for line in lines:
+        if line.startswith("- ") and paragraphs:
+            paragraphs[-1].append(line)
+        else:
+            paragraphs.append([line])
+    return "\n\n".join("\n".join(paragraph) for paragraph in paragraphs)
 
 
 def _quote_words(text: str) -> str:

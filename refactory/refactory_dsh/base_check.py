@@ -1288,6 +1288,38 @@ def compute_test_guardedness(
 # ── site-revert check ────────────────────────────────────────────────────
 
 
+def vitest_name_pattern(name: str) -> str:
+    """A cited vitest name as `vitest -t` matches it (dm-193).
+
+    A citation names a test as vitest reports it, ``describe > test``, but ``-t`` is a
+    regular expression matched against the names joined by a space: ``describe test``. So
+    the separator becomes a space, and the name is escaped, so a ``(`` in it is a
+    character and not a group vitest refuses at startup.
+    """
+    return re.sub(r"[.*+?^${}()|[\]\\/]", r"\\\g<0>", name.replace(" > ", " "))
+
+
+#: Vitest's own summary of what it ran, ``Tests  1 passed | 2 skipped (3)``; pytest's is
+#: `_PYTEST_SUMMARY`.
+_VITEST_SUMMARY = re.compile(r"^\s*Tests\s+(.+)$", re.MULTILINE)
+_RAN = re.compile(r"\b\d+ (?:passed|failed|errors?|xfailed|xpassed)\b")
+
+
+def _nothing_ran(output: str, *, vitest: bool) -> bool:
+    """Whether the run passed or failed no test: every selected test skipped, or none collected.
+
+    Vitest exits 0 when ``-t`` selects nothing, which would read as a test that still
+    passes with the site reverted; it prints no ``Tests`` line at all when it never got
+    to collect (dm-193). A pytest summary of only skipped tests is the same.
+    """
+    text = strip_ansi(output)
+    if vitest:
+        summary = _VITEST_SUMMARY.findall(text)
+        return not summary or not _RAN.search(summary[-1])
+    summary = _PYTEST_SUMMARY.findall(text)
+    return bool(summary) and not _RAN.search(summary[-1])
+
+
 def _is_test_file(path: str) -> bool:
     """Whether *path* is a test file (not a code site for revert purposes)."""
     parts = Path(path).parts
@@ -1809,7 +1841,7 @@ def compute_site_reverts(
                     argv = ["python", "-B", "-m", "pytest", "-x", "-q", test_path]
             elif test_path.endswith(".ts") or test_path.endswith(".spec.ts"):
                 if fn_name:
-                    argv = ["npx", "vitest", "run", test_path, "-t", fn_name]
+                    argv = ["npx", "vitest", "run", test_path, "-t", vitest_name_pattern(fn_name)]
                 else:
                     argv = ["npx", "vitest", "run", test_path]
             else:
@@ -1851,9 +1883,11 @@ def compute_site_reverts(
                 if has_collection:
                     result = ("import_only" if _is_import_only_failure(test_output, defined_names)
                               else "collection_error")
-                elif rc in (4, 5) or "no tests ran" in test_output.lower():
+                elif (rc in (4, 5) or "no tests ran" in test_output.lower()
+                      or _nothing_ran(test_output, vitest=argv[:2] == ["npx", "vitest"])):
                     # pytest exit 4 = no tests collected, 5 = no tests ran: the cited
                     # test does not exist, a wrong citation rather than a measurement gap.
+                    # So is a run that passed or failed nothing (`_nothing_ran`).
                     result = "no_tests"
                 elif rc != 0:
                     # Test failed — check if it's import-only

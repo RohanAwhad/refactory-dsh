@@ -180,9 +180,30 @@ describe('workflow-spine real composition', () => {
       expect(view.nodes.find(node => node.id === 'gate')?.gate_prompt).toBe(filled)
       await run(ctx, 'wf_verdict', { gate: 'gate' })
       // The card also says how many reloops are left before one stops the run (dm-141).
-      expect(asked[0]!.question).toBe(`${filled}\n\nReloops left: 3 of 3.`)
+      expect(asked[0]!.question).toBe(`${filled} Reloops left: 3 of 3.`)
+      expect(asked[0]!.detail).toBeUndefined()
     } finally { rmSync(tmp, { recursive: true, force: true }) }
     expect(workflowSpine.withFacts('Then, {{delivery}}.', undefined)).toBe('Then, {{delivery}}.')
+  })
+
+  it('puts the gate\'s card in the detail and keeps the question to its one-line ask', async () => {
+    // The question card shows `question` as a title that keeps no line breaks, and
+    // renders `detail` as text: design mode's card goes there, line by line (dm-163).
+    const card = 'Design: The tool prints the name.\n\nDesign review: PASS, nothing blocks the build\n\n'
+      + 'Pitfalls: 2\n- PIT-001 (high): addressed\n- PIT-002 (low): not mentioned'
+    const withCard: WorkflowGraph = {
+      ...graph,
+      nodes: { ...graph.nodes, gate: { ...graph.nodes.gate!, gate_prompt: '{{design_card}}\n\nApprove the design? Then, {{delivery}}.' } },
+    }
+    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-card-'))
+    try {
+      writeFileSync(join(tmp, 'facts.json'), JSON.stringify({ design_card: card, delivery: 'this run opens a pull request' }))
+      const { ctx, asked } = await gateRun(withCard, tmp, proceed)
+      await run(ctx, 'wf_next', {})
+      await run(ctx, 'wf_verdict', { gate: 'gate' })
+      expect(asked[0]!.question).toBe('Approve the design? Then, this run opens a pull request. Reloops left: 3 of 3.')
+      expect(asked[0]!.detail).toBe(card)
+    } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
   it('lets the person stop the run at a user gate that has no halt edge', async () => {
