@@ -37,6 +37,7 @@ from tests_support import DESIGN_DOC_ANSWER
 SOURCE = str(Path(refactory_dsh.__file__).resolve().parents[1])
 
 DESCRIPTION = "WHY-THIS-PULL-REQUEST: the tool prints one, and the next step adds a second tool."
+BRIEF = "Add more.py that prints two."
 
 
 class SpineRun:
@@ -82,20 +83,25 @@ class SpineRun:
         return prompt
 
 
+def _refine(url: str, tmp_path: Path, **knobs: str) -> SpineRun:
+    """A design run whose knobs ask for a refine of ``url``, as the spine is given them."""
+    state = DesignMode().state_dict()
+    given = {"name": NAME, "brief": BRIEF, "check": "python tool.py", "refine": url, **knobs}
+    for knob, value in given.items():
+        state["knobs"][knob]["value"] = value
+    run = tmp_path / "refine"
+    run.mkdir()
+    Ledger.seed(run, BRIEF)
+    return SpineRun(run, state)
+
+
 def test_the_spine_takes_the_light_route_when_refine_is_a_knob(opened_pull, tmp_path):
     """Real prepare and route_refine_design, as separate processes with `refine` a knob,
     take the light route: the design's reads are all there, before and after a person's
     reloop, its prompt shows the pull request both times, and the approval card names
     the refinement as the run's scale."""
     _describe(opened_pull.github, "acme/app", DESCRIPTION)
-    state = DesignMode().state_dict()
-    for knob, value in (("name", NAME), ("brief", "Add more.py that prints two."),
-                        ("check", "python tool.py"), ("refine", opened_pull.url)):
-        state["knobs"][knob]["value"] = value
-    run = tmp_path / "refine"
-    run.mkdir()
-    Ledger.seed(run, "Add more.py that prints two.")
-    spine = SpineRun(run, state)
+    spine = _refine(opened_pull.url, tmp_path)
 
     spine.node("prepare")
     assert (spine.facts()["research_scope"], spine.facts()["research_scope_reason"]) == (
@@ -120,6 +126,21 @@ def test_the_spine_takes_the_light_route_when_refine_is_a_knob(opened_pull, tmp_
         assert LIGHT_REFINE_STRATEGY_PLAN in prompt
         assert DESCRIPTION in prompt
         assert "tool.py" in prompt.split("### Changed files\n", 1)[1].splitlines()
+
+
+def test_a_full_refine_on_the_spine_is_classified_as_a_refine(opened_pull, tmp_path):
+    """refine_design=full: the route proceeds into research, and classify_scale keeps the run
+    scoped as a refine whatever the research found, through its refine shortcut, which reads
+    what prepare decided."""
+    spine = _refine(opened_pull.url, tmp_path, refine_design="full")
+    spine.node("prepare")
+    assert spine.node("route_refine_design") == "proceed"
+    # Research with no footprint, which on its own classifies a change as full.
+    spine.agent("research_director", {"research-plan.json": "[]\n"}, {"research": "(nothing found)"})
+    spine.node("record_findings")
+    spine.node("classify_scale")
+    assert (spine.facts()["research_scope"], spine.facts()["research_scope_reason"]) == (
+        "scoped", REFINE_SCOPE_REASON)
 
 
 def _run_node_main(run, target, node_id, node_type, monkeypatch):

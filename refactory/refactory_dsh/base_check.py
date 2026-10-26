@@ -1237,7 +1237,8 @@ def compute_test_guardedness(
             if f.startswith(tf + "::") or f.startswith(tf + " > ")
         )
         has_collection_error = tf in collection_errors or any(
-            e.startswith(tf) for e in collection_errors
+            e.startswith(tf) or e.endswith("/" + tf)
+            for e in collection_errors
         )
         if has_collection_error and not tests_in_file:
             # The test cannot be collected or imported on the base (correction 4):
