@@ -90,8 +90,8 @@ def test_spine_route_refine_design_light(tmp_path, monkeypatch):
             f"design_doc declared read {read_file!r} is missing after route_refine_design"
 
 
-def test_spine_route_refine_design_full_on_non_refine(tmp_path, monkeypatch):
-    """route_refine_design on a non-refine run returns full and writes nothing."""
+def test_spine_route_refine_design_proceed_on_non_refine(tmp_path, monkeypatch):
+    """route_refine_design on a non-refine run returns proceed and writes nothing."""
     from refactory_dsh import lowering
 
     mode = DesignMode()
@@ -110,7 +110,7 @@ def test_spine_route_refine_design_full_on_non_refine(tmp_path, monkeypatch):
 
     assert code == 0, f"exit {code}: {stderr}"
     lines = [l.strip() for l in stdout.strip().splitlines() if l.strip()]
-    assert lines[-1] == "full", f"expected verdict 'full', got lines: {lines}"
+    assert lines[-1] == "proceed", f"expected verdict 'proceed', got lines: {lines}"
 
     # No sentinel files were written (the downstream nodes write them).
     assert not (run / "research-plan.json").exists()

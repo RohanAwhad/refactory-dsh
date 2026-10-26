@@ -254,16 +254,16 @@ def test_route_refine_design_unit(tmp_path):
         facts={"research_scope_reason": ""},
     )
     result = route_refine_design(ctx_full)
-    assert result == "full"
+    assert result == "proceed"
     assert "strategy" not in ctx_full.facts
 
-    # Refine with full knob → full.
+    # Refine with full knob → proceed.
     ctx_refine_full = RunContext(
         tmp_path / "refine_full", knobs={"refine_design": "full"}, task={},
         facts={"research_scope_reason": REFINE_SCOPE_REASON},
     )
     result = route_refine_design(ctx_refine_full)
-    assert result == "full"
+    assert result == "proceed"
 
     # Refine with light knob → light, writes sentinels.
     run_dir = tmp_path / "refine_light"

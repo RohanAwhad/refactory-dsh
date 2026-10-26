@@ -259,11 +259,11 @@ def route_refine_design(ctx: Any) -> Any:
 
     # A non-refine run always takes the full path, regardless of the knob.
     if ctx.facts.get("research_scope_reason") != REFINE_SCOPE_REASON:
-        return Verdict("full", "not a refine: walking the full design phase")
+        return Verdict("proceed", "not a refine: walking the full design phase")
 
     # A refine with the full knob walks the full path too.
     if ctx.knob("refine_design", "light") == "full":
-        return Verdict("full", "refine_design=full: walking the full design phase")
+        return Verdict("proceed", "refine_design=full: walking the full design phase")
 
     # ── light path: write sentinel facts and files ──
     # Retrieve the PR body from delivery_plan.

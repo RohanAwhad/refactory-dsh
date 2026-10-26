@@ -2618,7 +2618,7 @@ research, pitfalls and strategy phases and goes from `prepare` straight to
 strategy_plan, strategy (including the PR description, diff stat and
 changed-file list from the worktree) — so every downstream node finds its
 declared inputs on disk on the spine.  With `refine_design=full`, or on any
-non-refine run, the gate returns `full` and the existing pipeline runs
+non-refine run, the gate returns `proceed` and the existing pipeline runs
 unchanged.
 
 The `refine_design` knob is frozen: it cannot change after the run starts.

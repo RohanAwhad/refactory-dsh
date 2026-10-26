@@ -913,7 +913,7 @@ class DesignMode(Mode):
         ))
 
         graph.connect("prepare", "route_refine_design")
-        graph.connect("route_refine_design", "research_director", condition="full")
+        graph.connect("route_refine_design", "research_director", condition="proceed")
         graph.connect("route_refine_design", "design_doc", condition="light")
         graph.connect("research_director", "record_findings")
         graph.connect("record_findings", "gate_research")
@@ -1111,7 +1111,7 @@ def main(argv: list[str] | None = None) -> int:
         state["knobs"]["pr"]["value"] = False
     if args.review_comments:
         state["knobs"]["review_comments"]["value"] = True
-    if args.refine_design:
+    if not args.fast and args.refine_design:
         state["knobs"]["refine_design"]["value"] = args.refine_design
     mode.load_state_dict(state)
     from refactory_dsh.create import parse_verdicts

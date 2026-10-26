@@ -332,14 +332,14 @@ export const designGraph: ShapeEntry = {
   gatesWithReloop: ['gate_research', 'gate_pitfalls', 'gate_design_review', 'gate_strategy', 'prepare_check', 'gate_check', 'gate_qa', 'gate_overwatch'],
   // A full design: the perspectives step runs. No reviewer sits between the design and
   // the person's gate at either scale.
-  fixedVerdicts: { route_strategy: 'proceed', route_refine_design: 'full' }, large: true,
+  fixedVerdicts: { route_strategy: 'proceed', route_refine_design: 'proceed' }, large: true,
 }
 
 /** The same graph for a scoped change, which skips the perspectives step. */
 export const designGraphScoped: ShapeEntry = {
   ...designGraph,
   name: 'designGraphScoped',
-  fixedVerdicts: { route_strategy: 'scoped', route_refine_design: 'full' },
+  fixedVerdicts: { route_strategy: 'scoped', route_refine_design: 'proceed' },
 }
 
 /** A light refine: skips research and strategy, goes straight to design_doc.

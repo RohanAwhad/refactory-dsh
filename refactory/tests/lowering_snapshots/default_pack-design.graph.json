@@ -924,7 +924,7 @@
     {
       "source": "route_refine_design",
       "target": "research_director",
-      "condition": "full"
+      "condition": "proceed"
     },
     {
       "source": "route_strategy",

@@ -1270,7 +1270,13 @@ def _mode(**knobs) -> DesignMode:
 def _design(workdir: Path, emit: dict[str, str] | None = None, *, mode: DesignMode | None = None,
             check: str = "python tool.py", **task: str):
     model = FakeModel(_answers(render(emit or {"tool.py": "print('built')\n"})))
-    return (mode or DesignMode()).run(
+    used_mode = mode or DesignMode()
+    # Delivery tests pre-date light refine and script answers for the full pipeline.
+    if "refine" in task:
+        state = used_mode.state_dict()
+        state["knobs"]["refine_design"]["value"] = "full"
+        used_mode.load_state_dict(state)
+    return used_mode.run(
         workdir, model=model, verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": "Build a tool\nthat prints built.", "check": check, **task},
     )
