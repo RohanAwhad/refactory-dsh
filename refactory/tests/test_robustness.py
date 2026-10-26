@@ -32,6 +32,10 @@ from tests_support import (DESIGN_DOC_ANSWER,
 # ── helpers ────────────────────────────────────────────────────────────────
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def _git_init(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", str(path)], capture_output=True, check=True)

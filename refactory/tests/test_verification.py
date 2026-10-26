@@ -17,6 +17,10 @@ from refactory_dsh.verification import VERIFICATION_METHODS, VERIFIER_PROMPT
 # ── graph structure tests ─────────────────────────────────────────────────
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def test_verifier_node_exists_in_design_mode():
     graph = DesignMode().build()
     assert "verifier" in graph.nodes

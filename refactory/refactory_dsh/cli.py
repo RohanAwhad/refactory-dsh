@@ -360,7 +360,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks: list[tuple[str, bool | None, str]] = []
     interpreter = Path(sys.executable)
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    checks.append(("python >= 3.12", sys.version_info >= (3, 12), version))
+    # What pyproject.toml declares (`requires-python`), so doctor and the installer agree.
+    checks.append(("python >= 3.11", sys.version_info >= (3, 11), version))
     checks.append(("uv", shutil.which("uv") is not None, shutil.which("uv") or "install from https://docs.astral.sh/uv"))
     checks.append(("node >= 22.19", _node_ok(), node_bin()))
     for module, why in (("refactory_dsh", "this package"),):

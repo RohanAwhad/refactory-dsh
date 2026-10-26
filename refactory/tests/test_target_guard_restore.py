@@ -16,6 +16,10 @@ from test_design_worktree import _answers, _design
 from tests_support import FakeModel, git, git_repo, render
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def _tree(root: Path) -> dict[str, tuple]:
     """Every entry under root except .git: (kind, bytes-or-link, mode)."""
     found = {}

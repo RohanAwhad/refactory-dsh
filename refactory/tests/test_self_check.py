@@ -38,6 +38,10 @@ PIN = "tests/test_pin.py::test_pin"
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def _target(root: Path, files: dict[str, str]) -> Path:
     """A repository on main with ``files`` committed over `git_repo`'s one file."""
     repo = git_repo(root)

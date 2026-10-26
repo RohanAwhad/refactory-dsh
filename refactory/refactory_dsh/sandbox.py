@@ -239,8 +239,14 @@ def scrub(env: dict[str, str] | None = None) -> dict[str, str]:
     return out
 
 
-def _limits(memory_mb: int, cpu_s: int, file_mb: int):  # pragma: no cover - posix only
-    """A preexec that caps what the child can consume."""
+def _limits(memory_mb: int, cpu_s: int, file_mb: int, *,
+            address_space: bool = True):  # pragma: no cover - posix only
+    """A preexec that caps what the child can consume.
+
+    ``memory_mb`` caps the heap (RLIMIT_DATA) and, unless ``address_space`` is false,
+    the whole address space (RLIMIT_AS). Node reserves address space it never uses, so
+    a child that starts Node keeps the heap cap and drops only the address-space one.
+    """
     import resource
 
     def apply() -> None:
@@ -254,7 +260,7 @@ def _limits(memory_mb: int, cpu_s: int, file_mb: int):  # pragma: no cover - pos
             except (ValueError, OSError):
                 pass
         for attribute, value in (
-            ("RLIMIT_AS", memory_mb * 1024 * 1024),
+            *((("RLIMIT_AS", memory_mb * 1024 * 1024),) if address_space else ()),
             ("RLIMIT_DATA", memory_mb * 1024 * 1024),
         ):
             which = getattr(resource, attribute, None)
@@ -335,12 +341,14 @@ def run_sandboxed(
     file_mb: int = DEFAULT_FILE_MB,
     env: dict[str, str] | None = None,
     forwarded: dict[str, str] | None = None,
+    address_space: bool = True,
 ) -> SandboxResult:
     """Run a snippet in a subprocess with limits, from the workspace, scrubbed.
 
     A subprocess rather than a thread or a same-process guard, because the thing
     being contained is *code*: only a separate process can be killed, capped and
-    given its own working directory.
+    given its own working directory. ``address_space=False`` keeps the heap cap and
+    drops the address-space cap (`_limits`).
     """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -350,7 +358,7 @@ def run_sandboxed(
     _apply_forwarded(child_env, forwarded)
     kwargs: dict[str, Any] = {}
     if sys.platform != "win32":
-        kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
+        kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb, address_space=address_space)
     started = time.monotonic()
     try:
         if child_env.get("REFACTORY_BUDGET_LEDGER"):
@@ -657,6 +665,14 @@ def smoke(
 
     forwarded = toolchain.tool_env(identifier.split("/", 1)[0], project)
     kwargs.setdefault("timeout_s", DEFAULT_MODEL_SMOKE_TIMEOUT_S if model else DEFAULT_TIMEOUT_S)
+    if model:
+        # A model call starts a DSH worker, which is Node, and Node's WebAssembly
+        # (fetch's HTTP parser among it) reserves far more address space than it uses.
+        # Under the snippet's address-space cap that fails with
+        # "WebAssembly.instantiate(): Out of memory" on Linux (dm-256), so a smoke with a
+        # model drops only that cap. The heap cap stays, so the mode's own code is
+        # still bounded; a smoke without a model keeps both.
+        kwargs.setdefault("address_space", False)
     if context.get("budget_ledger"):
         from refactory_dsh.budgets import RunBudget
 

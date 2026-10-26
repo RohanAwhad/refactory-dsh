@@ -23,9 +23,9 @@ The repository must be accessible to your GitHub account. `uv` manages the Pytho
 >
 > **Pinned runs.** When a run is resumed after the driver moved to a new
 > commit, a pin is created: a `graph-pin-<commit12>` profile in your own
-> `~/.dsh`, pointing to a prepared worktree of the original commit. Your
-> credentials stay in `~/.dsh` (DSH_HOME is unchanged). `refactory pin list`
-> shows active pins; `refactory pin prune` removes unused ones.
+> `$DSH_HOME` (`~/.dsh` unless you set it), pointing to a prepared worktree of
+> the original commit. Your credentials stay in `$DSH_HOME`, which is unchanged.
+> `refactory pin list` shows active pins; `refactory pin prune` removes unused ones.
 
 ### Builds and restarts
 
@@ -72,10 +72,10 @@ Use another package name if `first_tuned` already exists. Adoption preserves the
 ## 3. Open the GUI and configure a model
 
 ```bash
-uv run refactory ui --port 3081
+uv run refactory ui --port 3081 --no-open
 ```
 
-Open the exact URL printed by the server, including its token. Choose this checkout as the workspace, then create a new session. A blank session can open the right sidebar's **Modes** tab; no introductory model message is needed.
+Open the exact URL printed by the server, including its token (`http://127.0.0.1:3081/?token=…`); `--no-open` only stops it from opening a browser itself. Choose this checkout as the workspace, then create a new session. A blank session can open the right sidebar's **Modes** tab; no introductory model message is needed.
 
 In **Settings → Models**, configure a provider and save its API key with **Edit → API key → Apply**. Use the managed credential store for nested authoring and validation. An exported key or a repository `.env` alone does not survive nested execution's secret scrub. See [model setup](models.md#credentials-for-nested-execution).
 
@@ -84,7 +84,7 @@ uv run refactory doctor
 uv run refactory runtime
 ```
 
-Doctor checks local configuration, not authentication or quota. Runtime shows the nested defaults. Select a configured model in chat or use the CLI's `--provider` and `--model` options.
+Doctor checks local configuration, not authentication or quota. Runtime shows the nested defaults. Select a configured model in chat; CLI runs choose their model with `--provider` and `--model`, or from the runtime configuration that `uv run refactory runtime` shows.
 
 New coding workers default to **Skip permission checks**, including full native sandbox bypass for DSH/Codex. Their tools can access what your OS account can access. To retain backend checks, choose **Native permission policy** in the Modes panel or pass `--permission-mode default` in the CLI. Existing saved profiles and runs preserve their policy. [Worker permissions](models.md#model-provider-versus-coding-agent)
 
@@ -110,7 +110,7 @@ Start an interactive terminal run:
 
 ```bash
 uv run refactory ceo counting_pack/fixed_step \
-  --knob target=20 --knob step=2 --intent "Count to twenty and explain the recorded result."
+  --knob target=8 --knob step=2 --intent "Count to eight and explain the recorded result."
 ```
 
 The knobs supply the operation's inputs; prose intent does not change deterministic inputs automatically. The conversational CEO uses a model even when the underlying mode is deterministic.
@@ -119,17 +119,20 @@ To author a small artifact:
 
 ```bash
 uv run refactory ceo \
-  "Build wordcount.py to count lines, words and characters in a UTF-8 file. Include sample.txt and verify the counts." \
-  --mode design --name wordcount --check "python wordcount.py sample.txt"
+  "Build wordcount.py, which prints a file's line, word and character counts as wc -l -w -m counts them, as three numbers separated by spaces, and a plain-ASCII sample.txt." \
+  --mode design --name wordcount \
+  --check 'test "$(python wordcount.py sample.txt)" = "$(wc -l -w -m < sample.txt | xargs)"'
 ```
 
-Review the proposed design when asked. A command that merely prints counts does not by itself prove those counts correct; read the check evidence and review findings. Authoring can take substantial time because the current default modes include research and review stages.
+Review the proposed design when asked. The check compares the script's counts with `wc`, so it fails when they are wrong, not only when the script crashes; a check that only runs the script would pass on wrong counts. Still read the check evidence and review findings.
+
+Once the reviews pass, the run opens a pull request, which needs `gh` logged in (`gh auth login`). Without a login the files stay on the run's branch, which the run names (a new project's `main` stays empty), and `delivery.json` in the run directory lists the commands that publish them. Authoring can take substantial time because the current default modes include research and review stages.
 
 To author a reusable mode, follow [Create and Edit](tutorials/03-author-with-a-model.md). Choose a [Task](datasets.md) for repeated items, or `--single` explicitly for a one-off harness.
 
 ## 5. Stay involved
 
-In GUI chat, ask: “Open counting_pack/fixed_step with target=20 and step=2. Walk it one node at a time.” Ask to pause before a node, correct an instruction, or answer a gate. In the Modes panel, choose a mode and set its knobs: **Run once** executes it, including full and fast authoring modes; **Start** optimizes a scored mode. Chat supports stepwise authoring and user gates. Fast authoring uses smaller graphs with focused QA and bounded repair; see its [tested scope and resource choices](budgets-fast-modes.md#acceptance-status).
+In GUI chat, ask: “Open counting_pack/fixed_step with target=8 and step=2. Walk it one node at a time.” Ask to pause before a node, correct an instruction, or answer a gate. In the Modes panel, choose a mode and set its knobs: **Run once** executes it, including full and fast authoring modes; **Start** optimizes a scored mode. Chat supports stepwise authoring and user gates. Fast authoring uses smaller graphs with focused QA and bounded repair; see its [tested scope and resource choices](budgets-fast-modes.md#acceptance-status).
 
 Attach the run's exact directory with **Existing run directory → Read this run** to follow persisted live activity, worker receipts and pending questions. Reading a run does not execute it. Use **resume** explicitly for a supported saved boundary after its owner stops; completed work and consumed resources are retained. [Interface guide](interfaces.md) explains what is interactive, what updates automatically, and when controls take effect.
 

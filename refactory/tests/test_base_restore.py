@@ -30,6 +30,10 @@ from refactory_dsh.worktree import _json as _read_json, NO_HOOKS
 # ── helpers ────────────────────────────────────────────────────────────────
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def _git_init(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q", "-b", "main", str(path)],

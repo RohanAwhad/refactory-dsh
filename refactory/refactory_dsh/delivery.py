@@ -66,6 +66,7 @@ or loops. Delivery only ever pushes a head that contains main.
 from __future__ import annotations
 
 import dataclasses
+import ipaddress
 import json
 import os
 import re
@@ -130,6 +131,28 @@ _ASSIGNMENT = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)=(\S+)")
 #: The pull request fields a refinement starts from.
 _PULL_FIELDS = "url,number,state,headRefName,headRefOid,baseRefName,isCrossRepository,body"
 
+#: Why delivery stops when gh has no login, said the same way wherever it is found.
+LOGGED_OUT = ("GitHub CLI is not logged in here: `gh auth login` signs in, for the next run, "
+              "since a run delivers only what its approval gate showed")
+
+#: What may be an IP address in what gh or git says: GitHub's refusals name the
+#: address a request came from ("API rate limit exceeded for …"). Each candidate is
+#: checked with `ipaddress` before it is hidden, so versions and times stay as they are.
+_ADDRESS = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?!\w|\.\d)"
+                      r"|(?<![\w.:])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:]|\.\d)")
+
+
+def _without_addresses(text: str) -> str:
+    """``text`` with every IP address in it hidden: a run's records never say where it ran from."""
+    def hide(found: re.Match[str]) -> str:
+        try:
+            ipaddress.ip_address(found[0])
+        except ValueError:
+            return found[0]
+        return "[address hidden]"
+
+    return _ADDRESS.sub(hide, text)
+
 
 class NotDelivered(Exception):
     """Why a run's work stays on its local branch: a choice, or GitHub cannot be used for it.
@@ -141,7 +164,9 @@ class NotDelivered(Exception):
 
     def __init__(self, message: str, pull_request: str = "", pushed: str = "",
                  merge: MergeResult | None = None) -> None:
-        super().__init__(message)
+        # Every reason reaches a record, the plan the gate shows, or a run warning, so
+        # none of them carries an address (dm-260).
+        super().__init__(_without_addresses(message))
         self.pull_request = pull_request
         #: ``owner/repo:branch`` when the branch already reached GitHub before delivery stopped.
         self.pushed = pushed
@@ -150,6 +175,13 @@ class NotDelivered(Exception):
 
 class _NotFound(NotDelivered):
     """GitHub answered that what was asked for does not exist, or this login cannot see it."""
+
+
+class _LoggedOut(NotDelivered):
+    """gh has no login for GitHub here, so nothing was asked of GitHub."""
+
+    def __init__(self) -> None:
+        super().__init__(LOGGED_OUT)
 
 
 class Unverified(ValueError):
@@ -224,8 +256,7 @@ def _gh(*args: str, cwd: Path | None = None) -> str:
         return result.stdout
     # gh says "not logged in" with exit status 4, or, in later releases, as an HTTP 401.
     if result.returncode == 4 or "HTTP 401" in result.stderr:
-        raise NotDelivered("gh is not logged in to GitHub here: `gh auth login` signs in, for the next run, "
-                           "since a run delivers only what its approval gate showed")
+        raise _LoggedOut()
     said = " ".join(line.strip() for line in (result.stderr or result.stdout).splitlines() if line.strip())
     said = said[:400] or f"exit status {result.returncode}"
     if "HTTP 404" in result.stderr or "Could not resolve to a" in result.stderr:
@@ -250,6 +281,26 @@ def _git(path: Path, *args: str) -> str:
                             *worktree.NO_HOOKS, *args, env=_env())
     except ValueError as error:
         raise NotDelivered(_CREDENTIAL.sub("***@", str(error))) from error
+
+
+def _require_login() -> None:
+    """Refuse, saying so, when gh has no login for GitHub, before anything is asked of GitHub.
+
+    A logged-out gh still sends `gh api user` to GitHub, unauthenticated, and on a shared
+    address what comes back is GitHub's rate limit, naming the address, rather than "not
+    logged in" (dm-260). `gh auth status` answers a missing login from gh's own
+    configuration. `GH_HOST` is left out of its environment because with it gh reports a
+    login it does not have. Any other failure is left to the request that follows.
+    """
+    env = {name: value for name, value in _env().items() if name != "GH_HOST"}
+    try:
+        result = subprocess.run([_binary(), "auth", "status", "--hostname", "github.com"],
+                                capture_output=True, text=True, timeout=120, env=env,
+                                stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if result.returncode != 0 and "not logged in" in f"{result.stdout}\n{result.stderr}".lower():
+        raise _LoggedOut()
 
 
 def _login() -> str:
@@ -387,6 +438,7 @@ def plan(target: Path, *, base: str, branch: str, head: str = "", rev: str = "",
                     "summary": "won't open a pull request, because `pr` is off (--no-pr)", "inputs": inputs}
         if visibility not in VISIBILITIES:
             raise NotDelivered(f"repo_visibility is {visibility!r}, not one of {', '.join(VISIBILITIES)}")
+        _require_login()
         login = _login()
         found = _remote(target) if target.exists() else None
         if refine:
@@ -399,7 +451,8 @@ def plan(target: Path, *, base: str, branch: str, head: str = "", rev: str = "",
             planned = _creation(target, owner or login, visibility, branch, base)
     except NotDelivered as reason:
         return {"action": "none", "why": str(reason),
-                "summary": f"won't open a pull request, because {reason}", "inputs": inputs}
+                "summary": f"won't open a pull request, because {reason}", "inputs": inputs,
+                **({"logged_out": True} if isinstance(reason, _LoggedOut) else {})}
     return {**planned, "inputs": inputs}
 
 
@@ -888,7 +941,8 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
 
     # ── action "none" (--no-pr, never planned) ──────────────────────────
     if approved.get("action") in (None, "none"):
-        finish = _finish_commands(ctx, found, title, draft=bool(draft_delivery))
+        finish = _finish_commands(ctx, found, title, draft=bool(draft_delivery),
+                                  inputs=approved.get("inputs"), logged_out=bool(approved.get("logged_out")))
         result = _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
                        title=title, finish=finish, draft_delivery=draft_delivery)
         result["delivery_conflict_files"] = []
@@ -906,7 +960,8 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                rev=str(inputs.get("rev") or ""), enabled=bool(inputs["enabled"]), owner=inputs["owner"],
                visibility=inputs["visibility"], refine=inputs["refine"])
     repo_slug = now.get("repo") or approved.get("repo")
-    finish = _finish_commands(ctx, found, title, repo_slug, draft=bool(draft_delivery))
+    finish = _finish_commands(ctx, found, title, repo_slug, draft=bool(draft_delivery),
+                              inputs=inputs, logged_out=bool(now.get("logged_out")))
     if now["action"] == "none":
         result = _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish,
                        draft_delivery=draft_delivery)
@@ -2411,12 +2466,17 @@ def _write_pr_text(ctx: Any, found: worktree.Worktree, *,
 
 
 def _finish_commands(ctx: Any, found: worktree.Worktree, title: str,
-                     repo_slug: str | None = None, *, draft: bool = False) -> list[str]:
+                     repo_slug: str | None = None, *, draft: bool = False,
+                     inputs: dict[str, Any] | None = None, logged_out: bool = False) -> list[str]:
     """Shell commands that finish a kept-local delivery from any directory.
 
     When ``repo_slug`` is provided it is used directly; otherwise the repository is
-    resolved from the target the way :func:`plan` does.  When no GitHub repository can
-    be found, returns an empty list — the caller says so plainly.
+    resolved from the target the way :func:`plan` does. With a GitHub repository they
+    push the branch and open the pull request. A new project refactory created has none
+    yet, so they create it as delivery would (``inputs`` carries the run's `repo_owner`
+    and `repo_visibility`), push its empty `main` and the branch, and open its first pull
+    request. Any other target with no GitHub repository gets the local merge instead.
+    ``logged_out`` puts `gh auth login` first (dm-260).
     """
     slug = repo_slug
     if slug is None:
@@ -2426,17 +2486,30 @@ def _finish_commands(ctx: Any, found: worktree.Worktree, title: str,
                 slug = info[1]
         except NotDelivered:
             slug = None
-    if slug is None:
-        return []
+    login = ["gh auth login"] if logged_out else []
     body_path = str(Path(ctx.workdir).resolve() / BODY)
+    target = shlex.quote(str(Path(found.target).resolve()))
+    opening = (f"--head {found.branch} --title {shlex.quote(title)} --body-file {shlex.quote(body_path)}"
+               + (" --draft" if draft else ""))
+    if slug is None:
+        if _created(Path(found.target)) is None:
+            return [f"git -C {target} merge {shlex.quote(found.branch)}"]
+        inputs = inputs or {}
+        visibility = inputs.get("visibility") if inputs.get("visibility") in VISIBILITIES else "private"
+        name = Path(found.target).name
+        repository = f"{inputs['owner']}/{name}" if inputs.get("owner") else name
+        return [
+            *login,
+            f"gh repo create {shlex.quote(repository)} --{visibility} --source {target} --remote origin",
+            f"git -C {target} push origin main",
+            f"git -C {target} push origin {found.head}:refs/heads/{found.branch}",
+            f"cd {target} && gh pr create --base main {opening}",
+        ]
     wt_path = str(Path(found.path).resolve())
-    pr_cmd = (f"gh pr create --repo {slug} --head {found.branch}"
-              f" --title {shlex.quote(title)} --body-file {shlex.quote(body_path)}")
-    if draft:
-        pr_cmd += " --draft"
     return [
+        *login,
         f"git -C {shlex.quote(wt_path)} push {shlex.quote(_url(slug))} {found.head}:refs/heads/{found.branch}",
-        pr_cmd,
+        f"gh pr create --repo {slug} {opening}",
     ]
 
 
@@ -2570,13 +2643,18 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
     if merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
         finish_cmds = []
     gh_cmd = next((cmd for cmd in finish_cmds if cmd.startswith("gh pr create")), "")
+    # Where the files are, whatever else is said (dm-260): a new project's `main` is empty.
+    located = f"; the work is on branch {branch} of {found.target}" if found is not None else ""
+    if any(cmd.startswith("gh repo create") for cmd in finish_cmds):
+        located = (f"; there is no GitHub repository for it yet{located}; pull request text is at "
+                   f"{Path(ctx.workdir).resolve() / BODY}")
     if draft_delivery:
         n_unresolved = len(draft_delivery.get("unresolved", []))
         reason = _flat(draft_delivery.get("reason", ""))
         if pushed and gh_cmd:
             where = (f"; the branch {branch} is already on GitHub, as {pushed}; to finish: {gh_cmd}")
         elif finish_cmds:
-            where = f"; to finish: {' && '.join(finish_cmds)}"
+            where = f"{located}; to finish: {' && '.join(finish_cmds)}"
         elif found is not None:
             body_path = str(Path(ctx.workdir).resolve() / BODY)
             where = (f"; the work is on branch {branch}; pull request text is at {body_path}")
@@ -2591,7 +2669,7 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
     if pushed and gh_cmd:
         where = (f"; the branch {branch} is already on GitHub, as {pushed}; to finish: {gh_cmd}")
     elif finish_cmds:
-        where = f"; to finish: {' && '.join(finish_cmds)}"
+        where = f"{located}; to finish: {' && '.join(finish_cmds)}"
     elif merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
         # Say what actually stopped — no false "no GitHub repository" warning.
         where = f"; the work is on branch {branch}"

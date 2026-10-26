@@ -18,7 +18,6 @@ from refactory_dsh.create import CreateConfig, CreateError, CreateMode
 from refactory_dsh import create_ops, sandbox
 from refactory_dsh.create_ops import parse_files
 from refactory_dsh.paths import REPO_ROOT
-from model_credential import needs_model_credential
 from tests_support import (
     FakeModel,
     RESEARCH_ANSWER,
@@ -212,8 +211,8 @@ def test_create_mode_is_itself_a_mode():
     assert mode.is_scored() is False, "creating is judged by the package, not by a number"
 
 
-@pytest.mark.toolchain("model-credential")
-@needs_model_credential
+# prepare() checks the model credential, here a placeholder in the test's own home (dm-257).
+@pytest.mark.usefixtures("configured_model_home")
 def test_a_brief_alone_names_the_package(tmp_path):
     """"Make me a thing that counts teapots" is a complete request.
 
@@ -233,8 +232,8 @@ def test_a_brief_alone_names_the_package(tmp_path):
     assert create_ops.prepare(ctx)["name"] == "count_the_teapots"
 
 
-@pytest.mark.toolchain("model-credential")
-@needs_model_credential
+# prepare() checks the model credential, here a placeholder in the test's own home (dm-257).
+@pytest.mark.usefixtures("configured_model_home")
 def test_prepare_reads_the_knobs_a_run_on_dsh_carries(tmp_path):
     """The walker passes name/brief in the task; DSH has no task, so they are knobs."""
     from refactory_dsh import create_ops
@@ -251,8 +250,8 @@ def test_prepare_reads_the_knobs_a_run_on_dsh_carries(tmp_path):
     assert published["brief"] == "from the knobs"
 
 
-@pytest.mark.toolchain("model-credential")
-@needs_model_credential
+# prepare() checks the model credential, here a placeholder in the test's own home (dm-257).
+@pytest.mark.usefixtures("configured_model_home")
 def test_prepare_reads_the_mode_to_revise_from_the_knobs(tmp_path):
     """`--mode edit`'s subject travels as a knob, because a DSH run has no task."""
     from refactory_dsh import create_ops
@@ -737,8 +736,8 @@ def test_prepare_refuses_a_creation_that_names_no_task_and_is_not_single(tmp_pat
     assert "class of work is the default" in str(raised.value)
 
 
-@pytest.mark.toolchain("model-credential")
-@needs_model_credential
+# prepare() checks the model credential, here a placeholder in the test's own home (dm-257).
+@pytest.mark.usefixtures("configured_model_home")
 def test_an_edit_is_not_a_creation_and_needs_no_directive(tmp_path):
     """`edit` walks the same graph with a mode to revise, which is not a creation."""
     from refactory_dsh import create_ops
@@ -1033,8 +1032,8 @@ def test_declared_inputs_refuses_a_name_too_short_to_check():
         create_ops.declared_inputs("a")
 
 
-@pytest.mark.toolchain("model-credential")
-@needs_model_credential
+# prepare() checks the model credential, here a placeholder in the test's own home (dm-257).
+@pytest.mark.usefixtures("configured_model_home")
 def test_the_design_and_emit_prompts_are_told_what_the_mode_must_take(tmp_path):
     """The rule reaches the two prompts that decide the interface and the code."""
     graph = CreateMode().build()

@@ -25,6 +25,10 @@ from tests_support import (
 
 # ── validation ─────────────────────────────────────────────────────────────
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def test_validate_pitfalls_accepts_valid():
     raw = json.dumps([{
         "id": "PIT-001", "risk": "high", "category": "pinning_tests",
