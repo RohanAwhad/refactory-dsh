@@ -1042,11 +1042,23 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  // Who answers a `user` gate. Resolved here, once, so routing one is a runtime act
-  // rather than a claim the model makes: a composition without an answerer (a
-  // headless run) cannot route a person's gate at all, and a model cannot route one
-  // on their behalf.
-  const userQuestions: UserQuestionService | undefined = ctx.get('userQuestions')
+  // Who answers a `user` gate. Asked of the composition when a gate is asked, as
+  // `shell` and `sandboxPolicy` are, never captured at apply: the loader applies
+  // rows as their modules arrive, so the spine can be applied before the
+  // user-questions row it sits beside, and a value read here stayed undefined for the
+  // whole run, refusing every user gate at the terminal (dm-255). Routing one stays a
+  // runtime act rather than a claim the model makes: a composition without an
+  // answerer (a headless run) cannot route a person's gate at all, and a model cannot
+  // route one on their behalf.
+  const userQuestionsService = (): UserQuestionService | undefined => ctx.get('userQuestions')
+
+  /** The one real way to answer a user gate the runtime could not put to a person. */
+  function answerElsewhere(gate: string, labels: readonly string[], workdir: string | undefined): string {
+    const run = workdir ?? '<run directory>'
+    const label = labels.length === 0 ? '<label>' : `<${labels.join('|')}>`
+    return `answer it with \`refactory steer --run ${run} --verdict ${gate}=${label} [--note "…"]\`, `
+      + `then \`refactory graph-control resume --run ${run}\``
+  }
 
   /** Call a runtime-owned bookkeeping bridge without editing artifact text. */
   function runtimeBridge(command: string, workdir: string, env: Record<string, string>, payload: unknown): Record<string, unknown> {
@@ -1903,9 +1915,10 @@ export function apply(ctx: Context, config: Config): void {
       : undefined
     if (typeof prior?.verdict === 'string' && prior.verdict !== '') return { verdict: prior.verdict, feedback: '' }
     const stateBefore = JSON.stringify(spine.state())
+    const userQuestions = userQuestionsService()
     if (userQuestions === undefined) {
       const message = `gate ${gate} is answered by a person and this composition mounts no user-questions `
-        + 'channel, so it cannot be routed here; run it where a person can be asked'
+        + `channel, so it cannot be asked here; ${answerElsewhere(gate, labels, workdir)}`
       recordStatus(spine, workdir, 'refused', message)
       throw new Error(message)
     }
@@ -1967,7 +1980,8 @@ export function apply(ctx: Context, config: Config): void {
       answer = await Promise.race([nativeAnswer, panelAnswer()])
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error)
-      const message = `gate ${gate} is answered by a person and could not be asked: ${detail}`
+      const message = `gate ${gate} is answered by a person and could not be asked: ${detail}; `
+        + answerElsewhere(gate, labels, workdir)
       recordStatus(spine, workdir, 'refused', message)
       throw new Error(message)
     } finally { questionLifetime.abort() }
