@@ -1,44 +1,48 @@
 # Models
 
-DSH is the default coding worker. Configure its model routes in `~/.dsh/settings.yaml` or **Settings → Models**. The Modes panel exposes **Worker routing and shared resources** for Run once and saved optimization profiles. Supported entry points accept `--model` and `--provider` overrides without changing saved settings. The table below explains which execution paths receive those overrides.
+DSH is the default coding worker. Configure its model routes in **Settings → Models**, or in a profile's patch under `$DSH_HOME/profiles/` (below). The Modes panel exposes **Worker routing and shared resources** for Run once and saved optimization profiles. Supported entry points accept `--model` and `--provider` overrides without changing saved settings. The table below explains which execution paths receive those overrides.
 
 ## Where the list comes from
 
-The adapter's catalogue is **advisory**: it is what pickers offer, not what the route accepts. The DeepSeek route ships `deepseek-v4-flash`, `deepseek-v4-pro` and `deepseek-v4-flash-vision-exp`, and it will send any id you name — so a model that is not listed still works, it just is not offered. The settings document is hot-reloaded: nothing needs a restart.
+The adapter's catalogue is **advisory**: it is what pickers offer, not what the route accepts. The DeepSeek route ships `deepseek-v4-flash`, `deepseek-v4-pro` and `deepseek-v4-flash-vision-exp`, and it will send any id you name — so a model that is not listed still works, it just is not offered.
 
 ## In the GUI
 
-**Settings → Models.** Add a provider, paste its API key, optionally a base URL, and list the models — or press **Fetch available models** and pick from what the provider reports. **Add a custom provider** takes an id, a display name, one of three wire protocols (`openai-completions`, `openai-responses`, `anthropic-messages`) and a base URL, which is how a local server (Ollama, LM Studio, vLLM) is reached. The page writes the settings document and the credential store for you; the composer's model picker then offers the new models.
+**Settings → Models.** Add a provider, paste its API key, optionally a base URL, and list the models — or press **Fetch available models** and pick from what the provider reports. **Add a custom provider** takes an id, a display name, one of three wire protocols (`openai-completions`, `openai-responses`, `anthropic-messages`) and a base URL, which is how a local server (Ollama, LM Studio, vLLM) is reached. The page writes the GUI profile's patch and the credential store for you; the composer's model picker then offers the new models.
 
 ## In the terminal
 
-The same file, by hand:
+The pinned harness (0.2.0-rc.2) keeps these settings in each profile's own patch, `$DSH_HOME/profiles/<profile>/cordis.patch.yml`, not in a global `settings.yaml`: a `$DSH_HOME/settings.yaml` is imported once, into whichever profile boots first, and renamed `settings.yaml.imported` ([why](rc2-home-isolation.md)). Terminal runs read the `graph` profile (the CEO) and `headless` (nested workers and the credential check), so set routes for the CLI there, by hand:
 
 ```yaml
-# ~/.dsh/settings.yaml
-agent-default-model:
-  provider: deepseek-official
-  model: deepseek-v4-pro          # the default for every run that names none
+# $DSH_HOME/profiles/headless/cordis.patch.yml (and the same rows in graph)
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-v4-pro        # the default for every run that names none
 
-llm-pi-ai:
-  providers:
-    openai:
-      apiKeyEnv: OPENAI_API_KEY   # the *name* of the variable, never the key
-    anthropic:
-      apiKeyEnv: ANTHROPIC_API_KEY
-      models:
-        - id: claude-sonnet-4-5
-          contextWindow: 200000
-    ollama:                       # a local OpenAI-compatible server
-      displayName: Ollama
-      api: openai-completions
-      baseURL: http://127.0.0.1:11434/v1
-      models:
-        - id: qwen3-coder
-          contextWindow: 262144
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      openai:
+        apiKeyEnv: OPENAI_API_KEY   # the *name* of the variable, never the key
+      anthropic:
+        apiKeyEnv: ANTHROPIC_API_KEY
+        models:
+          - id: claude-sonnet-4-5
+            contextWindow: 200000
+      ollama:                       # a local OpenAI-compatible server
+        displayName: Ollama
+        api: openai-completions
+        baseURL: http://127.0.0.1:11434/v1
+        models:
+          - id: qwen3-coder
+            contextWindow: 262144
 ```
 
-Keys are read from the environment (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, …, including a `.env` at the checkout root) or from the managed store at `~/.dsh/.credentials.yaml` that the Models page writes. A `llm-deepseek:` section overrides the direct DeepSeek route the same way: `models:`, `baseURL:`, `apiKeyEnv:`, `thinking:`, `reasoningEffort:`.
+Keys are read from the environment (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, …, including a `.env` at the checkout root) or from the managed store at `$DSH_HOME/.credentials.yaml` that the Models page writes. An `llm-deepseek` row (`name: '@deepseek-ai/dsh-llm-deepseek-api-key'`) overrides the direct DeepSeek route the same way: `models:`, `baseURL:`, `apiKeyEnv:`, `thinking:`, `reasoningEffort:`. `uv run refactory doctor` reports whether the key the `headless` route names is configured.
 
 A local OpenAI-compatible server works through the same route, and still needs *a* key — pi-ai's OpenAI protocol asks for one, so name a dummy variable and export any value (`apiKeyEnv: LOCAL_TEST_KEY`, then `LOCAL_TEST_KEY=dummy`), or set an `Authorization` header.
 
