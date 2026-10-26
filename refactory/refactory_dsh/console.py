@@ -1749,13 +1749,17 @@ def runtime_context(project: Path, *, provider: str = "", model: str = "") -> di
     from refactory_dsh.model import DshModelClient
     from refactory_dsh.sandbox import model_readiness
 
+    from refactory_dsh.model import half_route_refusal
+
     route = model_route(project, provider=provider, model=model)
     chosen = route["worker_backend"] != "dsh" or bool(route["provider"] and route["model"])
     client = DshModelClient(routes_resolved=True, worker_backend=route["worker_backend"],
                             provider=route["provider"], model=route["model"])
     context = client.context()
+    refusal = half_route_refusal(route["provider"], route["model"]) if route["worker_backend"] == "dsh" else ""
     if not chosen:
-        # Nothing to inspect: a run here would be refused before any model call.
+        # Nothing to inspect: a run here would be refused before any model call, with
+        # the words `doctor` and the run itself use.
         result: dict[str, Any] = {"ready": False, "status": "no-model-chosen"}
     else:
         try:
@@ -1792,7 +1796,7 @@ def runtime_context(project: Path, *, provider: str = "", model: str = "") -> di
             "authenticated": False,
             "reasoning_effort": None,
             "reasoning_note": "The credential diagnostic does not resolve nested reasoning effort; the current session's effort is not proof of a child's selection.",
-            "message": messages[status],
+            "message": refusal or messages[status],
         },
         "inheritance": "This readiness diagnostic describes the selected DSH context, not an executed worker. worker_configuration reports project worker defaults; prepared runs and inherited children retain resolved routes independently of the CEO conversation model.",
     }

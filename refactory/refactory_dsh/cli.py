@@ -470,21 +470,28 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except Exception as exc:
         checks.append(("packages of modes", False, str(exc)))
 
-    # The run model (dm-258): what --provider/--model name, else the one stored choice.
-    # Its provider's key is the one checked, never the headless profile's default.
+    # The run model (dm-258): the route a run here would get — a flag, the environment,
+    # the project file or the one stored choice, resolved exactly as a run resolves it
+    # (`refactory runtime` shows the same). Its provider's key is the one checked, never
+    # the headless profile's default.
     route: dict[str, str] = {}
     try:
         from refactory_dsh import dsh_profile
+        from refactory_dsh.console import model_route
+        from refactory_dsh.model import half_route_refusal
+        from refactory_dsh.paths import project_root
 
-        stored = dsh_profile.stored_model_choice()
-        flagged = {key: str(getattr(args, key, "") or "") for key in ("provider", "model")}
-        if flagged["provider"] or flagged["model"]:
-            route = {key: flagged[key] or stored[key] for key in ("provider", "model")}
-            origin = "flag"
-        else:
-            route, origin = stored, "stored choice"
-        if route["provider"] and route["model"]:
-            checks.append(("run model", True, f"{route['provider']}/{route['model']} ({origin})"))
+        resolved = model_route(project_root(), provider=str(getattr(args, "provider", "") or ""),
+                               model=str(getattr(args, "model", "") or ""))
+        route = {"provider": resolved["provider"], "model": resolved["model"]}
+        if resolved["worker_backend"] != "dsh":
+            checks.append(("run model", None, f"{resolved['worker_backend']} workers use their own model settings"))
+            route = {}
+        elif route["provider"] and route["model"]:
+            checks.append(("run model", True, f"{route['provider']}/{route['model']} ({resolved['source']['provider']})"))
+        elif half_route_refusal(route["provider"], route["model"]):
+            checks.append(("run model", False, half_route_refusal(route["provider"], route["model"])))
+            route = {}
         else:
             keyed, refusal = dsh_profile.first_run_plan()
             if refusal or not keyed:

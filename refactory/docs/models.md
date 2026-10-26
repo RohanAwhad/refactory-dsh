@@ -54,22 +54,24 @@ A local OpenAI-compatible server works through the same route, and still needs *
 Every run uses the stored model choice unless it says otherwise. Above it, unchanged: `--provider` and `--model` on the command line, then the project's `refactory.workers.json` and the environment, then `node_routes`, which override `role_routes`, which override the run's route. Refactory hands the result to every DSH process it starts — the CEO and each worker — as `--provider` and `--model`, and never consults a DSH profile's own default.
 
 ```bash
-uv run refactory ceo counting_pack/fixed_step --model deepseek-v4-pro
-uv run refactory ceo "an idea" --mode create --single --model deepseek-v4-pro
+uv run refactory ceo counting_pack/fixed_step --provider deepseek-official --model deepseek-v4-pro
+uv run refactory ceo "an idea" --mode create --single --provider deepseek-official --model deepseek-v4-pro
 uv run refactory optimize circle_packing/adaptive --provider deepseek-official --model deepseek-v4-pro
 ```
 
-`--model` names the id and `--provider` the route; both override the stored choice for that run only, and neither writes anything back. A route that does not exist is a loud failure (`NO_ADAPTER: no adapter registered for provider …`), not a quiet return to the default. The same two flags exist one level down, on `dsh --profile headless|graph`, which is what `refactory` calls.
+`--model` names the id and `--provider` the route; both override the stored choice for that run only, and neither writes anything back. Pass both. `--model` alone keeps the stored provider; `--provider` alone keeps the stored model only when it names the stored provider, and is otherwise refused (`No model chosen: the run names provider … but no model`) rather than paired with another provider's model. The same holds for a provider set in the environment or the project file. A route that does not exist is a loud failure (`NO_ADAPTER: no adapter registered for provider …`), not a quiet return to the default. The same two flags exist one level down, on `dsh --profile headless|graph`, which is what `refactory` calls.
 
 ### First run
 
 A run that has no stored choice, and no flag or route that names a model, never falls back to a profile's default or to whichever provider has a key. It asks the credential store which providers have a key — whether one is set, never its value — and:
 
 - **one provider has a key:** the run uses that provider with the first model its route lists, stores it as the choice, and says so once: `Using <provider>/<model>, the only provider with a key; change it with refactory model set`. Later runs read the stored choice and say nothing.
-- **several have keys:** at a terminal it lists them and asks once, then stores the answer; a headless run (and the GUI) is refused with the list and the command to choose.
+- **several have keys:** at a terminal it lists them and asks once, then stores the answer; a headless run, or a bare `console open` that names no model, is refused with the list and the command to choose.
 - **none has a key:** the run is refused: `No model chosen: pick one in Settings → Models or with refactory model set --provider <provider> --model <model>`.
 
 A stored choice is never replaced this way. A run of deterministic nodes only, headless, needs no model and is not asked. `uv run refactory doctor` shows which of these a first run would take.
+
+A GUI run does not reach this: the GUI opens a run with the session's model (`wf_open` passes it), so it is never refused. The session's model is what Settings → Models chose, or, when nothing was ever saved there, the harness's built-in default — which the chat shows.
 
 ## Model selection across execution paths
 
@@ -79,10 +81,10 @@ A stored choice is never replaced this way. A run of deterministic nodes only, h
 | Python Create/Edit/Design agent nodes | The supplied `DshModelClient`, resolved the same way; carried to supported nested validation |
 | Optimization with the default `walker` evaluator | The search's model client, resolved the same way, serves the reasoning proposer and evaluated agent nodes |
 | Optimization with the separate `dsh` evaluator | The same client context is forwarded to the CEO and to workers dispatched through the same node bridge and route as the walker |
-| GUI CEO and children | The session's model (Settings → Models, the same stored choice, unless the session picked another), passed to the run's workers as its route |
+| GUI CEO and children | The session's model, passed to the run's workers as its route by `wf_open`: Settings → Models' choice (the same stored choice) unless the session picked another, or the harness's built-in default when nothing was ever saved |
 | `package smoke --model`, `doctor` | The stored choice, or `--provider`/`--model` |
 | `--worker-backend codex` / `claude_code` | Workers keep their product's own model settings; a local CEO still runs on the stored choice |
-| `openshell` worker backend | Out of the stored choice's scope: the run's graph runs in the sandbox, whose only inference path is the OpenShell gateway's verified `claude-code` provider. No route is passed in; a gateway without that provider is refused at dispatch, and a CEO launched with no route is refused rather than given a default |
+| `openshell` worker backend | Out of the stored choice's scope: the run's graph runs in the sandbox, whose only inference path is the OpenShell gateway's verified `claude-code` provider. No route is passed in: workers in the sandbox run on the sandbox's own default, a gateway without that provider is refused at dispatch, and a run that needs the CEO is refused by the graph runner, which takes no default |
 
 `refactory runtime` shows the route a run here would use and where each part came from (`model_route`: `flag`, `project file`, `environment`, `stored choice`, or `none`, plus each `node route` and `role route`); `.refactory/workers/*.json` receipts establish the selected backend, observed runtime route, version and usage. Requested settings are separate from observed settings. Explicit `node_routes` override `role_routes`, which override the run settings; an empty DSH route takes the stored choice. Switching backend clears inherited provider/model/effort unless the override supplies them. A provider route declared in one DSH profile's settings is invisible to the nested headless runtime a DSH worker runs; declare such routes for workers with [`provider_config`](worker-routing.md) in `refactory.workers.json`.
 

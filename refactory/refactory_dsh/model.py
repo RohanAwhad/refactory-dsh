@@ -48,6 +48,20 @@ class ModelChoiceError(Exception):
         super().__init__(message or NO_MODEL_CHOICE_MESSAGE)
 
 
+def half_route_refusal(provider: str, model: str) -> str:
+    """What a route naming only one of provider and model is refused with; ``""`` otherwise.
+
+    One message for the gate, ``doctor`` and ``refactory runtime``, so all three say
+    the same thing about the same route.
+    """
+    if bool(provider) == bool(model):
+        return ""
+    given, missing = (f"provider {provider}", "model") if provider else (f"model {model}", "provider")
+    return (f"No model chosen: the run names {given} but no {missing}; pass both --provider and "
+            "--model, or pick one in Settings → Models or with "
+            "`refactory model set --provider <provider> --model <model>`.")
+
+
 def complete_route(provider: str, model: str, *, interactive: bool = False,
                    home: str | Path | None = None) -> tuple[str, str]:
     """A complete DSH route, or :class:`ModelChoiceError`: the gate before any DSH process.
@@ -55,17 +69,15 @@ def complete_route(provider: str, model: str, *, interactive: bool = False,
     A route that a flag, a route map or the stored choice completed passes unchanged.
     One with neither a provider nor a model gets the first-run choice
     (:func:`refactory_dsh.dsh_profile.first_run_choice`), which stores it or refuses.
-    Half a route is refused: the harness would fill the other half from its own default.
+    Half a route is refused: the harness would fill the other half from its own
+    default, and a provider named without a model never borrows the stored model of
+    another provider (``worker_config.resolve``).
     """
     if provider and model:
         return provider, model
-    if provider or model:
-        given, missing = (f"provider {provider}", "model") if provider else (f"model {model}", "provider")
-        raise ModelChoiceError(
-            f"No model chosen: the run names {given} but no {missing}; pass both --provider and "
-            "--model, or pick one in Settings → Models or with "
-            "`refactory model set --provider <provider> --model <model>`."
-        )
+    refusal = half_route_refusal(provider, model)
+    if refusal:
+        raise ModelChoiceError(refusal)
     from refactory_dsh.dsh_profile import first_run_choice
 
     choice = first_run_choice(home, interactive=interactive)

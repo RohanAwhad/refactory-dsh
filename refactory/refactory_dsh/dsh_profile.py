@@ -976,6 +976,17 @@ def _with_model_choice(text: str, provider: str, model: str) -> str:
     return "".join(lines)
 
 
+def _yaml_problem(error: Exception) -> str:
+    """A YAML error as its problem and position only, without the source it quotes."""
+    if isinstance(error, yaml.MarkedYAMLError):
+        mark = error.problem_mark or error.context_mark
+        where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+        return f"{error.problem or error.context or 'invalid YAML'}{where}"
+    if isinstance(error, yaml.YAMLError):
+        return "invalid YAML"
+    return str(error)  # this module's own messages, which quote nothing from the file
+
+
 def model_choice_write(provider: str, model: str, home: str | Path | None = None) -> dict[str, str]:
     """Store the run model, changing only its own entry, atomically.
 
@@ -998,16 +1009,23 @@ def model_choice_write(provider: str, model: str, home: str | Path | None = None
     try:
         before = _entries(original)
     except (yaml.YAMLError, ValueError) as error:
-        raise ValueError(f"{path} is not a readable profile patch, so it was left alone: {error}") from error
+        # The problem and where, never the parser's quote of the line: a profile patch
+        # can carry credentials in headers (an `Authorization:` value, say).
+        raise ValueError(f"{path} is not a readable profile patch ({_yaml_problem(error)}), "
+                         "so it was left alone") from None
+    unplaced = f"{path} could not be edited in place; set the model in Settings → Models instead"
     updated = _with_model_choice(original, provider, model)
-    after = _entries(updated)
+    try:
+        after = _entries(updated)
+    except (yaml.YAMLError, ValueError):
+        raise ValueError(unplaced) from None
 
     def others(entries: list[object]) -> list[object]:
         return [entry for entry in entries
                 if not (isinstance(entry, dict) and entry.get("id") == MODEL_CHOICE_ENTRY)]
 
     if others(after) != others(before) or _choice_in(after) != {"provider": provider, "model": model}:
-        raise ValueError(f"{path} could not be edited in place; set the model in Settings → Models instead")
+        raise ValueError(unplaced)
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=str(path.parent), prefix=".cordis.patch.", suffix=".tmp", delete=False,
@@ -1077,6 +1095,17 @@ def first_run_plan(home: str | Path | None = None) -> tuple[list[dict[str, str]]
     return keyed, ""
 
 
+def _store_first_choice(provider: str, model: str, home: str | Path | None) -> dict[str, str]:
+    """Store a first-run choice; a file that cannot take it refuses the run, it does not crash it."""
+    from refactory_dsh.model import ModelChoiceError
+
+    try:
+        return model_choice_write(provider, model, home)
+    except (ValueError, OSError) as error:
+        raise ModelChoiceError(f"No model chosen: {provider}/{model} could not be stored ({error}); "
+                               "pick one in Settings → Models.") from None
+
+
 def first_run_choice(
     home: str | Path | None = None,
     *,
@@ -1118,13 +1147,13 @@ def first_run_choice(
         if not chosen["model"]:
             raise ModelChoiceError(f"No model chosen: {chosen['provider']}'s route lists no default model; choose one "
                                    f"with `refactory model set --provider {chosen['provider']} --model <model>`.")
-        choice = model_choice_write(chosen["provider"], chosen["model"], home)
+        choice = _store_first_choice(chosen["provider"], chosen["model"], home)
         print(f"Using {choice['provider']}/{choice['model']}; change it with `refactory model set`", file=sys.stderr)
         return choice
     if refusal:
         raise ModelChoiceError(refusal)
     assert keyed is not None and len(keyed) == 1
-    choice = model_choice_write(keyed[0]["provider"], keyed[0]["model"], home)
+    choice = _store_first_choice(keyed[0]["provider"], keyed[0]["model"], home)
     print(f"Using {choice['provider']}/{choice['model']}, the only provider with a key; "
           "change it with `refactory model set`", file=sys.stderr)
     return choice

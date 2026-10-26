@@ -122,6 +122,13 @@ def resolve(project: Path, overrides: dict[str, Any] | None = None, *,
                 sources[key] = source
                 if key in maps:
                     maps[key] = values[key]
+    if (stored["provider"] and sources["model"] == "stored-choice" and sources["provider"] != "stored-choice"
+            and route.get("provider") != stored["provider"]):
+        # The stored model belongs to the stored provider. A provider named by a flag,
+        # the environment or the project file without a model gets none of it, so the
+        # gate refuses the half route instead of pairing it with another provider's model.
+        route["model"] = ""
+        sources["model"] = "default"
     settings = {**route, **maps}
     validate(settings)
     return {"settings": settings, "provenance": {"project": str(project), "file": file_info,

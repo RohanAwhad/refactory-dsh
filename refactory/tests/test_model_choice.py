@@ -277,7 +277,9 @@ def test_with_no_choice_every_entry_point_refuses_before_any_dsh_process(entry, 
     assert dsh_profile.stored_model_choice() == {"provider": "", "model": ""}
 
 
-def test_with_no_choice_the_gui_open_refuses_before_anything_is_written(tmp_path, fake_dsh, no_model_choice, capsys):
+def test_with_no_choice_a_bare_console_open_refuses_before_anything_is_written(tmp_path, fake_dsh, no_model_choice,
+                                                                               capsys):
+    """A `console open` that names no model. The GUI's `wf_open` always names the session's."""
     keys(no_model_choice, {}, ("fakeprov",))
     run = tmp_path / "gui-run"
     assert console.main(["open", MODE, "--workdir", str(run)]) == 1
@@ -286,7 +288,19 @@ def test_with_no_choice_the_gui_open_refuses_before_anything_is_written(tmp_path
     assert fake_dsh.calls() == []
 
 
-def test_the_gui_open_lowers_every_worker_onto_the_stored_choice(tmp_path, fake_dsh, capsys):
+def test_a_gui_open_runs_its_workers_on_the_session_model_and_is_not_refused(tmp_path, fake_dsh, no_model_choice,
+                                                                             capsys):
+    """`wf_open` passes the GUI session's model as `--provider`/`--model`: that is the run's route."""
+    run = tmp_path / "gui-run"
+    assert console.main(["open", MODE, "--workdir", str(run), "--provider", "session-prov",
+                         "--model", "session-model"]) == 0, capsys.readouterr().out
+    specs = [json.loads(path.read_text()) for path in (run / ".refactory" / "worker-specs").glob("*.json")]
+    assert {(spec["model_context"]["provider"], spec["model_context"]["model"]) for spec in specs} == {
+        ("session-prov", "session-model")}
+    assert dsh_profile.stored_model_choice() == {"provider": "", "model": ""}
+
+
+def test_a_console_open_lowers_every_worker_onto_the_stored_choice(tmp_path, fake_dsh, capsys):
     store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
     run = tmp_path / "gui-run"
     assert console.main(["open", MODE, "--workdir", str(run)]) == 0, capsys.readouterr().out
@@ -497,11 +511,11 @@ def test_the_refusal_is_an_ordinary_exception_raised_before_any_dsh_process(tmp_
 # ── correction 5: doctor checks the chosen provider, never the profile's ───────
 
 
-def _doctor(capsys) -> tuple[int, dict[str, str]]:
+def _doctor(capsys, provider: str = "", model: str = "") -> tuple[int, dict[str, str]]:
     """Doctor's exit code and its two model rows, each as ``MARK  name  detail``."""
     from argparse import Namespace
 
-    code = cli.cmd_doctor(Namespace(provider="", model="", run=None))
+    code = cli.cmd_doctor(Namespace(provider=provider, model=model, run=None))
     rows = {}
     for line in capsys.readouterr().out.splitlines():
         stripped = line.strip()
@@ -682,3 +696,112 @@ def test_the_first_run_choice_returns_a_stored_choice_untouched(no_model_choice)
     keys(no_model_choice, {"fakeprov": "fake-model"})
     assert dsh_profile.first_run_choice() == {"provider": "chosen-prov", "model": "chosen-model"}
     assert stored.read_bytes() == before
+
+
+# ── review of e9e4e8edf9: half routes, error text, read-back, guards ─────────
+
+HALF = "No model chosen: the run names provider otherprov but no model"
+
+
+@pytest.mark.parametrize("named_by", ["flag", "environment", "project file"])
+def test_a_provider_named_without_a_model_is_refused_unless_it_is_the_stored_one(named_by, tmp_path, fake_dsh, project,
+                                                                                 capsys, monkeypatch):
+    """`--provider X` alone never borrows the stored model of another provider."""
+    store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
+    argv = ["ceo", MODE, "--workdir", str(tmp_path / "run"), "--headless"]
+    if named_by == "flag":
+        argv += ["--provider", "otherprov"]
+    elif named_by == "environment":
+        monkeypatch.setenv("REFACTORY_MODEL_PROVIDER", "otherprov")
+    else:
+        (project / "refactory.workers.json").write_text(json.dumps({"provider": "otherprov"}))
+    assert cli.main(argv) == 1
+    assert f"refactory: {HALF}" in capsys.readouterr().err
+    assert fake_dsh.calls() == []
+
+
+def test_the_stored_provider_named_alone_keeps_its_model_and_a_model_alone_keeps_the_provider(tmp_path, fake_dsh,
+                                                                                              capsys):
+    store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "one"), "--headless", "--provider", "chosen-prov"]) == 0
+    assert {(provider, model) for _profile, provider, model in fake_dsh.routes()} == {("chosen-prov", "chosen-model")}
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "two"), "--headless", "--model", "other-model"]) == 0
+    assert {(provider, model) for _profile, provider, model in fake_dsh.routes()[3:]} == {("chosen-prov", "other-model")}
+    capsys.readouterr()
+
+
+def test_doctor_and_runtime_report_a_half_route_as_the_run_does(project, capsys, monkeypatch):
+    monkeypatch.delenv("DSH_CLI", raising=False)
+    store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
+    code, rows = _doctor(capsys, provider="otherprov")
+    assert code == 1 and rows["run model"].startswith("MISS") and HALF in rows["run model"]
+    assert "sandbox model configuration" not in rows
+    assert console.main(["runtime", "--project", str(project), "--provider", "otherprov"]) == 0
+    reported = json.loads(capsys.readouterr().out)
+    assert (reported["model_route"]["provider"], reported["model_route"]["model"]) == ("otherprov", "")
+    assert reported["nested"]["status"] == "no-model-chosen" and reported["nested"]["message"].startswith(HALF)
+
+
+def test_a_codex_run_starts_its_local_ceo_on_the_stored_choice(tmp_path, fake_dsh, capsys):
+    """The workers keep Codex's own settings; the CEO is a DSH agent and gets the choice."""
+    store_model_choice(Path(os.environ["DSH_HOME"]), "chosen-prov", "chosen-model")
+    # The fake answers in text, not in Codex's files, so the run itself may stop early.
+    interactive.main([MODE, "--workdir", str(tmp_path / "run"), "--headless", "--worker-backend", "codex"])
+    routes = fake_dsh.routes()
+    assert routes and routes[0] == ("graph", "chosen-prov", "chosen-model"), capsys.readouterr().err
+    assert all(route == ("headless", None, None) for route in routes[1:])
+
+
+def test_model_set_never_prints_the_line_a_yaml_error_is_on(capsys):
+    path = dsh_profile.model_choice_path()
+    broken = ("- id: llm-pi-ai\n  config:\n    headers:\n"
+              "      Authorization: Bearer sk-SECRETVALUE: oops\n")
+    path.write_text(broken)
+    assert cli.main(["model", "set", "--provider", "p1", "--model", "m1"]) == 1
+    said = capsys.readouterr()
+    assert "SECRETVALUE" not in said.err + said.out and "Bearer" not in said.err + said.out
+    assert "at line 4, column" in said.err and "left alone" in said.err
+    assert path.read_text() == broken
+
+
+def test_model_set_refuses_a_file_it_cannot_edit_in_place_without_crashing(capsys):
+    path = dsh_profile.model_choice_path()
+    indented = "  - id: ui\n    config:\n      theme: dark\n"
+    path.write_text(indented)
+    assert cli.main(["model", "set", "--provider", "p1", "--model", "m1"]) == 1
+    assert "could not be edited in place" in capsys.readouterr().err
+    assert path.read_text() == indented
+
+
+def test_model_set_refuses_an_edit_that_would_change_another_entry(monkeypatch, capsys):
+    """The read-back guard: whatever the edit did, another entry must read back unchanged."""
+    path = dsh_profile.model_choice_path()
+    path.write_text(_GUI_PATCH)
+    edit = dsh_profile._with_model_choice
+    monkeypatch.setattr(dsh_profile, "_with_model_choice",
+                        lambda text, provider, model: edit(text, provider, model).replace("theme: dark", "theme: light"))
+    assert cli.main(["model", "set", "--provider", "p1", "--model", "m1"]) == 1
+    assert "could not be edited in place" in capsys.readouterr().err
+    assert path.read_text() == _GUI_PATCH
+
+
+@pytest.mark.parametrize("entry", [
+    "- id: agent-default-model\n  disabled: true\n  config:\n    provider: a\n    model: b\n",
+    "- id: agent-default-model\n  config:\n    provider: a\n",
+])
+def test_a_disabled_or_half_written_entry_is_no_choice(entry, capsys):
+    dsh_profile.model_choice_path().write_text(entry)
+    assert dsh_profile.stored_model_choice() == {"provider": "", "model": ""}
+    assert cli.main(["model", "show"]) == 1
+    assert MESSAGE in capsys.readouterr().err
+
+
+def test_a_first_run_choice_that_cannot_be_stored_is_a_refusal(tmp_path, fake_dsh, no_model_choice, capsys):
+    keys(no_model_choice, {"fakeprov": "fake-model"})
+    path = dsh_profile.model_choice_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("  - id: ui\n    config:\n      theme: dark\n")
+    assert cli.main(["ceo", MODE, "--workdir", str(tmp_path / "run"), "--headless"]) == 1
+    said = capsys.readouterr().err
+    assert "fakeprov/fake-model could not be stored" in said and "could not be edited in place" in said
+    assert fake_dsh.calls() == []
