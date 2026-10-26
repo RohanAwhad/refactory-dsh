@@ -11,6 +11,10 @@ from refactory_dsh.design import DesignMode
 from refactory_dsh.workers import resolve_route
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def test_resolve_route_with_node_routes_for_design_doc():
     base = {"worker_backend": "dsh", "model": "default-model",
             "provider": "", "effort": "", "permission_mode": "default"}

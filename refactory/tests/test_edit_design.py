@@ -38,6 +38,10 @@ NAME = "edited_pkg"
 ARTIFACT = "designed_tool"
 
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 @pytest.fixture(autouse=True)
 def _clean():
     # The owner record too: the check tests run the gate without a prepare, so a name

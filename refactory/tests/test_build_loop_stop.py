@@ -28,6 +28,10 @@ from refactory_dsh.run import (
 
 # ── BuildLoopStop is a ValueError ─────────────────────────────────────────
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def test_build_loop_stop_is_a_value_error():
     assert issubclass(BuildLoopStop, ValueError)
     assert isinstance(BuildLoopStop("x"), ValueError)

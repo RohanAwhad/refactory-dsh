@@ -28,6 +28,10 @@ from tests_support import (
 
 # ── gate integration tests (1–4) ──────────────────────────────────────────
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def test_gate_records_an_uncited_research_finding_without_listing_it(tmp_path):
     """1: A finding in a research file, missing from the design, fails the gate."""
     ctx = nn.RunContext(tmp_path)

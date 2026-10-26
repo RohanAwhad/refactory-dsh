@@ -46,6 +46,10 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+#: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
+pytestmark = pytest.mark.usefixtures("fake_gh")
+
+
 def _git(root, *args, **kwargs):
     """Run a git command in root."""
     env = kwargs.pop("env", None)
