@@ -37,3 +37,51 @@ def test_initial_fast_inputs_reach_lowered_worker_dispatch(tmp_path, monkeypatch
     monkeypatch.setattr(DshModelClient, 'complete', dispatch)
     with pytest.raises(RuntimeError, match='admission passed'):
         execute(spec, ctx.workdir)
+
+
+def test_a_worktree_off_design_fast_run_reaches_focused_qa_on_the_spine(tmp_path, monkeypatch):
+    """Each step runs through the node runner, as the spine runs it. A worktree-off run
+    writes no test-guardedness.json, so focused_qa may not declare it: a declared input
+    that is missing refuses the dispatch (dm-152)."""
+    import io
+    import sys
+
+    from refactory_dsh.run import main
+    from tests_support import render
+
+    monkeypatch.setenv('REFACTORY_PROJECT', str(tmp_path))
+    run = tmp_path / 'run'
+    run.mkdir()
+    mode = DesignFastMode()
+    lowering.write_declarations(mode.state_dict(), run)
+    monkeypatch.setenv('REFACTORY_KNOBS', json.dumps({
+        **mode.values(), 'name': 'greeting', 'brief': 'a tiny greeting', 'check': 'true', 'worktree': False}))
+
+    def step(target: str, node: str, kind: str) -> None:
+        monkeypatch.setenv('REFACTORY_WORKDIR', str(run))
+        monkeypatch.setenv('DSH_WORKFLOW_NODE', json.dumps({'id': node, 'type': kind}))
+        err, saved = io.StringIO(), sys.stderr
+        sys.stderr = err
+        try:
+            code = main([target, '--node', node])
+        finally:
+            sys.stderr = saved
+        assert code == 0, f'{node}: {err.getvalue()}'
+
+    step('refactory_dsh.fast_ops:prepare_artifact', 'prepare', 'op')
+    (run / 'implementation-plan.txt').write_text('Write greeting.py.\n')
+    (run / 'emit.txt').write_text(render({'greeting.py': "print('hi')\n"}))
+    step('refactory_dsh.fast_ops:materialise_artifact', 'materialise', 'op')
+    step('refactory_dsh.fast_ops:gate_emit', 'gate_emit', 'gate')
+    step('refactory_dsh.fast_ops:focused_check', 'focused_check', 'op')
+    assert not (run / 'test-guardedness.json').exists(), 'only a worktree run writes it'
+
+    workers.lower_workflow(lowering.to_workflow(mode.state_dict()), run, DshModelClient().context())
+    spec = next(json.loads(path.read_text()) for path in (run / '.refactory/worker-specs').glob('*.json')
+                if json.loads(path.read_text())['node_id'] == 'focused_qa')
+
+    def dispatch(*args, **kwargs):
+        raise RuntimeError('admission passed; deterministic stop before provider')
+    monkeypatch.setattr(DshModelClient, 'complete', dispatch)
+    with pytest.raises(RuntimeError, match='admission passed'):
+        execute(spec, run)

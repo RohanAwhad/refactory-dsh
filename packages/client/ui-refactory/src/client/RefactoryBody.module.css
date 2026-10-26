@@ -88,6 +88,8 @@
 .launch .note { margin-top: 7px; }
 .disclosure { padding: 12px; border: 1px solid var(--rf-border); border-radius: 8px; background: var(--rf-canvas); }
 .note { margin: 0; color: var(--rf-muted); font-size: 12px; }
+/* A gate's prompt keeps its lines: design mode's card is one item a line (dm-163). */
+.gatePrompt { white-space: pre-wrap; overflow-wrap: anywhere; }
 .notice { margin: 12px 16px 0!important; padding: 12px 14px; border: 1px solid color-mix(in srgb,var(--refactory-error) 45%,var(--rf-border)); border-radius: 8px; color: var(--refactory-error,var(--dsw-alias-label-error)); background: var(--rf-surface); font-size: 13px; }
 .attention { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 16px 0; padding: 12px 14px; background: color-mix(in srgb,var(--refactory-warning) 9%,var(--rf-surface)); color: var(--refactory-warning); border: 1px solid color-mix(in srgb,var(--refactory-warning) 35%,var(--rf-border)); border-radius: 8px; }
 .attention a { color: inherit; font-weight: 650; }
