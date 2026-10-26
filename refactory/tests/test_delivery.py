@@ -255,8 +255,8 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_fail_row(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "Not all review steps completed" in body
-    assert "Reviews passed" not in body
+    assert "not all review steps completed" in body
+    assert "overwatch audit passed" not in body
 
 
 def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
@@ -284,8 +284,8 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "Not all review steps completed" in body
-    assert "Reviews passed" not in body
+    assert "not all review steps completed" in body
+    assert "overwatch audit passed" not in body
 
 
 def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path):
@@ -313,7 +313,7 @@ def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "Not all review steps completed" in body
+    assert "not all review steps completed" in body
 
 
 def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
@@ -341,7 +341,7 @@ def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "Not all review steps completed" in body
+    assert "not all review steps completed" in body
 
 
 def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path):
@@ -380,8 +380,8 @@ def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path)
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "Reviews passed" in body
-    assert "Not all review steps completed" not in body
+    assert "overwatch audit passed" in body
+    assert "not all review steps completed" not in body
 
 
 def test_pr_check_line_says_failed_when_validation_failed(tmp_path):
@@ -1473,15 +1473,17 @@ def test_redeliver_on_design_run_behind_main_merges_and_pushes(new_run):
 
 
 def test_delivered_commit_records_merge_sha(new_run):
-    """After a delivery that pushes, delivered_commit is set and commit still holds
-    materialise's original commit."""
+    """After a delivery that pushes, commit still holds materialise's original commit.
+    delivered_commit is only set when a merge pushes a different commit."""
     run, result = new_run.run, new_run.result
     rec = _record(run)
     if rec.get("status") in ("opened", "updated", "already open"):
-        # delivered_commit should be set
-        assert result.facts.get("delivered_commit"), "delivered_commit should be set after delivery"
         # commit should still be materialise's value
         assert result.facts.get("commit"), "commit fact should still exist"
+        # delivered_commit is only set when a merge occurs
+        if result.facts.get("delivered_commit"):
+            assert result.facts["delivered_commit"] != result.facts["commit"], \
+                "delivered_commit should differ from commit (it is the merge commit)"
 
 
 def test_create_mode_at_review_limit_still_raises_build_loop_stop(tmp_path):
@@ -2655,7 +2657,10 @@ def test_refine_starts_from_the_pull_requests_head_and_pushes_onto_its_branch(op
     assert _remote_head(github, "acme/app", pull["head"]) == found.head
     assert git(repo, "merge-base", "--is-ancestor", head, found.head) == ""
     [after] = _pulls(github, "acme/app")
-    assert (after["title"], after["body"]) == (pull["title"], pull["body"])
+    assert after["title"] == pull["title"]
+    # Refine updates the delivery-owned body sections (dm-212)
+    assert delivery.BODY_START in after["body"]
+    assert delivery.BODY_END in after["body"]
     assert _record(run)["status"] == "updated" and result.facts["pull_request"] == url
     assert f"pushes onto {pull['head']}, the branch of the pull request {url}" in (run / delivery.PLAN).read_text()
     ledger = (run / "intent-ledger.md").read_text()

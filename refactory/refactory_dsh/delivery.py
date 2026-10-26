@@ -912,9 +912,9 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                 except ValueError:
                     worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
     # Record the pushed merge commit in delivered_commit (dm-192), not in commit.
-    push_head = (outcome["merge"].merge_commit if outcome.get("merge") and outcome["merge"].merge_commit
-                 else found.head)
-    ctx.set_fact("delivered_commit", push_head)
+    # Only set when a merge actually pushed a different commit than found.head.
+    if outcome.get("merge") and outcome["merge"].merge_commit:
+        ctx.set_fact("delivered_commit", outcome["merge"].merge_commit)
     updated_dd = outcome.get("_draft_delivery", draft_delivery)
     result = _delivered(ctx, approved, found, outcome, title=title, draft_delivery=updated_dd)
     result["delivery_conflict_files"] = []
@@ -1870,28 +1870,28 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             tests_section += mutant_line
         sections.append(tests_section)
 
-    # ## Verification — one check line, one review line.
+    # ## Verification — check line, review line, and conditional advisory items.
     check_passed = (ev_data is not None
                     and isinstance(ev_data.get('validation'), dict)
                     and ev_data['validation'].get('status') == 'pass')
     report_data = ctx.read_json("design.json", None) if ctx.exists("design.json") else None
     check_skipped = report_data.get("check_skipped") if isinstance(report_data, dict) else None
     if isinstance(check_skipped, dict) and check_skipped.get('source') == 'person':
-        check_line = (f"`{check_cmd}` did not run "
+        check_line = (f"**Check:** `{check_cmd}` did not run "
                       f"(skipped by the person at {check_skipped.get('at', '?')} via graph-control; "
                       f"covers later attempts).")
     elif check_passed:
-        check_line = f"`{check_cmd}` passed."
+        check_line = f"**Check:** `{check_cmd}` passed."
     elif check_cmd:
         check_ran_and_failed = (ev_data is not None
                                 and isinstance(ev_data.get('validation'), dict)
                                 and ev_data['validation'].get('status') != 'pass')
         if check_ran_and_failed:
-            check_line = f"`{check_cmd}` **failed**."
+            check_line = f"**Check:** `{check_cmd}` **failed**."
         else:
-            check_line = f"`{check_cmd}` did not run."
+            check_line = f"**Check:** `{check_cmd}` did not run."
     else:
-        check_line = "No check command."
+        check_line = ""
 
     def _audit_passed() -> bool:
         from refactory_dsh import judges
@@ -1914,10 +1914,15 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
 
     from refactory_dsh.create_ops import follow_ups
     left = follow_ups(ctx)
-    if ev_data is not None and check_passed and _audit_passed():
-        reviews_line = "Reviews passed (QA + overwatch)."
+    if ev_data is not None and check_passed and _audit_passed() and left:
+        reviews_line = ("**Reviews:** the health check, code review, independent verification, "
+                        "QA and overwatch audit found no core defect; "
+                        f"{len(left)} non-core finding(s) are listed under Follow-ups.")
+    elif ev_data is not None and check_passed and _audit_passed():
+        reviews_line = ("**Reviews:** the health check, code review, independent verification and QA found nothing blocking, "
+                        "and the overwatch audit passed.")
     else:
-        reviews_line = "Not all review steps completed."
+        reviews_line = "**Reviews:** not all review steps completed."
 
     # Render uncommitted-changes note in the PR's Verification when the base
     # included the person's uncommitted files.
@@ -1947,12 +1952,48 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         merge_line = (f"- **Merge:** not merged; the check failed on "
                       f"the merged result: {merge.check_failed[:200]}.\n")
 
-    sections.append(f"## Verification\n\n- {check_line}\n" + uncommitted_line + merge_line + f"- {reviews_line}")
+    verification = (f"## Verification\n\n"
+                    + (f"- {check_line}\n" if check_line else "")
+                    + uncommitted_line + merge_line
+                    + f"- {reviews_line}")
+    # Repository questions the reviewers left unanswered (advisory; never re-run).
+    if ctx.exists("reviews/qa-gate.txt"):
+        from refactory_dsh.authoring_evidence import ADVISORY_REPO_QUESTIONS
+
+        gate_text = ctx.read_text("reviews/qa-gate.txt")
+        if ADVISORY_REPO_QUESTIONS in gate_text:
+            missing = gate_text.split(ADVISORY_REPO_QUESTIONS, 1)[1].strip()
+            verification += ("\n- **Repository questions left unanswered (advisory):**\n"
+                             + missing + "\n")
+    # Overwatch correction judgments or correction-audit advisories.
+    from refactory_dsh import judges
+
+    try:
+        judged = (judges.read(ctx, judges.OVERWATCH_VERDICT, judges.OVERWATCH_VERDICTS).corrections
+                  if ctx.exists(judges.OVERWATCH_VERDICT) else None)
+    except judges.Unreadable:
+        judged = None
+    if judged is not None:
+        if judged:
+            verification += ("\n- **Corrections, as the overwatch judged them:**\n"
+                             + "\n".join(f"  - {_public(' '.join(judges.correction_line(item).split()))}"
+                                         for item in judged) + "\n")
+    else:
+        from refactory_dsh.authoring_evidence import correction_audit_advisories
+
+        by_hand = correction_audit_advisories(ctx)
+        if by_hand:
+            verification += ("\n- **Correction-audit checks to confirm by hand (advisory):**\n"
+                             + "\n".join(f"  - {note}" for note in by_hand) + "\n")
+    sections.append(verification)
 
     # ## Follow-ups
     if left:
         sections.append(
-            "## Follow-ups\n\n" + "\n".join(f"- {_public(' '.join(item.split()))}" for item in left))
+            "## Follow-ups (non-core findings)\n\n"
+            "The reviews judged these real but outside the change's core (no ask, "
+            "criterion, correction or existing behaviour depends on them), so they did "
+            "not hold it back:\n\n" + "\n".join(f"- {_public(' '.join(item.split()))}" for item in left))
 
     # ## Corrections given at approval
     corrections = _public(str(ctx.facts.get("gate_corrections") or "")).strip()
