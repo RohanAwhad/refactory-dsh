@@ -436,7 +436,9 @@ plans "the simplest thing that could pass the check" from the research and pitfa
 with no perspectives step. The routing gate answers `scoped` or `proceed` (also what a
 person's skip of a gate sends on the spine), which both runtimes follow as edge labels.
 Non-refine research is guided to 3 to 5 directions. A full design keeps the
-perspectives step.
+perspectives step. At either scale the design cites a research finding only where it changes a
+decision; the findings stay in `research/` and `strategy/` for the design writer to
+read.
 
 **Light refine.** A refine skips more than the perspectives step. `route_refine_design`,
 right after `prepare`, answers `light` on a refine (the default, `refine_design=light`)
@@ -449,11 +451,8 @@ as GitHub has it now ("unavailable" when that cannot be read, never "empty"). A 
 reloop at `gate_strategy` goes to `synthesize_strategy`, which gets the same block as its
 `strategy_plan`, and the next design still gets `refine_context`. With
 `refine_design=full` (`--refine-design full`), or on any run that is not a refine, the
-gate answers `proceed` and the full phase runs. Prepare knows a refine by the pull
-request `delivery.refine_task` resolved, because on the spine `refine` is a knob and not
-part of the node's task. At either scale the design cites a research finding only where it changes a
-decision; the findings stay in `research/` and `strategy/` for the design writer to
-read.
+gate answers `proceed` and the full phase runs. Prepare reads the refine from the task
+(the walker) or the `refine` knob (the spine, where a node's task names only the node).
 
 The `deliverable_kind` fact, computed by `prepare_design`, distinguishes repository
 changes from artifacts. The `review_instructions` fact renders `REPO_CHANGE_REVIEW_INSTRUCTIONS`

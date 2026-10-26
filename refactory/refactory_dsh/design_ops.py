@@ -153,11 +153,10 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
                                  output_only=PLANNING_STEPS)
 
     # Compute research_scope.  A refine is always scoped; everything else starts
-    # as full and is reclassified by classify_scale after research.  A refine is
-    # known by the pull request `delivery.refine_task` resolved, not by the task's
-    # `refine`: the walker passes `refine` in the task, but a run on DSH carries it
-    # as a knob, and there the task names only the node.
-    if task.get("refining"):
+    # as full and is reclassified by classify_scale after research.  The walker
+    # passes `refine` in the task, but a run on DSH carries it as a knob, and there
+    # the task names only the node: read both, as `delivery.refine_task` does.
+    if str(task.get("refine") or ctx.knob("refine", "") or "").strip():
         research_scope = "scoped"
         research_scope_reason = REFINE_SCOPE_REASON
     else:

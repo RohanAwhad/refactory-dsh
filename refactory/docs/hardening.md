@@ -2671,10 +2671,11 @@ unavailable, never that it is empty, and a warning says why.  With
 `refine_design=full`, or on any non-refine run, the gate returns `proceed` and
 the existing pipeline runs unchanged.
 
-Prepare knows a refine by the pull request `delivery.refine_task` resolved.
-On the spine `refine` is a knob and a node's task names only the node, so the
-task's `refine` key, which the first version read, never fired there: every
-refine walked the full phase, and `classify_scale`'s refine shortcut never ran.
+Prepare reads the refine from the task or, failing that, the `refine` knob,
+as `delivery.refine_task` does.  On the spine `refine` is a knob and a node's
+task names only the node, so the task's `refine` key, which the first version
+read alone, never fired there: every refine walked the full phase, and
+`classify_scale`'s refine shortcut never ran.
 
 The `refine_design` knob is frozen: it cannot change after the run starts.
 The default is `light`.  The CLI flag is `--refine-design light|full`, which
