@@ -88,7 +88,7 @@ class _Repeating(Optimizer):
 def test_each_epochs_refusals_are_counted_with_that_epochs_codes(tmp_path):
     config = LoopConfig(optimizer="random", edit_preset="knob_only", epochs=3, batch_size=2,
                         seed=5, runs_root=tmp_path)
-    Loop(MODE, config, project=Path("."), optimizer=_Repeating(k=1)).run()
+    report = Loop(MODE, config, project=Path("."), optimizer=_Repeating(k=1)).run()
     records = [json.loads(line) for line in (tmp_path / "progress.jsonl").read_text().splitlines()]
     lines = [r for r in records if r.get("step") == "optimizer"]
     assert [r["epoch"] for r in lines] == [1, 2, 3]
@@ -98,6 +98,10 @@ def test_each_epochs_refusals_are_counted_with_that_epochs_codes(tmp_path):
     last = lines[-1]
     assert last["refused"] and sum(last["refusal_codes"].values()) > last["refused"], (
         "the run's tally has more than the last epoch's own refusals")
+    # The JSON summary keeps the two apart the same way.
+    summary = report["epochs_summary"]
+    assert [s["refused"] for s in summary] == [r["refused"] for r in lines]
+    assert summary[-1]["refused_total"] > summary[-1]["refused"] > 0
 
 
 def test_the_line_names_the_epochs_codes_not_the_runs():

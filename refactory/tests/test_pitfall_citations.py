@@ -71,7 +71,8 @@ PROBES = {
         "## Anti-patterns to avoid\n\n- **PIT-001 (splitlines trap)**\n"
         "  Line counting uses `text.count('\\n')`, never `splitlines()`, so a file without a final "
         "newline still counts.\n",
-        "PIT-001 (splitlines trap)", "Anti-patterns to avoid"),
+        "PIT-001 (splitlines trap) Line counting uses `text.count('\\n')`, never `splitlines()`, so a "
+        "file without a final newline still counts.", "Anti-patterns to avoid"),
     "heading with title, remedy in body": (
         "## Anti-patterns to avoid\n\n### PIT-001 (splitlines trap)\n\n"
         "Line counting uses `text.count('\\n')`, so a file without a final newline counts like wc.\n",
@@ -153,10 +154,10 @@ def test_the_wordcount_card_shows_where_each_pitfall_is_cited(tmp_path):
     design = (FIXTURES / "wordcount_design.md").read_text()
     pitfalls = json.loads((FIXTURES / "wordcount_pitfalls.json").read_text())
     lines = _card_pitfalls(_gate(tmp_path, design, pitfalls))
-    # PIT-001: the Tests line (long, so quoted around the id), then its Anti-patterns entry.
-    assert lines[0].startswith('- PIT-001 (high): \u00a7 Tests: "\u2026')
-    assert 'repository root (PIT-001)."' in lines[0]
-    assert '; § Anti-patterns to avoid: "PIT-001 (file co-location): Both files placed' in lines[0]
+    # PIT-001: its Anti-patterns entry first, then the Tests line (long, so quoted around the id).
+    assert lines[0].startswith('- PIT-001 (high): \u00a7 Anti-patterns to avoid: "PIT-001 (file co-location): '
+                               'Both files placed')
+    assert '; \u00a7 Tests: "\u2026' in lines[0] and lines[0].endswith('repository root (PIT-001)."')
     # PIT-005 is cited only in its Anti-patterns entry.
     assert lines[4] == ('- PIT-005 (medium): § Anti-patterns to avoid: "PIT-005 (no test '
                         'framework): No external dependencies. Check command is sole automated '

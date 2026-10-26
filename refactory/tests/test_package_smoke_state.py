@@ -134,6 +134,25 @@ def test_a_passing_package_smoke_clears_the_mark(tmp_path):
     assert "unverified" not in registry.render_catalogue(tmp_path)
 
 
+def test_a_failing_package_smoke_leaves_the_mark(tmp_path):
+    root = registry.workspace_root(tmp_path) / "still_broken_pkg"
+    root.mkdir(parents=True)
+    (root / "__init__.py").write_text(
+        "from refactory_dsh.nn import Package\n"
+        "from refactory_dsh.nn.mode import RunResult\n"
+        "from refactory_packages.circle_packing.mode import CirclePacking\n\n\n"
+        "class Broken(CirclePacking):\n"
+        "    def evaluate(self, workdir, model=None, **kwargs):\n"
+        "        return RunResult(exit_ok=False, error='still broken')\n\n\n"
+        "PACKAGE = Package(name='still_broken_pkg', description='not fixed yet', modes=(Broken,),\n"
+        "                  ops=('refactory_packages.circle_packing.ops',))\n")
+    (root / registry.ORIGIN).write_text(json.dumps({"origin": "create-mode", "smoke": "pending"}))
+    assert registry.smoke(tmp_path, "still_broken_pkg/adaptive")["exit_ok"] is False
+    assert registry.smoke_state("still_broken_pkg", tmp_path) == "pending"
+    assert "still_broken_pkg/  not fixed yet  [unverified (smoke not passed)]" in (
+        registry.render_catalogue(tmp_path))
+
+
 def test_a_package_smoke_writes_nothing_for_a_package_with_no_record(tmp_path):
     _runnable(tmp_path, "unrecorded_pkg", "passed")
     origin = registry.workspace_root(tmp_path) / "unrecorded_pkg" / registry.ORIGIN

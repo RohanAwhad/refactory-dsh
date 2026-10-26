@@ -123,15 +123,36 @@ def test_a_pitfall_the_design_never_cites_is_not_mentioned():
 
 def test_every_line_citing_a_pitfall_is_quoted_under_its_heading_at_most_two():
     design = _contract(body="### Notes\n\nPIT-001 is why the base is read twice.",
-                       anti="- **PIT-001** (high): addressed at `file.py:1`\n"
-                            "- PIT-001 again, a third mention")
+                       anti="- **PIT-001** (high): addressed at `file.py:1`")
+    # The Anti-patterns entry first, where a design answers pitfalls; then design order.
     assert _citations(design) == {"PIT-001": [
-        ("Notes", "PIT-001 is why the base is read twice."),
-        ("Anti-patterns to avoid", "PIT-001 (high): addressed at `file.py:1`")]}
+        ("Anti-patterns to avoid", "PIT-001 (high): addressed at `file.py:1`"),
+        ("Notes", "PIT-001 is why the base is read twice.")]}
     entry = pitfalls_mod.pitfall_citations(design, [_pit()])[0]
     assert pitfalls_mod.citation_line(entry) == (
-        "PIT-001 (high): \u00a7 Notes: \"PIT-001 is why the base is read twice.\"; "
-        "\u00a7 Anti-patterns to avoid: \"PIT-001 (high): addressed at `file.py:1`\"")
+        "PIT-001 (high): \u00a7 Anti-patterns to avoid: \"PIT-001 (high): addressed at `file.py:1`\"; "
+        "\u00a7 Notes: \"PIT-001 is why the base is read twice.\"")
+    three = _contract(body="PIT-001 first.\n\nPIT-001 second.", anti="- PIT-001 third.")
+    assert [text for _, text in _citations(three)["PIT-001"]] == ["PIT-001 third.", "PIT-001 first."]
+    # A subsection of Anti-patterns is still where the design answers pitfalls.
+    nested = _contract(body="PIT-001 first.", anti="### Details\n\nPIT-001 under a subsection.")
+    assert _citations(nested)["PIT-001"] == [("Details", "PIT-001 under a subsection."),
+                                             ("Changes", "PIT-001 first.")]
+
+
+def test_a_list_item_is_quoted_with_the_lines_that_continue_it():
+    design = _contract(anti="- **PIT-001**\n  The base is read once, so the cache key holds.\n"
+                            "- PIT-002 is another\n\nPIT-003 later.")
+    assert _citations(design, _pit())["PIT-001"] == [
+        ("Anti-patterns to avoid", "PIT-001 The base is read once, so the cache key holds.")]
+
+
+def test_a_hash_line_in_a_code_fence_is_not_a_heading():
+    design = _contract(body="```python\n# PIT-001: read the base once\nbase = read()\n```\n\n"
+                            "PIT-001 is settled by the line above.")
+    assert _citations(design) == {"PIT-001": [
+        ("Changes", "PIT-001: read the base once"),
+        ("Changes", "PIT-001 is settled by the line above.")]}
 
 
 def test_a_summary_mention_or_a_set_aside_is_quoted_like_any_other():

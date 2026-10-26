@@ -145,6 +145,13 @@ def _quote(line: str, pid: str) -> str:
     return text
 
 
+#: A list item's start: a bullet or a number.
+_ITEM = re.compile(r"\s*(?:[-*+]|\d+[.)])\s")
+
+#: The section whose lines the card quotes first: the one a design answers pitfalls in.
+ANSWERS_SECTION = "anti-patterns to avoid"
+
+
 def pitfall_citations(
     design_text: str, pitfalls: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -152,28 +159,44 @@ def pitfall_citations(
 
     No verdict: whether a line answers its pitfall is the person's judgment, so the card
     shows the lines, at most `QUOTES_PER_PITFALL`, each with the heading it sits under,
-    and says "not mentioned" only for an id the design never cites. One entry per pitfall
-    with an id, in order: ``{"id", "risk", "quotes": [(heading, text), ...]}``.
+    and says "not mentioned" only for an id the design never cites. Lines in
+    ``## Anti-patterns to avoid`` come first, then the rest in design order; a list item
+    is quoted with the lines that continue it, where its answer often is. A ``#`` line
+    inside a code fence is code, not a heading. One entry per pitfall with an id, in
+    order: ``{"id", "risk", "quotes": [(heading, text), ...]}``.
     """
-    lines: list[tuple[str, str]] = []
-    heading = ""
+    rows = design_text.splitlines()
+    # (heading, in the answers section, the line, the line with what continues it)
+    lines: list[tuple[str, bool, str, str]] = []
+    heading = section = ""
     fenced = False
-    for line in design_text.splitlines():
+    for index, line in enumerate(rows):
         stripped = line.strip()
         if stripped.startswith(("```", "~~~")):
             fenced = not fenced
-        lines.append((heading, line))
-        if not fenced and (found := re.match(r"#{1,6}\s+(.+)", stripped)):
-            heading = found[1].strip()
+        text = line
+        if _ITEM.match(line):
+            for following in rows[index + 1:]:
+                if not following.strip() or not following[:1].isspace() or _ITEM.match(following):
+                    break
+                text += " " + following.strip()
+        lines.append((heading, section.lower() == ANSWERS_SECTION, line, text))
+        if not fenced and (found := re.match(r"(#{1,6})\s+(.+)", stripped)):
+            heading = found[2].strip()
+            if len(found[1]) <= 2:
+                section = heading
     cited: list[dict[str, Any]] = []
     for pitfall in pitfalls:
         pid = str(pitfall.get("id") or "")
         if not pid:
             continue
         mention = re.compile(rf"(?<![\w-]){re.escape(pid)}(?!\d)")
-        quotes = [(under, _quote(line, pid)) for under, line in lines if mention.search(line)]
+        found_lines = [(answers, under, text) for under, answers, line, text in lines
+                       if mention.search(line)]
+        found_lines.sort(key=lambda row: not row[0])   # stable: design order within each
         cited.append({"id": pid, "risk": str(pitfall.get("risk") or "?"),
-                      "quotes": quotes[:QUOTES_PER_PITFALL]})
+                      "quotes": [(under, _quote(text, pid))
+                                 for _, under, text in found_lines[:QUOTES_PER_PITFALL]]})
     return cited
 
 
