@@ -96,6 +96,20 @@ def node_session_budget_s(attempts: int, timeout_s: int) -> int:
 #: work — so the client retries, and only a client that keeps failing fails the node.
 DEFAULT_ATTEMPTS = 3
 
+#: How long the waits between those attempts add up to, in seconds, however many attempts
+#: there are. A DNS or network blip lasts up to about a minute; retries one and two
+#: seconds apart all landed inside one and failed the run (dm-218).
+RETRY_WINDOW_S = 60.0
+
+
+def retry_delays(attempts: int, window_s: float = RETRY_WINDOW_S) -> list[float]:
+    """The wait before each retry of ``attempts``: each twice the last, together ``window_s``."""
+    retries = max(0, int(attempts) - 1)
+    if retries == 0:
+        return []
+    unit = max(0.0, float(window_s)) / (2 ** retries - 1)
+    return [unit * 2 ** index for index in range(retries)]
+
 
 #: What the child says when the failure was on the wire rather than in the model.
 #:
@@ -156,8 +170,9 @@ class DshModelClient:
     """One-shot completions through ``dsh --profile headless``.
 
     Implements ``factory.outer_loop.optimizers.ModelClient``. A completion that fails
-    on the wire is retried, bounded, with a backoff; one that fails for any other
-    reason is raised straight away with the cause named.
+    on the wire is retried, up to ``attempts`` in all, with waits that double and add up
+    to ``backoff_s`` (`retry_delays`); one that fails for any other reason is raised
+    straight away with the cause named.
     """
 
     def __init__(
@@ -166,7 +181,7 @@ class DshModelClient:
         model: str = "",
         provider: str = "",
         attempts: int = DEFAULT_ATTEMPTS,
-        backoff_s: float = 1.0,
+        backoff_s: float = RETRY_WINDOW_S,
         dsh_home: str | Path | None = None,
         runtime_root: str | Path | None = None,
         dsh_cli: str | None = None,
@@ -517,6 +532,7 @@ class DshModelClient:
         if wall is not None and wall < budget_s:
             budget_s = wall
             stop_at = time.monotonic() + budget_s
+        delays = retry_delays(self._attempts, self._backoff_s)
         for attempt in range(1, self._attempts + 1):
             self._raise_if_cancelled()
             self._checkpoint()
@@ -544,7 +560,7 @@ class DshModelClient:
                     )
                 last = cause or f"exit {proc.returncode}"
             if attempt < self._attempts:
-                delay = self._backoff_s * (2 ** (attempt - 1))
+                delay = delays[attempt - 1]
                 if not self._cancellations:
                     time.sleep(delay)
                 else:

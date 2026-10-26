@@ -179,7 +179,8 @@ describe('workflow-spine real composition', () => {
         + 'octo/tool; {{unknown}} stays.'
       expect(view.nodes.find(node => node.id === 'gate')?.gate_prompt).toBe(filled)
       await run(ctx, 'wf_verdict', { gate: 'gate' })
-      expect(asked[0]!.question).toBe(filled)
+      // The card also says how many reloops are left before one stops the run (dm-141).
+      expect(asked[0]!.question).toBe(`${filled}\n\nReloops left: 3 of 3.`)
     } finally { rmSync(tmp, { recursive: true, force: true }) }
     expect(workflowSpine.withFacts('Then, {{delivery}}.', undefined)).toBe('Then, {{delivery}}.')
   })

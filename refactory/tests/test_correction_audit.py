@@ -1308,6 +1308,50 @@ def test_reverts_in_one_file_never_run_stale_bytecode(tmp_path):
     assert [p["result"] for p in results] == ["fail"] * 6
 
 
+def test_a_cited_test_name_reaches_its_runner_whole_and_runs_nothing_else(tmp_path, monkeypatch):
+    """A vitest name is `describe > test`. Unquoted, the shell redirected the run into a
+    stray file in the worktree, cut the name, and ran what followed a `;` (dm-193). A
+    pytest id with a space in its parameter split the same way."""
+    from refactory_dsh import base_check
+
+    argv_file = tmp_path / "npx-argv.txt"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "npx").write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{argv_file}"\nexit 1\n')
+    (bin_dir / "npx").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    repo = git_repo(tmp_path / "repo")
+    (repo / "src").mkdir()
+    (repo / "src" / "hmr.ts").write_text("export const enabled = true\n")
+    (repo / "m.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "run-branch")
+    (repo / "src" / "hmr.ts").write_text("export const enabled = false\n")
+    (repo / "src" / "hmr.test.ts").write_text("// stands in for the vitest file\n")
+    (repo / "m.py").write_text("def f():\n    return 2\n")
+    (repo / "test_m.py").write_text("import pytest\nimport m\n\n\n@pytest.mark.parametrize('label', ['a b'])\n"
+                                    "def test_f(label):\n    assert m.f() == 2\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "change")
+    (run_dir / ".refactory" / "worktree.json").write_text(json.dumps({
+        "path": str(repo), "base": base, "head": git(repo, "rev-parse", "HEAD"),
+        "branch": "run-branch", "target": str(repo), "run": str(run_dir)}))
+    ctx = nn.RunContext(run_dir, facts={"brief": "test"})
+    name = "client-hmr composition > disabled after composition; touch pwned"
+    results = base_check.compute_site_reverts(ctx, [
+        ("src/hmr.ts:1", f"src/hmr.test.ts::{name}", "local"),
+        ("m.py:2", "test_m.py::test_f[a b]", "local")])["pairs"]
+    assert argv_file.read_text().splitlines() == ["vitest", "run", "src/hmr.test.ts", "-t", name]
+    assert [p["result"] for p in results] == ["fail", "fail"], results
+    stray = [line for line in git(repo, "status", "--porcelain", "--untracked-files=all").splitlines()
+             if "pytest_cache" not in line and "__pycache__" not in line]
+    assert stray == [], "nothing the shell wrote: no `disabled` capture, no `pwned`"
+
+
 def test_a_documentation_site_needs_no_test_but_must_be_in_the_diff(tmp_path):
     """A correction to a prose document is evidenced by the diff: no test is expected to
     fail when its line is reverted, or to be cited at all, so either is advisory, not a

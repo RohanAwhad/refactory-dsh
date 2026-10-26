@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -531,9 +532,11 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree, list[str]]
 
     _isolate_hooks(target, base_path)
 
-    # Prepare the environment (installs)
+    # Prepare the environment (installs). A lockfile the install writes stays in the base
+    # worktree, uncommitted: the base is a fixed commit, and an amend would also point
+    # the run's worktree record at the base (dm-188).
     budget = getattr(ctx, "budget", None)
-    _, problems, _ = worktree.ensure_environment(base_found, ctx.workdir, budget)
+    _, problems, _ = worktree.ensure_environment(base_found, ctx.workdir, budget, commit_lockfiles=False)
     if problems:
         unavailable = [p for p in problems if "UNAVAILABLE:" in p]
         if unavailable:
@@ -1793,22 +1796,25 @@ def compute_site_reverts(
 
         detail = ""
         try:
-            # Pick runner and build command
+            # Pick runner and build command. Each argument is quoted: a vitest name
+            # such as `suite > test` would otherwise redirect into a stray file in the
+            # worktree and select the wrong tests (dm-193).
             test_path = test_name.split("::")[0] if "::" in test_name else test_name
             fn_name = test_name.split("::")[-1] if "::" in test_name else ""
 
             if test_path.endswith(".py"):
                 if fn_name:
-                    cmd = f"python -B -m pytest -x -q {test_name}"
+                    argv = ["python", "-B", "-m", "pytest", "-x", "-q", test_name]
                 else:
-                    cmd = f"python -B -m pytest -x -q {test_path}"
+                    argv = ["python", "-B", "-m", "pytest", "-x", "-q", test_path]
             elif test_path.endswith(".ts") or test_path.endswith(".spec.ts"):
                 if fn_name:
-                    cmd = f"npx vitest run {test_path} -t {fn_name}"
+                    argv = ["npx", "vitest", "run", test_path, "-t", fn_name]
                 else:
-                    cmd = f"npx vitest run {test_path}"
+                    argv = ["npx", "vitest", "run", test_path]
             else:
-                cmd = f"python -B -m pytest -x -q {test_name}"
+                argv = ["python", "-B", "-m", "pytest", "-x", "-q", test_name]
+            cmd = shlex.join(argv)
 
             home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
             env = worktree.check_environment(attempt_path, home)

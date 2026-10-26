@@ -1059,7 +1059,8 @@ export function apply(ctx: Context, config: Config): void {
    * @param workdir - where to write: the configured run directory, or the opened
    * run's own directory when a session opened the mode at run time.
    * @param status - `done`, `ready`, `failed`, or `refused`.
-   * @param detail - the error, for a failure or refusal.
+   * @param given - the error, for a failure or refusal. A halt at a gate's reloop limit
+   * without one records what the limit stopped and how to go on.
    * @param failedNode - the node that failed. Writes `last_failure` in the
    * status record. For most node command failures (nonzero exit other than 3)
    * the run-level status stays non-terminal (`ready`) so the retry is not
@@ -1068,9 +1069,11 @@ export function apply(ctx: Context, config: Config): void {
    * status is `failed` — `last_failure` accompanies the terminal status so
    * readers see which node stopped the run.
    */
-  function recordStatus(spine: Spine, workdir: string | undefined, status: string, detail?: string,
+  function recordStatus(spine: Spine, workdir: string | undefined, status: string, given?: string,
       failedNode?: { node: string; error: string }): void {
     if (workdir === undefined) return
+    // A run a gate's reloop limit stopped says so, and how to go on, on every write.
+    const detail = given ?? (status === 'halted' ? limitMessage(spine, workdir) : undefined)
     try {
       const dir = join(workdir, '.refactory')
       mkdirSync(dir, { recursive: true })
@@ -1142,6 +1145,43 @@ export function apply(ctx: Context, config: Config): void {
       // Persist the execution marker before dispatch, and stop on every write error.
       throw new Error('Cannot persist graph recovery checkpoint; continuation refused', { cause: error })
     }
+  }
+
+  /**
+   * The gate card's line on how many reloops are left before a reloop stops the run
+   * (dm-141), or undefined for a gate without a counted reloop.
+   * @param spine - the run's spine.
+   * @param gate - the user gate being asked.
+   * @returns the line.
+   */
+  function reloopsLeft(spine: Spine, gate: string): string | undefined {
+    const spent = spine.reloops(gate)
+    if (spent === undefined) return undefined
+    const left = Math.max(0, spent.cap - spent.used)
+    return left === 0
+      ? `Reloops left: 0 of ${spent.cap}. A reloop now stops the run instead of going back to ${spent.target}.`
+      : `Reloops left: ${left} of ${spent.cap}.`
+  }
+
+  /**
+   * What a person reads when a gate's reloop limit stopped the run: that the limit was
+   * reached, and how to go on (dm-141). Undefined for any other halt.
+   * @param spine - the run's spine.
+   * @param workdir - the run directory, named in the commands.
+   * @returns the message.
+   */
+  function limitMessage(spine: Spine, workdir: string | undefined): string | undefined {
+    const halted = spine.state().halted as { gate?: string; reason?: string } | undefined
+    if (halted?.reason !== 'max_iterations' || !halted.gate) return undefined
+    const spent = spine.reloops(halted.gate)
+    const limit = spent === undefined ? 'its reloop limit' : `its limit of ${spent.cap} reloops`
+    const target = spent?.target ?? 'the node it reloops to'
+    const run = workdir ?? 'RUN_DIR'
+    return `The run stopped: ${halted.gate} reached ${limit}. To go on, rerun ${target}: in the GUI, `
+      + 'choose it, then Preview affected results and Confirm correction and rerun; or run '
+      + `\`refactory graph-control preview --run ${run} --node ${target}\` and then `
+      + `\`refactory graph-control rerun --run ${run} --node ${target} --revision REVISION\` `
+      + 'with the revision it returns. A rerun by a person resets the limit.'
   }
 
   /** The status {@link recordStatus} last wrote for the run, or undefined when there is none to read. */
@@ -1798,6 +1838,8 @@ export function apply(ctx: Context, config: Config): void {
       recordStatus(spine, workdir, 'waiting_user')
       // Build the question text, appending CEO notes if available.
       let questionText = withFacts(view.gate_prompt ?? '', workdir) || `Gate ${gate}`
+      const left = reloopsLeft(spine, gate)
+      if (left !== undefined) questionText += `\n\n${left}`
       if (config.steerCommand !== '' && workdir !== undefined) {
         try {
           const steerResult = spawnSync(config.steerCommand, [...config.steerArgs, workdir], {
@@ -2283,10 +2325,12 @@ export function apply(ctx: Context, config: Config): void {
         }
         spine.verdict(args.gate, result.verdict, result.feedback || args.feedback || '')
         if (spine.isHalted()) recordStatus(spine, workdir, 'halted')
+        const limit = limitMessage(spine, workdir)
         return json({
           status: 'routed', gate: args.gate, verdict: result.verdict, answered_by: 'user',
           ...(result.feedback ? { feedback: result.feedback } : {}),
           ...(spine.isHalted() ? { halted: true } : {}),
+          ...(limit === undefined ? {} : { message: limit }),
         })
       }
       if (args.verdict === undefined) {

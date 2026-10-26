@@ -398,6 +398,40 @@ def test_the_model_client_reports_a_failed_run(monkeypatch):
         DshModelClient().complete("hello")
 
 
+def test_a_transport_blip_is_ridden_out_over_about_a_minute(monkeypatch):
+    """A DNS blip outlasted retries one and two seconds apart and failed the run (dm-218).
+    The waits double and add up to about a minute, whatever the attempt count; a clock
+    that only records the waits keeps the test from waiting."""
+    from refactory_dsh import model
+    from refactory_dsh.model import DshModelClient
+
+    class Blip:
+        returncode = 1
+        stdout = ""
+        stderr = "dsh: TRANSPORT: getaddrinfo ENOTFOUND api.example.com"
+
+    class Ok:
+        returncode = 0
+        stdout = "done\n"
+        stderr = ""
+
+    answers: list[object] = [Blip(), Blip(), Blip(), Ok()]
+    waits: list[float] = []
+    monkeypatch.setattr(DshModelClient, "_run_completion", lambda *a, **k: answers.pop(0))
+    monkeypatch.setattr(model.time, "sleep", waits.append)
+    assert DshModelClient(attempts=4).complete("hello") == "done\n"
+    assert answers == [] and len(waits) == 3
+    assert waits[1] == 2 * waits[0] and waits[2] == 2 * waits[1]
+    assert sum(waits) == pytest.approx(60.0)
+
+    # The default count keeps the same window, and still fails a transport that stays down.
+    answers[:] = [Blip(), Blip(), Blip()]
+    waits.clear()
+    with pytest.raises(RuntimeError, match="on the wire 3 time"):
+        DshModelClient().complete("hello")
+    assert waits == pytest.approx([20.0, 40.0])
+
+
 def test_the_model_client_returns_stdout(monkeypatch):
     import subprocess
 

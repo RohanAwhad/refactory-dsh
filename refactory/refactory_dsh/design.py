@@ -541,7 +541,7 @@ class DesignMode(Mode):
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
                       "design_review_rewrites", "design_review_findings", "pitfall_coverage",
-                      "finding_coverage", "design_review_status",
+                      "finding_coverage", "design_review_status", "design_card",
                       "design_review_advisory", "design_review_blocking"),
             knobs=("design_review_attempts",),
             max_iterations=6,
@@ -559,14 +559,14 @@ class DesignMode(Mode):
             max_iterations=4,
             # `{{delivery}}` is filled from the run's facts wherever the question is put
             # (the spine's question card, the panel, the CEO's view), so the card itself
-            # names the repository a run would create, and who can see it.
+            # names the repository a run would create, and who can see it. The card is
+            # plain text, as the question card shows it (`design_ops.design_card`, dm-163).
             notes=(
-                "{{design_review_status}}\n\n"
+                "{{design_card}}\n\n"
                 "Approve the design before the artifact is written? It is in design.md "
                 "in the run directory. Then, {{delivery}}; delivery.md there says more. "
                 "Answer proceed to build and deliver it that way, or reloop to have the "
-                "plan redone.\n\n"
-                "## Unresolved design review findings\n{{design_review_findings}}"
+                "plan redone."
             ),
         ))
         graph.add(Node(

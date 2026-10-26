@@ -328,6 +328,42 @@ def test_an_attempt_that_died_after_its_commit_is_replaced_by_the_redo(repo, tmp
     assert git(Path(found.path), "ls-tree", "--name-only", "HEAD").splitlines() == ["app.py", "tool.py"]
 
 
+def test_an_attempt_never_commits_a_run_artifact_its_emission_names_or_the_worktree_holds(
+        repo, tmp_path, capsys):
+    """b40a committed `.refactory/verifier-findings.md` onto its branch (dm-242)."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "a2a2a2a2b4b4", run)
+    path = Path(found.path)
+    (path / ".refactory").mkdir()
+    (path / ".refactory" / "x.md").write_text("a reviewer's stray notes\n")
+    git(path, "add", "-f", ".refactory/x.md")
+    advanced = worktree.commit_attempt(
+        run, {Path("tool.py"): "x\n", Path(".refactory/verifier-findings.md"): "findings\n",
+              Path(".Refactory/notes.md"): "notes\n"}, "attempt 1")
+    assert git(path, "ls-tree", "-r", "--name-only", advanced.head).splitlines() == ["app.py", "tool.py"]
+    assert not (path / ".refactory" / "verifier-findings.md").exists(), "never written either"
+    assert ("were left out of it: .Refactory/notes.md, .refactory/verifier-findings.md"
+            in capsys.readouterr().err)
+
+
+def test_a_run_artifact_staged_in_the_worktree_is_never_amended_into_the_attempt(repo, tmp_path, monkeypatch):
+    """An amendment commits what is staged: a lockfile amend must not carry a staged run artifact."""
+    stub(tmp_path / "bin", "npm", "echo '{\"lockfileVersion\": 3}' > package-lock.json")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "a3a3a3a3b4b4", run)
+    attempt = worktree.commit_attempt(run, {Path("package.json"): "{}\n"}, "attempt 1")
+    path = Path(found.path)
+    (path / ".refactory").mkdir()
+    (path / ".refactory" / "verifier-findings.md").write_text("findings\n")
+    git(path, "add", "-f", ".refactory/verifier-findings.md")
+    amended, problems, _pf = worktree.ensure_environment(attempt, run)
+    assert problems == [] and amended.head != attempt.head
+    assert sorted(git(path, "ls-tree", "-r", "--name-only", "HEAD").splitlines()) == [
+        "app.py", "package-lock.json", "package.json"]
+    assert (path / ".refactory" / "verifier-findings.md").read_text() == "findings\n", "left on disk, unstaged"
+
+
 @pytest.mark.parametrize("name", [".git/config", ".GIT", "sub/.Git/HEAD"])
 def test_an_emitted_path_inside_gits_own_state_is_refused_in_any_case(repo, tmp_path, name):
     """A `.GIT` on a case-insensitive disk would replace the worktree's link to its repository."""
