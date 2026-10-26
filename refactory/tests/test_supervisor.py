@@ -88,17 +88,20 @@ def _make_valid_run_dir(tmp_path: Path, *, status: str = 'ready',
 
 
 def _dsh_available() -> bool:
-    """Check if DSH build and profile are available for end-to-end tests."""
+    """Whether this checkout is built, which an end-to-end test needs.
+
+    Only the build: whether a `graph` profile exists is the person's machine state, read
+    from their DSH home at collection, and the test runs in a sealed home of its own
+    anyway (`graph_profile_home` provides the profile). Asking the real home skipped the
+    test wherever the person's profile is linked to another checkout, and ran it on CI
+    against a home it never sees.
+    """
     try:
         from refactory_dsh.paths import require_build
         require_build()
     except Exception:
         return False
-    try:
-        from refactory_dsh import dsh_profile
-        return dsh_profile.requirement() is None
-    except Exception:
-        return False
+    return True
 
 
 def _dead_pid() -> int:
@@ -718,7 +721,17 @@ def test_headless_deliberate_stop_no_respawn(tmp_path):
 # ── Item 1: real child no self-refusal ─────────────────────────────────────
 
 
-@pytest.mark.skipif(not _dsh_available(), reason='DSH build/profile not available')
+def test_whether_the_real_child_runs_depends_only_on_the_build():
+    """The end-to-end test below runs wherever the checkout is built, whatever the
+    person's DSH home holds; this test's own home is the sealed, empty one."""
+    from refactory_dsh import dsh_profile
+
+    assert dsh_profile.requirement() is not None, "the sealed home has no graph profile"
+    assert _dsh_available()
+
+
+@pytest.mark.skipif(not _dsh_available(), reason='this checkout is not built (pnpm run build)')
+@pytest.mark.usefixtures('graph_profile_home')
 def test_real_child_no_self_refusal(tmp_path):
     """The supervisor does not write the child's PID into the checkpoint,
     so the child's recovery.prepare() succeeds instead of refusing itself.
