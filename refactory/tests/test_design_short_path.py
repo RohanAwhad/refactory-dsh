@@ -30,6 +30,10 @@ def _edges(graph):
 def test_the_design_graph_routes_on_the_scale():
     graph = DesignMode().build()
     edges = _edges(graph)
+    # route_refine_design sits between prepare and research_director.
+    assert ("prepare", "route_refine_design", None) in edges
+    assert ("route_refine_design", "research_director", "proceed") in edges
+    assert ("route_refine_design", "design_doc", "light") in edges
     assert ("gate_research", "classify_scale", "proceed") in edges
     assert ("classify_scale", "pitfalls_researcher", None) in edges
     assert ("gate_pitfalls", "route_strategy", "proceed") in edges
@@ -49,7 +53,13 @@ def test_the_spine_gets_the_same_routes():
     node = workflow.nodes["route_strategy"]
     assert node.evaluator_type == "fn"
     assert node.evaluator_command.endswith("refactory_dsh.design_ops:route_strategy")
+    refine_node = workflow.nodes["route_refine_design"]
+    assert refine_node.evaluator_type == "fn"
+    assert refine_node.evaluator_command.endswith("refactory_dsh.design_ops:route_refine_design")
     lowered = {(e.source, e.target, e.condition) for e in workflow.edges}
+    assert ("prepare", "route_refine_design", None) in lowered
+    assert ("route_refine_design", "research_director", "proceed") in lowered
+    assert ("route_refine_design", "design_doc", "light") in lowered
     assert ("route_strategy", "synthesize_strategy", "scoped") in lowered
     assert ("check_design_claims", "gate_design_review", None) in lowered
     assert "design_review" not in workflow.nodes and "route_design_review" not in workflow.nodes

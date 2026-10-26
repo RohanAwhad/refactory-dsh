@@ -137,6 +137,8 @@ def _worktree_knobs(args: argparse.Namespace, *, deliver: bool = True) -> list[s
         knobs.append(f"refine={args.refine}")
     if args.review_comments:
         knobs.append("review_comments=1")
+    if getattr(args, "refine_design", None):
+        knobs.append(f"refine_design={args.refine_design}")
     return knobs
 
 
@@ -185,6 +187,10 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         return 2
     if args.review_comments and not args.refine:
         print("refactory: --review-comments goes with --refine: they are the pull request's comments",
+              file=sys.stderr)
+        return 2
+    if getattr(args, "refine_design", None) and not args.refine:
+        print("refactory: --refine-design goes with --refine: it says how a refine designs its change",
               file=sys.stderr)
         return 2
     model_timeout_s = getattr(args, 'model_timeout_s', None)
@@ -602,6 +608,9 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument("--review-comments", action="store_true",
                      help="design only, with --refine: add the pull request's reviews and comments to the "
                           "run's steering")
+    ceo.add_argument("--refine-design", default=None, choices=["light", "full"],
+                     help="design only, with --refine: light (default) skips research and strategy; "
+                          "full walks the whole design phase")
     for key in ("worker_backend", "effort", "permission_mode"):
         ceo.add_argument("--" + key.replace("_", "-"), default="")
     ceo.add_argument(

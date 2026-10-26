@@ -1240,6 +1240,13 @@ def _pulls(github: Path, slug: str) -> list[dict]:
     return json.loads(path.read_text()) if path.exists() else []
 
 
+def _describe(github: Path, slug: str, body: str) -> None:
+    """Give the one pull request on ``slug`` the description ``body``, as its author would on GitHub."""
+    path = github / f"{slug}.pulls.json"
+    [pull] = json.loads(path.read_text())
+    path.write_text(json.dumps([{**pull, "body": body}]))
+
+
 def _calls(tmp_path: Path) -> str:
     log = tmp_path / "bin" / "calls.log"
     return log.read_text() if log.exists() else ""
@@ -1270,7 +1277,13 @@ def _mode(**knobs) -> DesignMode:
 def _design(workdir: Path, emit: dict[str, str] | None = None, *, mode: DesignMode | None = None,
             check: str = "python tool.py", **task: str):
     model = FakeModel(_answers(render(emit or {"tool.py": "print('built')\n"})))
-    return (mode or DesignMode()).run(
+    used_mode = mode or DesignMode()
+    # Delivery tests pre-date light refine and script answers for the full pipeline.
+    if "refine" in task:
+        state = used_mode.state_dict()
+        state["knobs"]["refine_design"]["value"] = "full"
+        used_mode.load_state_dict(state)
+    return used_mode.run(
         workdir, model=model, verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": "Build a tool\nthat prints built.", "check": check, **task},
     )
@@ -2559,6 +2572,41 @@ def test_the_command_line_hands_the_delivery_flags_to_the_run_as_knobs(monkeypat
     assert {"pr=0", "refine=acme/app#3", "review_comments=1"} <= set(knobs)
 
 
+def test_the_command_line_hands_refine_design_to_the_run(monkeypatch):
+    """`--refine-design full` reaches the run as its knob; without the flag the mode's default holds."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+
+    def knobs() -> list[str]:
+        return [seen[-1][i + 1] for i, arg in enumerate(seen[-1]) if arg == "--knob"]
+
+    assert cli.main(["ceo", "a tool", "--check", "true", "--refine", "acme/app#3", "--refine-design", "full"]) == 0
+    assert "refine_design=full" in knobs()
+    assert cli.main(["ceo", "a tool", "--check", "true", "--refine", "acme/app#3"]) == 0
+    assert not [knob for knob in knobs() if knob.startswith("refine_design=")]
+
+
+def test_the_design_command_applies_refine_design_and_refuses_it_without_refine(tmp_path, monkeypatch, capsys):
+    from refactory_dsh import design
+
+    used: list[str] = []
+    monkeypatch.setattr(design.DesignMode, "run", lambda self, *a, **k: used.append(self.values()["refine_design"])
+                        or nn.RunResult(exit_ok=True, facts={}))
+    _fake_dsh = tmp_path / "fake_dsh"
+    (_fake_dsh / "profiles" / "headless").mkdir(parents=True)
+    (_fake_dsh / "profiles" / "headless" / "package.json").write_text("{}")
+    monkeypatch.setattr("refactory_dsh.dsh_profile.model_home", lambda home=None: _fake_dsh)
+    monkeypatch.chdir(tmp_path)
+    given = ["--name", NAME, "--brief", "a tool", "--check", "true", "--workdir", "run"]
+    assert design.main([*given, "--refine", "acme/app#3", "--refine-design", "full"]) == 0
+    assert design.main([*given, "--refine", "acme/app#3"]) == 0
+    assert used == ["full", "light"]
+    with pytest.raises(SystemExit):
+        design.main([*given, "--refine-design", "full"])
+    assert "--refine-design goes with --refine" in capsys.readouterr().err
+    assert used == ["full", "light"]
+
+
 def test_the_console_and_chat_route_says_how_it_will_be_delivered_when_approved_up_front(github, tmp_path,
                                                                                         monkeypatch, capsys):
     from refactory_dsh import design
@@ -2594,6 +2642,7 @@ def test_a_run_approved_up_front_does_only_what_it_announced(github, tmp_path, c
 def test_the_command_line_refuses_delivery_flags_that_cannot_apply(capsys):
     assert cli.main(["ceo", "a tool", "--check", "true", "--refine", "acme/app#3", "--base", "main"]) == 2
     assert cli.main(["ceo", "a tool", "--check", "true", "--review-comments"]) == 2
+    assert cli.main(["ceo", "a tool", "--check", "true", "--refine-design", "full"]) == 2
     assert cli.main(["ceo", "a tool", "--check", "true", "--mode", "design_fast", "--no-pr"]) == 2
     assert cli.main(["ceo", "a tool", "--check", "true", "--mode", "design_fast", "--refine", "acme/app#3"]) == 2
     assert cli.main(["ceo", "a tool", "--check", "true", "--no-worktree", "--refine", "acme/app#3"]) == 2
@@ -2601,6 +2650,7 @@ def test_the_command_line_refuses_delivery_flags_that_cannot_apply(capsys):
     assert "takes no --base" in err and "goes with --refine" in err
     assert "does not take --no-pr" in err and "--no-worktree cannot take --refine" in err
     assert "--mode design_fast does not take --refine" in err
+    assert "--refine-design goes with --refine" in err
 
 
 def test_the_console_design_verb_forwards_how_the_run_is_delivered(monkeypatch):

@@ -186,6 +186,12 @@
       "max_iterations": 1,
       "_type": "AgentNode"
     },
+    "route_refine_design": {
+      "id": "route_refine_design",
+      "evaluator_type": "fn",
+      "max_iterations": 2,
+      "_type": "GateNode"
+    },
     "route_strategy": {
       "id": "route_strategy",
       "evaluator_type": "fn",
@@ -378,7 +384,7 @@
     },
     {
       "source": "prepare",
-      "target": "research_director",
+      "target": "route_refine_design",
       "condition": null
     },
     {
@@ -410,6 +416,16 @@
       "source": "research_director",
       "target": "record_findings",
       "condition": null
+    },
+    {
+      "source": "route_refine_design",
+      "target": "design_doc",
+      "condition": "light"
+    },
+    {
+      "source": "route_refine_design",
+      "target": "research_director",
+      "condition": "proceed"
     },
     {
       "source": "route_strategy",
