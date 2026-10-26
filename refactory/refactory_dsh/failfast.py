@@ -321,23 +321,25 @@ def _self_check(
                                         failing.append(test_id)
                                 if found2:
                                     failed_outputs.append(_output(result2))
+                                # Check for _INTERRUPTED in the rerun (module did not import).
+                                if _INTERRUPTED.search(_output(result2)):
+                                    named2 = self_check_failures(_output(result2))
+                                    broken2 = [name for name in rest_of_chunk
+                                               if name in named2]
+                                    rest2 = [name for name in rest_of_chunk
+                                             if name not in broken2]
+                                    ran.extend(broken2)
+                                    if broken2 and rest2:
+                                        queue.insert(0, rest2)
+                                        notes.append(
+                                            f"chunk {number}: dropped not-found ids "
+                                            f"{sorted(dropped)}, reran; "
+                                            f"{', '.join(broken2)} did not import")
+                                        continue
                                 ran.extend(rest_of_chunk)
                                 notes.append(f"chunk {number}: dropped not-found ids "
                                              f"{sorted(dropped)}, reran the rest")
                                 continue
-                            # Check for _INTERRUPTED in the rerun.
-                            if _INTERRUPTED.search(_output(result2)):
-                                named2 = self_check_failures(_output(result2))
-                                broken2 = [name for name in rest_of_chunk if name in named2]
-                                rest2 = [name for name in rest_of_chunk if name not in broken2]
-                                ran.extend(broken2)
-                                if broken2 and rest2:
-                                    queue.insert(0, rest2)
-                                    notes.append(
-                                        f"chunk {number}: dropped not-found ids "
-                                        f"{sorted(dropped)}, reran; "
-                                        f"{', '.join(broken2)} did not import")
-                                    continue
                             # Rerun also failed: note and fall through to cut.
                             notes.append(f"chunk {number}: dropped not-found ids "
                                          f"{sorted(dropped)}, reran but the rest also failed")

@@ -1751,28 +1751,47 @@ def test_empty_diff_check_skipped_when_head_equals_base(tmp_path, monkeypatch):
 
 
 def test_rerun_with_zero_remaining_records_lower_bound(tmp_path, monkeypatch):
-    """When a not-found rerun has no time left (remaining < 1), a timed_out timing entry
-    is recorded and the chunk is cut, with a note."""
+    """When a not-found rerun has no time left (remaining_for_rerun < 1), a
+    timed_out timing entry is recorded and the chunk is cut.
+
+    Exercises the guard at failfast.py lines 296-305.  Removing those lines
+    lets the rerun proceed with nearly zero time — this test fails because
+    ``run_fn`` is called a second time."""
+    import time as _time
     from refactory_dsh.sandbox import SandboxResult
 
     exit4_output = "ERROR: not found: /abs/path/tests/test_x.py::test_gone\n"
     exit4 = SandboxResult(ok=False, returncode=4, stdout=exit4_output, stderr="",
-                          timed_out=False, elapsed_s=299.5)
+                          timed_out=False, elapsed_s=9.5)
+
+    # Force both items into one chunk so rest_of_chunk is non-empty after
+    # dropping the not-found id.
+    monkeypatch.setattr(failfast, "SELF_CHECK_CHUNKS", 1)
 
     calls = []
+    elapsed = [0.0]
+
+    def mock_monotonic():
+        return 1000.0 + elapsed[0]
+
+    monkeypatch.setattr(_time, "monotonic", mock_monotonic)
+
     def run_fn(cmd, timeout):
         calls.append(cmd)
+        elapsed[0] = 9.5  # simulate nearly the full 10 s limit consumed
         return exit4
 
     prepass = failfast.targeted_prepass(
         {}, CHECK, run_fn, 180,
         selection=["tests/test_x.py::test_gone", "tests/test_x.py"],
-        self_check_timeout_s=1,  # very short limit
+        self_check_timeout_s=10,
     )
-    # The chunk was cut after the first run.
+    # run_fn was called once (the loop-level guard did not cut first).
+    assert len(calls) == 1
+    # The chunk was cut.
     assert prepass.cut_ids
-    # A note about no time left for a rerun.
-    assert any("no time left" in n or "limit was spent" in n for n in prepass.notes)
+    # The note specifically mentions "no time left for a rerun".
+    assert any("no time left" in n for n in prepass.notes)
 
 
 def test_rerun_handles_module_import_error(tmp_path, monkeypatch):
@@ -1815,8 +1834,11 @@ def test_rerun_handles_module_import_error(tmp_path, monkeypatch):
     )
     # test_y.py did not import; it should be in ran (from the rerun _INTERRUPTED path).
     assert "tests/test_y.py" in prepass.ran_ids
-    # test_z.py should have been re-queued and run.
+    # test_z.py should have been re-queued and run separately (not via ran.extend).
     assert "tests/test_z.py" in prepass.ran_ids
+    # Verify the re-queue path was taken: test_z.py ran in a third call.
+    assert call_count[0] >= 3, "test_z.py must be re-queued and run separately"
+    assert any("did not import" in n for n in prepass.notes)
 
 
 def test_exhausted_empty_diff_does_not_call_targeted_prepass(tmp_path, monkeypatch):
