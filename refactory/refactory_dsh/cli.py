@@ -9,6 +9,7 @@
     refactory package list|smoke|add|…        manage packages of modes
     refactory ui                              the GUI
     refactory doctor                          is this machine ready
+    refactory model set|show                  the one model every run uses
 
 Every verb is a thin dispatcher onto the module that already owns it — `console`,
 `registry`, `loop`, `interactive`, `create`, `design`, `edit` — so there is one
@@ -469,20 +470,57 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except Exception as exc:
         checks.append(("packages of modes", False, str(exc)))
 
+    # The run model (dm-258): the route a run here would get — a flag, the environment,
+    # the project file or the one stored choice, resolved exactly as a run resolves it
+    # (`refactory runtime` shows the same). Its provider's key is the one checked, never
+    # the headless profile's default.
+    route: dict[str, str] = {}
     try:
-        from tempfile import TemporaryDirectory
-        from refactory_dsh.model import DshModelClient
-        from refactory_dsh.sandbox import model_readiness
+        from refactory_dsh import dsh_profile
+        from refactory_dsh.console import model_route
+        from refactory_dsh.model import half_route_refusal
+        from refactory_dsh.paths import project_root
 
-        client = DshModelClient(provider=getattr(args, "provider", ""), model=getattr(args, "model", ""))
-        with TemporaryDirectory(prefix="refactory-readiness-") as work:
-            readiness = model_readiness(Path(work), model_context=client.context())
-        unverified = readiness.get("status") == "diagnostic-unavailable"
-        checks.append(("sandbox model configuration", None if unverified else True,
-                       f"{readiness['provider']}/{readiness['model']}: {readiness['status']}; authentication not tested"
-                       + (f"; {readiness['warning']}" if readiness.get("warning") else "")))
+        resolved = model_route(project_root(), provider=str(getattr(args, "provider", "") or ""),
+                               model=str(getattr(args, "model", "") or ""))
+        route = {"provider": resolved["provider"], "model": resolved["model"]}
+        if resolved["worker_backend"] != "dsh":
+            checks.append(("run model", None, f"{resolved['worker_backend']} workers use their own model settings"))
+            route = {}
+        elif route["provider"] and route["model"]:
+            checks.append(("run model", True, f"{route['provider']}/{route['model']} ({resolved['source']['provider']})"))
+        elif half_route_refusal(route["provider"], route["model"]):
+            checks.append(("run model", False, half_route_refusal(route["provider"], route["model"])))
+            route = {}
+        else:
+            keyed, refusal = dsh_profile.first_run_plan()
+            if refusal or not keyed:
+                checks.append(("run model", False, refusal))
+                route = {}
+            else:
+                route = keyed[0]
+                checks.append(("run model", None,
+                               f"none chosen yet; the first run will use {route['provider']}/{route['model']}, "
+                               "the only provider with a key (`refactory model set` chooses another)"))
     except Exception as exc:
-        checks.append(("sandbox model configuration", False, str(exc)))
+        checks.append(("run model", False, str(exc)))
+        route = {}
+
+    if route.get("provider") and route.get("model"):
+        try:
+            from tempfile import TemporaryDirectory
+            from refactory_dsh.model import DshModelClient
+            from refactory_dsh.sandbox import model_readiness
+
+            client = DshModelClient(provider=route["provider"], model=route["model"])
+            with TemporaryDirectory(prefix="refactory-readiness-") as work:
+                readiness = model_readiness(Path(work), model_context=client.context())
+            unverified = readiness.get("status") == "diagnostic-unavailable"
+            checks.append(("sandbox model configuration", None if unverified else True,
+                           f"{readiness['provider']}/{readiness['model']}: {readiness['status']}; authentication not tested"
+                           + (f"; {readiness['warning']}" if readiness.get("warning") else "")))
+        except Exception as exc:
+            checks.append(("sandbox model configuration", False, str(exc)))
 
     width = max(len(name) for name, _ok, _detail in checks)
     for name, ok, detail in checks:
@@ -691,13 +729,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="the registry verb; its own arguments pass through",
     )
 
+    # ── the run model ──
+    model_group = sub.add_parser(
+        "model", help="the model every run uses: one choice, shared with Settings → Models",
+        description="Every run uses one model choice, stored where Settings → Models writes it. "
+                    "--provider/--model on a command override it for that run only.",
+    )
+    model_sub = model_group.add_subparsers(dest="model_action", required=True)
+    model_set = model_sub.add_parser("set", help="store the model every run uses")
+    model_set.add_argument("--provider", required=True, help="the provider route, e.g. deepseek-official")
+    model_set.add_argument("--model", required=True, help="the model id, e.g. deepseek-v4-pro")
+    model_sub.add_parser("show", help="print the stored model choice as JSON")
+
     ui = sub.add_parser("ui", help="the Web GUI (the tool, the panel, the conversation)")
     ui.add_argument("--port", type=int, default=0, help="default: the launcher's own")
     ui.add_argument("--no-open", action="store_true", help="do not open a browser")
 
     doctor = sub.add_parser("doctor", help="check local prerequisites and sandbox credential configuration (no model request)")
-    doctor.add_argument("--provider", default="", help="provider route to check (default: DSH settings)")
-    doctor.add_argument("--model", default="", help="model selection to report (default: DSH settings)")
+    doctor.add_argument("--provider", default="", help="provider route to check (default: the stored model choice)")
+    doctor.add_argument("--model", default="", help="model to check (default: the stored model choice)")
     doctor.add_argument("--run", type=str, default=None, metavar="DIR",
                         help="check a specific run's driver pin state")
 
@@ -792,12 +842,35 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ui(args)
     if args.verb == "doctor":
         return cmd_doctor(args)
+    if args.verb == "model":
+        return _cmd_model(args)
     if args.verb == "pin":
         return _cmd_pin(args)
     if args.verb == "package":  # handled before argparse; kept for completeness
         return _forward("refactory_dsh.registry", [])
     parser.error(f"unknown verb {args.verb!r}")  # pragma: no cover - argparse rejects first
     return 2
+
+
+def _cmd_model(args: argparse.Namespace) -> int:
+    """Store or show the one model choice (dm-258)."""
+    from refactory_dsh import dsh_profile
+
+    path = dsh_profile.model_choice_path()
+    if args.model_action == "set":
+        try:
+            choice = dsh_profile.model_choice_write(args.provider, args.model)
+        except (ValueError, OSError) as exc:
+            print(f"refactory: {exc}", file=sys.stderr)
+            return 1
+        print(f"refactory: runs now use {choice['provider']}/{choice['model']} (stored in {path})")
+        return 0
+    choice = dsh_profile.stored_model_choice()
+    if not choice["provider"]:
+        print(f"refactory: {dsh_profile.NO_MODEL_CHOICE_MESSAGE}", file=sys.stderr)
+        return 1
+    print(json.dumps({**choice, "stored_in": str(path)}, indent=2))
+    return 0
 
 
 def _cmd_pin(args: argparse.Namespace) -> int:

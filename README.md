@@ -100,7 +100,7 @@ existing `web` profile stays unchanged.
 
 Open the exact URL the server prints, token and all (`http://127.0.0.1:3081/?token=…`); `--no-open` only stops it from opening a browser itself. Select the checkout as your workspace, then create a session. Open the right sidebar's **Modes** tab; no introductory chat message is required.
 
-Before model-backed work, save a provider key in **Settings → Models**. Nested workers and validation use the managed credential store; a checkout `.env` or exported key alone is insufficient for those scrubbed processes. `uv run refactory doctor` checks configuration, not authentication or quota. CLI runs choose their model with `--provider` and `--model`, or from the runtime configuration that `uv run refactory runtime` shows. [Model setup →](refactory/docs/models.md)
+Before model-backed work, save a provider key in **Settings → Models** and choose the model there, or run `uv run refactory model set --provider <provider> --model <model>`. That one choice is the model every terminal run uses, and a GUI session starts on it. CLI runs choose their model with `--provider` and `--model` for one run instead (pass both). A run with no choice never falls back to a profile's default: if exactly one provider has a key it uses that provider and says so, at a terminal it asks which, and otherwise it is refused before any model call. `uv run refactory runtime` shows the route and where it came from. Nested workers and validation use the managed credential store; a checkout `.env` or exported key alone is insufficient for those scrubbed processes. `uv run refactory doctor` checks the chosen provider's configuration, not authentication or quota. [Model setup →](refactory/docs/models.md)
 
 Try this in GUI chat:
 
@@ -146,7 +146,7 @@ During a search you can add instructions, keep or reject candidate branches, pau
 
 ## Models and coding workers
 
-DSH remains the default worker runtime, composed with Cordis. Its providers include DeepSeek, OpenAI and Anthropic. A DSH worker using an OpenAI model is still a DSH worker. Both evaluators carry the selected routing context; per-node overrides take precedence over per-role and run settings. Inspect actual execution receipts, not just the configured selection. [Routing and worker guide →](refactory/docs/models.md)
+DSH remains the default worker runtime, composed with Cordis. Its providers include DeepSeek, OpenAI and Anthropic. Runs without a configured model are refused before any model call. A DSH worker using an OpenAI model is still a DSH worker. Both evaluators carry the selected routing context; per-node overrides take precedence over per-role and run settings. Inspect actual execution receipts, not just the configured selection. [Routing and worker guide →](refactory/docs/models.md)
 
 Codex and Claude Code are explicit, optional worker backends through the installed DSH provider registry. They retain native authentication and product settings; unsupported capabilities fail before dispatch. External token-limited runs are refused because complete nested accounting is not established. Refactory still owns graph order, validation and gates.
 

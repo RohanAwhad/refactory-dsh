@@ -33,6 +33,74 @@ import importlib.metadata
 from refactory_dsh.invocations import HOOK_SUPPRESS, WORKTREE_RECORD
 from refactory_dsh.owned_process import SHUTDOWN_GRACE_S, shutdown, _termination_as_exit
 
+
+class ModelChoiceError(Exception):
+    """A run has no model: no flag, no route and no stored choice (dm-258).
+
+    An ordinary exception, not a ``SystemExit``: the walker and the outer loop are
+    library code and must never end their process from deep inside. Each
+    command-line entry point catches it, prints the message and exits 1.
+    """
+
+    def __init__(self, message: str = "") -> None:
+        from refactory_dsh.dsh_profile import NO_MODEL_CHOICE_MESSAGE
+
+        super().__init__(message or NO_MODEL_CHOICE_MESSAGE)
+
+
+def half_route_refusal(provider: str, model: str) -> str:
+    """What a route naming only one of provider and model is refused with; ``""`` otherwise.
+
+    One message for the gate, ``doctor`` and ``refactory runtime``, so all three say
+    the same thing about the same route.
+    """
+    if bool(provider) == bool(model):
+        return ""
+    given, missing = (f"provider {provider}", "model") if provider else (f"model {model}", "provider")
+    return (f"No model chosen: the run names {given} but no {missing}; pass both --provider and "
+            "--model, or pick one in Settings → Models or with "
+            "`refactory model set --provider <provider> --model <model>`.")
+
+
+def complete_route(provider: str, model: str, *, interactive: bool = False,
+                   home: str | Path | None = None) -> tuple[str, str]:
+    """A complete DSH route, or :class:`ModelChoiceError`: the gate before any DSH process.
+
+    A route that a flag, a route map or the stored choice completed passes unchanged.
+    One with neither a provider nor a model gets the first-run choice
+    (:func:`refactory_dsh.dsh_profile.first_run_choice`), which stores it or refuses.
+    Half a route is refused: the harness would fill the other half from its own
+    default, and a provider named without a model never borrows the stored model of
+    another provider (``worker_config.resolve``).
+    """
+    if provider and model:
+        return provider, model
+    refusal = half_route_refusal(provider, model)
+    if refusal:
+        raise ModelChoiceError(refusal)
+    from refactory_dsh.dsh_profile import first_run_choice
+
+    choice = first_run_choice(home, interactive=interactive)
+    return choice["provider"], choice["model"]
+
+
+def require_model_choice(client: Any, *, interactive: bool = False) -> Any:
+    """``client`` with a complete DSH route (:func:`complete_route`), or ``ModelChoiceError``.
+
+    A client of another backend (Codex, Claude Code, OpenShell) keeps its native
+    settings, and an object that is not a DSH client (a test's fake) passes as it is.
+    """
+    if getattr(client, "_worker_backend", None) != "dsh":
+        return client
+    route = complete_route(client._provider, client._model, interactive=interactive,
+                           home=getattr(client, "_dsh_home", None))
+    if route == (client._provider, client._model):
+        return client
+    chosen = copy.copy(client)
+    chosen._provider, chosen._model = route
+    return chosen
+
+
 #: The overlay that keeps a node's completion from backgrounding its own work. Checked
 #: in rather than generated, so what a node's model call is configured with is
 #: reviewable in the repository.
@@ -275,6 +343,16 @@ class DshModelClient:
         # Resolve before containment rewrites HOME. This is a location, never a key.
         from refactory_dsh.dsh_profile import model_home
         self._dsh_home = model_home(dsh_home)
+        # The one model choice is the bottom layer of every DSH route (dm-258): a route
+        # no flag, environment, project file or route map completed — including a saved
+        # context from before there was a choice — takes it from the DSH home this client
+        # was given (else the person's), never the profile default the harness would
+        # otherwise use. Half a route is left for the gate to refuse.
+        if self._worker_backend == "dsh" and not self._provider and not self._model:
+            from refactory_dsh.dsh_profile import stored_model_choice
+
+            stored = stored_model_choice(dsh_home)
+            self._provider, self._model = stored["provider"], stored["model"]
         self._attempts = max(1, int(attempts)) if self._worker_backend == "dsh" else 1
         self._backoff_s = None if backoff_s is None else max(0.0, float(backoff_s))
         self._retry_window_s = max(0.0, float(retry_window_s))
@@ -290,6 +368,11 @@ class DshModelClient:
         from refactory_dsh.workers import resolve_route
         route = resolve_route(self.route(), node=node, role=role,
                               role_routes=self._role_routes, node_routes=self._node_routes)
+        if route["worker_backend"] == "dsh" and not route.get("provider") and not route.get("model"):
+            # A route map that switched this node back to DSH starts from the one choice too.
+            from refactory_dsh.dsh_profile import stored_model_choice
+
+            route.update(stored_model_choice(self._dsh_home))
         client = copy.copy(self)
         client._node_id, client._role = node, role
         for key, value in route.items():
@@ -513,6 +596,10 @@ class DshModelClient:
         present as "the score did not move", are distinguishable from a mode that
         simply has no better version.
         """
+        # The last line of defence: whatever path built this client, no DSH process
+        # starts without a complete route, so the headless profile's default never answers.
+        if self._worker_backend == "dsh" and not (self._provider and self._model):
+            raise ModelChoiceError()
         task = f"{system}\n\n{prompt}" if system else prompt
         # The launcher resolves its own entry; the child's working directory stays
         # the node's, not the checkout's.

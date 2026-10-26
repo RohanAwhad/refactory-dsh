@@ -155,6 +155,12 @@ def run_on_dsh(
                 command += ["--provider", context["provider"]]
             if context.get("model"):
                 command += ["--model", context["model"]]
+    else:
+        # No client was given, but a CEO that runs still runs on the one choice, never
+        # on the graph profile's default; with no choice the graph runner refuses (dm-258).
+        stored = dsh_profile.stored_model_choice(selected_home)
+        if stored["provider"]:
+            command += ["--provider", stored["provider"], "--model", stored["model"]]
     started = time.time()
     from refactory_dsh.owned_process import shutdown, _termination_as_exit
     with _termination_as_exit():

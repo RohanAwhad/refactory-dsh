@@ -3226,7 +3226,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## runtime
 
-Inspect local configured credential readiness and current session selection before asking setup questions; this does not test authentication.
+Inspect the run model and where it came from (model_route: flag, project file, environment, stored choice, node/role routes; none when nothing is chosen) and its configured credential readiness before asking setup questions; this does not test authentication.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -3242,7 +3242,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
   "examples": [
     {
       "arguments": {},
-      "explanation": "Inspect local configured credential readiness and current session selection before asking setup questions; this does not test authentication."
+      "explanation": "Inspect the run model (provider, model and where each came from: a flag, the project file, the environment or the stored choice, plus any node or role routes) and its credential readiness before asking setup questions; this does not test authentication."
     }
   ],
   "interfaces": {
@@ -3253,7 +3253,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
   "parameters": {
     "model": {
       "default": "",
-      "description": "model selection to inspect (default: DSH settings)",
+      "description": "model to inspect (default: the stored model choice)",
       "flags": [
         "--model"
       ],
@@ -3275,7 +3275,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "provider": {
       "default": "",
-      "description": "provider route to inspect (default: DSH settings)",
+      "description": "provider route to inspect (default: the stored model choice)",
       "flags": [
         "--provider"
       ],
@@ -3307,8 +3307,8 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     }
   },
-  "purpose": "Inspect local configured credential readiness and current session selection before asking setup questions; this does not test authentication.",
-  "reviewed_schema": "3b2e5f7f74576a4de682a0d56c7c0faeb590bc37e776d73e01d234793db2eb55"
+  "purpose": "Inspect the run model and where it came from (model_route: flag, project file, environment, stored choice, node/role routes; none when nothing is chosen) and its configured credential readiness before asking setup questions; this does not test authentication.",
+  "reviewed_schema": "c08d34a5e008095a7a67872f96e123cf766adc693e18c8f74b40a93c87ee7ae7"
 }
 ```
 
@@ -5005,7 +5005,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## cli:doctor
 
-Inspect prerequisites and configured credentials without a model call; with --run, also report a run's driver pin state. Configured does not mean authenticated.
+Inspect prerequisites, the run model and the chosen provider's configured credential (never the headless profile's default) without a model call; with --run, also report a run's driver pin state. Configured does not mean authenticated.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -5016,7 +5016,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
   "examples": [
     {
       "arguments": {},
-      "explanation": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated."
+      "explanation": "Inspect prerequisites, the run model (--provider/--model, else the stored choice, else what the first run would choose) and that provider's configured credential without a model call; configured does not mean authenticated."
     },
     {
       "arguments": {
@@ -5033,7 +5033,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
   "parameters": {
     "model": {
       "default": "",
-      "description": "model selection to report (default: DSH settings)",
+      "description": "model to check (default: the stored model choice)",
       "flags": [
         "--model"
       ],
@@ -5044,7 +5044,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "provider": {
       "default": "",
-      "description": "provider route to check (default: DSH settings)",
+      "description": "provider route to check (default: the stored model choice)",
       "flags": [
         "--provider"
       ],
@@ -5065,8 +5065,8 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     }
   },
-  "purpose": "Inspect prerequisites and configured credentials without a model call; with --run, also report a run's driver pin state. Configured does not mean authenticated.",
-  "reviewed_schema": "22c0386b3491338de9e7ddfe53d52c1fd72bb93a87a9798061d8e3b33fda4f2b"
+  "purpose": "Inspect prerequisites, the run model and the chosen provider's configured credential (never the headless profile's default) without a model call; with --run, also report a run's driver pin state. Configured does not mean authenticated.",
+  "reviewed_schema": "70ed865990a4b3979383d83aa6cae6fa005f787dea18cc94e4f389a5e317e469"
 }
 ```
 
@@ -5123,6 +5123,56 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
   },
   "purpose": "List installed modes or packages in the terminal; JSON preserves the same catalogue consumed by chat and panel.",
   "reviewed_schema": "63eeb3d2acd8663ae55a5aa065bb4cb6537794e5f076d4e38721388f8c494833"
+}
+```
+
+## cli:model
+
+The one model choice every run uses (the refactory profile's agent-default-model, shared with Settings → Models). A run with no choice and no flag is refused, or on a first run uses the only provider with a key. set stores it; show reads it.
+
+Documentation: [refactory/docs/models.md](../../../refactory/docs/models.md)
+
+```json
+{
+  "description": "the model every run uses: one choice, shared with Settings \u2192 Models",
+  "doc": "refactory/docs/models.md",
+  "examples": [
+    {
+      "arguments": {
+        "model_action": "set"
+      },
+      "explanation": "Store the model every run uses, where Settings \u2192 Models keeps it: `refactory model set --provider deepseek-official --model deepseek-v4-pro`. Only that entry of the profile patch changes. --provider/--model on a command override it for that run."
+    },
+    {
+      "arguments": {
+        "model_action": "show"
+      },
+      "explanation": "Show the stored model choice and the file it is stored in, as JSON; exits 1 when none is chosen."
+    }
+  ],
+  "interfaces": {
+    "chat": "Unavailable as a direct chat mutation; use the documented CLI route.",
+    "cli": "refactory model {set --provider <p> --model <m>, show}",
+    "panel": "Unavailable as a dedicated panel control; use Settings \u2192 Models."
+  },
+  "parameters": {
+    "model_action": {
+      "default": null,
+      "description": "",
+      "enum": [
+        "set",
+        "show"
+      ],
+      "flags": [],
+      "nargs": "A...",
+      "position": 0,
+      "positional": true,
+      "required": true,
+      "type": "string"
+    }
+  },
+  "purpose": "The one model choice every run uses (the refactory profile's agent-default-model, shared with Settings \u2192 Models). A run with no choice and no flag is refused, or on a first run uses the only provider with a key. set stores it; show reads it.",
+  "reviewed_schema": "f10bd7347dd90563346c2b4b9790d80ae0d3988d70a9426d093f2e3ef8d27fd9"
 }
 ```
 

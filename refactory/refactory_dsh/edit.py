@@ -219,8 +219,18 @@ def main(argv: list[str] | None = None) -> int:
         if not args.name:
             parser.error("--name is required when not resuming")
 
-    from refactory_dsh.model import DshModelClient
+    from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
     from refactory_dsh.paths import project_root
+
+    try:
+        # Every agent node calls a model, so the route is settled before anything runs (dm-258).
+        client = require_model_choice(DshModelClient(
+            project=None if args.resume else project_root(),
+            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
+        ), interactive=sys.stdin.isatty())
+    except ModelChoiceError as exc:
+        print(f"refactory: {exc}", file=sys.stderr)
+        return 1
 
     if args.resume:
         workdir = Path(args.resume)
@@ -232,10 +242,6 @@ def main(argv: list[str] | None = None) -> int:
                 fast = run_config.get('fast', fast)
             except (json.JSONDecodeError, OSError):
                 pass
-        client = DshModelClient(
-            project=None,
-            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
-        )
         from refactory_dsh.run_ownership import ownership
 
         try:
@@ -279,10 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                 fast=args.fast, repair_attempts=args.repair_attempts, check=args.check,
                 resource_limits=arguments(args),
             ),
-            client=DshModelClient(
-                project=None if args.resume else project_root(),
-                timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
-            ),
+            client=client,
             enable_recovery=True,
         )
     except CreateError as exc:

@@ -1,9 +1,18 @@
-/** Describe configured credentials through the installed DSH services, without a model request. */
+/**
+ * Describe configured credentials through the installed DSH services, without a model request.
+ *
+ * `<repo> <provider> <model>` checks that route's key. `<repo> --keyed-providers` lists
+ * the provider routes whose key the managed store holds, each with the first model its
+ * route lists: the first-run choice reads it (dm-258). Both only ask the store whether a
+ * key is set; neither reads one.
+ */
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const [repo, requestedProvider, requestedModel] = process.argv.slice(2)
+const [repo, ...rest] = process.argv.slice(2)
+const keyedProviders = rest[0] === '--keyed-providers'
+const [requestedProvider, requestedModel] = keyedProviders ? [] : rest
 const fibers = []
 let stage = 'installed DSH modules'
 let provider = requestedProvider || '(runtime default)'
@@ -24,7 +33,6 @@ try {
   const { isJsExpr } = await load('@deepseek-ai/cordis-plugin-loader', createRequire(installed.resolve('@deepseek-ai/dsh-app-boot/package.json')))
   const { default: Credentials } = await load('@deepseek-ai/dsh-credentials-local')
   const { credentialRef } = await load('@deepseek-ai/dsh-credentials', createRequire(base.resolve('@deepseek-ai/dsh-credentials-local/package.json')))
-  const { default: DefaultModel } = await load('@deepseek-ai/dsh-agent-default-model')
   const home = resolveDshHome()
   stage = 'headless profile configuration'
   const profile = loadProfile('refactory readiness', 'headless', anchor, home)
@@ -61,33 +69,71 @@ try {
   // composed entry's config, read through that plugin's own Config schema for its
   // defaults, exactly as the plugin itself reads it.
   stage = 'model settings'
-  await mount(DefaultModel, config('agent-default-model', '@deepseek-ai/dsh-agent-default-model'))
-  const selection = ctx.agentDefaultModel.currentSelection()
-  provider = requestedProvider || selection.provider
-  model = requestedModel || selection.model
   const read = value => (typeof value?.get === 'function' ? value.get() : value)
-  let connection
-  if (provider === 'deepseek-official') {
-    const { Config } = await load('@deepseek-ai/dsh-llm-deepseek-api-key')
-    connection = { apiKeyEnv: read(Config(config('llm-deepseek', '@deepseek-ai/dsh-llm-deepseek-api-key')).apiKeyEnv) }
+  if (keyedProviders) {
+    // Every route the headless composition serves that names a stored key. A family
+    // the composition does not mount is skipped; one whose configuration is dynamic
+    // cannot be read here, and the whole answer is then unavailable rather than short.
+    const family = (id, name) => {
+      try {
+        return config(id, name)
+      } catch (error) {
+        if (error instanceof DiagnosticUnavailable && error.reason === 'unsupported-headless-composition') return undefined
+        throw error
+      }
+    }
+    const routes = []
+    const deepseek = family('llm-deepseek', '@deepseek-ai/dsh-llm-deepseek-api-key')
+    if (deepseek !== undefined) {
+      const { Config } = await load('@deepseek-ai/dsh-llm-deepseek-api-key')
+      const settings = Config(deepseek)
+      routes.push({ provider: 'deepseek-official', ref: read(settings.apiKeyEnv), models: read(settings.models) })
+    }
+    const piAi = family('llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai')
+    if (piAi !== undefined) {
+      const { Config } = await load('@deepseek-ai/dsh-llm-pi-ai')
+      for (const [route, profile] of Object.entries(read(Config(piAi).providers) ?? {})) {
+        routes.push({ provider: route, ref: profile?.apiKeyEnv, models: profile?.models })
+      }
+    }
+    const providers = []
+    for (const route of routes) {
+      if (typeof route.ref !== 'string' || route.ref === '') continue
+      const info = await ctx.credentials.describe(credentialRef(route.ref))
+      if (info.configured !== true) continue
+      const first = Array.isArray(route.models) ? route.models[0]?.id : undefined
+      providers.push({ provider: route.provider, model: typeof first === 'string' ? first : '' })
+    }
+    console.log(JSON.stringify({ status: 'keyed-providers', providers }))
   } else {
-    const { Config } = await load('@deepseek-ai/dsh-llm-pi-ai')
-    connection = read(Config(config('llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai')).providers)?.[provider]
-    if (!connection) throw new DiagnosticUnavailable('provider-inspection-unavailable')
+    // The route is the one the caller names. There is no profile default to fall back to:
+    // a run with no chosen model is refused before it gets here (dm-258).
+    if (!requestedProvider || !requestedModel) throw new DiagnosticUnavailable('no-model-chosen')
+    provider = requestedProvider
+    model = requestedModel
+    let connection
+    if (provider === 'deepseek-official') {
+      const { Config } = await load('@deepseek-ai/dsh-llm-deepseek-api-key')
+      connection = { apiKeyEnv: read(Config(config('llm-deepseek', '@deepseek-ai/dsh-llm-deepseek-api-key')).apiKeyEnv) }
+    } else {
+      const { Config } = await load('@deepseek-ai/dsh-llm-pi-ai')
+      connection = read(Config(config('llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai')).providers)?.[provider]
+      if (!connection) throw new DiagnosticUnavailable('provider-inspection-unavailable')
+    }
+    const ref = connection.apiKeyEnv
+    const hasCredentialReference = ref !== undefined
+    // Native provider authentication (ADC, grants, etc.) is not an API-key check.
+    // Keep that limitation explicit instead of inventing a missing key or a pass.
+    const info = hasCredentialReference ? await ctx.credentials.describe(credentialRef(ref)) : { configured: null }
+    const ready = info.configured !== false
+    console.log(JSON.stringify({
+      ready, provider, model, authenticated: false,
+      credential: { reference: ref ?? null, ...info },
+      status: hasCredentialReference ? (ready ? 'configured' : 'missing-credential') : 'native-auth-unverified',
+      ...(ready ? {} : { error: `Sandbox model credential ${ref} is not configured for ${provider}. Save it through DSH Settings → Models in the configured DSH home; exported keys are intentionally scrubbed. Authentication has not been tested.` }),
+    }))
+    if (!ready) process.exitCode = 1
   }
-  const ref = connection.apiKeyEnv
-  const hasCredentialReference = ref !== undefined
-  // Native provider authentication (ADC, grants, etc.) is not an API-key check.
-  // Keep that limitation explicit instead of inventing a missing key or a pass.
-  const info = hasCredentialReference ? await ctx.credentials.describe(credentialRef(ref)) : { configured: null }
-  const ready = info.configured !== false
-  console.log(JSON.stringify({
-    ready, provider, model, authenticated: false,
-    credential: { reference: ref ?? null, ...info },
-    status: hasCredentialReference ? (ready ? 'configured' : 'missing-credential') : 'native-auth-unverified',
-    ...(ready ? {} : { error: `Sandbox model credential ${ref} is not configured for ${provider}. Save it through DSH Settings → Models in the configured DSH home; exported keys are intentionally scrubbed. Authentication has not been tested.` }),
-  }))
-  if (!ready) process.exitCode = 1
 } catch (error) {
   // A parser exception may quote a secret-bearing document. Emit only our stage.
   // An inspector's missing capability is not evidence of missing credentials.

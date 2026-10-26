@@ -27,7 +27,7 @@ import type { GraphStartupValues } from './startup.ts'
 export const name = 'graph-runner'
 
 /** Core services required before the CEO turn can start. */
-export const inject = ['agentDefaultModel', 'agents', 'sessions', GRAPH_STARTUP_SERVICE, CONFIGURED_RUN_SERVICE]
+export const inject = ['agents', 'sessions', GRAPH_STARTUP_SERVICE, CONFIGURED_RUN_SERVICE]
 
 /**
  * The best score the mode's ops recorded, or `null` when none recorded one.
@@ -191,6 +191,10 @@ function turnError(session: Session, firstSeq: SessionLogOffset): string | undef
   return 'the model turn recorded no completion'
 }
 
+/** What a run with no model says; the same words as refactory's own refusal. */
+export const NO_MODEL_CHOSEN =
+  'No model chosen: pick one in Settings → Models or with `refactory model set --provider <provider> --model <model>`.'
+
 /** The terminal the run writes to and reads from; the launcher supplies the process's. */
 export interface Io {
   stdout: { write(chunk: string): unknown }
@@ -198,10 +202,6 @@ export interface Io {
   /** The person's terminal. A gate reads it too; see {@link chat}. */
   stdin: NodeJS.ReadableStream & { readableEnded?: boolean }
   exit(code: number): void
-}
-
-interface DefaultModelLike {
-  currentSelection(): { provider: string; model: string }
 }
 
 /** One line the person typed, or `undefined` at end of input. */
@@ -299,13 +299,20 @@ async function run(ctx: Context, io: Io): Promise<void> {
     return
   }
   const agents = ctx.get('agents')
-  const defaultModel = ctx.get('agentDefaultModel') as DefaultModelLike | undefined
   const sessions = ctx.get('sessions')
-  if (startup === undefined || agents === undefined || defaultModel === undefined || sessions === undefined) return
+  if (startup === undefined || agents === undefined || sessions === undefined) return
 
-  const selection = defaultModel.currentSelection()
-  const provider = startup.provider || selection.provider
-  const model = startup.model || selection.model
+  // The CEO runs on the route the run names, never on the graph profile's own
+  // default: that default is how a terminal run reached a provider nobody chose
+  // (dm-258). Refactory always passes both; a launch that passes neither is refused
+  // here, before any agent exists, with the message every refusal uses.
+  const provider = startup.provider ?? ''
+  const model = startup.model ?? ''
+  if (provider === '' || model === '') {
+    io.stderr.write(`dsh: ${NO_MODEL_CHOSEN}\n`)
+    io.exit(1)
+    return
+  }
   const { agent } = await agents.create({
     sessionId: brandString<SessionId>(`session-${randomUUID()}`),
     meta: { cwd: startup.workdir },

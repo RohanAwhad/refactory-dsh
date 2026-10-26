@@ -207,6 +207,13 @@ def _sealed(
         home = tmp_path_factory.mktemp("dsh-home")
         monkeypatch.setenv("DSH_HOME", str(home))
         monkeypatch.setenv("REFACTORY_MODEL_DSH_HOME", str(home))
+        # Every run needs a model now, and refuses without one (dm-258). The sealed home
+        # holds the choice a person who picked one in Settings → Models has, so a test
+        # that starts a run starts it; a test of the refusal or of the first-run choice
+        # asks for `no_model_choice`.
+        from tests_support import store_model_choice
+
+        store_model_choice(home)
     bin_dir, log = _real_gh_shim
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     _SEAL.update(home=not real_home, gh=request.node.get_closest_marker("integration") is None, touched=[],
@@ -379,6 +386,17 @@ def fake_gh(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monkey
     monkeypatch.setenv("PATH", f"{base / 'bin'}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_GH_ROOT", str(root))
     return root
+
+
+@pytest.fixture
+def no_model_choice() -> Path:
+    """The test's DSH home with no model chosen: a first run on a fresh install (dm-258)."""
+    from refactory_dsh import dsh_profile
+
+    home = Path(os.environ["DSH_HOME"])
+    assert os.path.realpath(home) not in _REAL_DSH_HOMES, "no_model_choice needs the sealed DSH home"
+    dsh_profile.model_choice_path(home).unlink(missing_ok=True)
+    return home
 
 
 @pytest.fixture

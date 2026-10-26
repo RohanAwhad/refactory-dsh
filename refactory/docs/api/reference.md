@@ -488,7 +488,7 @@ Discover, list and resolve packages of modes.
 | function | `render_catalogue` | `(project: 'Path') -> 'str'` |
 | function | `resolve` | `(project: 'Path', identifier: 'str') -> 'tuple[Package, type]'` |
 | function | `set_enabled` | `(project: 'Path', name: 'str', enabled: 'bool') -> 'None'` |
-| function | `smoke` | `(project: 'Path', identifier: 'str', *, model: 'bool' = False) -> 'dict[str, Any]'` |
+| function | `smoke` | `(project: 'Path', identifier: 'str', *, model: 'bool' = False, client: 'Any' = None) -> 'dict[str, Any]'` |
 | function | `smoke_state` | `(name: 'str', project: 'Path \| None' = None) -> 'str'` |
 | function | `tool_report` | `(project: 'Path \| None' = None, name: 'str \| None' = None) -> 'dict[str, list[dict[str, Any]]]'` |
 | function | `tools` | `(name: 'str', project: 'Path \| None' = None)` |
@@ -781,6 +781,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 | function | `level_two` | `() -> 'dict[str, Any]'` |
 | function | `list_projects` | `() -> 'list[dict[str, Any]]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
+| function | `model_route` | `(project: 'Path', *, provider: 'str' = '', model: 'str' = '') -> 'dict[str, Any]'` |
 | function | `runs` | `(*, project: 'Path \| None' = None, runs_root: 'Path \| None' = None, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
 | function | `runtime_context` | `(project: 'Path', *, provider: 'str' = '', model: 'str' = '') -> 'dict[str, Any]'` |
 | function | `start` | `(mode: 'str', *, project: 'Path \| None' = None, runs_root: 'Path \| None' = None, run_id: 'str \| None' = None, **config: 'Any') -> 'dict[str, Any]'` |
@@ -797,6 +798,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`leaderboard`** — The candidates by score, with each one's diff against its parent.
 - **`level_two`** — The three level-2 seams by name, each with what it says it is.
 - **`list_projects`** — The registered projects, as the GUI's target picker needs them.
+- **`model_route`** — The model a run in ``project`` would use, and where each part of it came from.
 - **`runs`** — Every run under the root, newest first, each with where it got to.
 - **`runtime_context`** — Describe the existing nested model configuration without a model request.
 - **`start`** — Begin a run in its own process, and hand back the id to watch it with.
