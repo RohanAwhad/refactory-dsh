@@ -1260,8 +1260,10 @@ def register(ctx: Any) -> dict[str, Any]:
             )
         # Record the source-versus-staged diff for reviewers before copying.
         _record_staging_diff(ctx, Path(staging_root))
-        # Write this run's id into the staged .origin.json before copying.
+        # Write this run's id into the staged .origin.json before copying, and that its
+        # smoke has not passed yet: the listing marks it until it does (dm-264).
         _stamp_origin_run_id(Path(staging_root), ctx.workdir)
+        registry.record_smoke(Path(staging_root), registry.SMOKE_PENDING)
         # Atomic swap: write to a sibling temp dir, rename the old aside, rename
         # the new in, then delete the old.
         shared.parent.mkdir(parents=True, exist_ok=True)
@@ -1284,6 +1286,10 @@ def register(ctx: Any) -> dict[str, Any]:
                 shutil.rmtree(old_aside, ignore_errors=True)
             if temp.exists():
                 shutil.rmtree(temp, ignore_errors=True)
+    elif (registry.workspace_root(project_for_nodes()) / name).is_dir():
+        # Written in place by `materialise`: it is listed from now on, unverified.
+        registry.record_smoke(registry.workspace_root(project_for_nodes()) / name,
+                              registry.SMOKE_PENDING)
     registry.install_workspace(project_for_nodes())
     importlib.invalidate_caches()
     if name not in registry.discover_names(project_for_nodes()):
@@ -1670,7 +1676,8 @@ def smoke(ctx: Any) -> dict[str, Any]:
     score = float(result.payload.get("score") or 0.0)
     revised = _revision(ctx, revision, score, not_comparable=(
         f"{identifier} calls a model ({', '.join(agent_nodes)}), and one sample of a model call "
-        "is not a score to refuse a revision on" if agent_nodes else ""))
+        "is not a score to refuse a revision on" if agent_nodes else ""),
+        revised_knobs=result.payload.get("knobs"))
     return {"smoke_score": score, "smoke_ok": True,
             **({"smoke_model": "used"} if agent_nodes else {}), **revised}
 
@@ -1765,8 +1772,13 @@ def repair(ctx: Any, findings: list[str], *, kind: str = "check",
 def gate_smoke(ctx: Any) -> str:
     from refactory_dsh import authoring_evidence as evidence
 
-    # Never let a previous successful smoke survive a failed new attempt.
+    # Never let a previous successful smoke survive a failed new attempt: not in the
+    # facts, and not on the package, which the listing marks until its smoke passes.
     ctx.set_fact("smoke_ok", False)
+    package = Path(str(ctx.facts.get("package_path") or ""))
+    registered = bool(ctx.facts.get("package_path")) and (package / registry.ORIGIN).is_file()
+    if registered:
+        registry.record_smoke(package, registry.SMOKE_PENDING)
     for name in ("smoke.json", "revision.json"):
         if ctx.exists(name):
             path = ctx.workdir / ".refactory" / "validation-history" / "prior"
@@ -1789,13 +1801,40 @@ def gate_smoke(ctx: Any) -> str:
         return (_repair if "repair_attempts" in ctx.knobs else repair)(ctx, [detail])
     for key, value in produced.items():
         ctx.set_fact(key, value)
+    if registered:
+        registry.record_smoke(package, registry.SMOKE_PASSED)
     evidence.record(ctx, {"status": "pass", "smoke": ctx.read_json("smoke.json", {}),
                           "revision": ctx.read_json("revision.json", None)})
     return "proceed"
 
 
+def _changed_defaults(state: dict[str, Any], revised_knobs: Any,
+                      samples: dict[str, str]) -> list[str]:
+    """The knobs the revision runs with another value than its source does (dm-263).
+
+    Both smokes run on their own defaults, except the sample knobs both are given, so a
+    default the revision changed moves its score without the change being better: an
+    edit that raised `budget` from 3 to 8 scored 0.875 → 1.08. Each as ``budget 3 → 8``.
+    Only the knobs both modes have: a knob the revision adds is part of its change.
+    """
+    if not isinstance(revised_knobs, dict):
+        return []
+    source = {name: entry.get("value") for name, entry in (state.get("knobs") or {}).items()
+              if isinstance(entry, dict)}
+    # Compared as JSON, the form the revision's values came back in.
+    source = json.loads(json.dumps(source, default=str))
+
+    def shown(value: Any) -> str:
+        return value if isinstance(value, str) else json.dumps(value, default=str)
+
+    return [f"{name} {shown(source[name])} → {shown(revised_knobs[name])}"
+            for name in sorted(set(source) & set(revised_knobs) - set(samples))
+            if source[name] != revised_knobs[name]]
+
+
 def _revision(
     ctx: Any, revision: str, after: float | None, *, not_comparable: str = "",
+    revised_knobs: Any = None,
 ) -> dict[str, Any]:
     """Score the mode a revision came from, and refuse a revision that scores lower.
 
@@ -1879,6 +1918,9 @@ def _revision(
         before = float(scored.payload.get("score") or 0.0)
 
     regressed = None if allowed else bool(before is not None and after is not None and after < before)
+    # Said beside the comparison, not acted on: whether to re-score on equal settings is
+    # a separate decision.
+    changed = _changed_defaults(state, revised_knobs, samples)
     recorded = {
         "revision_of": revision,
         "revision_of_state": state,
@@ -1887,6 +1929,7 @@ def _revision(
         "after_score": after,
         "regressed": regressed,
         "allow_regression": allowed,
+        "changed_defaults": changed,
         "brief": ctx.facts.get("brief", ""),
         "note": reason,
     }
@@ -1911,6 +1954,7 @@ def _revision(
         "regressed": regressed,
         "revision_note": (
             reason or f"compared with {revision}: {before} → {after}"
+            + (f" (not like for like: {', '.join(changed)})" if changed else "")
         ),
     }
 

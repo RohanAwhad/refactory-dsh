@@ -108,6 +108,8 @@ def test_additive_composes_web_and_refactory_without_copying_web(additive_home):
         assert "@deepseek-ai/dsh-client-ui-refactory" in page
         assert "@deepseek-ai/dsh-client-ui-brand-refactory" not in page
         assert "@deepseek-ai/dsh-client-ui-brand-official" in page
+        # The native brand stays, and the page is named for the product (ui-refactory).
+        assert "<title>Refactory</title>" in page and "DeepSeek Harness</title>" not in page
         assert rpc(opener, base, "refactoryConsole/project", {}) == str(REPO_ROOT)
         from refactory_dsh.console import catalogue
         modes = rpc(opener, base, "refactoryConsole/modes", {})

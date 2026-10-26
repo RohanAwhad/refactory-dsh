@@ -721,7 +721,8 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
     Reads research-plan.json as raw JSON (not via ``_plan()``, which strips
     entries to only focus/slug/finding/ids).  Every direction must carry a
     ``footprint`` object.  The three-part rule decides scoped vs full; the
-    brief is never read.
+    brief is never read.  In a new or empty project (a checkout with no tracked
+    file) everything is new, so new items alone do not make the change full.
     """
     # ── refine detection ───────────────────────────────────────────────
     # prepare writes REFINE_SCOPE_REASON for a refine run.  Detect that
@@ -783,10 +784,19 @@ def classify_scale(ctx: Any) -> dict[str, Any]:
     if len(touched) > 2:
         names = ", ".join(key[1] for key in sorted(touched)[:3])
         return _full(f"touches {len(touched)} existing functions (max 2 for scoped): {names}")
-    if new_items:
+    # In a new or empty project everything is a new item, so new items alone say nothing
+    # about the change's size (dm-259): it is scoped unless it names existing functions,
+    # which an empty checkout cannot resolve (full above), or a shared engine.
+    empty_project = tracked is not None and not tracked
+    if new_items and not empty_project:
         return _full(f"adds new items: {', '.join(sorted(new_items)[:3])}")
     if engine:
         return _full(f"changes a shared engine: {', '.join(engine[:3])}")
+    if new_items:
+        return {"research_scope": "scoped",
+                "research_scope_reason": "a new or empty project: adds "
+                + ", ".join(sorted(new_items)[:3])
+                + "; touches no existing function, no shared engine"}
     detail = ", ".join(f"{key[1]} at {touched[key]}" for key in sorted(touched))
     reason = (
         f"touches {len(touched)} existing function(s)"

@@ -427,7 +427,9 @@ empty reason otherwise. After `gate_research` proceeds, `classify_scale` reads e
 direction's `footprint` object from `research-plan.json` and applies a three-part
 rule: the change is scoped only when it touches at most two existing functions, adds
 nothing new, and changes no shared engine. Anything else is full; so is a direction
-with no footprint key, or an entry without file:line evidence. The brief is never
+with no footprint key, or an entry without file:line evidence. In a new or empty
+project (a checkout with no tracked file) everything is new, so new items alone do
+not make it full: it is scoped unless it changes a shared engine. The brief is never
 read by the classifier. The `research_scope_reason` fact records why the run was
 classed as it was, and the approval card's scale line shows it ("Scale: scoped —
 <reason>"). A scoped change gets at most five pitfalls, and one step is left out:

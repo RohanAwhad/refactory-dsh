@@ -794,6 +794,11 @@ class Loop(OuterLoop):
         )
 
     # ── loss ───────────────────────────────────────────────────────────────
+    def _seed_score(self) -> float | None:
+        """The seed's score, the point the search started from; None until it ran and scored."""
+        seed = self.population[0] if self.population else None
+        return seed.score if seed is not None and seed.evaluated and seed.exit_ok else None
+
     def loss_step(self) -> dict[str, Any]:
         evaluated = self._evaluated()
         scored = [c for c in evaluated if c.exit_ok and c.score is not None]
@@ -801,7 +806,9 @@ class Loop(OuterLoop):
         raw_scores = [c.raw_score for c in scored if c.raw_score is not None]
         best = max(scores) if scores else None
         mean = (sum(scores) / len(scores)) if scores else None
-        previous = self.loss.get("best")
+        # What this epoch is compared with: the last epoch's best, or for the first epoch
+        # the seed's score, the point the search started from (dm-265).
+        previous = self.loss.get("best") if self.loss else self._seed_score()
         self.loss = {
             "epoch": self.epoch,
             "batch": len(evaluated),
@@ -1022,11 +1029,7 @@ class Loop(OuterLoop):
         }
 
     def _rejection_codes(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for rejection in self.rejections:
-            for code in rejection.codes():
-                counts[code] = counts.get(code, 0) + 1
-        return dict(sorted(counts.items()))
+        return _codes(self.rejections)
 
     def _op_mix(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -1099,9 +1102,13 @@ class Loop(OuterLoop):
         self._append_rejections(rejections)
         self._progress(
             "optimizer",
-            proposed=len(proposals),
+            # This epoch's proposals, every round `install` asked for: each one was either
+            # accepted for evaluation or refused, so the three counts add up (dm-265).
+            proposed=len(candidates) + len(rejections),
             accepted=len(candidates),
             refused=len(rejections),
+            # Why this epoch's were refused, beside the count it explains.
+            epoch_refusal_codes=_codes(rejections),
             # The running tally, so a watcher sees which rule is dominating without
             # opening the run directory. Same derivation as the report's.
             refusal_codes=self._rejection_codes(),
@@ -2507,6 +2514,15 @@ def _yield(accepted: int, refused: int) -> str:
     if not total:
         return "n/a"
     return f"{100.0 * accepted / total:.0f}%"
+
+
+def _codes(rejections: Sequence[Rejection]) -> dict[str, int]:
+    """How many refusals each rule code made, by code."""
+    counts: dict[str, int] = {}
+    for rejection in rejections:
+        for code in rejection.codes():
+            counts[code] = counts.get(code, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _trim(facts: dict[str, Any], limit: int = 400) -> dict[str, Any]:

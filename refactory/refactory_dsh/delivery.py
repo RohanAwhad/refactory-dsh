@@ -1901,6 +1901,33 @@ def _written(found: worktree.Worktree, test_id: str, diff_files: list[str]) -> b
     return re.search(pattern, text, re.M) is not None
 
 
+#: A sentence that only says a new project starts empty ("The repository is empty."). It is
+#: true of every new project, so it tells the reader nothing about the change (dm-261).
+_EMPTY_START = re.compile(
+    r"(?:the|this) (?:new |fresh )?(?:git )?(?:repository|repo|project|codebase|checkout|worktree"
+    r"|directory) (?:is|was|starts|starts out)(?: currently| still| completely| entirely)?"
+    r" (?:empty|blank)(?: of (?:any )?(?:files?|code))?[.!]?"
+    r"|there (?:are|is) no (?:existing )?(?:files?|code)(?: in (?:the|this) (?:repository|repo"
+    r"|project))?(?: yet)?[.!]?", re.I)
+
+
+def _empty_base(found: worktree.Worktree) -> bool:
+    """Whether the run started from an empty tree: a new project's empty first commit."""
+    try:
+        return not worktree.git(Path(found.path), "ls-tree", found.base).strip()
+    except ValueError:
+        return False
+
+
+def _built_summary(summary: str) -> str:
+    """A new project's Summary from what the change builds: its opening sentences about the
+    empty starting state left out, unless they are all it says."""
+    sentences = re.split(r"(?<=[.!?])\s+", summary.strip())
+    while len(sentences) > 1 and _EMPTY_START.fullmatch(sentences[0]):
+        sentences.pop(0)
+    return " ".join(sentences)
+
+
 def _follow_ups(ctx: Any) -> list[str]:
     """Every recorded follow-up once, each with the gates that let it through: an item the
     QA judge and the overwatch both name is one follow-up, not two."""
@@ -2035,7 +2062,9 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     design_text = ctx.read_text("design.md") if ctx.exists("design.md") else ""
     parsed = design_contract.parse(design_text, str(ctx.facts.get("name") or ""))
     sections: list[str] = []
-    summary = parsed.summary or _shorten(" ".join(str(ctx.facts.get("brief") or "").split()), 600)
+    summary = (_built_summary(parsed.summary) if parsed.summary and _empty_base(found)
+               else parsed.summary)
+    summary = summary or _shorten(" ".join(str(ctx.facts.get("brief") or "").split()), 600)
     if summary:
         sections.append(f"## Summary\n\n{_public(summary)}")
     for heading, text in design_contract.pr_sections(design_text):

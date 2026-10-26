@@ -480,11 +480,13 @@ Discover, list and resolve packages of modes.
 | function | `missing_tools` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `packages_root` | `() -> 'Path'` |
 | function | `provenance` | `(name: 'str', project: 'Path \| None' = None) -> 'dict[str, Any]'` |
+| function | `record_smoke` | `(root: 'Path', status: 'str') -> 'None'` |
 | function | `remove` | `(project: 'Path', name: 'str', *, force: 'bool' = False) -> 'Path'` |
 | function | `render_catalogue` | `(project: 'Path') -> 'str'` |
 | function | `resolve` | `(project: 'Path', identifier: 'str') -> 'tuple[Package, type]'` |
 | function | `set_enabled` | `(project: 'Path', name: 'str', enabled: 'bool') -> 'None'` |
 | function | `smoke` | `(project: 'Path', identifier: 'str', *, model: 'bool' = False) -> 'dict[str, Any]'` |
+| function | `smoke_state` | `(name: 'str', project: 'Path \| None' = None) -> 'str'` |
 | function | `tool_report` | `(project: 'Path \| None' = None, name: 'str \| None' = None) -> 'dict[str, list[dict[str, Any]]]'` |
 | function | `tools` | `(name: 'str', project: 'Path \| None' = None)` |
 | function | `verify` | `(project: 'Path', name: 'str \| None' = None) -> 'dict[str, list[str]]'` |
@@ -505,10 +507,12 @@ Discover, list and resolve packages of modes.
 - **`missing_tools`** — The names of required tools this machine does not have, for a listing.
 - **`packages_root`** — The directory holding every package.
 - **`provenance`** — Where a package came from, as the writer recorded it.
+- **`record_smoke`** — Record a create or edit run's smoke in the package at ``root`` (`SMOKE`).
 - **`remove`** — Delete a workspace package, refusing to break a dependent.
 - **`render_catalogue`** — The grouped listing a user sees.
 - **`resolve`** — The package and mode class for ``<package>/<name>``.
 - **`smoke`** — Run one mode once, so a package can be checked rather than merely imported.
+- **`smoke_state`** — What a create or edit run recorded about its package's smoke (`SMOKE`).
 - **`tool_report`** — Every declared tool of every package, with its status on this machine.
 - **`tools`** — The tools a package declares, read without importing it.
 - **`verify`** — Import every mode of a package and say what is wrong with it.

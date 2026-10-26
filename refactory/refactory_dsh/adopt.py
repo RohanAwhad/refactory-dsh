@@ -168,9 +168,32 @@ def best(run_root: Path) -> dict[str, Any]:
         "run": str(run_root),
         "candidate": winner_id,
         "score": winner_score,
+        **_score_basis(entries, winner_id, winner_score),
         "edits": winner_edits,
         "state": winner_state,
     }
+
+
+def _number(value: float) -> str:
+    return format(round(float(value), 6), "g")
+
+
+def _score_basis(entries: list[dict[str, Any]], candidate_id: str, score: float) -> dict[str, Any]:
+    """What a winner's score is: the search's, with its cost penalty, beside the raw one.
+
+    `package smoke` reports the mode's own (raw) score, so without this the adopted
+    package's two numbers disagree with no reason given (0.875 here, 0.955 there).
+    """
+    detail = next((entry for entry in reversed(entries) if entry.get("event") == "score"
+                   and str(entry.get("id")) == candidate_id), {})
+    raw = detail.get("raw_score")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return {"score_note": f"{_number(score)} with the cost penalty"}
+    penalty = ""
+    if isinstance(detail.get("parsimony"), (int, float)) and isinstance(detail.get("nodes"), int):
+        penalty = f" ({_number(detail['parsimony'])} x {detail['nodes']} nodes)"
+    return {"raw_score": raw,
+            "score_note": f"{_number(score)} with the cost penalty{penalty}; raw {_number(raw)}"}
 
 
 def _mode_source(
@@ -357,6 +380,7 @@ def adopt(
         "adopted_from": mode,
         "candidate": winner["candidate"],
         "score": winner["score"],
+        **{key: winner[key] for key in ("raw_score", "score_note") if key in winner},
         "edits": winner["edits"],
         "package_root": str(destination),
     }

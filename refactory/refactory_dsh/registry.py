@@ -34,6 +34,16 @@ ORIGIN = ".origin.json"
 #: a sandbox needs.
 WORKSPACE = Path(".factory") / "packages"
 
+#: The ``.origin.json`` key a create or edit run records its smoke in: `SMOKE_PENDING`
+#: from registration until the smoke passes, then `SMOKE_PASSED`. A package without the
+#: key (installed, added, adopted, or registered before the key existed) is not marked.
+SMOKE = "smoke"
+SMOKE_PENDING = "pending"
+SMOKE_PASSED = "passed"
+
+#: How the listing marks a package whose smoke has not passed (dm-264).
+UNVERIFIED = "unverified (smoke not passed)"
+
 
 class PackageClash(PackageError):
     """A package name exists in both the install and the workspace."""
@@ -216,6 +226,33 @@ def provenance(name: str, project: Path | None = None) -> dict[str, Any]:
     return {"package": name, **recorded}
 
 
+def smoke_state(name: str, project: Path | None = None) -> str:
+    """What a create or edit run recorded about its package's smoke (`SMOKE`).
+
+    `SMOKE_PASSED` when nothing was recorded: only a run that registered the package
+    writes the key, so a package that never went through one has nothing to verify.
+    """
+    path = _origin_file(name, project)
+    try:
+        recorded = json.loads(path.read_text()) if path is not None else {}
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        recorded = {}
+    return str(recorded.get(SMOKE, SMOKE_PASSED)) if isinstance(recorded, dict) else SMOKE_PASSED
+
+
+def record_smoke(root: Path, status: str) -> None:
+    """Record a create or edit run's smoke in the package at ``root`` (`SMOKE`)."""
+    path = Path(root) / ORIGIN
+    try:
+        recorded = json.loads(path.read_text()) if path.exists() else {}
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        recorded = {}
+    if not isinstance(recorded, dict):
+        recorded = {}
+    recorded[SMOKE] = status
+    path.write_text(json.dumps(recorded, indent=2, default=str))
+
+
 def discover(project: Path | None = None) -> dict[str, Package]:
     """Every package that loads. A package that fails to import is reported."""
     found: dict[str, Package] = {}
@@ -299,7 +336,12 @@ def catalogue(project: Path) -> dict[str, list[dict[str, Any]]]:
 
 
 def render_catalogue(project: Path) -> str:
-    """The grouped listing a user sees."""
+    """The grouped listing a user sees.
+
+    For a person: what each mode is, and what stands in its way. How an agent runs a
+    mode (the console verb, ``wf_open``, the gates that ask a person) is in the JSON
+    catalogue (`refactory list --json`), not here.
+    """
     lines: list[str] = []
     for name in installed_names(Path(project)):
         try:
@@ -311,6 +353,11 @@ def render_catalogue(project: Path) -> str:
         marks = [] if package.trust == "trusted" else [package.trust]
         if not is_enabled(Path(project), name):
             marks.append("disabled")
+        # A package a create or edit run registered is listed from that moment, because
+        # its smoke has to import it; until the smoke passes it is a candidate, not a
+        # mode that is known to run (dm-264).
+        if smoke_state(name, Path(project)) != SMOKE_PASSED:
+            marks.append(UNVERIFIED)
         # A declared tool this machine lacks is the one thing worth saying in a
         # listing: it is why a mode that is otherwise fine will not run here.
         needed = missing_tools(name, Path(project))
@@ -321,35 +368,8 @@ def render_catalogue(project: Path) -> str:
         for mode in sorted(package.modes, key=lambda m: m.name):
             identifier = mode_id(name, mode.name)
             description = getattr(mode, "description", "")
-            lines.append(f"  {identifier:<38} {description}{_routes(mode)}")
+            lines.append(f"  {identifier:<38} {description}")
     return "\n".join(lines) + "\n" if lines else "no packages installed\n"
-
-
-def _routes(mode_class: type) -> str:
-    """How the mode is run, and where it stops for a person, for the listing.
-
-    Best-effort by construction: a mode whose default state cannot be built is still
-    listed with its description, because a listing that raises for one mode hides
-    every other. Both routes are named: the verb that runs it headless, and the
-    workflow spine, which lowers the same mode and puts its `user` gates to the
-    person rather than pre-answering them.
-    """
-    try:
-        mode = mode_class()
-        described = mode.describe()
-    except Exception:  # a listing is not the place to fail about one mode
-        return ""
-    scored = mode.is_scored()
-    verb = "start" if scored else (mode.name if mode.name in ("create", "edit", "design") else "start")
-    asks = [
-        node["id"]
-        for node in described["nodes"]
-        if node["kind"] == "gate" and node.get("gate_kind") == "user"
-    ]
-    note = f"[run: {verb} or wf_open"
-    if asks:
-        note += f"; asks a person at: {', '.join(asks)}"
-    return f"  {note}]"
 
 
 def smoke(project: Path, identifier: str, *, model: bool = False) -> dict[str, Any]:
@@ -375,6 +395,12 @@ def smoke(project: Path, identifier: str, *, model: bool = False) -> dict[str, A
         "exit_ok": result.exit_ok,
         "error": result.error,
         "score": result.score,
+        # A search, `best` and `adopt` report a score with the search's cost penalty taken
+        # off; this one has none, so the same mode reads higher here.
+        "score_note": (f"{format(round(float(result.score), 6), 'g')} raw: the mode's own score, "
+                       "without a search's cost penalty"
+                       if isinstance(result.score, (int, float)) and not isinstance(result.score, bool)
+                       else "not scored"),
         "iterations": result.iterations,
     }
 

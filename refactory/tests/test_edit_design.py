@@ -849,6 +849,54 @@ def test_an_improvement_is_not_a_regression(tmp_path, monkeypatch):
     assert produced["revision_note"] == "compared with counting_pack/fixed_step: 0.9 → 1.0"
 
 
+def test_a_comparison_names_the_defaults_the_revision_changed(tmp_path, monkeypatch):
+    """dm-263: an edit raised `budget`'s default from 3 to 8 and reported 0.875 → 1.08 as
+    if both ran alike. The comparison says so beside the numbers; it does not re-score."""
+    from refactory_dsh import lowering, sandbox
+    from refactory_dsh.run import run_node
+    from refactory_dsh.sandbox import SandboxResult
+
+    source = registry.resolve(Path("."), "circle_packing/adaptive")[1]().state_dict()["knobs"]
+    revised = {name: entry["value"] for name, entry in source.items()}
+    assert revised["budget"] == 3
+    revised["budget"] = 8
+    calls = []
+
+    def stub(identifier, workdir_, *, project=None, model=False, knobs=None, **kwargs):
+        calls.append(knobs)
+        if Path(workdir_).name == "smoke-source":
+            return SandboxResult(ok=True, payload={"score": 0.875, "iterations": 2})
+        ran = {**revised, **({"budget": int(knobs["budget"])} if knobs else {})}
+        return SandboxResult(ok=True, payload={"score": 1.08, "iterations": 2, "knobs": ran})
+
+    workdir = _smoke_run(tmp_path, monkeypatch, revision="circle_packing/adaptive",
+                         scores={})
+    monkeypatch.setattr(sandbox, "smoke", stub)
+    produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+    assert produced["revision_note"] == (
+        "compared with circle_packing/adaptive: 0.875 → 1.08 (not like for like: budget 3 → 8)")
+    assert produced["before_score"] == 0.875 and produced["regressed"] is False
+    assert json.loads((workdir / "revision.json").read_text())["changed_defaults"] == ["budget 3 → 8"]
+    assert len(calls) == 2, "said, not re-scored"
+
+    # A knob both smokes were given the same value of is like for like.
+    monkeypatch.setenv(lowering.KNOBS_ENV, json.dumps({"sample_knobs": '["budget=8"]'}))
+    produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+    assert produced["revision_note"] == "compared with circle_packing/adaptive: 0.875 → 1.08"
+
+
+def test_the_sandboxed_smoke_reports_the_knob_values_it_ran_with(tmp_path):
+    """What the comparison above reads: the defaults, with the sample knobs over them."""
+    from refactory_dsh import sandbox
+
+    result = sandbox.smoke("circle_packing/adaptive", tmp_path / "smoke", project=Path("."),
+                           knobs={"budget": "5"})
+    assert result.ok, result.problem()
+    defaults = registry.resolve(Path("."), "circle_packing/adaptive")[1]().state_dict()["knobs"]
+    assert result.payload["knobs"] == {
+        **{name: entry["value"] for name, entry in defaults.items()}, "budget": 5}
+
+
 def test_a_revision_of_an_unscored_mode_is_recorded_as_uncompared(tmp_path, monkeypatch):
     """There is no number to compare against, and saying so beats inventing one."""
     from refactory_dsh.run import run_node

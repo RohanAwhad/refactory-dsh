@@ -124,25 +124,58 @@ def validate_pitfalls(raw: str, source: str = "", run_dir: str = "") -> list[str
 
 from refactory_dsh import coverage_helpers
 
+#: How many words of its own a line citing a pitfall needs to be a remedy (dm-262): a
+#: sentence saying what the design does about it ("Line counting uses `count('\n')`,
+#: never `splitlines()`"), not a bare pointer ("handled by `retry()`", "see Changes").
+REMEDY_WORDS = 5
+
+#: A pitfall id, with the title a design gives it right after (``PIT-002 (splitlines
+#: trap)``, ``**PIT-002** (weakened guard)``): neither is the design's remedy.
+_ID_AND_TITLE = re.compile(r"PIT-\d+\**\s*(?:\([^)]*\))?")
+
+
+def _is_remedy(line: str) -> bool:
+    """Whether a line citing a pitfall says, in words of its own, what the design does
+    about it: at least `REMEDY_WORDS` words once its ids, their titles, its code spans
+    and its markup are gone. A word is a whitespace-separated token with a letter in it."""
+    text = _ID_AND_TITLE.sub(" ", re.sub(r"`[^`]*`", " ", line))
+    return sum(1 for token in text.split() if re.search(r"[^\W\d_]", token)) >= REMEDY_WORDS
+
+
+def _answer_lines(design_text: str) -> list[str]:
+    """The lines a design can answer a pitfall on: every line but its ``## Summary``,
+    which states the problem rather than what the design does about it."""
+    lines: list[str] = []
+    in_summary = False
+    for line in design_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            in_summary = stripped.lower() == "## summary"
+        if not in_summary:
+            lines.append(line)
+    return lines
+
 
 def pitfall_coverage(
     design_text: str, pitfalls: list[dict[str, Any]], source: str = "",
 ) -> tuple[list[str], list[str], list[str]]:
-    """Check pitfall id coverage in the Anti-patterns section of design.md.
+    """Which pitfalls design.md answers, wherever it answers them.
 
-    Returns ``(addressed, set_aside, missing)``:
+    A design answers a pitfall on a line that cites its id: an entry in ``## Anti-patterns
+    to avoid``, and also a ``## Changes`` bullet ("avoids PIT-002"), a test that pins it,
+    a paragraph ("per PIT-003") or a heading of the design. Its ``## Summary`` does not
+    count. Returns ``(addressed, set_aside, missing)``:
 
-    - *addressed*: pitfall ids that appear in the Anti-patterns section and
-      reference a valid site or heading.
-    - *set_aside*: pitfall ids with a ``[set-aside: <reason>]`` marker where
-      *reason* is non-empty.
-    - *missing*: pitfall ids not found in the Anti-patterns section, or found
-      without a valid reference and without a set-aside marker.
+    - *addressed*: the lines citing the id name a valid site or § heading, or one of them
+      is a remedy, a sentence of its own on what the design does (`_is_remedy`, dm-262).
+    - *set_aside*: a line citing the id has a ``[set-aside: <reason>]`` marker with a
+      non-empty reason.
+    - *missing*: no line cites the id, or none names a site, a heading or a remedy.
 
     *source* is the checkout a design without ``## Rule and sites`` has its cited sites
     checked against (`coverage_helpers.site_paths`).
     """
-    anti = coverage_helpers.extract_section(design_text, "Anti-patterns to avoid")
+    lines = _answer_lines(design_text)
     sites = coverage_helpers.site_paths(design_text, source=source)
     hdgs = coverage_helpers.headings(design_text)
 
@@ -155,13 +188,10 @@ def pitfall_coverage(
         if not pid:
             continue
 
-        # The id must appear in the Anti-patterns section, not elsewhere.
-        if not anti.strip() or pid not in anti:
+        entry_lines = [ln for ln in lines if pid in ln]
+        if not entry_lines:
             missing.append(pid)
             continue
-
-        # Find the line(s) containing this pid in the section.
-        entry_lines = [ln for ln in anti.splitlines() if pid in ln]
         entry_text = "\n".join(entry_lines)
 
         # Check for a set-aside marker with a non-empty reason.
@@ -170,8 +200,9 @@ def pitfall_coverage(
             set_aside.append(pid)
             continue
 
-        # Not set-aside: verify the entry references something that exists.
-        if coverage_helpers.has_valid_reference(entry_text, sites, hdgs):
+        # Not set-aside: a site or heading that exists, or a remedy in its own words.
+        if (coverage_helpers.has_valid_reference(entry_text, sites, hdgs)
+                or any(_is_remedy(line) for line in entry_lines)):
             addressed.append(pid)
         else:
             missing.append(pid)

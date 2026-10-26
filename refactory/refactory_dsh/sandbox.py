@@ -643,8 +643,11 @@ def smoke(
         "        state = configure(state, name, value)\n"
         "    mode.load_state_dict(state)\n"
         f"result = mode.evaluate(Path({str(Path(workdir))!r}){', ' + call if call else ''})\n"
+        # The knob values the run used, so a comparison can say what differed (dm-263).
+        "knobs = {name: entry.get('value') for name, entry in"
+        " (mode.state_dict().get('knobs') or {}).items() if isinstance(entry, dict)}\n"
         "print(json.dumps({'exit_ok': result.exit_ok, 'error': result.error,"
-        " 'score': result.score, 'iterations': result.iterations}))\n"
+        " 'score': result.score, 'iterations': result.iterations, 'knobs': knobs}, default=str))\n"
     )
     from refactory_dsh import toolchain
 

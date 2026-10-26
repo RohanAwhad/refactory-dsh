@@ -318,6 +318,62 @@ def test_doc_only_research_with_empty_footprints_is_scoped():
     assert "0 existing function" in result["research_scope_reason"]
 
 
+def _checkout(path: Path, *, empty: bool) -> Path:
+    """A git checkout: a new project's (one empty commit) or a person's (it holds app.py)."""
+    import subprocess
+
+    path.mkdir(parents=True)
+    run = lambda *args: subprocess.run(["git", "-C", str(path), *args], check=True,  # noqa: E731
+                                       capture_output=True)
+    run("init", "-q", "-b", "main")
+    if not empty:
+        (path / "app.py").write_text("def main():\n    pass\n")
+        run("add", "app.py")
+    run("-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+        "commit", "-q", "--allow-empty", "-m", "start")
+    return path
+
+
+_WORDCOUNT_PLAN = (Path(__file__).resolve().parent / "fixtures" / "wordcount_research_plan.json").read_text()
+
+
+def test_a_new_project_brief_that_only_adds_new_items_is_scoped(tmp_path):
+    """The README's wordcount brief was classed full because a new project always "adds new
+    items", and took 14.5 min to its gate (dm-259). Its research, as the run wrote it."""
+    ctx = _scale_ctx(_WORDCOUNT_PLAN, facts={"source": str(_checkout(tmp_path / "new", empty=True))})
+    result = classify_scale(ctx)
+    assert result["research_scope"] == "scoped"
+    assert result["research_scope_reason"] == (
+        "a new or empty project: adds sample.txt:1 — new sample data file, wordcount.py:1 "
+        "— new script file with main() function; touches no existing function, no shared engine")
+
+
+def test_an_existing_project_brief_that_adds_new_items_is_still_full(tmp_path):
+    ctx = _scale_ctx(_WORDCOUNT_PLAN, facts={"source": str(_checkout(tmp_path / "old", empty=False))})
+    assert classify_scale(ctx) == {
+        "research_scope": "full",
+        "research_scope_reason": "adds new items: sample.txt:1 — new sample data file, "
+                                 "wordcount.py:1 — new script file with main() function"}
+
+
+def test_a_new_project_still_goes_full_on_a_shared_engine_or_a_cited_function(tmp_path):
+    source = str(_checkout(tmp_path / "new", empty=True))
+    engine = [{"focus": "q", "slug": "s", "finding": "f", "ids": [], "footprint": {
+        "existing_functions": [], "new_items": ["tool.py:1 new"], "shared_engine": ["executor.py:10"]}}]
+    assert classify_scale(_scale_ctx(engine, facts={"source": source}))["research_scope_reason"] == (
+        "changes a shared engine: executor.py:10")
+    # Nothing exists to cite in an empty checkout: a cited function is unresolvable.
+    cited = [{"focus": "q", "slug": "s", "finding": "f", "ids": [], "footprint": {
+        "existing_functions": ["app.py:1 main"], "new_items": ["tool.py:1 new"], "shared_engine": []}}]
+    assert classify_scale(_scale_ctx(cited, facts={"source": source}))["research_scope"] == "full"
+    # A refine is decided before the footprint is read, new project or not.
+    refine = classify_scale(_scale_ctx(_WORDCOUNT_PLAN, facts={
+        "source": source, "research_scope_reason": REFINE_SCOPE_REASON}))
+    assert refine == {"research_scope": "scoped", "research_scope_reason": REFINE_SCOPE_REASON}
+    # Without a checkout to read, nothing says the project is empty: full, as before.
+    assert classify_scale(_scale_ctx(_WORDCOUNT_PLAN))["research_scope"] == "full"
+
+
 def test_footprint_entry_without_evidence_is_full():
     # A bare string without path:line evidence
     plan = [
