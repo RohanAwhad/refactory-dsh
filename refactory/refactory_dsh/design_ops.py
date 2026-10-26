@@ -1245,6 +1245,10 @@ def prepare_check(ctx: Any) -> Any:
     # Nothing a last attempt prepared or decided may stand for this one.
     for name in (CHECK_PREP, CHECK_VERDICT):
         ctx.path(name).unlink(missing_ok=True)
+    # Draft delivery already set by materialise's refusal path: skip straight
+    # to report via the "draft" condition, without re-running reviews or the check.
+    if ctx.facts.get("draft_delivery"):
+        return "draft"
     refused = _refused_verdict(ctx)
     if refused is not None:
         return refused
@@ -1936,16 +1940,6 @@ def _review_questions_advisory(ctx: Any) -> str:
     problems = [problem for name, _ in DESIGN_QA_REVIEWS if ctx.exists(name)
                 for problem in check_review_questions(ctx.read_text(name), changed, nodes[name])]
     return advisory_repo_questions(problems) if problems else ""
-
-
-def _send_back(ctx: Any, gate_file: str, fact: str, reason: str) -> Any:
-    """Write why the change goes back, and spend a review attempt on it (`create_ops.repair`),
-    which raises BuildLoopStop at the review limit."""
-    from refactory_dsh.create_ops import repair
-
-    ctx.write_text(gate_file, reason + "\n")
-    ctx.set_fact(fact, reason)
-    return repair(ctx, [reason], kind="review")
 
 
 def _send_back_or_draft(ctx: Any, gate_file: str, fact: str, reason: str) -> Any:

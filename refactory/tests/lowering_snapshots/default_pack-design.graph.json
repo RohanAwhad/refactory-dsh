@@ -397,8 +397,8 @@
         "changes.diff"
       ],
       "blocking": true,
-      "command": "python -m refactory_dsh.run refactory_dsh.repo_change:materialise",
-      "callable_name": "refactory_dsh.repo_change:materialise",
+      "command": "python -m refactory_dsh.run refactory_dsh.design_ops:design_materialise",
+      "callable_name": "refactory_dsh.design_ops:design_materialise",
       "notes": "commit the emitted files on the run's branch, or write the artifact directory",
       "_type": "FnNode"
     },
@@ -878,6 +878,11 @@
       "source": "prepare_check",
       "target": "fork_qa",
       "condition": "proceed"
+    },
+    {
+      "source": "prepare_check",
+      "target": "report",
+      "condition": "draft"
     },
     {
       "source": "qa_judge",

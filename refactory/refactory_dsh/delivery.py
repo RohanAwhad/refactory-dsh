@@ -1036,6 +1036,10 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
             _after_push(lambda: _undraft(ctx, url), slug, branch, url)
             # Update body on refine: replace between body markers (dm-212).
             # Only when not a draft: _redraft already handles the body.
+            # Write the freshly generated body to the BODY file first so
+            # _update_refine_body reads it (not the stale GitHub body that
+            # _undraft may have written).
+            ctx.write_text(BODY, _body(ctx, found))
             _after_push(lambda: _update_refine_body(ctx, url), slug, branch, url)
         return {"status": status, "merge": merge, "_draft_delivery": draft_delivery, "draft_note": note,
                 "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
@@ -1164,8 +1168,11 @@ def _undraft(ctx: Any, url: str) -> None:
         body_path = Path(ctx.workdir) / BODY
         body_path.write_text(clean_body)
         _gh("pr", "edit", url, "--body-file", str(body_path))
-    if title.startswith(DRAFT_TITLE):
-        clean_title = title[len(DRAFT_TITLE):]
+    clean_title = title
+    for prefix in (DRAFT_TITLE, "[check failing] "):
+        if clean_title.startswith(prefix):
+            clean_title = clean_title[len(prefix):]
+    if clean_title != title:
         _gh("pr", "edit", url, "--title", clean_title)
 
 
@@ -1185,7 +1192,7 @@ def _update_refine_body(ctx: Any, url: str) -> None:
         ctx.set_fact("_refine_body_note", "description not updated: no delivery markers in the existing body")
         return
     new_inner = (Path(ctx.workdir) / BODY).read_text()
-    updated = _BODY_SECTION.sub(new_inner.rstrip("\n"), old_body)
+    updated = _BODY_SECTION.sub(lambda _m: new_inner.rstrip("\n"), old_body)
     body_path = Path(ctx.workdir) / BODY
     body_path.write_text(updated)
     _gh("pr", "edit", url, "--body-file", str(body_path))
@@ -1813,7 +1820,8 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     if summary:
         sections.append(f"## Summary\n\n{summary}")
 
-    # ## Changes — from sites and diff files (build_what_changed), renamed from ## What changed.
+    # ## Changes — from the design's ## Changes section (behaviour-level bullets),
+    # falling back to build_what_changed (per-file/per-site items from Rule and sites).
     diff_files = sorted(
         line for line in worktree.git(
             Path(found.path), "diff", "--name-only", "--diff-filter=d",
@@ -1821,10 +1829,20 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         ).splitlines()
         if line
     )
-    what_changed, mismatches = design_contract.build_what_changed(parsed, diff_files)
-    if what_changed:
-        sections.append("## Changes\n\n" + "\n".join(f"- {item}" for item in what_changed))
-    if mismatches:
+    if parsed.changes:
+        # Behaviour-level bullets from the design's ## Changes section (dm-191).
+        sections.append("## Changes\n\n" + "\n".join(f"- {item}" for item in parsed.changes))
+    else:
+        what_changed, mismatches_list = design_contract.build_what_changed(parsed, diff_files)
+        if what_changed:
+            sections.append("## Changes\n\n" + "\n".join(f"- {item}" for item in what_changed))
+        if mismatches_list:
+            target_guard.warn(
+                f"design sites marked [changed] but not in the diff: {', '.join(mismatches_list)}"
+            )
+    # Still check for mismatches even when using parsed.changes, for the warning.
+    _unused, mismatches = design_contract.build_what_changed(parsed, diff_files)
+    if parsed.changes and mismatches:
         target_guard.warn(
             f"design sites marked [changed] but not in the diff: {', '.join(mismatches)}"
         )
@@ -1990,10 +2008,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     # ## Follow-ups
     if left:
         sections.append(
-            "## Follow-ups (non-core findings)\n\n"
-            "The reviews judged these real but outside the change's core (no ask, "
-            "criterion, correction or existing behaviour depends on them), so they did "
-            "not hold it back:\n\n" + "\n".join(f"- {_public(' '.join(item.split()))}" for item in left))
+            "## Follow-ups\n\n" + "\n".join(f"- {_public(' '.join(item.split()))}" for item in left))
 
     # ## Corrections given at approval
     corrections = _public(str(ctx.facts.get("gate_corrections") or "")).strip()
@@ -2096,37 +2111,6 @@ def _abort_pending_merge(ctx: Any) -> None:
         pass
     pending = Path(ctx.workdir) / PENDING_MERGE
     pending.unlink(missing_ok=True)
-
-
-def _process_notes_section(ctx: Any) -> str:
-    """Non-blocking summary of process-scoped steering notes for the PR body."""
-    import json as _json
-    from refactory_dsh import authoring_evidence as evidence
-
-    def _safe_read_json(name: str) -> Any:
-        try:
-            return _json.loads(ctx.read_text(name))
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
-
-    audit = _safe_read_json(evidence.AUDIT) if ctx.exists(evidence.AUDIT) else None
-    ev = _safe_read_json(evidence.EVIDENCE) if ctx.exists(evidence.EVIDENCE) else None
-    notes = (ev or {}).get("process_notes", [])
-    if not notes:
-        return ""
-    audit_notes = {item["id"]: item for item in (audit or {}).get("process_notes", [])
-                   if isinstance(item, dict)}
-    lines = ["\n- **Process notes** (non-blocking):"]
-    for note in notes:
-        nid = note.get("id", "")
-        info = audit_notes.get(nid)
-        if info and isinstance(info.get("followed"), bool):
-            status = "followed" if info["followed"] else "not followed"
-            detail = info.get("detail", "")
-            lines.append(f"  - `{nid}`: {status}" + (f" — {detail}" if detail else ""))
-        else:
-            lines.append(f"  - `{nid}`: recorded; compliance not verified by audit")
-    return "\n".join(lines)
 
 
 def _validate_design_after_corrections(workdir: Path) -> None:

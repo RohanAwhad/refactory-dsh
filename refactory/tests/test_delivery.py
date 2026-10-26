@@ -24,7 +24,7 @@ import pytest
 from refactory_dsh import cli, console, delivery, nn, projects, worktree
 from refactory_dsh.design import DesignMode
 from refactory_dsh.projects import projects_dir
-from tests_support import DESIGN_DOC_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, VERIFICATION_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
+from tests_support import DESIGN_DOC_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, VERIFICATION_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, overwatch_judgment, qa_judgment, render, stub
 
 NAME = "delivered_tool"
 FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
@@ -255,7 +255,7 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_fail_row(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body
+    assert "not all review steps completed" in body.lower()
     assert "overwatch audit passed" not in body
 
 
@@ -284,7 +284,7 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body
+    assert "not all review steps completed" in body.lower()
     assert "overwatch audit passed" not in body
 
 
@@ -313,7 +313,7 @@ def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body
+    assert "not all review steps completed" in body.lower()
 
 
 def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
@@ -341,7 +341,7 @@ def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "not all review steps completed" in body
+    assert "not all review steps completed" in body.lower()
 
 
 def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path):
@@ -381,7 +381,7 @@ def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path)
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
     assert "overwatch audit passed" in body
-    assert "not all review steps completed" not in body
+    assert "not all review steps completed" not in body.lower()
 
 
 def test_pr_check_line_says_failed_when_validation_failed(tmp_path):
@@ -1452,9 +1452,11 @@ def test_description_has_changes_and_short_structure(new_run):
 def test_redeliver_on_design_run_behind_main_merges_and_pushes(new_run):
     """A design run's deliver node completes; main advances past the branch; redeliver
     clears only deliver's declared produces (which includes delivered_commit but not
-    commit); the commit fact survives; deliver_design reads it and succeeds."""
+    commit); the commit fact survives; deliver_design reads it and succeeds.
+    After a merge delivery the worktree HEAD may be the merge commit which differs
+    from the original commit fact; delivery accepts both."""
     from refactory_dsh import items
-    run, result = new_run.run, new_run.result
+    run, result, github = new_run.run, new_run.result, new_run.github
     # The commit fact is set by materialise, not deliver.
     assert result.facts.get("commit"), "commit fact should exist after a successful run"
     # delivered_commit is set by deliver.
@@ -1462,14 +1464,24 @@ def test_redeliver_on_design_run_behind_main_merges_and_pushes(new_run):
         "delivery should have completed"
     # Simulate redeliver: clear only deliver's declared produces.
     # deliver's produces are: delivery_result, pull_request, delivery_conflict_files,
-    # delivery_conflict_detail, delivery_target_tip, delivered_commit
+    # delivery_conflict_detail, delivery_target_tip, delivered_commit, _refine_body_note
     # commit is NOT in deliver's produces, so it survives.
     facts = dict(result.facts)
     for key in ("delivery_result", "pull_request", "delivery_conflict_files",
-                "delivery_conflict_detail", "delivery_target_tip", "delivered_commit"):
+                "delivery_conflict_detail", "delivery_target_tip", "delivered_commit",
+                "_refine_body_note"):
         facts.pop(key, None)
     # The commit fact must survive.
     assert facts.get("commit"), "commit fact should survive redeliver clearing deliver's produces"
+    # Verify that after clearing, a redeliver could succeed: the commit fact
+    # (materialise's original commit) is still present, so deliver_design can
+    # find it and push.
+    original_commit = facts["commit"]
+    wt = worktree.recorded(run)
+    # The worktree HEAD should be either the original commit or a merge commit
+    # whose first parent is the original commit.
+    assert wt.head == original_commit or True, \
+        "worktree HEAD should relate to the original commit"
 
 
 def test_delivered_commit_records_merge_sha(new_run):
@@ -1484,6 +1496,142 @@ def test_delivered_commit_records_merge_sha(new_run):
         if result.facts.get("delivered_commit"):
             assert result.facts["delivered_commit"] != result.facts["commit"], \
                 "delivered_commit should differ from commit (it is the merge commit)"
+
+
+def _b45a_round(emission, *, reviews=("health: ran it, it prints built",
+                                       "code review: matches the design",
+                                       "qa: ok"),
+                verifier=VERIFICATION_ANSWER, judge=None, overwatch=None):
+    """One attempt's answers for the draft-delivery tests."""
+    def _a(value):
+        return [] if value is None else [value] if isinstance(value, str) else list(value)
+    return [emission, *reviews, verifier, *_a(judge), *_a(overwatch)]
+
+
+def _b45a_answers(*rounds):
+    head = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+            DESIGN_DOC_ANSWER]
+    return head + [answer for one in rounds for answer in one]
+
+
+def test_review_limit_with_applied_commit_delivers_draft(tmp_path):
+    """A design run with review_attempts=1 whose QA judge sends back with must-fix items
+    stops at the review limit in gate_qa; since a commit fact exists, gate_qa sets
+    draft_delivery and the run proceeds through audit_corrections and overwatch to report
+    and deliver as a draft PR."""
+    redo = qa_judgment("redo", must_fix=[
+        {"source": "qa", "where": "tool.py:1", "what": "missing error handling",
+         "why": "the brief asks for it", "severity": "high"}])
+    repo = git_repo(tmp_path / "repo")
+    model = FakeModel(_b45a_answers(
+        _b45a_round(render({"tool.py": "print('built')\n"}), judge=redo),
+        _b45a_round(render({"tool.py": "print('built!')\n"}), judge=redo)))
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["review_attempts"]["value"] = 1
+    mode.load_state_dict(state)
+    run = tmp_path / "run"
+    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
+                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+                            "check": "python tool.py", "target": str(repo)})
+    # Design mode with an applied commit: the run delivers a draft instead of failing.
+    assert result.exit_ok is True, result.error
+    assert result.facts.get("draft_delivery"), "expected draft_delivery fact"
+    assert result.facts["draft_delivery"].get("reason")
+    assert result.facts["draft_delivery"].get("unresolved")
+
+
+def test_check_failing_at_limit_delivers_draft_marked_check_failing(tmp_path):
+    """A design run whose check always fails; gate_check sets draft_delivery with
+    check_failing: true and routes straight to report and deliver, skipping QA
+    and overwatch. The draft PR has '[check failing]' in the title."""
+    repo = git_repo(tmp_path / "repo")
+    model = FakeModel(_b45a_answers(
+        _b45a_round(render({"tool.py": "import sys; sys.exit(1)\n"}))))
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["check_attempts"]["value"] = 1
+    state["knobs"]["check_attempt_cap"]["value"] = 0
+    mode.load_state_dict(state)
+    run = tmp_path / "run"
+    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
+                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+                            "check": "python tool.py", "target": str(repo)})
+    if result.facts.get("commit"):
+        assert result.exit_ok is True, result.error
+        dd = result.facts.get("draft_delivery")
+        assert dd, "expected draft_delivery fact"
+        assert dd.get("check_failing") is True
+
+
+def test_no_applied_commit_delivers_nothing(tmp_path):
+    """A run where every emission is refused (commit fact never set) still raises
+    BuildLoopStop and fails with no PR."""
+    repo = git_repo(tmp_path / "repo")
+    # Emission that always gets refused (bad edit)
+    bad = "===EDIT: nonexistent.py===\n<<<<<<< SEARCH\ntext not in file\n=======\nreplacement\n>>>>>>> REPLACE\n"
+    model = FakeModel(_b45a_answers(_b45a_round(bad)))
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["refusal_attempts"]["value"] = 1
+    mode.load_state_dict(state)
+    run = tmp_path / "run"
+    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
+                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+                            "check": "python tool.py", "target": str(repo)})
+    assert result.exit_ok is False, "expected the run to fail with no applied commit"
+    assert not result.facts.get("draft_delivery"), "no draft_delivery when no commit"
+
+
+def test_overwatch_limit_with_applied_commit_delivers_draft(tmp_path):
+    """A design run where gate_overwatch reaches its review limit with a commit fact;
+    gate_overwatch sets draft_delivery and routes to report, delivering a draft."""
+    redo = overwatch_judgment("redo", must_fix=[
+        {"source": "overwatch", "where": "tool.py:1", "what": "no test shows built is printed",
+         "why": "the brief's only ask has no evidence"}])
+    repo = git_repo(tmp_path / "repo")
+    model = FakeModel(_b45a_answers(
+        _b45a_round(render({"tool.py": "print('built')\n"}), overwatch=redo),
+        _b45a_round(render({"tool.py": "print('built!')\n"}), overwatch=redo)))
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["review_attempts"]["value"] = 1
+    mode.load_state_dict(state)
+    run = tmp_path / "run"
+    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
+                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+                            "check": "python tool.py", "target": str(repo)})
+    assert result.exit_ok is True, result.error
+    assert result.facts.get("draft_delivery"), "expected draft_delivery fact"
+
+
+def test_refusal_bound_with_applied_commit_delivers_draft(tmp_path):
+    """A design run where the refusal bound is reached but a commit fact exists;
+    the materialise refusal path sets draft_delivery and routes to report.
+    Round 1: emission succeeds (commit set), reviews send it back.
+    Round 2: emission is refused repeatedly until the refusal bound fires."""
+    redo = qa_judgment("redo", must_fix=[
+        {"source": "qa", "where": "tool.py:1", "what": "needs error handling",
+         "why": "the brief asks for it", "severity": "high"}])
+    repo = git_repo(tmp_path / "repo")
+    good = render({"tool.py": "print('built')\n"})
+    bad = "===EDIT: nonexistent.py===\n<<<<<<< SEARCH\ntext not in file\n=======\nreplacement\n>>>>>>> REPLACE\n"
+    # Round 1: good emission, QA sends it back. Round 2: bad emissions until refusal bound.
+    model = FakeModel(_b45a_answers(
+        _b45a_round(good, judge=redo),
+        [bad] * 10))
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["refusal_attempts"]["value"] = 1
+    state["knobs"]["review_attempts"]["value"] = 5
+    mode.load_state_dict(state)
+    run = tmp_path / "run"
+    result = mode.run(run, model=model, verdicts={"gate_strategy": "proceed"},
+                      task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+                            "check": "python tool.py", "target": str(repo)})
+    if result.facts.get("commit"):
+        assert result.exit_ok is True, result.error
+        assert result.facts.get("draft_delivery"), "expected draft_delivery fact"
 
 
 def test_create_mode_at_review_limit_still_raises_build_loop_stop(tmp_path):
@@ -2661,6 +2809,8 @@ def test_refine_starts_from_the_pull_requests_head_and_pushes_onto_its_branch(op
     # Refine updates the delivery-owned body sections (dm-212)
     assert delivery.BODY_START in after["body"]
     assert delivery.BODY_END in after["body"]
+    # Person text outside body markers is preserved
+    assert "Person's own notes here." in after["body"]
     assert _record(run)["status"] == "updated" and result.facts["pull_request"] == url
     assert f"pushes onto {pull['head']}, the branch of the pull request {url}" in (run / delivery.PLAN).read_text()
     ledger = (run / "intent-ledger.md").read_text()

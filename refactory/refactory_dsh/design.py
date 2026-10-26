@@ -593,9 +593,10 @@ class DesignMode(Mode):
             notes="write the artifact's files",
         ))
         graph.add(repo_change.materialise_node(
+            call=f"{OPS}:design_materialise",
             writes=("changes.diff", "changed-functions.json"),
             produces=("artifact", "files", "commit", "change", "emission_refused",
-                      "changed_functions", "consecutive_refusals"),
+                      "changed_functions", "consecutive_refusals", "draft_delivery"),
             knobs=("refusal_attempts",),
         ))
         # ── the check, beside the reviews ──
@@ -923,6 +924,7 @@ class DesignMode(Mode):
         graph.connect("materialise", "prepare_check")
         graph.connect("prepare_check", "emit", condition="reloop")
         graph.connect("prepare_check", "fork_qa", condition="proceed")
+        graph.connect("prepare_check", "report", condition="draft")
         graph.connect("fork_qa", "join_qa")
         graph.connect("verifier", "join_qa")
         graph.connect("join_qa", "gate_check")

@@ -397,6 +397,11 @@
       "condition": "proceed"
     },
     {
+      "source": "prepare_check",
+      "target": "report",
+      "condition": "draft"
+    },
+    {
       "source": "qa_judge",
       "target": "gate_qa",
       "condition": null
