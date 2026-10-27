@@ -49,15 +49,20 @@ EMIT_CHECKLIST = (
 #: attempt, whose diff the runtime writes into emit.txt. design_fast's builder too.
 BUILDER_WORKSPACE = {"kind": "clone", "of": "attempt", "collect": "diff"}
 
-#: How design mode's builder is told to work in its workspace, and when to stop.
+#: How design mode's builder is told to work in its workspace, which tests to run there,
+#: and when to stop. It runs the tests its change touches and the brief's own example, not
+#: the full suite (approved 2026-10-27): in the live trial (dm-149) the builder's full-suite
+#: runs took 11.6 of its 27 minutes, and the check runs the full suite after it anyway.
 WORKSPACE_BRIEFING = (
     "## Your workspace\n"
     "Your workspace is a prepared clone of the last attempt, with its dependencies "
     "installed and its setup and generate commands run; its path is in the execution "
-    "block above. Make the change there, and run the tests, the CLI and the brief's own "
-    "example there as often as you need: the check command runs there as it runs in the "
-    "check. `git diff HEAD` there shows what you changed since the last attempt; the "
-    "run's base commit is {{base}}.\n"
+    "block above. Make the change there. `git diff HEAD` there shows what you changed "
+    "since the last attempt; the run's base commit is {{base}}.\n"
+    "Run there, as often as you need, the tests your change touches: the test files you "
+    "changed or added, and the tests that import the modules you changed. Run the brief's "
+    "own example or CLI path there too. They run there as they run in the check.\n"
+    "Do not run the full suite yourself: the check runs it for you after you answer.\n"
     "When you are done, stop: the workspace's diff is your answer. The runtime turns it "
     "into the next attempt, which the check and the reviews then judge. Return a short "
     "completion message.\n"

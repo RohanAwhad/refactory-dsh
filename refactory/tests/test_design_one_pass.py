@@ -368,3 +368,35 @@ def test_only_design_modes_builder_checks_each_correction_fails_without_its_chan
     assert "default_pack-design_fast" in others
     assert [key for key, node in others.items()
             if node is not None and "## Before you stop" in node.prompt_template] == []
+
+
+def test_the_workspace_builder_runs_the_tests_its_change_touches_not_the_full_suite():
+    """In the live trial (dm-149) the workspace builder ran the full suites several times:
+    11.6 of its 27 minutes, before the self-check and the check ran them again. Design's and
+    design_fast's builders are told to run the tests their change touches and the brief's
+    own example, and that the check runs the full suite after they answer (approved
+    2026-10-27); design's still reverts each change and reruns its test. No other mode's
+    builder is told this."""
+    from refactory_dsh.design import EMIT_CHECKLIST, WORKSPACE_BRIEFING
+    from test_lowering_smoke import _mode_classes
+
+    modes = dict(_mode_classes())
+    told = {key: cls().build().nodes.get("emit") for key, cls in modes.items()}
+    assert sorted(key for key, node in told.items()
+                  if node is not None and WORKSPACE_BRIEFING in node.prompt_template) == [
+        "default_pack-design", "default_pack-design_fast"]
+    for key in ("default_pack-design", "default_pack-design_fast"):
+        emit = told[key].prompt_template
+        for line in ("Run there, as often as you need, the tests your change touches",
+                     "the test files you changed or added",
+                     "the tests that import the modules you changed",
+                     "Run the brief's own example or CLI path there too",
+                     "Do not run the full suite yourself: the check runs it for you after "
+                     "you answer."):
+            assert line in emit, (key, line)
+        # The only mention of the full suite is the one telling the builder not to run it.
+        assert emit.count("full suite") == 1, key
+        assert "check command runs there" not in emit, key
+    assert "revert that change in the workspace and run the same test again: it must fail" in (
+        EMIT_CHECKLIST)
+    assert EMIT_CHECKLIST in told["default_pack-design"].prompt_template

@@ -139,8 +139,9 @@ docs/hardening.md, "Self-check inside the attempt (b41a)".
 
 Design's `emit` worker (and design_fast's) works in a prepared clone of the last
 attempt (`workspace: clone of attempt, collect: diff`): it makes the change there and
-runs the tests, the CLI and the brief's own example as often as it needs, and the
-runtime writes `emit.txt` from the clone's diff. The clone is prepared once per run
+runs the tests its change touches and the brief's own example as often as it needs,
+leaving the full suite to the check, and the runtime writes `emit.txt` from the clone's
+diff. The clone is prepared once per run
 and installs again only when the manifests change. See docs/hardening.md, "Agent
 workspaces". Design's emit prompt no longer names the builder probe; `design_doc` still
 uses it (`--command`), below.
