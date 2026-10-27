@@ -26,7 +26,7 @@ from refactory_dsh.design import (DesignMode, gate_self_check_iterations,
                                   prepare_check_iterations)
 from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT
 from refactory_dsh.sandbox import SandboxResult
-from tests_support import FakeModel, early_asks_judgment, git, not_built, render
+from tests_support import FakeModel, early_asks_judgment, not_built, render
 
 pytestmark = pytest.mark.usefixtures("fake_gh")
 
