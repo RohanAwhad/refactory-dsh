@@ -437,19 +437,26 @@ def test_a_design_check_limit_goes_to_the_report_as_a_draft_on_the_spine(tmp_pat
                                                       "refusal_attempts": 3}))
     (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
     routes = _walk_on_the_spine(run, monkeypatch, *_ATTEMPT, _REPORT)
-    assert routes == [("materialise", 0, ""), ("prepare_check", 0, "proceed"), ("check", 0, ""),
-                      ("gate_check", 0, "draft"), ("report", 0, "")], routes
+    assert routes == [*_TO_THE_CHECK, ("gate_check", 0, "draft"), ("report", 0, "")], routes
     facts = json.loads((run / "facts.json").read_text())
     assert facts["draft_delivery"]["reason"] == "check attempts exhausted after 1 check failure(s)"
     assert facts["draft_delivery"]["check_failing"] is True
     assert json.loads((run / "design.json").read_text())["draft"] is True
 
 
-#: The nodes of one attempt, as the spine runs design's graph (`DesignMode.graph`).
+#: The nodes of one attempt, as the spine runs design's graph (`DesignMode.graph`): the
+#: first self-check's fork, its judge's verdict (written as the agent node writes it,
+#: `tests_support.judge_finds_everything_built`), then the check beside the reviews.
 _ATTEMPT = (("refactory_dsh.design_ops:design_materialise", "materialise", "op"),
             ("refactory_dsh.design_ops:prepare_check", "prepare_check", "gate"),
+            ("refactory_dsh.design_ops:first_self_check", "first_self_check", "op"),
+            ("tests_support:judge_finds_everything_built", "early_asks_check", "op"),
+            ("refactory_dsh.design_ops:gate_self_check", "gate_self_check", "gate"),
             ("refactory_dsh.design_ops:check_beside_reviews", "check", "op"),
             ("refactory_dsh.design_ops:gate_check", "gate_check", "gate"))
+#: The attempt's routes up to the check beside the reviews, which the first self-check passes.
+_TO_THE_CHECK = [("materialise", 0, ""), ("prepare_check", 0, "first"), ("first_self_check", 0, ""),
+                 ("early_asks_check", 0, ""), ("gate_self_check", 0, "proceed"), ("check", 0, "")]
 _REPORT = ("refactory_dsh.design_ops:report_judged", "report", "op")
 
 
@@ -500,8 +507,8 @@ def test_the_refusal_bound_after_an_applied_commit_goes_to_the_report_on_the_spi
     import hashlib
 
     run = _spine_attempt(tmp_path, monkeypatch, "true", refusal_attempts=2)
-    assert [step[1:] for step in _walk_on_the_spine(run, monkeypatch, *_ATTEMPT)] == [
-        (0, ""), (0, "proceed"), (0, ""), (0, "proceed")]
+    assert _walk_on_the_spine(run, monkeypatch, *_ATTEMPT) == [*_TO_THE_CHECK,
+                                                               ("gate_check", 0, "proceed")]
     bad = "===EDIT: missing.py===\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n"
     (run / "emit.txt").write_text(bad)
     assert _walk_on_the_spine(run, monkeypatch, *_ATTEMPT[:2]) == [
@@ -721,11 +728,10 @@ def test_a_gate_check_that_runs_the_check_itself_drafts_at_its_limit_on_the_spin
     """When no decision stands for the attempt (the check command was corrected after the
     check ran), gate_check runs the whole check itself; at the limit it routes ``draft``."""
     run = _spine_attempt(tmp_path, monkeypatch, "exit 1", check_attempts=1)
-    assert [step[0] for step in _walk_on_the_spine(run, monkeypatch, *_ATTEMPT[:3])] == [
-        "materialise", "prepare_check", "check"]
+    assert _walk_on_the_spine(run, monkeypatch, *_ATTEMPT[:-1]) == _TO_THE_CHECK
     facts = json.loads((run / "facts.json").read_text())
     (run / "facts.json").write_text(json.dumps({**facts, "check": "exit 2"}))
-    assert _walk_on_the_spine(run, monkeypatch, _ATTEMPT[3], _REPORT) == [
+    assert _walk_on_the_spine(run, monkeypatch, _ATTEMPT[-1], _REPORT) == [
         ("gate_check", 0, "draft"), ("report", 0, "")]
     fact = json.loads((run / "facts.json").read_text())["draft_delivery"]
     assert fact["reason"] == "check attempts exhausted after 2 check failure(s)" and fact["check_failing"]

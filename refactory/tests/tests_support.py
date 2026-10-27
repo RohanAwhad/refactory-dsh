@@ -530,6 +530,8 @@ def _is_emission(answer: str) -> bool:
 #: Design mode's two judges (`refactory_dsh.judges`), keyed by a line of each prompt.
 QA_JUDGE_MARK = "You are the QA judge."
 OVERWATCH_JUDGE_MARK = "Write `overwatch-verdict.json`"
+#: The early asks judge's prompt marker (`design_ops.EARLY_ASKS_JUDGE_MARK`).
+EARLY_ASKS_JUDGE_MARK = "You are the early asks judge."
 
 #: What a judge answers when the script has no verdict for it: the QA judge proceeds and
 #: the overwatch passes, with nothing listed.
@@ -549,6 +551,37 @@ def overwatch_judgment(verdict: str = "pass", must_fix: list | None = None,
     """A scripted design overwatch's answer: the JSON it writes to overwatch-verdict.json."""
     return json.dumps({"verdict": verdict, "must_fix": must_fix or [],
                        "follow_ups": follow_ups or [], "corrections": corrections or []})
+
+
+def early_asks_judgment(*items: dict, prompt: str = "") -> str:
+    """A scripted early asks judge's answer: the JSON it writes to early-asks.json.
+
+    With no ``items``, every ask is built: one ask, and one correction when the prompt
+    gives the person's corrections, each citing a line of the diff.
+    """
+    if not items:
+        built = [{"id": "ask-1", "kind": "ask", "text": "the brief", "built": True,
+                  "evidence": "changes.diff:1"}]
+        corrections = prompt.split("## Corrections the person gave when approving the design\n",
+                                   1)[-1].split("\n\n## What to read", 1)[0] if prompt else ""
+        if corrections.strip():
+            built.append({"id": "correction-1", "kind": "correction", "text": "the corrections",
+                          "built": True, "evidence": "changes.diff:1"})
+        items = tuple(built)
+    return json.dumps({"items": list(items)})
+
+
+def judge_finds_everything_built(ctx) -> dict:
+    """Stands in for the early asks judge's agent node on a walk of the spine's node
+    processes: writes the verdict a judge that found everything built writes."""
+    ctx.write_text("early-asks.json", early_asks_judgment())
+    return {}
+
+
+def not_built(text: str, kind: str = "ask", missing: str = "") -> dict:
+    """One item the scripted early asks judge found not built."""
+    return {"id": f"{kind}-9", "kind": kind, "text": text, "built": False, "evidence": "",
+            "missing": missing or f"nothing in the diff does {text!r}"}
 
 
 class Scripted(str):
@@ -601,11 +634,14 @@ class FakeModel:
 
     Design mode's QA judge and overwatch answer in JSON. A script with no verdict for a
     judge gets the default one (`_judge_answer`): scripts written before the judges, and
-    tests about something else, need not script them.
+    tests about something else, need not script them. The early asks judge, which runs
+    beside every attempt's first self-check, answers from ``early_asks`` in order, a
+    scripted verdict for each call, and finds everything built once that is empty.
     """
 
-    def __init__(self, answers: list[str]) -> None:
+    def __init__(self, answers: list[str], early_asks: list[str] | None = None) -> None:
         self.answers = list(answers)
+        self.early_asks = list(early_asks or [])
         self.prompts: list[str] = []
         #: The directory each completion was told to run in; see the walker's `_ask_model`.
         self.workdirs: list[object] = []
@@ -613,6 +649,9 @@ class FakeModel:
     def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
         self.prompts.append(prompt)
         self.workdirs.append(workdir)
+        if EARLY_ASKS_JUDGE_MARK in prompt:
+            queue = getattr(self, "early_asks", None)
+            return queue.pop(0) if queue else early_asks_judgment(prompt=prompt)
         beside = (next((text for marker, text in BESIDE_CHECK_REVIEWS if marker in prompt), None)
                   if BESIDE_CHECK in prompt else None)
         if beside is not None and self.answers and _is_emission(self.answers[0]):

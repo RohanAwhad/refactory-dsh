@@ -18,6 +18,8 @@ from refactory_dsh.create_ops import API, MARKER_RULE, RESEARCH_SCHEMA, SEVERITY
 from refactory_dsh.invocations import CHECK_PREP, CHECK_VERDICT, SELF_CHECK_RECORD
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
+from refactory_dsh.design_ops import (EARLY_ASKS_JUDGE_MARK, EARLY_ASKS_VERDICT,
+                                      FIRST_SELF_CHECK, SELF_CHECK_TICKET, UPDATED_TESTS)
 
 OPS = "refactory_dsh.design_ops"
 
@@ -113,6 +115,11 @@ QA_JUDGE_PROMPT = (
     "finding's format, an example or a review rule is not a finding, and neither is a "
     "reviewer's tally of its own findings. The check has already passed on this attempt "
     "and stays binding; do not run it again.\n\n"
+    "A test that was updated to pass after failing \u2014 one whose assertions were "
+    "removed, weakened, or made trivially true \u2014 is a must-fix unless the update "
+    "legitimately follows an ask or correction that retires the pinned behaviour. "
+    "The updated-tests section of qa-synthesized.md lists which tests were modified "
+    "after failing.\n\n"
     + _JUDGE_RULE
     + "A finding that is wrong (it does not hold against the code) is dismissed, with the "
     "reason. Two reviewers reporting the same defect is one must_fix item.\n\n"
@@ -128,6 +135,44 @@ QA_JUDGE_PROMPT = (
     "verdict is `redo`, the builder goes again and the map is made next round, so an "
     "empty one (`{\"requirements\": []}`) will do.\n"
     "{{qa_judge_reread}}"
+)
+
+#: Design mode's early asks judge (b48a): beside an attempt's first self-check, it reads the
+#: diff against the brief's asks and the approved corrections and says which are built.
+#: Presence, not quality: the QA judge's bar is unchanged. Its not-built items go back to
+#: the builder with the self-check's failures (`design_ops.gate_self_check`).
+EARLY_ASKS_PROMPT = (
+    "Artifact directory (absolute): {{artifact}}\n{{change}}\n\n"
+    "Brief: {{brief}}\n\n"
+    "## Corrections the person gave when approving the design\n{{gate_corrections}}\n\n"
+    "## What to read\n"
+    "`changes.diff` in the run directory holds this attempt's whole diff from its base. Read "
+    "the code at the artifact path wherever the diff needs it. Do not run the tests: they "
+    "are running beside you.\n\n"
+    + EARLY_ASKS_JUDGE_MARK + " The builder has just finished an attempt. For each ask in the "
+    "brief and each correction above (none when that section is empty), decide whether the "
+    "attempt builds it: whether the diff holds code that does what it asks, on the path the "
+    "brief names. A function that is defined but never called, a setting nothing reads, or "
+    "a fallback the ask removes but the diff keeps does not build an ask. Judge presence, "
+    "not quality: whether code that is there is right is the reviewers' question. Take the "
+    "brief's asks as a reviewer would, one item for each distinct thing it asks for.\n\n"
+    "Write `" + EARLY_ASKS_VERDICT + "` in the run directory holding one JSON object and "
+    "nothing else that is JSON:\n"
+    '{"items": [{"id": "ask-1", "kind": "ask" | "correction", "text": "<the ask or '
+    'correction, in a few words>", "built": true | false, "evidence": "<path:line in the '
+    'diff that builds it>", "missing": "<what is not built>"}]}\n'
+    "List every ask and every correction. A built item cites the path:line that builds it; "
+    "an item that is not built says what is missing.\n"
+    "{{early_asks_reread}}"
+)
+
+#: What the code reviewer and the QA director read about the tests the builder updated
+#: (dm-270): the lines its completion messages gave (`design_ops.note_updated_tests`).
+UPDATED_TESTS_NOTE = (
+    "## Tests the builder says it updated\n{{updated_tests}}\n"
+    "A test weakened to pass after it failed (assertions removed, weakened or made "
+    "trivially true) is BLOCKING unless the update follows an ask or correction that "
+    "retires the behaviour it pinned.\n\n"
 )
 
 #: Design mode's overwatch: verifies acceptance with the correction audit as evidence.
@@ -192,6 +237,17 @@ def prepare_check_iterations(knobs: dict[str, Any]) -> int:
     fixups = int(knobs.get("self_check_fixups", 2)) * attempts
     refusals = max(int(knobs.get("refusal_attempts", 3)) - 1, 0)
     return (reach + fixups + 1) * refusals + fixups + reach + 1
+
+
+def gate_self_check_iterations(knobs: dict[str, Any]) -> int:
+    """gate_self_check's iteration limit: one more than the most reloops and rereads it gives.
+
+    It runs once for each attempt's first self-check, which `prepare_check` routes, so at
+    most ``prepare_check_iterations`` times; each time it reloops at most once and has the
+    early asks judge asked again at most ``judge_rereads`` times. Past that, b39b's stop has
+    already ended the run: the limit never ends it, however many times the pair is used.
+    """
+    return (1 + int(knobs.get("judge_rereads", 1))) * prepare_check_iterations(knobs) + 1
 
 
 class DesignMode(Mode):
@@ -271,20 +327,26 @@ class DesignMode(Mode):
             **delivery.knobs(),
         }
 
+    #: The gates whose iteration limits follow the knobs' values.
+    _LIMITS = {"prepare_check": prepare_check_iterations,
+               "gate_self_check": gate_self_check_iterations}
+
     def graph(self) -> Graph:
-        """The graph, with prepare_check's iteration limit following the knobs' values."""
+        """The graph, with prepare_check's and gate_self_check's limits following the knobs."""
         graph = super().graph()
-        if "prepare_check" in graph.nodes:
-            graph.nodes["prepare_check"].max_iterations = prepare_check_iterations(self.values())
+        for name, limit in self._LIMITS.items():
+            if name in graph.nodes:
+                graph.nodes[name].max_iterations = limit(self.values())
         return graph
 
     def state_dict(self) -> dict[str, Any]:
-        """The state, with prepare_check's iteration limit following the knobs' values, so a
-        lowered run (the spine) gets the limit the walker does."""
+        """The state, with those limits following the knobs' values, so a lowered run (the
+        spine) gets the limits the walker does."""
         state = super().state_dict()
-        node = state["graph"].get("nodes", {}).get("prepare_check")
-        if node is not None:
-            node["max_iterations"] = prepare_check_iterations(self.values())
+        for name, limit in self._LIMITS.items():
+            node = state["graph"].get("nodes", {}).get(name)
+            if node is not None:
+                node["max_iterations"] = limit(self.values())
         return state
 
     def build(self) -> Graph:
@@ -623,7 +685,10 @@ class DesignMode(Mode):
                 "Write those blocks into emit.txt, with no prose outside them. Write nothing "
                 "but emit.txt: do not apply or test your change anywhere — the target, the "
                 "run's worktree or a copy — because materialise and the check do that after "
-                "you answer and send you the result. Then return a short completion message.\n"
+                "you answer and send you the result. Then return a short completion message; "
+                "when you updated an existing test because the brief or a correction changes "
+                "what it pins, end the message with one line: `Updated tests: <test id> "
+                "(follows <the ask or correction>), ...`.\n"
                 "{{probe_instruction}}\n"
                 + EMIT_CHECKLIST
             ),
@@ -636,10 +701,12 @@ class DesignMode(Mode):
         graph.add(repo_change.materialise_node(
             call=f"{OPS}:design_materialise",
             # check.txt: at the refusal bound, the check's receipt is put back for the draft
-            # (`design_ops._draft_for_stop`).
-            writes=("changes.diff", "changed-functions.json", "check.txt"),
+            # (`design_ops._draft_for_stop`). updated-tests.json: what the builder says it
+            # updated (`design_ops.note_updated_tests`).
+            writes=("changes.diff", "changed-functions.json", "check.txt", UPDATED_TESTS),
             produces=("artifact", "files", "commit", "change", "emission_refused",
-                      "changed_functions", "consecutive_refusals", "draft_delivery"),
+                      "changed_functions", "consecutive_refusals", "draft_delivery",
+                      "updated_tests"),
             knobs=("refusal_attempts",),
         ))
         # ── the check, beside the reviews ──
@@ -654,24 +721,69 @@ class DesignMode(Mode):
         check_writes = ("check.txt", "validation.txt", "authoring-evidence.json",
                         "check-record.json", "test-guardedness.json", CHECK_VERDICT)
         check_knobs = ("check_attempts", "check_timeout_s", "check_attempt_cap")
+        defaults = {name: knob.default for name, knob in self.declare().items()}
+        self_check_produces = (*check_produces, *repo_change.CHECK_PRODUCES,
+                               "review_feedback", "review_baseline",
+                               "self_check_fixup_count", "total_self_check_fixups_used",
+                               "draft_delivery", "early_asks_rereads", "early_asks_reread")
         graph.add(Node(
             "prepare_check", "gate", evaluator=f"{OPS}:prepare_check", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP, SELF_CHECK_RECORD),
-            produces=(*check_produces, *repo_change.CHECK_PRODUCES,
-                      "review_feedback", "review_baseline",
-                      "self_check_fixup_count", "total_self_check_fixups_used",
-                      "draft_delivery"),
+            writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP, SELF_CHECK_RECORD,
+                    SELF_CHECK_TICKET),
+            produces=self_check_produces,
             knobs=(*check_knobs, "self_check_fixups", "self_check_timeout_s"),
             # From the knobs, so the build loop's stop always comes first: 45 with the
             # defaults (`prepare_check_iterations`; `DesignMode.graph` follows the knobs).
-            max_iterations=prepare_check_iterations({name: knob.default
-                                                     for name, knob in self.declare().items()}),
-            notes="settle the commit the check and the reviews see, and run the tests the "
-                  "change can break first: a failure goes back to emit as a fix-up, "
+            max_iterations=prepare_check_iterations(defaults),
+            notes="settle the commit the check and the reviews see; an attempt's first "
+                  "emission goes to the whole check beside the early asks judge, and a "
+                  "fix-up's self-check runs here: a failure goes back to emit as a fix-up, "
                   "spending no attempt and running no review; a limit stop with an "
                   "applied commit and current check evidence goes to the report as a draft",
+        ))
+        # ── the first self-check, beside the early asks judge (b48a) ──
+        # An attempt's first emission runs the whole check once, so the builder sees every
+        # failure in one pass, while a judge reads the diff against the brief's asks and the
+        # approved corrections. gate_self_check sends both back as one fix-up. The judge is
+        # an optional branch: one that fails is asked again once, then the attempt goes on
+        # with the failure on record, never read as "everything is built".
+        graph.add(Node("fork_self_check", "fork",
+                       targets=("first_self_check", "early_asks_check"),
+                       optional_targets=("early_asks_check",),
+                       notes="run the whole check and the early asks judge at once"))
+        graph.add(Node(
+            "first_self_check", "op", call=f"{OPS}:first_self_check", role="validation",
+            resource_role="final_validation",
+            reads=(SELF_CHECK_TICKET,),
+            writes=(FIRST_SELF_CHECK,),
+            knobs=("check_timeout_s", "self_check_timeout_s"),
+            notes="run the brief's whole check once on the attempt and compare what fails "
+                  "with the base",
+        ))
+        graph.add(Node(
+            "early_asks_check", "agent",
+            prompt_template=EARLY_ASKS_PROMPT,
+            reads=("brief.json", "changes.diff"),
+            writes=(EARLY_ASKS_VERDICT,),
+            resource_role="final_validation",
+            notes="judge whether the attempt builds each ask and correction",
+        ))
+        graph.add(Node("join_self_check", "join", sources=("first_self_check",),
+                       notes="wait for the self-check and the judge"))
+        graph.add(Node(
+            "gate_self_check", "gate", evaluator=f"{OPS}:gate_self_check", role="validation",
+            resource_role="final_validation",
+            reads=(SELF_CHECK_TICKET, FIRST_SELF_CHECK, EARLY_ASKS_VERDICT),
+            writes=(*check_writes, *repo_change.CHECK_WRITES, CHECK_PREP, SELF_CHECK_RECORD),
+            produces=self_check_produces,
+            knobs=(*check_knobs, "self_check_fixups", "self_check_timeout_s", "judge_rereads"),
+            # Never the run's stop (`gate_self_check_iterations`; `DesignMode.graph`).
+            max_iterations=gate_self_check_iterations(defaults),
+            notes="send the attempt's failures and the asks the judge found not built back "
+                  "to emit as one fix-up, or go on to the reviews; ask an unreadable judge "
+                  "again once; a limit stop goes to the report as a draft",
         ))
         graph.add(Node(
             "check", "op", call=f"{OPS}:check_beside_reviews", role="validation",
@@ -753,6 +865,7 @@ class DesignMode(Mode):
                 "In a worktree it may edit or delete files rather than write them whole, so judge "
                 "the result: the files at the artifact path, and the diff named above.\n\n"
                 + _ACCEPTANCE_BASELINE
+                + UPDATED_TESTS_NOTE
                 + "You are the code reviewer. Read the delivered files against the design "
                 "and the brief: is every file the design names present, does it do what "
                 "the design says, and would it run? Trace input values through parsing "
@@ -785,6 +898,7 @@ class DesignMode(Mode):
                 "## The approved design\nRead the approved design from `design.md` in the run directory.\n\n"
                 "## The plan\nRead the synthesis strategy from `strategy.json` in the run directory.\n\n"
                 + _ACCEPTANCE_BASELINE
+                + UPDATED_TESTS_NOTE
                 + "You are the QA director. Design adversarial checks on the artifact — "
                 "the cases a friendly reviewer would not try — and run them. Vary one "
                 "semantic property at a time and inspect the actual output, not just "
@@ -976,6 +1090,15 @@ class DesignMode(Mode):
         graph.connect("prepare_check", "emit", condition="reloop")
         graph.connect("prepare_check", "fork_qa", condition="proceed")
         graph.connect("prepare_check", "report", condition="draft")
+        graph.connect("prepare_check", "fork_self_check", condition="first")
+        graph.connect("fork_self_check", "join_self_check")
+        graph.connect("early_asks_check", "join_self_check")
+        graph.connect("join_self_check", "gate_self_check")
+        graph.connect("gate_self_check", "emit", condition="reloop")
+        graph.connect("gate_self_check", "fork_qa", condition="proceed")
+        graph.connect("gate_self_check", "report", condition="draft")
+        # The judge asked again, with no builder round: the self-check's result stands.
+        graph.connect("gate_self_check", "fork_self_check", condition="reread")
         graph.connect("fork_qa", "join_qa")
         graph.connect("verifier", "join_qa")
         graph.connect("join_qa", "gate_check")
