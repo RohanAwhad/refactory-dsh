@@ -257,7 +257,7 @@ retried with the new one, without anyone editing the checkpoint.
 Follow with `refactory graph-control resume --run /absolute/run` to start a new
 owner. For a failed checkpoint, add `--acknowledge-failure` to the amend-command.
 
-### Acknowledge an executing, failed or paused checkpoint
+### Acknowledge an executing, failed, paused or stopped checkpoint
 
 When the owner dies while nodes are running, the checkpoint stays `executing`.
 When a run is stopped during an agent node, the checkpoint may be `failed` with
@@ -296,7 +296,24 @@ no failure acknowledged. An optional fork branch that is recorded missing, a
 verifier past its time limit say, settles its own marker on both runtimes, so
 that case no longer needs it.
 
-Acknowledge refuses while the owner or the supervisor is alive. When the
+`graph-control stop` alone lets a dispatched agent's worker finish and applies at
+the next boundary. When the worker dies while its owner lives on, though (a
+`refactory stop` SIGINT that reaches the worker, a kill, a crash), the spine
+records the failed node as retryable: the checkpoint is `ready` (or `halted`), the
+worker's marker stays pending, and recovery refuses it (dm-275). Acknowledge takes
+such a stopped checkpoint when a pending marker is there, the same way, with only
+the checkpoint's SHA; a stopped checkpoint with nothing pending has nothing to
+acknowledge and is refused. On a stopped checkpoint, a `stop` still queued for the
+owner that exited is set aside with the markers and journalled as withdrawn: the
+run already stopped, and the owner `resume` starts would otherwise apply it and
+halt again. On an executing, failed or paused checkpoint a queued stop stays
+queued for the next owner. So stop, `acknowledge`, `resume` continues the run with
+no file moved by hand. The
+walker has no graph controls: `graph-control` refuses a run without a spine
+checkpoint.
+
+Acknowledge refuses while the owner or the supervisor is alive, and an owner running
+as another user (whose signal probe is refused) counts as alive. When the
 supervisor stops on the dm-70 refusal, `start-failure.json` and
 `refactory status` name this command as the next step.
 

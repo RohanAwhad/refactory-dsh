@@ -50,6 +50,16 @@ def _settle_missing(workdir: Path, members: list[Node], error: str) -> None:
             "could not settle the delivery markers of %s: %s", ", ".join(agents), settle_error)
 
 
+def _record_missing(workdir: Path, node: str, error: str) -> None:
+    """Record why an optional branch's node failed, where the spine records it: the worker
+    and `refactory_dsh.run` write ``reviews/<node>-missing.txt`` with the error, and a gate
+    that reads the branch's output says why it is missing from it (the early asks judge's
+    error reaches `design_ops._read_early_asks` this way on both runtimes)."""
+    reviews = Path(workdir) / "reviews"
+    reviews.mkdir(parents=True, exist_ok=True)
+    (reviews / f"{node}-missing.txt").write_text(f"{error}\n")
+
+
 def _branches(executor: Executor, fork: Node, barrier: str) -> list[list[Node]]:
     """Admit disjoint flat branches before any branch can have side effects."""
     from .executor import ExecutionError
@@ -279,6 +289,7 @@ def run_fork(executor: Executor, node: Node) -> str | None:
             # step scan (Executor.run) does not fail the run on it.
             for step in child.steps:
                 if step.error:
+                    _record_missing(ctx.workdir, step.node, step.error)
                     step.reason, step.error = f"missing: {step.error}", None
             _settle_missing(ctx.workdir, branches[index], errors[index])
         executor.steps.extend(child.steps)

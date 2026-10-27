@@ -40,7 +40,11 @@ FIRST_CHECK_CACHE = Path(".refactory") / "first-check-cache.json"
 #: What the builder says it updated on the attempt in progress (`note_updated_tests`).
 UPDATED_TESTS = "updated-tests.json"
 #: The line of the builder's completion message that names the tests it updated.
-UPDATED_TESTS_LINE = _re.compile(r"(?im)^[\s>*_`-]*updated tests?\s*[:\-]\s*(.+?)\s*$")
+UPDATED_TESTS_LINE = _re.compile(
+    r"(?im)^[\s>`-]*(?:[*+]\s+)?(?P<em>\*\*|__|\*|_)?updated tests?(?:(?P=em))?\s*[:\-]\s*"
+    r"(?:(?P=em))?\s*(.+?)\s*$")
+#: Paired markdown emphasis, widest first.
+_EMPHASIS = ("**", "__", "*", "_")
 
 #: The reason prepare_design writes when the run is a refinement.  classify_scale
 #: recognises a refine by this constant rather than reading research_scope (which
@@ -2006,8 +2010,9 @@ def _settle_self_check(ctx: Any, prepass: Any, entry: dict[str, Any], *, base: s
     The attempt's own failures, a failure that named no test, and the asks and corrections
     the early asks judge found not built all go back to emit as a fix-up, which spends no
     attempt and runs no review, at most ``self_check_fixups`` times an attempt and that
-    many times ``check_attempts`` a run. Past the bound they are the early stop, which
-    spends the attempt. Anything else -- a pass, failures the base has too, or a result
+    many times ``check_attempts`` a run. Past the bound, failures are the early stop, which
+    spends the attempt; items the judge found not built, alone, go on to the reviews, which
+    are told of them (dm-276). Anything else -- a pass, failures the base has too, or a result
     that says nothing (a timeout, a runner it cannot target, nothing collected) -- goes on
     to the reviews and the whole check. The first self-check's whole-check result is kept
     for the check beside the reviews only when it went on from there (``first_result``):
@@ -2029,17 +2034,23 @@ def _settle_self_check(ctx: Any, prepass: Any, entry: dict[str, Any], *, base: s
                                      not_built=not_built, unparsed=unparsed)
         why = (f"{used} of {allowed} fix-ups used on this attempt" if used >= allowed
                else f"{run_used} of {run_cap} fix-ups used on this run")
-        _record_self_check(ctx, {**entry, "outcome": "exhausted", "why": why})
-        _end_fixups(ctx)
-        # The base's failures stay out of what the next check counts as this change's.
-        prior = {**prev_record, "inherited": sorted({*prev_record.get("inherited", []), *inherited})}
-        said = [prepass.digest_text, unparsed,
-                "\n".join(["Asks and corrections the early asks judge found not built:",
-                           *_not_built_lines(not_built)]) if not_built else ""]
-        stop = replace(prepass, digest_text="\n\n".join(part for part in said if part),
-                       targeted_command=prepass.targeted_command or "\n".join(prepass.commands)
-                       or None)
-        return _early_stop(ctx, stop, prior, saved_base_unavailable)
+        if failing or unparsed:
+            _record_self_check(ctx, {**entry, "outcome": "exhausted", "why": why})
+            _end_fixups(ctx)
+            # The base's failures stay out of what the next check counts as this change's.
+            prior = {**prev_record,
+                     "inherited": sorted({*prev_record.get("inherited", []), *inherited})}
+            said = [prepass.digest_text, unparsed,
+                    "\n".join(["Asks and corrections the early asks judge found not built:",
+                               *_not_built_lines(not_built)]) if not_built else ""]
+            stop = replace(prepass, digest_text="\n\n".join(part for part in said if part),
+                           targeted_command=prepass.targeted_command
+                           or "\n".join(prepass.commands) or None)
+            return _early_stop(ctx, stop, prior, saved_base_unavailable)
+        # dm-276: past the budget, items the judge found not built alone are no reason to
+        # spend the attempt unreviewed, or to call a check that passed failing. They go on to
+        # the reviews, listed for the QA judge and the overwatch (`_not_built_section`).
+        entry = {**entry, "not_built_to_reviews": why}
     outcome = ("nothing selected" if not prepass.selection else
                "inherited" if inherited else
                "pass" if prepass.ran and not prepass.cut_ids and not prepass.notes else
@@ -2629,6 +2640,7 @@ def synthesize_qa(ctx: Any) -> dict[str, Any]:
         + "## The diff stat\n\n```\n" + _diff_stat(ctx) + "\n```\n\n"
         + "## The design's Changes\n\n" + (changes or "(design.md has no Changes section)") + "\n"
     )
+    body += _not_built_section(ctx)
     body += _updated_tests_section(ctx)
     ctx.write_text(QA_SYNTHESIS, body)
     return {"qa": body, "qa_missing": len(missing),
@@ -2827,7 +2839,7 @@ def note_updated_tests(ctx: Any) -> dict[str, Any]:
             said = (ctx.workdir / str(receipt["final_response"])).read_text()
         except (OSError, UnicodeDecodeError):
             said = ""
-    lines = [match.group(1).strip() for match in UPDATED_TESTS_LINE.finditer(said)]
+    lines = [_plain(match.group(2)) for match in UPDATED_TESTS_LINE.finditer(said)]
     lines = [line for line in lines if line.strip(" .`*").lower() not in ("", "none", "no", "n/a")]
     attempt = int(ctx.facts.get("attempts_used") or 0) + 1
     record = ctx.read_json(UPDATED_TESTS, {}) if ctx.exists(UPDATED_TESTS) else {}
@@ -2837,6 +2849,48 @@ def note_updated_tests(ctx: Any) -> dict[str, Any]:
     ctx.write_json(UPDATED_TESTS, record)
     return {"updated_tests": "\n".join(f"- {line}" for line in record["said"])
             or "(the builder named no test it updated)"}
+
+
+def _not_built_section(ctx: Any) -> str:
+    """``## Asks and corrections not built`` for the QA judge and the overwatch, who both read
+    the synthesis: what the early asks judge found not built on this attempt when the
+    self-check's fix-up budget was spent and the attempt went on to the reviews (dm-276)."""
+    commit = str(ctx.facts.get("commit") or "")
+    went_on = [entry for entry in _self_checks(ctx)
+               if entry.get("not_built_to_reviews") and entry.get("commit") == commit]
+    if not commit or not went_on:
+        return ""
+    entry = went_on[-1]
+    return "\n".join([
+        "", "", "## Asks and corrections not built", "",
+        "The early asks judge read this attempt's diff against the brief and the approved "
+        "corrections and found these not built. The self-check's fix-ups were spent "
+        f"({entry['not_built_to_reviews']}), so the attempt came to the reviews with them "
+        "rather than stopping: judge each one. An ask or correction that is not built holds "
+        "the change back.",
+        *entry.get("not_built", []), ""])
+
+
+def _unwrap(text: str) -> str:
+    """``text`` without emphasis markers that wrap the whole of it in pairs (``**x**``,
+    ``__x__``, ``*x*``, ``_x_``); a lone ``_`` that starts or ends a name stays."""
+    while True:
+        for marker in _EMPHASIS:
+            if (len(text) > 2 * len(marker) and text.startswith(marker)
+                    and text.endswith(marker)):
+                text = text[len(marker):-len(marker)].strip()
+                break
+        else:
+            return text
+
+
+def _plain(line: str) -> str:
+    """An ``Updated tests:`` line without its markdown: code spans, and emphasis paired
+    around the whole line or around one word of it. A builder that writes
+    ``**Updated tests:** **<id>**`` names ``<id>``; a test path that starts or ends with
+    ``_`` keeps it."""
+    text = _unwrap(line.replace("`", "").strip())
+    return " ".join(_unwrap(word) for word in text.split())
 
 
 def _updated_tests_section(ctx: Any) -> str:
