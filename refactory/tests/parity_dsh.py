@@ -23,12 +23,16 @@ completion, or an object:
 - ``judge``: a judgment built from what the run holds — ``early_asks`` (every ask built,
   and every correction the prompt gives) or ``intent_audit`` (every requirement of
   `authoring-evidence.json` passed, written to `intent-audit.json`);
+- ``hold_s``: take that long to answer;
 - ``repo_questions``: append the repository-questions record a reviewer gives for the
   functions in `changed-functions.json`.
 
 Every completion is appended to ``DIR/calls.jsonl``: the node, its visit, the prompt it was
-given on stdin, and its working directory. The test compares the prompts; the working
-directory is kept for reading a failure, never compared (agent workspaces, #516, move it).
+given on stdin, its working directory, and the route it was started on: dsh's own
+arguments with each ``--patch`` file's content, the route variables, the worker context
+and the receipt's role and requested route. The test compares the prompts and the routes;
+the working directory is kept for reading a failure, never compared (agent workspaces,
+#516, move it).
 """
 
 from __future__ import annotations
@@ -37,20 +41,44 @@ import fcntl
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 #: The early asks judge's corrections section (`design_ops` renders it from the facts).
 CORRECTIONS = "## Corrections the person gave when approving the design\n"
 
 
-def _node() -> str:
+def _receipt() -> dict:
     receipt = os.environ.get("REFACTORY_WORKER_RECEIPT", "")
     if not receipt:
-        return ""
+        return {}
     try:
-        return str(json.loads(Path(receipt).read_text()).get("node_id") or "")
+        found = json.loads(Path(receipt).read_text())
     except (OSError, ValueError):
-        return ""
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+#: The variables a completion's route reaches dsh through.
+ROUTE_ENV = ("REFACTORY_WORKER_BACKEND", "REFACTORY_MODEL_PROVIDER", "REFACTORY_MODEL_ID",
+             "REFACTORY_MODEL_EFFORT")
+
+
+def _route(argv: list[str], receipt: dict) -> dict:
+    """What this completion runs on: its arguments, patches, route and worker context."""
+    patches = {}
+    for index, part in enumerate(argv[:-1]):
+        if part == "--patch":
+            try:
+                patches[argv[index + 1]] = Path(argv[index + 1]).read_text()
+            except OSError as error:
+                patches[argv[index + 1]] = f"<unreadable: {error}>"
+    try:
+        context = json.loads(os.environ.get("REFACTORY_WORKER_CONTEXT") or "{}")
+    except ValueError:
+        context = {"unreadable": os.environ.get("REFACTORY_WORKER_CONTEXT")}
+    return {"argv": argv, "patches": patches, "env": {name: os.environ.get(name) for name in ROUTE_ENV},
+            "context": context, "role": receipt.get("role"), "requested_route": receipt.get("requested_route")}
 
 
 def _early_asks(prompt: str) -> str:
@@ -123,7 +151,9 @@ def main(argv: list[str]) -> int:
                         "--", *after])
     prompt = sys.stdin.read()
     cwd = Path.cwd()
-    node = _node()
+    receipt = _receipt()
+    node = str(receipt.get("node_id") or "")
+    route = _route(rest, receipt)
     script = json.loads((scenario / "scenario.json").read_text())
     log = scenario / "calls.jsonl"
     with open(scenario / "calls.lock", "w") as lock:
@@ -132,7 +162,8 @@ def main(argv: list[str]) -> int:
         calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
         visit = sum(1 for call in calls if call["node"] == node)
         with open(log, "a") as out:
-            out.write(json.dumps({"node": node, "visit": visit, "cwd": str(cwd), "prompt": prompt}) + "\n")
+            out.write(json.dumps({"node": node, "visit": visit, "cwd": str(cwd), "prompt": prompt,
+                                  "route": route}) + "\n")
     answers = script.get(node)
     if not answers:
         print(f"parity_dsh: no scripted answer for node {node!r}", file=sys.stderr)
@@ -150,6 +181,9 @@ def main(argv: list[str]) -> int:
         text = _early_asks(prompt)
     elif judge == "intent_audit":
         _intent_audit(cwd)
+    if answer.get("hold_s"):
+        # A completion that takes a while, so concurrent sessions overlap visibly.
+        time.sleep(float(answer["hold_s"]))
     if answer.get("repo_questions"):
         text = _repo_questions(cwd, text)
     sys.stdout.write(text)

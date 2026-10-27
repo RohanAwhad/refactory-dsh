@@ -15,11 +15,15 @@
  *
  * FILE holds `answers`: what the person answers at user gates, in the order the run
  * asks them, across every owner of the run. Each is a verdict, or `{ selected, custom }`
- * for a verdict with a note. A gate asked with no answer left leaves the run waiting for
- * the person, and the owner exits. Each question is appended to `questions.log` beside
- * FILE.
+ * for a verdict with a note. A gate asked with no answer left cannot be asked here, as a
+ * headless owner's cannot: the question is refused, the spine records the run `refused`
+ * with the commands that answer it elsewhere, and the owner exits. Each question is
+ * appended to `questions.log` beside FILE.
+ *
+ * Commands run asynchronously, as the shell service runs them, so a fork's branches are
+ * dispatched at once and their workers write the run's facts concurrently.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -57,35 +61,42 @@ ctx.on('user-questions/request', request => {
   const asked = existsSync(questions) ? readFileSync(questions, 'utf8').split('\n').filter(Boolean).length : 0
   for (const question of request.questions) appendFileSync(questions, `${question.id}\n`)
   const answer = answers[asked]
-  if (answer === undefined) {
-    // Nobody answers here: the spine recorded `waiting_user` before asking.
-    setImmediate(() => process.exit(0))
-    return new Promise(() => {})
-  }
+  if (answer === undefined) return Promise.reject(new Error('nobody is at this run to answer'))
   const { selected, custom } = typeof answer === 'string' ? { selected: answer, custom: '' } : answer
   return Promise.resolve({
     answers: request.questions.map(question => ({ id: question.id, selected: [selected], custom: custom ?? '' })),
   })
 })
+/** One command, without blocking the event loop, so concurrent dispatches run at once. */
+function run(spec) {
+  return new Promise(done => {
+    // No startup files: a shell that read the person's profile would rewrite PATH.
+    const child = spawn('bash', ['--norc', '--noprofile', '-c', spec.command], {
+      cwd: spec.workdir, env: { ...process.env, ...spec.env }, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const out = []
+    const err = []
+    child.stdout.on('data', chunk => out.push(chunk))
+    child.stderr.on('data', chunk => err.push(chunk))
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, spec.timeoutMs)
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+      done({
+        exitCode: code ?? 1, signal, timedOut, aborted: false, timeoutMs: spec.timeoutMs,
+        stdout: { text: Buffer.concat(out).toString('utf8'), truncated: false },
+        stderr: { text: Buffer.concat(err).toString('utf8'), truncated: false },
+      })
+    })
+  })
+}
+
 ctx.provide('shell', {
   resolve: spec => ({
     command: spec.command, workdir: spec.workdir ?? workdir, timeoutMs: spec.timeoutMs ?? 600_000,
     onExpiry: 'kill', stdoutMaxBytes: 10_000_000, env: spec.env, sandboxPolicy: spec.sandboxPolicy,
   }),
-  execute: async spec => ({
-    result: async () => {
-      // No startup files: a shell that read the person's profile would rewrite PATH.
-      const done = spawnSync('bash', ['--norc', '--noprofile', '-c', spec.command], {
-        encoding: 'utf8', cwd: spec.workdir, timeout: spec.timeoutMs, env: { ...process.env, ...spec.env },
-        maxBuffer: 64 * 1024 * 1024,
-      })
-      return {
-        exitCode: done.status ?? 1, signal: done.signal, timedOut: done.error?.code === 'ETIMEDOUT', aborted: false,
-        timeoutMs: spec.timeoutMs, stdout: { text: done.stdout ?? '', truncated: false },
-        stderr: { text: done.stderr ?? '', truncated: false },
-      }
-    },
-  }),
+  execute: async spec => ({ result: () => run(spec) }),
 })
 // The spine row as the graph profile's patch configures it.
 await ctx.plugin(spinePlugin, {
@@ -110,6 +121,12 @@ for (;;) {
   if (gate === undefined) {
     throw new Error(`graph owner has no worker for ${(next.nodes ?? []).map(node => node.id).join(', ')}: ${JSON.stringify(next).slice(0, 2000)}`)
   }
-  await call('wf_verdict', { gate: gate.id })
+  try {
+    await call('wf_verdict', { gate: gate.id })
+  } catch (error) {
+    // As the graph runner ends a run that did not finish: the reason, and a failure exit.
+    process.stderr.write(`the graph did not finish: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.exit(1)
+  }
 }
 process.exit(0)
