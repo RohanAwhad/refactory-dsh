@@ -127,8 +127,16 @@
 .level input { margin: 0; accent-color: var(--rf-accent); }
 /* The viewport is as tall as the whole history and scrolls the drawn window
    inside it; `overflow-anchor: none` keeps the browser from re-anchoring a list
-   whose rows are translated rather than re-created. */
+   whose rows are translated rather than re-created.
+   Each row is exactly ROW_HEIGHT (24px, defined in RunActivity.tsx): the
+   translate offset and the scroll-to-index mapping are arithmetic on that
+   constant, so a row that grew would put every row after it out of step with
+   the scrollbar. A long record is therefore clipped and ellipsised instead of
+   wrapped — the full text is still in the record, and a person can widen the
+   panel. */
 .historyViewport { max-height: 320px; overflow-y: auto; overflow-anchor: none; }
+.historyViewport .recorded { gap: 0; }
+.historyViewport .recorded > li { box-sizing: border-box; height: 24px; padding: 4px 0; line-height: 15px; border-bottom: 1px solid var(--rf-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .activityMeta { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 12px; margin: 0; font-size: 12px; }
 .activityMeta dt { color: var(--rf-muted); }
 .activityMeta dd { margin: 0; overflow-wrap: anywhere; }

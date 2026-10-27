@@ -278,3 +278,38 @@ Screenshots: `/tmp/pr-shots/live-{standard,verbose,compact}.png` (panel section,
 ## Still a human check
 Whether virtual scrolling *feels* right, and whether the scrollbar thumb is usable on a
 269,900-record run. Both are taste/usability judgements that a screenshot cannot settle.
+
+---
+
+# Layout defect on a live run, and its fix (2026-10-27)
+
+Found by a human reading a live 437-record run in the panel: the activity history opened with a
+large empty gap above its first row. Three separate causes compounded.
+
+| Cause | How it was found | Measured before | After |
+|---|---|---|---|
+| Row height was assumed, not enforced | `RunActivity.tsx` declares `ROW_HEIGHT = 24` with the comment "a row index is a scroll position", but `.recorded > li` was `padding: 8px 0` in an `8px`-gap flex column | row 35.59px + 8px gap = **43.59px** | **24px**, gap 0 |
+| Reserved height disagreed with the content | `clientHeight 320`, `scrollHeight 15,503` vs inline `height: 11,592px` | mismatch | **12,696 = 12,696** |
+| The viewport was never moved to the drawn slice | the slice was translated by `first * ROW_HEIGHT` while the element stayed `scrollTop 0` | first row **7,896px** below the viewport top | **0px** |
+
+Fix:
+- rows are fixed-height (`height: 24px; box-sizing: border-box`), gap 0, and a long record
+  ellipsises instead of wrapping — the translate offset and the scroll-to-index mapping are
+  arithmetic on `ROW_HEIGHT`, so a row that grew put every later row out of step with the scrollbar;
+- the viewport is positioned at the drawn slice when the history **opens or the level changes**
+  (`key={level}` + a ref), deliberately **not** on a page arrival, which would yank a reader who
+  is looking further back;
+- `standard` still opens at the newest records (SD-2) and both levels follow the reader once they
+  scroll (SD-12).
+
+Verified on the live run (529 records by then): `scrollTop 7896`, `firstRowTop == viewportTop`
+(both 2834.1), newest records drawn, **no console errors**.
+
+Regression test added (`body.client.spec.tsx`): the slice index the element reports and the offset
+it is positioned at must agree, which is exactly what the reported gap violated. The first attempt
+at this fix used a `ref` keyed on `level + events.length`; it broke an existing scroll test by
+repositioning on every page arrival, which is why the key carries the level only.
+
+**Lesson worth keeping:** the panel's DOM-bound tests all passed throughout — 199 of them — while
+the layout was unreadable, because none asserted anything about position. A bound on *how many*
+rows are drawn says nothing about *where* they are.

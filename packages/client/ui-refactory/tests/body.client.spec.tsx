@@ -355,6 +355,31 @@ describe('the activity levels of the run the picker reads', () => {
     expect(rows(view).length).toBe(RENDER_WINDOW)
   })
 
+  // Reported from a live 437-record run: the history opened with a large empty
+  // gap above its first row. The drawn slice is translated to its position in
+  // the history, but the viewport stayed scrolled to the top, so the rows began
+  // far below the visible area. Rendering therefore has to position the viewport
+  // at the slice, which is asserted here from the two values that must agree.
+  it('positions the viewport at the slice it draws, so the rows are in view', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      activityLevel: 'standard',
+      activity: { after: 0, cursor: 437, events: ACTIVITY(0, 437, 437).events, total: 437, paged: true },
+      frame: { kind: 'ready', value: { ...FRAME, activity: live(0, 437, 437) } },
+    })
+    const viewport = at(view, 'data-refactory-activity-history').querySelector('[role="group"]') as HTMLElement
+    const indices = rows(view).map(row => Number(row.getAttribute('data-refactory-activity-row')))
+    // Standard still opens at the newest records (SD-2)...
+    expect(indices[0]).toBe(437 - RENDER_WINDOW)
+    // ...and the slice index the element reports must be the one whose offset the
+    // viewport is scrolled to. A view scrolled to 0 while the slice sits at row
+    // 237 is the reported gap.
+    const slice = Number(viewport.getAttribute('data-refactory-activity-window'))
+    expect(slice).toBe(437 - RENDER_WINDOW)
+    expect(viewport.getAttribute('data-refactory-activity-offset')).toBe(String(slice * 24))
+  })
+
   it('scrolls to a row near the end, renders it, and still keeps the count bounded', () => {
     const { view, instance } = mountBody({
       choices: { kind: 'ready', value: CHOICES },

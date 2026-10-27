@@ -120,10 +120,18 @@ function HistoryWindow({
   readonly t: TranslateNS<'sidebarRefactory'>
 }): ReactNode {
   const events = held.events
-  // `standard` draws the newest window (SD-2); `verbose` draws the same window
-  // over the whole held history, wherever the reader has scrolled to (SD-12).
+  // `standard` opens at the newest records (SD-2); once the reader scrolls,
+  // both levels follow the scroll position (SD-12), so the drawn slice is always
+  // where the reader is looking rather than pinned to one end of the history.
   const last = Math.max(0, events.length - RENDER_WINDOW)
-  const first = level === 'verbose' ? Math.min(Math.max(0, scroll), last) : last
+  const requested = level === 'verbose' ? scroll : Math.max(scroll, last)
+  const first = Math.min(Math.max(0, requested), last)
+  // The spacer puts the drawn slice at its position in the whole history, so the
+  // scrollbar spans the run. The viewport is scrolled to that same position:
+  // translating without scrolling left a fresh view scrolled to the top (0) with
+  // its rows thousands of pixels down, which read as a large empty gap above the
+  // first history row.
+  const offset = first * ROW_HEIGHT
   return (
     <div
       className={css.historyViewport}
@@ -134,6 +142,16 @@ function HistoryWindow({
       role="group"
       aria-label={t('activity.history')}
       data-refactory-activity-window={first}
+      // The offset the viewport is kept at. Exposed so a test can assert that the
+      // scroll position and the drawn slice agree, which is what the reported
+      // empty gap above the first row violated.
+      data-refactory-activity-offset={offset}
+      // Opening the history and switching levels move the drawn slice without a
+      // scroll event, so the viewport is placed at it then. A page arrival must
+      // NOT reposition: the reader may be reading further back, and the key
+      // therefore carries the level only.
+      key={level}
+      ref={(node) => { if (node !== null && node.scrollTop !== offset) node.scrollTop = offset }}
       onScroll={(event) => {
         // Only the row index travels, and only when the reader has moved a whole
         // window of rows: a render per scrolled pixel would be work proportional
@@ -142,7 +160,7 @@ function HistoryWindow({
         if (row !== first) onScroll(row)
       }}
     >
-      <ol className={css.recorded} style={{ transform: `translateY(${first * ROW_HEIGHT}px)` }}>
+      <ol className={css.recorded} style={{ transform: `translateY(${offset}px)` }}>
         {events.slice(first, first + RENDER_WINDOW).map((event, index) => (
           <ActivityRow key={first + index} event={event} index={first + index} />
         ))}
