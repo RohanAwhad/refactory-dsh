@@ -573,3 +573,12 @@ def test_a_pitfall_answered_under_its_own_heading_is_quoted_with_the_block_under
         "PIT-001": [("Anti-patterns to avoid",
                      "PIT-001 (high) - Verifier format The verifier reads it at `file.py:1`.")],
         "PIT-002": [("Anti-patterns to avoid", "PIT-002 (low) Other.")]}
+
+
+def test_a_cross_reference_under_a_pitfalls_heading_stays_in_its_quote():
+    """Review of #519: "Unlike PIT-002, ..." is PIT-001's answer, not the start of PIT-002's."""
+    design = _contract(anti="### PIT-001 (high)\n\nUnlike PIT-002, fixed at `file.py:1`.\n\n"
+                            "- **PIT-002** (low): see \u00a7 Changes")
+    quotes = _citations(design, _pit(), _pit("PIT-002", "low"))
+    assert quotes["PIT-001"] == [("Anti-patterns to avoid",
+                                  "PIT-001 (high) Unlike PIT-002, fixed at `file.py:1`.")]

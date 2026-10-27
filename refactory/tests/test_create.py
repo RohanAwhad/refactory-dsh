@@ -846,13 +846,43 @@ def test_an_emit_path_that_cannot_be_package_relative_is_refused():
 
 @pytest.mark.parametrize("char, named", [
     ("\x7f", "U+007F (a control character)"), ("\x9b", "U+009B (a control character)"),
-    ("\u202e", "U+202E RIGHT-TO-LEFT OVERRIDE"), ("\u200b", "U+200B ZERO WIDTH SPACE"),
-], ids=["DEL", "C1-control", "bidi-override", "zero-width-format"])
+    ("\u202e", "U+202E RIGHT-TO-LEFT OVERRIDE"), ("\u2066", "U+2066 LEFT-TO-RIGHT ISOLATE"),
+    ("\u200b", "U+200B ZERO WIDTH SPACE"), ("\ufeff", "U+FEFF ZERO WIDTH NO-BREAK SPACE"),
+], ids=["DEL", "C1-control", "bidi-override", "bidi-isolate", "zero-width-space", "byte-order-mark"])
 def test_an_emit_path_holding_a_control_or_format_character_is_refused_by_name(char, named):
     """dm-208: create mode's path check refuses what `_artifact_paths` refuses."""
     import re as _re
     with pytest.raises(ValueError, match=_re.escape(named)):
         create_ops._package_relative(f"modes/count{char}er.py", NAME)
+    # A joiner Persian names are written with is not one of them.
+    persian = "docs/\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.md"
+    assert create_ops._package_relative(persian, NAME) == persian
+
+
+@pytest.mark.parametrize("bad_path, said", [
+    ("mode\u202e.py", "U+202E RIGHT-TO-LEFT OVERRIDE"),
+    ("../outside.py", "does not resolve to a file inside the package root"),
+    ("/etc/outside.py", "which is not a path inside the package"),
+], ids=["bidi", "dotdot", "absolute"])
+def test_create_fast_sends_a_path_it_cannot_place_back_to_emit(tmp_path, monkeypatch, bad_path, said):
+    """Review of #519: a path `_package_relative` refuses goes back to emit with the reason,
+    as a malformed header does, instead of ending the run; nothing of it is written."""
+    from refactory_dsh.fast import CreateFastMode
+
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    name = "fast_counter"
+    mode = CreateFastMode()
+    state = mode.state_dict()
+    state["knobs"]["single_shot"]["value"] = True
+    mode.load_state_dict(state)
+    bad_emission = render(good_files(name)) + f"===FILE: {bad_path}===\ncontent\n"
+    client = FakeModel([PLAN, bad_emission, render(good_files(name)), QA_PASS])
+    run = mode.run(tmp_path / "run", model=client, task={"name": name, "brief": "a reusable counter"})
+    assert run.exit_ok, run.error
+    emit_prompts = [p for p in client.prompts if "emit the package" in p]
+    assert len(emit_prompts) == 2, "emit must run twice"
+    assert said in emit_prompts[-1], "the retry prompt must say why the path was refused"
+    assert not list(tmp_path.rglob("outside.py")) and not list(tmp_path.rglob("mode\u202e.py"))
 
 
 def test_the_missing_manifest_reason_names_the_root_and_what_is_there(tmp_path):

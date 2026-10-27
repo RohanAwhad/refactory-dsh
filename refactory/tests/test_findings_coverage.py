@@ -550,3 +550,24 @@ def test_a_finding_answered_under_its_own_heading_is_addressed():
     addressed, _, missing = finding_coverage(design, [_finding(n) for n in (1, 2, 3, 4)])
     assert addressed == ['FND-foo-1', 'FND-foo-4']
     assert missing == ['FND-foo-2', 'FND-foo-3']
+
+
+def test_a_cross_reference_inside_a_headings_block_does_not_end_the_entry():
+    """Review of #519: a line that mentions another finding stays in the block; only a line
+    that starts with one (or a heading) begins the next entry."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n'
+             '### FND-foo-1\n\nSee also FND-foo-2 for context.\n\nAddressed at `file.py:1`.\n\n'
+             '### FND-foo-2\n\nNothing.\n')
+    addressed, _, missing = finding_coverage(design, [_finding(1), _finding(2)])
+    assert addressed == ['FND-foo-1'] and missing == ['FND-foo-2']
+
+
+def test_a_hash_line_in_a_code_fence_does_not_end_a_headings_entry():
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n'
+             '### FND-foo-1\n\n```python\n# the key is read once\nkey = read()\n```\n\n'
+             'Addressed at `file.py:1`.\n')
+    assert finding_coverage(design, [_finding()]) == (['FND-foo-1'], [], [])

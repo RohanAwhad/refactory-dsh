@@ -4275,6 +4275,19 @@ def test_a_push_refused_for_a_missing_workflow_scope_says_so_and_how_to_finish(g
     assert push in capsys.readouterr().err
 
 
+def test_a_github_app_without_the_workflows_permission_is_named_as_a_permission():
+    """GitHub words a GitHub App's refusal with a permission, not a scope."""
+    said = delivery._scope_refusal(
+        "git push failed in /w: To https://github.com/acme/app.git\n ! [remote rejected] abc -> b "
+        "(refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` "
+        "without `workflows` permission)\n")
+    assert said == ("GitHub refused the push because it changes .github/workflows/ci.yml, and the "
+                    "credential delivery pushed with lacks the `workflows` permission that changing a "
+                    "workflow file takes; run the finishing commands where a GitHub credential with "
+                    "the `workflows` permission is signed in")
+    assert delivery._scope_refusal("! [rejected] abc -> b (non-fast-forward)") == ""
+
+
 def test_no_worktree_writes_no_pr_text(github, tmp_path, monkeypatch):
     """A run with no worktree writes no pull-request.md, no title, and no pr_text.
 

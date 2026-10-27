@@ -70,12 +70,19 @@ def code_spans(text: str) -> list[str]:
 _HEADING = re.compile(r"(#{1,6})\s+(.*)")
 
 
+#: What may come before the id that starts an entry: heading marks, a bullet or a number,
+#: then bold or italic marks and a backtick.
+_ENTRY_LEAD = re.compile(r"\s*(?:#{1,6}\s+)?(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__|\*|_)?`?")
+
+
 def entry_lines(lines: list[str], index: int, ids: re.Pattern[str]) -> list[str]:
     """The entry that ``lines[index]``, a line naming an id, starts (dm-219).
 
     A heading's entry is the heading and the block under it, up to the next heading of the
-    same or a higher level or the next line naming another id that ``ids`` matches. Any
-    other line is its own entry. A ``#`` line inside a code fence is code, not a heading.
+    same or a higher level, or the next line that starts with another id that ``ids``
+    matches (after any heading marks, bullet, or bold marks): an entry of its own. A line
+    that only mentions another id, as a cross-reference does, stays in the block. Any other
+    line is its own entry. A ``#`` line inside a code fence is code, not a heading.
     """
     found = _HEADING.match(lines[index].strip())
     if found is None:
@@ -89,7 +96,8 @@ def entry_lines(lines: list[str], index: int, ids: re.Pattern[str]) -> list[str]
             fenced = not fenced
         elif not fenced and (heading := _HEADING.match(stripped)) and len(heading[1]) <= level:
             break
-        if _ids_in(line, ids) - own:
+        elif not fenced and (starts := ids.match(line, _ENTRY_LEAD.match(line).end())) \
+                and starts.group(0) not in own:
             break
         entry.append(line)
     return entry

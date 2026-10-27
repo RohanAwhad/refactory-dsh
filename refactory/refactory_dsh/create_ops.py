@@ -822,6 +822,13 @@ def materialise(ctx: Any) -> dict[str, Any]:
             "nothing to write"
         )
     name = str(ctx.facts["name"])
+    # Every path is placed before anything is removed or written, and a path that cannot be
+    # placed goes back to emit like a malformed header rather than ending the run.
+    try:
+        placed = {relative: _package_relative(relative, name) for relative in files}
+    except ValueError as exc:
+        from refactory_dsh.repo_change import _count_refusal
+        return _count_refusal(ctx, exc)
     # When the run has a staging directory (from prepare_create), write there
     # instead of the shared .factory/packages/<name>/.
     staging_root = ctx.facts.get("package_root")
@@ -834,7 +841,7 @@ def materialise(ctx: Any) -> dict[str, Any]:
     root.mkdir(parents=True)
     written: list[str] = []
     for relative, content in files.items():
-        inside = _package_relative(relative, name)
+        inside = placed[relative]
         refuse_truncated(Path(inside), content)
         target = root / inside
         if not target.resolve().is_relative_to(root.resolve()):
