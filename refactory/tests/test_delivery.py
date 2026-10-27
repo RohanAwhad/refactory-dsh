@@ -1273,9 +1273,30 @@ def _published(github: Path, slug: str, source: Path) -> Path:
     bare.parent.mkdir(parents=True, exist_ok=True)
     git(bare.parent, "init", "-q", "--bare", "-b", "main", bare.name)
     (github / f"{slug}.json").write_text(json.dumps({"visibility": "private", "default_branch": "main"}))
-    git(source, "remote", "add", "origin", f"https://github.com/{slug}.git")
+    # Pushed before origin is added: from git 2.56 a push to a URL that matches a configured
+    # remote also updates its tracking refs, and the person's clone here has none.
     git(source, "push", "-q", f"https://github.com/{slug}.git", "main:refs/heads/main")
+    git(source, "remote", "add", "origin", f"https://github.com/{slug}.git")
     return bare
+
+
+def test_delivery_leaves_the_persons_remote_tracking_refs_as_they_were(tmp_path, monkeypatch):
+    """A push by URL that also updates the matching remote's tracking refs, as git 2.56 does,
+    leaves no ``origin/<run branch>`` and moves no tracking ref the person had."""
+    repo = git_repo(tmp_path / "repo")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    before = git(repo, "for-each-ref", "refs/remotes")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "run")
+    head = git(repo, "rev-parse", "HEAD")
+
+    def push(path, *args):  # git >= 2.56, pushing by URL to a configured remote's URL
+        git(Path(path), "update-ref", "refs/remotes/origin/run-1", head)
+        git(Path(path), "update-ref", "refs/remotes/origin/main", head)
+        return ""
+
+    monkeypatch.setattr(delivery, "_git", push)
+    delivery._push(repo, "acme/app", head, "run-1", default="main")
+    assert git(repo, "for-each-ref", "refs/remotes") == before
 
 
 def _remote_head(github: Path, slug: str, branch: str) -> str:
