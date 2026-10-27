@@ -495,6 +495,21 @@ def test_policy_report_leaves_the_files_and_names_them_with_their_diff(tmp_path,
     assert "left as they are: app.py" in target_guard.restore_log(driver.resolve()).read_text()
 
 
+def test_policy_report_shows_only_what_the_node_changed(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(target_guard, "CHECKOUT_POLICY", "report")
+    driver, _, run = _bracket_run(tmp_path)
+    mine = driver / "refactory" / "refactory_dsh" / "mine.py"
+    ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    mine.write_text("print('the agent, during the node')\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+    with pytest.raises(ValueError, match="left as they are: refactory/refactory_dsh/mine.py"):
+        ad.finish(run, "emit")
+    said = capsys.readouterr().err
+    # From the person's uncommitted bytes at the node's start, not from HEAD.
+    assert "-print('the person, uncommitted')" in said and "+print('the agent, during the node')" in said
+    assert "-print('committed')" not in said
+
+
 def test_policy_restore_if_clean_restores_a_clean_checkout(tmp_path, monkeypatch):
     driver, refusal = _stray_edit(tmp_path, monkeypatch, "restore-if-clean", dirty=False)
     assert (driver / "app.py").read_text() == "print('app')\n"
@@ -547,6 +562,26 @@ def test_the_suite_never_watches_its_own_checkout(tmp_path, monkeypatch):
     assert target_guard.checkouts(run, source) == [], "conftest names this checkout as unwatched"
     monkeypatch.delenv(target_guard.UNWATCHED_ENV)
     assert target_guard.checkouts(run, source) == [REPO_ROOT.resolve()]
+
+
+def test_the_unwatched_variable_is_ignored_outside_a_test(tmp_path, monkeypatch, capsys):
+    """A person's shell never has PYTEST_CURRENT_TEST: there the variable must not silence the guard."""
+    driver, _, run = _bracket_run(tmp_path)
+    monkeypatch.setenv(target_guard.UNWATCHED_ENV, str(driver))
+    monkeypatch.setattr(target_guard, "_IGNORED_UNWATCHED", [])
+    source = driver / "refactory" / "refactory_dsh"
+    assert target_guard.checkouts(run, source) == [], "inside a test it is honoured"
+    monkeypatch.delenv("PYTEST_CURRENT_TEST")
+    assert target_guard.checkouts(run, source) == [driver.resolve()]
+    ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    (driver / "app.py").write_text("print('stray')\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+    with pytest.raises(ValueError, match="refactory's own checkout"):
+        ad.finish(run, "emit")
+    said = capsys.readouterr().err
+    warned = [line for line in said.splitlines()
+              if line.startswith(f"refactory: warning: {target_guard.UNWATCHED_ENV} is set")]
+    assert len(warned) == 1, said
 
 
 def test_a_checkout_is_read_from_one_status_call(tmp_path):

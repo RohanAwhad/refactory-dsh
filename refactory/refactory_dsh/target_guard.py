@@ -647,10 +647,30 @@ def restore_target(root: Path, before: dict[str, Any],
 #: and a pinned resume adds its ``pin_checkout`` (`pin.resolve_pin`).
 RUN_CONFIG = Path(".refactory/run-config.json")
 
-#: Checkouts never watched as refactory's own, separated like PATH. The test suite names
-#: its own checkout here (`tests/conftest.py`): its tests dispatch thousands of scripted
-#: agents, and a person editing that checkout while they run is not a stray write.
+#: Checkouts never watched as refactory's own, separated like PATH, honoured only inside a
+#: pytest test (``PYTEST_CURRENT_TEST``, which the processes a test starts inherit and a
+#: person's shell never has). The test suite names its own checkout here
+#: (`tests/conftest.py`): its tests dispatch thousands of scripted agents, and a person
+#: editing that checkout while they run is not a stray write. Anywhere else the variable
+#: would switch the guard off without a word, so it is ignored, with a warning.
 UNWATCHED_ENV = "REFACTORY_GUARD_UNWATCHED"
+
+#: Whether this process has said it ignores :data:`UNWATCHED_ENV`; once is enough.
+_IGNORED_UNWATCHED: list[bool] = []
+
+
+def _unwatched() -> set[Path]:
+    """The checkouts :data:`UNWATCHED_ENV` names, when a test is running; otherwise none."""
+    named = [path for path in os.environ.get(UNWATCHED_ENV, "").split(os.pathsep) if path]
+    if not named:
+        return set()
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        if not _IGNORED_UNWATCHED:
+            _IGNORED_UNWATCHED.append(True)
+            print(f"refactory: warning: {UNWATCHED_ENV} is set, but it is only for refactory's own test "
+                  "suite, so it is ignored: refactory's own checkout is watched as usual", file=sys.stderr)
+        return set()
+    return {Path(path).expanduser().resolve() for path in named}
 
 
 def _overlaps(one: Path, other: Path) -> bool:
@@ -694,8 +714,7 @@ def checkouts(workdir: Path, source: Path) -> list[Path]:
     if recorded is not None:
         candidates.append(recorded)
     own = [Path(baseline["root"]).resolve(), *(Path(path).resolve() for path in baseline.get("also") or ())]
-    unwatched = {Path(path).expanduser().resolve()
-                 for path in os.environ.get(UNWATCHED_ENV, "").split(os.pathsep) if path}
+    unwatched = _unwatched()
     found: list[Path] = []
     for candidate in candidates:
         path = candidate.expanduser().resolve()
@@ -842,6 +861,36 @@ def restores(before: dict[str, Any]) -> bool:
     return CHECKOUT_POLICY == "restore"
 
 
+def _node_diff(root: Path, path: str, before: dict[str, Any], baseline_dir: Path) -> str:
+    """What the node changed in one file: from its bytes at `begin` (the saved baseline, or
+    HEAD for a file that was clean), not from HEAD, so a person's earlier edit is not shown."""
+    import difflib
+
+    def text(data: bytes | None) -> list[str]:
+        return [] if data is None else data.decode("utf-8", "replace").splitlines(keepends=True)
+
+    plan = _restore_plan(root, path, before, baseline_dir)
+    if plan is None:
+        return f"{path}: its content at the node's start was not kept, so no diff\n"
+    kind, value = plan
+    earlier: bytes | None
+    if kind == "copy":
+        earlier = Path(value).read_bytes()
+    elif kind == "git":
+        earlier = value[1].encode("utf-8", "surrogateescape")
+    elif kind == "symlink":
+        earlier = f"symlink to {value}\n".encode()
+    else:
+        earlier = None
+    full = root / path
+    try:
+        now = (f"symlink to {os.readlink(full)}\n".encode() if full.is_symlink()
+               else full.read_bytes() if full.exists() else None)
+    except OSError as error:
+        return f"{path}: unreadable now ({error})\n"
+    return "".join(difflib.unified_diff(text(earlier), text(now), f"a/{path}", f"b/{path}"))
+
+
 def restore_log(root: Path) -> Path:
     """The checkout's own log of what refusals did to it, under refactory's home."""
     return _stray_record_path(Path(root)) / "restores.log"
@@ -884,7 +933,7 @@ def settle_checkout(path: str, before: dict[str, Any], directory: Path, workdir:
                       "mode": "restored", "left": []}
         else:
             left = _differ(before.get("changes") or {}, now.get("changes") or {})
-            diff = _git(root, "diff", "HEAD", "--", *left) if left else ""
+            diff = "".join(_node_diff(root, name, before, checkout_baseline(directory, path)) for name in left)
             result = {"mode": "reported", "restored": [], "left": left, "set_aside": None, "errors": [],
                       "head_moved": now.get("head") != before.get("head"),
                       "diff": (diff or "")[:DIFF_SHOWN]}
