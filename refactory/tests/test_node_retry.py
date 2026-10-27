@@ -265,6 +265,7 @@ def test_the_spine_reserves_every_attempt_and_one_overhead(tmp_path):
     assert lowered.nodes["reviewer"].command_timeout_s == 100 + 200 + NODE_DISPATCH_OVERHEAD_S
     spec = json.loads(Path(lowered.nodes["reviewer"].dispatch_command.rsplit(" ", 1)[1].strip("'")).read_text())
     assert spec["retry"] == RULE
+    assert lowering.node_declarations(state)["reviewer"]["retry"] == RULE
     # A node without a bound retries on its route's envelope, doubled.
     state = {"graph": _graph(_node(timeout_s=None)).to_state(), "knobs": {}}
     lowered = workers.lower_workflow(lowering.to_workflow(state), tmp_path, dsh.client().context(),
@@ -488,3 +489,6 @@ def test_status_shows_the_retries(tmp_path):
     text = readable.format_status({"authoring": {"completed": []}, "state": "running",
                                    "activity": {"node_retries": retries(tmp_path)}})
     assert "Retried after a timeout: verifier (1x)" in text
+    from refactory_dsh.console import status
+
+    assert status(tmp_path)["activity"]["node_retries"] == {"verifier": 1}
