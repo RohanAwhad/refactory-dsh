@@ -33,17 +33,106 @@ following the same pattern as `refactory.environment_overlay`.  Core modules
 (`agent_delivery`, `worker_node`, `nn.executor`) import nothing from the product;
 they reach the refill logic only through the entry point.
 
+### Agent workspaces
+
+An agent node can declare where it works: `workspace` on the node (`nn.graph`,
+saved only when it is not the default, `none`), carried by the IR, the run's
+declarations and the worker spec. `scratch` is a fresh empty folder per dispatch;
+`clone` (`of: attempt` or `base`) is a prepared clone of the run's worktree.
+`collect: files` copies the node's declared writes out of the workspace;
+`collect: diff` writes the clone's diff into the node's first write. Both runtimes
+run it through one module, `refactory_dsh/workspace.py`: the spine's worker
+(`worker_node.execute`) and the walker (`Executor._visit_agent`) prepare the
+workspace before the delivery bracket opens and collect from it before it closes, so
+`agent_delivery.finish` checks what the workspace produced. A workspace is refused on
+the CEO-subagent route (`workers.lower_workflow` with no worker model context): nothing
+there could give the node a workspace or collect from it. The spine only passes the
+declaration through.
+
+Design mode's builder (`emit`, in design and design_fast) works in a clone of the
+last attempt and collects its diff: it edits the repository there, runs the tests its
+change touches (the test files it changed or added, and the tests importing the modules
+it changed) and the brief's own example or CLI path as often as it needs, and stops. Its
+prompt says the check runs the full suite after it answers, so it does not run the full
+suite itself: in the live trial (dm-149) its full-suite runs took 11.6 of its 27
+minutes, and the self-check and the check ran the suite again. Materialise,
+the check, the reviews and the target guard read the derived `emit.txt` as they read
+an emitted one. create, edit and fast-create keep the emission-only builder.
+
+- **Prepared once per run.** The clone (`clones.prepare`, the product's half,
+  reached through the `refactory.workspace_clone` entry point) shares the target's
+  objects (`git clone --shared`), keeps its own refs and index, and has no remote and
+  no hooks. It persists across commands, fix-ups and attempts. When materialise has
+  committed what it derived, the clone already holds the new head: the next dispatch
+  verifies that (the clone's change from the new head, less what its preparation
+  made, is empty) and only moves its base (`verified`). A head that did not move keeps
+  the clone as the agent left it (`kept`), so a refused emission's work is still there
+  to fix; any other head resets the clone to it (`reset`). A file the agent added counts
+  as held when its content and mode are the commit's. Installs run again only when a
+  dependency manifest or lockfile anywhere in the clone changes
+  (`clones.dependency_fingerprint`), setup with them or after a reset, and generate on
+  every dispatch. A step that fails does not stop the node: the agent is told, and the
+  check runs the same steps. A pending merge from delivery is started in the clone, its
+  generated conflicts resolved to main's side as materialise resolves them; a merge the
+  agent finished is kept across a refused round, and one materialise gave up is
+  dropped, so main's changes never come back as the agent's own.
+- **Run.** The model's working directory is the workspace; its receipt and patch stay
+  in the run directory (`DshModelClient.complete(cwd=...)`). Its environment is the
+  clone's (`worktree.check_environment`): the clone's own `.venv` and
+  `node_modules/.bin` first, the run worktree's taken off PATH, and HOME at the
+  clone's `.refactory/home`, with pnpm's store, uv's cache and the XDG cache inside it
+  (the person's are read-only to it). Its shell is told a DSH home of its own inside the
+  workspace (`workers.write_patch`'s `shell-env` row), and its `BASH_ENV` file unsets the
+  run's variables (`REFACTORY_*`, `SRF_*`, `VENV_BIN`, `PYTHONPATH`) before each command,
+  as the check never has them; the DSH process keeps them for its observer. Its DSH
+  sandbox policy is `workspace-write` rooted at the workspace, with approval `never`
+  (`workers.permission_patch`), where a DSH runner works here (bubblewrap or Landlock on
+  Linux, Seatbelt on macOS; probed once). Where none does, a workspace node on the dsh
+  backend is refused, since its shell would have full access while it is asked to install
+  and run things, unless `REFACTORY_WORKSPACE_SANDBOX=unconfined` chooses that; the
+  dispatch record and a warning then say so. A native backend (codex, Claude Code) runs
+  under its own sandbox and keeps the person's HOME, where its CLI finds its login.
+- **Collect.** `derive_emission` writes whole-file `===FILE:` and `===DELETE:` blocks
+  from `git diff --raw --no-renames <base>` and the untracked files, leaving out
+  `.refactory/`, the environments and tool caches, and what the preparation made while
+  the agent left it as made. A binary file, a symlink, a mode change, a new executable,
+  a submodule, a line the emission would read as a block header, or (without a
+  worktree) a deletion is refused, as is a path an emission header cannot carry (with
+  whitespace, `=`, a quote, a backtick or a backslash) or one holding a control or hidden
+  format character (the same `unprintable_refusal` an emitted block gets, dm-278), a
+  file over 50 MB, a change over 200 MB in all, and a workspace with no change: the
+  refusal is left beside the emission
+  (`.refactory/workspace-refusal.json`, keyed by its digest) and materialise sends it
+  back to the builder like any refused emission. Line endings and end-of-file newlines
+  are normalised by the blocks, with a warning, and the next dispatch tells the agent
+  which files. Only the repository's own ignore rules apply: the clone ignores a
+  person's global ignore file.
+- **Clean-up.** At the run's end, however it ended: the walker and the DSH evaluator
+  (the `refactory.run_end` entry point) and a spine run's owner. A workspace a
+  dispatch holds is left.
+- **OpenShell (experimental).** On the `openshell` worker backend the same workspace is
+  packed (`openshell_backend.pack_workspace`, after the clone takes its own copy of the
+  objects it borrowed), the agent (Claude Code, the binary the gateway's provider admits)
+  runs inside the sandbox, and the folder comes back (`download_artifacts`) to the same
+  collect step (`workspace.sync_back`, which refuses a folder that is not the workspace's
+  copy). It has had no live run, so it is refused unless
+  `REFACTORY_OPENSHELL_WORKSPACE=1` opts in. Not yet: packing `.venv` and
+  `node_modules`, the node's model and usage for `claude -p`, and the remote stop's PID
+  path.
+
 ### The builder probe
 
-The emit prompt's "do not apply or test your change anywhere" exists because
-direct edits to the worktree bypass materialise and the check.  The builder probe
-gives a safe alternative.  Since dm-133, the probe is also available to
-`design_doc` via `--command` (no `--emission`); the clone
+The emit prompt's "do not apply or test your change anywhere", which create, edit
+and fast-create still carry, exists because direct edits to the worktree bypass
+materialise and the check. The builder probe gave design's builder a safe way to test
+before its workspace did; its prompt no longer names it. Since dm-133, the probe is
+also available to `design_doc` via `--command` (no `--emission`); the clone
 runs at the run's base with `emission=None`, and the same isolation guarantees
 apply:
 
-- **Standalone clone** (`git clone --no-local --depth 1`): not a linked worktree.
-  No `.git` registration.  `origin` removed after clone.
+- **Standalone clone** (`clones.clone_shared`, `git clone --shared`): not a linked
+  worktree, so no `.git` registration; its own refs and index, the target's objects
+  shared.  `origin` removed after clone.
 - **Hooks off**: `core.hooksPath=/dev/null`, `LEFTHOOK=0`, `HUSKY=0`.
 - **Isolated HOME and DSH_HOME**: per-probe directories under `probe-<id>/`.
 - **PATH stripped**: the run worktree's `.venv/bin` and `node_modules/.bin` are
@@ -848,9 +937,12 @@ zero-width space (U+200B), a word joiner (U+2060) or a byte-order mark (U+FEFF) 
 refused, naming the character, for example `U+202E RIGHT-TO-LEFT OVERRIDE`. A terminal,
 a diff or a review hides such a character or shows the name as something else, so the
 file a reviewer reads about would not be the file written. Other format characters are
-allowed: U+200C and U+200D join letters in Persian names and emoji sequences.
-`repo_change.unprintable_refusal` is the one check, for any place that takes a path
-from an agent.
+allowed: U+200C and U+200D join letters in Persian names and emoji sequences. A name
+that is not UTF-8 (a workspace file such as `tool\xff.py`, which git decodes to a lone
+surrogate) is refused the same way, naming the byte, rather than crashing collect (dm-278).
+`unprintable_refusal` (in the core module `emitted_paths`, re-exported by `repo_change`)
+is the one check, for any place that takes a path from an agent: materialise, create
+mode, and a workspace's collect step (dm-278).
 
 **A malformed header goes back to the builder in every mode (dm-215).** In create and
 the fast modes, as in design mode, `materialise` records a malformed header as

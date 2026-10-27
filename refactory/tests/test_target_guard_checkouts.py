@@ -22,7 +22,7 @@ from refactory_dsh import agent_delivery as ad
 from refactory_dsh import target_guard, worktree
 from refactory_dsh.model import DshModelClient
 from test_design_worktree import _answers, _design
-from tests_support import FakeModel, git, git_repo, render
+from tests_support import FakeModel, apply_in_workspace, git, git_repo, render
 
 #: A design run plans its delivery by asking gh for its login, so it asks the fake (dm-271).
 pytestmark = pytest.mark.usefixtures("fake_gh")
@@ -111,11 +111,13 @@ class Emit(FakeModel):
         super().__init__(answers)
         self.generator, self.first, self.seen = generator, first, {}
 
-    def complete(self, prompt, *, system="", workdir=None):
+    def complete(self, prompt, *, system="", workdir=None, **_workspace):
         if self.first is not None:
             self.first()
             self.first = None
-        answer = super().complete(prompt, system=system, workdir=workdir)
+        # A workspace node's cwd/env/confine (#516) go on to FakeModel, which makes the
+        # scripted emission in the workspace.
+        answer = super().complete(prompt, system=system, workdir=workdir, **_workspace)
         if ad.CONTRACT_START in prompt and _contract(prompt)["node"] == "emit" and "ran" not in self.seen:
             execution = _contract(prompt)
             self.seen.update(ran=True, prompt=prompt, execution=execution)
@@ -201,11 +203,15 @@ def test_walker_legitimate_writes_pass_with_the_driver_watched(tmp_path, monkeyp
                         lambda workdir, paths: watched.append(list(paths)) or real(workdir, paths))
 
     class Scratch(FakeModel):
-        def complete(self, prompt, *, system="", workdir=None):
+        def complete(self, prompt, *, system="", workdir=None, **_workspace):
             if workdir is not None:
                 # An agent's own notes in its run directory are its to write.
                 (Path(workdir) / "scratch-notes.txt").write_text(prompt[:40])
-            return super().complete(prompt, system=system, workdir=workdir)
+            answer = super().complete(prompt, system=system, workdir=workdir)
+            # Design's emit works in a clone (#516): the scripted emission is made there.
+            if _workspace.get("cwd") is not None:
+                apply_in_workspace(answer, _workspace["cwd"])
+            return answer
 
     # The run directory lies inside the driver checkout: it is still the run's own.
     result = _design(driver / "runs" / "one", Scratch(_answers(render({"tool.py": "print('built')\n"}))),
@@ -230,7 +236,7 @@ def _dispatch(run: Path, node: str, writes: list[str], monkeypatch, act) -> dict
     """Run one agent node through `worker_node.execute`, the agent acting as ``act`` says."""
     from refactory_dsh.worker_node import execute
 
-    def complete(self, prompt, *, system="", workdir=None):
+    def complete(self, prompt, *, system="", workdir=None, **_workspace):
         act(_contract(prompt), Path(workdir))
         return "Done."
 

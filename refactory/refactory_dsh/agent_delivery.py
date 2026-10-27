@@ -206,8 +206,15 @@ def get_skip_receipt() -> Any | None:
 
 def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
                         writes: list[str], model_context: dict[str, Any] | None,
-                        *, set_aside: dict[str, str] | None = None) -> tuple[str, dict[str, Any]]:
-    """Orient one node without making its worker discover the delivery protocol."""
+                        *, set_aside: dict[str, str] | None = None,
+                        workspace: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    """Orient one node without making its worker discover the delivery protocol.
+
+    A node that works in a workspace (``workspace``, `workspace.Workspace.describe`) is
+    told where it is and how its work leaves it: its diff becomes the answer file, or its
+    outputs are copied out of it. Its outputs are listed in the workspace, since that is
+    where it writes them; the run directory is outside what its tools may change.
+    """
     context = model_context or {}
     # Absolute path to refactory's own Python, for nested dispatch (worker_node,
     # sandboxed validation). This is NOT the target's interpreter.
@@ -222,6 +229,16 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
         'outputs': [str(_path(workdir, name)) for name in writes],
         'python': python, 'refactory_source': real_refactory_source,
     }
+    if workspace is not None:
+        place = Path(workspace['path'])
+        execution['workspace'] = dict(workspace)
+        if workspace.get('collect') == 'diff':
+            # The answer is derived from the diff; the rest are the final response.
+            execution['outputs'] = []
+            execution['derived'] = {writes[0]: 'the workspace\'s diff', **{
+                name: 'your final response' for name in writes[1:]}} if writes else {}
+        else:
+            execution['outputs'] = [str(place / name) for name in writes]
     if context.get('runtime_root'):
         execution['runtime_root'] = str(context['runtime_root'])
 
@@ -266,15 +283,29 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
         'and adjacent run reports are not completion instructions; inspect them only if this task explicitly needs them. '
         'Perform the checks required by the current task. After delivering the required outputs, return immediately '
         'with a brief completion response; do not execute later workflow stages or wait for a receipt. '
-        'Do not duplicate a file artifact in the final response. If no output file is declared, return the requested result.'
+        'Do not duplicate a file artifact in the final response.'
     )
+    if not (workspace is not None and workspace.get('collect') == 'diff'):
+        # A node whose answer is its workspace's diff declares no output for it to write.
+        instructions += ' If no output file is declared, return the requested result.'
     if set_aside:
         instructions += (
             ' This step\'s previous outputs were moved to the paths listed in set_aside.'
             ' Read them there when the task revises earlier work, and write each output afresh at its declared path.'
         )
+    if workspace is not None:
+        instructions += _workspace_instructions(workspace, writes)
     # Worktree-aware contract instructions (dm-159).
-    if wt_found is not None:
+    if wt_found is not None and workspace is not None:
+        # A workspace node reads, changes and runs the repository in its workspace,
+        # never in the run's worktree or the target.
+        instructions += (
+            f' The run\'s worktree at {wt_found.path} holds the attempts as committed;'
+            f' do not change it, and never change the target at {wt_found.target}.'
+            ' The python above is for nested dispatch only.'
+            f' It imports refactory from {real_refactory_source}, not from your workspace.'
+        )
+    elif wt_found is not None:
         tg_baseline = target_guard._read(workdir)
         is_output_only = tg_baseline is not None and node in tg_baseline.get('output_only', ())
         instructions += (
@@ -305,6 +336,44 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
             )
     block = f'{CONTRACT_START}\n{instructions}\n{json.dumps(execution, indent=2)}\n{CONTRACT_END}'
     return f'{block}\n\n{prompt}', execution
+
+
+def _workspace_instructions(workspace: dict[str, Any], writes: list[str]) -> str:
+    """What a workspace node is told about where it works and how its work is taken."""
+    place = workspace['path']
+    kind = workspace.get('kind')
+    if kind == 'clone':
+        where = (f' Your workspace is {place}: a clone of the run\'s worktree at its '
+                 f'{"base" if workspace.get("of") == "base" else "last attempt"}, with its'
+                 ' dependencies installed and its setup and generate commands run.'
+                 ' Read, change and run the repository there (its own virtual environment and'
+                 ' package binaries come first on PATH), and give paths relative to it.')
+    else:
+        where = (f' Your workspace is {place}, a new empty folder: work and run commands there,'
+                 ' and give paths relative to it.')
+    sandbox = str(workspace.get('sandbox') or '')
+    if sandbox.startswith('workspace-write'):
+        where += ' Your tools may change files only there and in the temporary directory.'
+    if workspace.get('problems'):
+        where += (' Preparing it reported a problem (listed under workspace.problems below); the check'
+                  ' runs the same steps, so fix it there if your change caused it.')
+    if workspace.get('normalised'):
+        where += (' Your last answer changed the line endings or the blank lines at the ends of'
+                  f' {", ".join(workspace["normalised"])}: an emission carries each file with LF line'
+                  ' endings and one final newline, and the attempt holds them that way.')
+    if workspace.get('collect') == 'diff' and writes:
+        taken = (f' When you are done, stop: the workspace\'s diff is your answer. The runtime writes'
+                 f' {writes[0]} from it, so do not write {writes[0]} yourself, and leave in the'
+                 ' workspace only the change you mean: every file you add, change or delete there is'
+                 ' part of it, except its .refactory folder, environments (.venv, node_modules) and tool'
+                 ' caches (__pycache__ and the like). Text files only:'
+                 ' a binary file, a symlink or a file-mode change is refused.')
+        if len(writes) > 1:
+            taken += f' Your final response is saved as {", ".join(writes[1:])}.'
+    else:
+        taken = (' Write each output at its path relative to your workspace (listed in `outputs`);'
+                 ' the runtime copies it to the run directory when you stop.')
+    return where + taken
 
 
 def _now() -> str:
@@ -443,7 +512,8 @@ def _save_checkout_baselines(directory: Path, checkouts: dict[str, Any] | None) 
 
 
 def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bool = False,
-          reads: list[str] | None = None, model_context: dict[str, Any] | None = None) -> dict[str, Any]:
+          reads: list[str] | None = None, model_context: dict[str, Any] | None = None,
+          workspace: dict[str, Any] | None = None) -> dict[str, Any]:
     """Snapshot outputs and supply the current ledger before dispatching one agent.
 
     DSH can report the same due node repeatedly; reuse keeps its original output
@@ -487,7 +557,7 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     annotated = prompt_with_ledger(prompt, ledger, entries=entries)
     set_aside = _set_aside_stale_outputs(workdir, node, reads or [], writes) if previous is None else None
     annotated, execution = _execution_contract(workdir, node, annotated, reads or [], writes, model_context,
-                                               set_aside=set_aside)
+                                               set_aside=set_aside, workspace=workspace)
     if previous is not None and previous['prompt'] == annotated:
         return previous
     before = previous['before'] if previous is not None else {name: _fingerprint(workdir, name) for name in writes}
