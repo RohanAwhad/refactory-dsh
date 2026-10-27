@@ -493,3 +493,60 @@ def test_dsh_run_node_reports_missing_finding(tmp_path):
     feedback = (d / 'reviews' / 'design-review-feedback.txt').read_text()
     assert feedback.startswith('nothing blocks the build')
     assert 'FND-foo-1' not in feedback
+
+
+# ── code spans (dm-146) and entries under a heading (dm-219) ───────────────
+
+def _finding(n: int = 1) -> dict:
+    return {'id': f'FND-foo-{n}', 'source_file': 'research/foo.md', 'text': 'a finding'}
+
+
+def test_a_double_backtick_span_in_the_rule_does_not_shift_the_sites_after_it():
+    """dm-146: a run of N backticks closes only on a run of N, so a double-backtick span
+    holding a single backtick leaves every later site path where it is."""
+    from refactory_dsh import coverage_helpers
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n'
+             '- FND-foo-1: the ``===FILE: `x` ===`` header is parsed at `other.py:2`\n'
+    ).replace('- `file.py:1` — **[changed]**\n',
+              'Rule: a header reads ``===FILE: `path` ===``, the path in backticks.\n'
+              '- `file.py:1` — **[changed]**\n- `other.py:2` — **[changed]**\n')
+    assert coverage_helpers.site_paths(design) == [
+        '===FILE: `path` ===', 'file.py:1', 'other.py:2']
+    assert finding_coverage(design, [_finding()]) == (['FND-foo-1'], [], [])
+
+
+def test_a_double_backtick_span_does_not_shift_citations_in_a_design_without_a_rule_section():
+    """The same for a design that names its sites where it uses them."""
+    from refactory_dsh import coverage_helpers
+    design = _contract(body='Rule: ``a `b` c`` stays one span; the fix is at `file.py:3`.\n')
+    design = design.replace('## Rule and sites\n\n- `file.py:1` — **[changed]**\n\n', '')
+    assert coverage_helpers.site_paths(design) == ['file.py:3']
+
+
+def test_code_spans_are_read_the_commonmark_way():
+    from refactory_dsh.coverage_helpers import code_spans
+    assert code_spans('``a `b` c`` then `d`') == ['a `b` c', 'd']
+    assert code_spans('`` ` `` and ` e `') == ['`', 'e']
+    # A run nothing closes is literal; an escaped backtick opens nothing.
+    assert code_spans('a ``` b `c`') == ['c']
+    assert code_spans(r'\`not a span` but `this`') == ['but']
+    # A blank line ends any span still open.
+    assert code_spans('a `open\n\nclosed `x` b') == ['x']
+
+
+def test_a_finding_answered_under_its_own_heading_is_addressed():
+    """dm-219: an entry written as a heading reads on through the block under it, up to the
+    next heading of its level or the next line naming another finding."""
+    from refactory_dsh.findings_coverage import finding_coverage
+    design = _contract(
+        body='## Research and perspective findings\n\n'
+             '### FND-foo-1 (the cache key)\n\n'
+             'The base is read once, so the key holds:\n\n- at `file.py:1`\n\n'
+             '### FND-foo-2\n\nNothing cited here.\n\n'
+             '### Notes\n\nThe key is at `file.py:1`.\n\n'
+             '### FND-foo-3\n\n- FND-foo-4 is answered at `file.py:1`\n')
+    addressed, _, missing = finding_coverage(design, [_finding(n) for n in (1, 2, 3, 4)])
+    assert addressed == ['FND-foo-1', 'FND-foo-4']
+    assert missing == ['FND-foo-2', 'FND-foo-3']

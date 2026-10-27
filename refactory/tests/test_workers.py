@@ -407,23 +407,29 @@ def test_worker_shell_keeps_selected_python_through_actual_dsh_scrub(monkeypatch
     if not modules:
         pytest.skip('pinned DSH subprocess package not installed')
     node = shutil.which('node')
-    bindir = str(Path(sys.executable).parent)
+    import os
+    # The interpreter is selected by a path with `..` in it, as `../.venv/bin/python` gives
+    # (dm-269): the client normalises it, and the scrub keeps the normalised directory.
+    bindir = str(Path(os.path.abspath(sys.executable)).parent.resolve())
+    selected = os.path.join(bindir, '..', os.path.basename(bindir))
+    assert '..' in Path(selected).parts and os.path.samefile(selected, bindir)
     # A narrow PATH still has to reach the shell the worker spawns and the selected
     # interpreter. `/usr/bin:/bin` is a distro assumption NixOS does not satisfy, so
     # pin the two directories the test actually needs instead.
-    import os
     bash_dir = os.path.dirname(shutil.which('bash') or '')
     monkeypatch.setenv('PATH', os.pathsep.join(part for part in (bindir, bash_dir) if part))
     monkeypatch.delenv('PYTHONPATH', raising=False)
     monkeypatch.setenv('REFACTORY_TEST_SECRET', 'not-a-real-secret')
-    client = DshModelClient(python_bin=bindir)
+    client = DshModelClient(python_bin=selected)
+    assert client.context()['python_bin'] == bindir
     from refactory_dsh.sandbox import scrub
     recreated = DshModelClient(**client.context())
     # Context survives even the narrower generated-package environment scrub.
     with monkeypatch.context() as isolated:
         isolated.setenv('VENV_BIN', '/not/the/selected/environment')
         assert DshModelClient(**recreated.context()).context()['python_bin'] == bindir
-    expression = 'import json,sys,refactory_dsh; print(json.dumps({"executable":sys.executable,"module":refactory_dsh.__file__}))'
+    expression = ('import json,os,sys,refactory_dsh; print(json.dumps({"executable":sys.executable,'
+                  '"module":refactory_dsh.__file__,"venv":os.environ.get("VENV_BIN")}))')
     import shlex
     from refactory_dsh.agent_delivery import begin
     delivery = begin(tmp_path, 'runtime-check', 'Import the installed API.', [], model_context=client.context())
@@ -438,6 +444,7 @@ def test_worker_shell_keeps_selected_python_through_actual_dsh_scrub(monkeypatch
                             env=client._environment(), capture_output=True, text=True, check=True)
     actual = json.loads(result.stdout)
     assert Path(actual['executable']).parent == Path(bindir)
+    assert actual['venv'] == bindir, "the scrub did not forward the selected Python, normalised"
     assert Path(actual['module']).resolve() == root / 'refactory/refactory_dsh/__init__.py'
     assert 'REFACTORY_TEST_SECRET' not in scrub(client._environment())
     # After the environment fix, PYTHONPATH is absent from the scrubbed env.

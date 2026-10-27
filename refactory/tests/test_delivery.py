@@ -105,7 +105,7 @@ def test_pr_title_falls_back_to_brief():
 
 
 def test_pr_title_truncates_at_word_boundary():
-    long_heading = "Fix " + "word " * 20  # well over 72 chars
+    long_heading = "Fix " + "word " * 60  # well over the limit
     ctx = _TitleCtx(
         facts={"brief": "short", "name": "b2"},
         files={"design.md": f"# {long_heading}\n"},
@@ -115,8 +115,35 @@ def test_pr_title_truncates_at_word_boundary():
     assert title.endswith("…")
 
 
+def test_a_long_design_heading_is_the_whole_title_up_to_githubs_limit():
+    """dm-217: #494's title was cut at 72 characters, mid-phrase ("...and other safe...").
+    A heading GitHub takes whole is the title whole, prefixes and all."""
+    heading = ("Emitted paths: accept @-scoped package paths, refuse quoted and malformed headers, "
+               "and other safe characters")
+    ctx = _TitleCtx(facts={"brief": "short", "name": "b2"}, files={"design.md": f"# {heading}\n"})
+    assert delivery._title(ctx) == heading
+    assert len(delivery.DRAFT_TITLE + delivery.CHECK_FAILING_TITLE) + delivery.TITLE_LIMIT <= 256
+
+
+def test_a_heading_past_githubs_limit_is_cut_between_phrases_or_at_a_word_never_inside_one():
+    """dm-217: past the limit the cut falls between phrases; with none, at a word boundary."""
+    phrases = ", ".join(f"phrase number {n} with a few words" for n in range(12))
+    ctx = _TitleCtx(facts={"brief": "short", "name": "b2"}, files={"design.md": f"# {phrases}\n"})
+    title = delivery._title(ctx)
+    assert len(phrases) > delivery.TITLE_LIMIT >= len(title) > delivery.TITLE_LIMIT // 2
+    cut = title.removesuffix("\u2026")
+    assert title.endswith("\u2026") and cut.endswith("with a few words")
+    assert phrases.startswith(cut + ", ")
+    words = "Make " + " ".join(f"word{n}" for n in range(80))
+    ctx = _TitleCtx(facts={"brief": "short", "name": "b2"}, files={"design.md": f"# {words}\n"})
+    title = delivery._title(ctx)
+    cut = title.removesuffix("\u2026")
+    assert len(title) <= delivery.TITLE_LIMIT and title.endswith("\u2026")
+    assert words.startswith(cut + " "), "the cut falls between two words"
+
+
 def test_pr_title_never_cuts_inside_backticks():
-    heading = "Fix how gate_overwatch and its refusal of the `code_reviewer` backtick_spans are reported in the pipeline"
+    heading = "Fix how gate_overwatch and its refusal of the `code_reviewer` backtick_spans are reported in the pipeline " * 3
     ctx = _TitleCtx(
         facts={"brief": "short", "name": "b2"},
         files={"design.md": f"# {heading}\n"},
@@ -4209,6 +4236,43 @@ def test_push_refused_leaves_pr_text_and_finish_commands(github, tmp_path, capsy
     assert record["title"]
     assert record["status"] == "kept local"
     assert any("gh pr create" in cmd and "--body-file" in cmd for cmd in record["finish"])
+
+
+def test_a_push_refused_for_a_missing_workflow_scope_says_so_and_how_to_finish(github, tmp_path, capsys,
+                                                                                monkeypatch):
+    """dm-75: GitHub's refusal is said in one sentence naming the file and the scope, then
+    the push and the pull request commands to run where a credential has that scope."""
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    real_git = delivery._git
+
+    def git(path, *args):
+        if "push" in args:
+            raise delivery.NotDelivered(
+                f"git push -q https://github.com/acme/app.git {args[-1]} failed in {path}: "
+                "To https://github.com/acme/app.git\n"
+                " ! [remote rejected] abc -> refactory/run-abc (refusing to allow an OAuth App to "
+                "create or update workflow `.github/workflows/ci.yml` without `workflow` scope)\n"
+                "error: failed to push some refs to 'https://github.com/acme/app.git'")
+        return real_git(path, *args)
+
+    monkeypatch.setattr(delivery, "_git", git)
+    run = tmp_path / "run"
+    result = _design(run, target=str(repo))
+    assert result.exit_ok, result.error
+    said = result.facts["delivery_result"]
+    assert said.startswith(
+        "not delivered: GitHub refused the push because it changes .github/workflows/ci.yml, and "
+        "the credential delivery pushed with lacks the `workflow` scope that changing a workflow "
+        "file takes; run the finishing commands where a GitHub credential with the `workflow` "
+        "scope is signed in"), said
+    assert "remote rejected" not in said
+    record = _record(run)
+    assert record["status"] == "kept local" and "remote rejected" not in record["why"]
+    push = next(cmd for cmd in record["finish"] if " push https://github.com/acme/app.git " in cmd)
+    opening = next(cmd for cmd in record["finish"] if cmd.startswith("gh pr create --repo acme/app "))
+    assert f"to finish: {push} && {opening}" in said
+    assert push in capsys.readouterr().err
 
 
 def test_no_worktree_writes_no_pr_text(github, tmp_path, monkeypatch):

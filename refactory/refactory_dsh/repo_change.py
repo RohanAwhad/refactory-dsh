@@ -35,6 +35,7 @@ import re
 import shutil
 import sys
 import tempfile
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
@@ -269,14 +270,38 @@ def _require_owner(name: str, run: Path) -> None:
         )
 
 
+def _unprintable(path: str) -> str:
+    """The first character of ``path`` that a file name may not hold, named; else ``""``.
+
+    Control characters (Unicode category Cc: the C0 range, DEL and the C1 range) and
+    format characters (Cf: bidirectional overrides such as U+202E, zero-width joiners),
+    which a terminal, a diff or a review hides or shows as something else (dm-208).
+    """
+    for char in path:
+        if unicodedata.category(char) in ("Cc", "Cf"):
+            name = unicodedata.name(char, "")
+            return f"U+{ord(char):04X} " + (name if name else "(a control character)")
+    return ""
+
+
+def unprintable_refusal(path: str) -> str:
+    """Why ``path`` is refused when it holds a character `_unprintable` names; else ``""``."""
+    found = _unprintable(path)
+    return (f"the emitted path {path!r} holds {found}, and no emitted path may hold a control "
+            "or format character (DEL, a C1 control, a bidirectional override): it is hidden or "
+            "misshown wherever the path is read. Name the file without it") if found else ""
+
+
 def _artifact_paths(names: list[str]) -> list[Path]:
     """The emitted paths, refused unless each names a distinct file inside the artifact."""
     checked: list[Path] = []
     for relative in names:
         path = Path(relative)
+        if refusal := unprintable_refusal(relative):
+            raise AttemptRefused(refusal)
         if (path.is_absolute() or PureWindowsPath(relative).drive
                 or "\\" in relative or ".." in path.parts or not path.parts
-                or relative.endswith("/") or any(ord(char) < 32 for char in relative)):
+                or relative.endswith("/")):
             raise AttemptRefused(f"{relative!r} is not a file inside the artifact directory; name it by its "
                                  "path from the artifact's root")
         if path in checked:

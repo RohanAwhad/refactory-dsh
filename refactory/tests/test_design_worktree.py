@@ -301,7 +301,8 @@ def test_a_retry_edits_the_file_its_last_attempt_wrote(tmp_path):
     (render({"tool.py": "x = 'long'  # ... (line truncated to 2000 chars)\n"}), "the read tool's note that it cut"),
     ("===EDIT: app.py===\nprint('no pairs')\n", "has text outside its"),
     ("===FILE: ../outside.py===\nx = 1\n", "is not a file inside the artifact directory"),
-], ids=["edit-not-found", "truncated-read", "malformed-edit", "outside-path"])
+    ("===FILE: tool\u202e.py===\nx = 1\n", "U+202E RIGHT-TO-LEFT OVERRIDE"),
+], ids=["edit-not-found", "truncated-read", "malformed-edit", "outside-path", "bidi-path"])
 def test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason(repo, tmp_path, emission, reason):
     """It once ended the run (#330 E5); now the retry is told why, and nothing of it is committed."""
     model = FakeModel(_answers(emission, render({"tool.py": "print('built')\n"})))
@@ -2048,6 +2049,22 @@ def test_absolute_path_is_refused_naming_the_path():
     import re as _re
     with pytest.raises(worktree.AttemptRefused, match=_re.escape("/etc/passwd")):
         repo_change._emitted("===FILE: /etc/passwd===\ncontent\n", edits=True)
+
+
+# ── dm-208: a control or format character in a path is refused by name ─────
+#: One character of each class a path may not hold, and how a refusal names it.
+UNPRINTABLE = [("\x7f", "U+007F (a control character)"), ("\x9b", "U+009B (a control character)"),
+               ("\u202e", "U+202E RIGHT-TO-LEFT OVERRIDE"), ("\u200b", "U+200B ZERO WIDTH SPACE")]
+UNPRINTABLE_IDS = ["DEL", "C1-control", "bidi-override", "zero-width-format"]
+
+
+@pytest.mark.parametrize("char, named", UNPRINTABLE, ids=UNPRINTABLE_IDS)
+def test_a_path_holding_a_control_or_format_character_is_refused_by_name(char, named):
+    import re as _re
+    with pytest.raises(worktree.AttemptRefused, match=_re.escape(named)):
+        repo_change._emitted(f"===FILE: src/a{char}b.py===\ncontent\n", edits=True)
+    with pytest.raises(worktree.AttemptRefused, match=_re.escape(named)):
+        repo_change._emitted(f"===DELETE: src/a{char}b.py===\n", edits=True)
 
 
 # ── T5: malformed header refused, quoting the line in _emitted ─────────────

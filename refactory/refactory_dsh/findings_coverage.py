@@ -194,25 +194,27 @@ def finding_coverage(
     addressed: list[str] = []
     set_aside: list[str] = []
     missing: list[str] = []
+    rows = section.splitlines()
+    # What starts another entry: any finding id. An entry written as a heading reads on
+    # to the next one (`coverage_helpers.entry_lines`, dm-219).
+    entry_ids = re.compile("|".join([FND_ID_RE.pattern] + [
+        re.escape(f['id']) for f in findings if not FND_ID_RE.search(f['id'])]))
 
     for f in findings:
         fid = f['id']
-        # Find lines in section containing this full id.
+        # Find the entries in section that name this full id.
         found_lines: list[str] = []
-        if FND_ID_RE.search(fid):
-            # FND-style id: match by full-id equality via parse_fnd_id
-            for line in section.splitlines():
-                for parsed_id, _, _ in parse_fnd_id(line):
-                    if parsed_id == fid:
-                        found_lines.append(line)
-                        break
-        else:
-            # Path-as-id (e.g. 'strategy/bar.md'): match by exact string
-            # containment in section lines, so the design can address or
-            # set aside files that carried no FND definitions.
-            for line in section.splitlines():
-                if fid in line:
-                    found_lines.append(line)
+        for index, line in enumerate(rows):
+            if FND_ID_RE.search(fid):
+                # FND-style id: match by full-id equality via parse_fnd_id
+                named = any(parsed_id == fid for parsed_id, _, _ in parse_fnd_id(line))
+            else:
+                # Path-as-id (e.g. 'strategy/bar.md'): match by exact string
+                # containment in section lines, so the design can address or
+                # set aside files that carried no FND definitions.
+                named = fid in line
+            if named:
+                found_lines.extend(coverage_helpers.entry_lines(rows, index, entry_ids))
 
         if not found_lines:
             missing.append(fid)

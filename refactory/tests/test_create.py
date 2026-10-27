@@ -18,6 +18,7 @@ from refactory_dsh.create import CreateConfig, CreateError, CreateMode
 from refactory_dsh import create_ops, sandbox
 from refactory_dsh.create_ops import parse_files
 from refactory_dsh.paths import REPO_ROOT
+from test_fast_modes import PLAN, QA_PASS
 from tests_support import (
     FakeModel,
     RESEARCH_ANSWER,
@@ -112,21 +113,11 @@ def test_create_fast_mode_loops_back_on_malformed_header(tmp_path, monkeypatch):
     name = "fast_counter"
     bad_emission = "===FILE: has space.txt===\ncontent\n"
     good_emission = render(good_files(name))
-    QA_PASS = json.dumps({"status": "pass", "checks": [{"name": "structural admission",
-                         "command": "import check", "status": "pass",
-                         "evidence": "the package loads"}],
-                         "findings": [],
-                         "not_run": ["broad research and full reviewer campaign not requested"]})
     mode = CreateFastMode()
     state = mode.state_dict()
     state["knobs"]["single_shot"]["value"] = True
     mode.load_state_dict(state)
-    client = FakeModel([
-        "Change only the requested file, preserve its public behavior, and review the required check result.",
-        bad_emission,
-        good_emission,
-        QA_PASS,
-    ])
+    client = FakeModel([PLAN, bad_emission, good_emission, QA_PASS])
     run = mode.run(tmp_path / "run", model=client,
                    task={"name": name, "brief": "a reusable counter"})
     assert run.exit_ok, run.error
@@ -851,6 +842,17 @@ def test_an_emit_path_that_cannot_be_package_relative_is_refused():
             create_ops._package_relative(bad, NAME)
     # A subdirectory inside the package is legitimate and stays one.
     assert create_ops._package_relative("modes/counter.py", NAME) == "modes/counter.py"
+
+
+@pytest.mark.parametrize("char, named", [
+    ("\x7f", "U+007F (a control character)"), ("\x9b", "U+009B (a control character)"),
+    ("\u202e", "U+202E RIGHT-TO-LEFT OVERRIDE"), ("\u200b", "U+200B ZERO WIDTH SPACE"),
+], ids=["DEL", "C1-control", "bidi-override", "zero-width-format"])
+def test_an_emit_path_holding_a_control_or_format_character_is_refused_by_name(char, named):
+    """dm-208: create mode's path check refuses what `_artifact_paths` refuses."""
+    import re as _re
+    with pytest.raises(ValueError, match=_re.escape(named)):
+        create_ops._package_relative(f"modes/count{char}er.py", NAME)
 
 
 def test_the_missing_manifest_reason_names_the_root_and_what_is_there(tmp_path):

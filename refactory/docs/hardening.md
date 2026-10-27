@@ -831,6 +831,40 @@ head+tail for non-refactory commands.
 - `correction.spec.ts: "acknowledged rerun after exit-3 stop runs the stopped node again"`
 - `correction.spec.ts: "failureDetailOf with run warnings before marker shows reason first"`
 
+## Emission parsing and materialise (#494, dm-208, dm-215)
+
+**Emission path validation.** The path in a `===FILE:`, `===EDIT:` or `===DELETE:`
+header may contain any character except whitespace, `=`, backtick, single quote and
+double quote. Structural safety is enforced after parsing, by `_artifact_paths` in
+`repo_change` (design and design_fast) and `_package_relative` in `create_ops` (create,
+create_fast, edit and edit_fast): no absolute path, no `..`, no backslash, no trailing
+`/`, and no control or format character. A line that starts like a header but does not
+match the format is refused with the offending line quoted, in both parsers.
+
+**Control and format characters are refused by name (dm-208).** A path holding a
+character of Unicode category Cc (the C0 controls, DEL, the C1 controls) or Cf (format
+characters: bidirectional overrides such as U+202E, zero-width characters) is refused,
+naming the character, for example `U+202E RIGHT-TO-LEFT OVERRIDE`. A terminal, a diff
+or a review hides such a character or shows the name as something else, so the file a
+reviewer reads about would not be the file written.
+
+**A malformed header goes back to the builder in every mode (dm-215).** In create and
+the fast modes, as in design mode, `materialise` records a malformed header as
+`emission_refused`, and the gate sends the reason back to `emit` with the line quoted;
+the run does not end there. The refusal bound above still applies.
+
+**Emitted paths are literal pathspecs (dm-215).** Every worktree git call runs with
+`GIT_LITERAL_PATHSPECS=1`: those through `worktree.git`, which delivery's go through
+too, and the check's own in `base_check` and `failfast`. A path such as
+`app/[id]/page.ts` names that one file and is never read as a pattern, so deleting it
+can no longer delete `app/i/page.ts`.
+
+Tests: `test_design_worktree.py::test_a_path_holding_a_control_or_format_character_is_refused_by_name`,
+`test_create.py::test_an_emit_path_holding_a_control_or_format_character_is_refused_by_name`,
+`test_design_worktree.py::test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason`,
+`test_create.py::test_create_fast_mode_loops_back_on_malformed_header` and
+`test_worktree.py::test_delete_bracket_path_does_not_glob_expand`.
+
 ## Judges decide QA in design mode (b37b, measure4-dm149, b39b)
 
 ### The evidence
@@ -1134,7 +1168,6 @@ emission, budget exhaustion, or a person's stop — leaves the worktree clean.
   (default 3). At the limit, it raises an error naming the conflicting files
   without starting a merge. `graph-control redeliver` accepts a run stopped
   there.
-- *Emission path validation.* The path in a `===FILE:`/`===EDIT:`/`===DELETE:` header may contain any character except whitespace, `=`, backtick, single quote, and double quote. Structural safety (`_artifact_paths`: no absolute paths, no `..`, no backslash, no control characters, no trailing `/`) is enforced after parsing. A line that starts like a header but does not match the format is refused with the offending line quoted, in both repo_change and create-mode parsing.
 - *Delivery advance (dm-116).* When delivery pushes a merge commit, the
   finally block advances the worktree record (head = merge, base = main's
   tip) so a later push fast-forwards.
