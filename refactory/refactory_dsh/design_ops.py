@@ -40,7 +40,11 @@ FIRST_CHECK_CACHE = Path(".refactory") / "first-check-cache.json"
 #: What the builder says it updated on the attempt in progress (`note_updated_tests`).
 UPDATED_TESTS = "updated-tests.json"
 #: The line of the builder's completion message that names the tests it updated.
-UPDATED_TESTS_LINE = _re.compile(r"(?im)^[\s>*_`-]*updated tests?[*_`]*\s*[:\-]\s*(.+?)\s*$")
+UPDATED_TESTS_LINE = _re.compile(
+    r"(?im)^[\s>`-]*(?:[*+]\s+)?(?P<em>\*\*|__|\*|_)?updated tests?(?:(?P=em))?\s*[:\-]\s*"
+    r"(?:(?P=em))?\s*(.+?)\s*$")
+#: Paired markdown emphasis, widest first.
+_EMPHASIS = ("**", "__", "*", "_")
 
 #: The reason prepare_design writes when the run is a refinement.  classify_scale
 #: recognises a refine by this constant rather than reading research_scope (which
@@ -2835,7 +2839,7 @@ def note_updated_tests(ctx: Any) -> dict[str, Any]:
             said = (ctx.workdir / str(receipt["final_response"])).read_text()
         except (OSError, UnicodeDecodeError):
             said = ""
-    lines = [_plain(match.group(1)) for match in UPDATED_TESTS_LINE.finditer(said)]
+    lines = [_plain(match.group(2)) for match in UPDATED_TESTS_LINE.finditer(said)]
     lines = [line for line in lines if line.strip(" .`*").lower() not in ("", "none", "no", "n/a")]
     attempt = int(ctx.facts.get("attempts_used") or 0) + 1
     record = ctx.read_json(UPDATED_TESTS, {}) if ctx.exists(UPDATED_TESTS) else {}
@@ -2867,10 +2871,26 @@ def _not_built_section(ctx: Any) -> str:
         *entry.get("not_built", []), ""])
 
 
+def _unwrap(text: str) -> str:
+    """``text`` without emphasis markers that wrap the whole of it in pairs (``**x**``,
+    ``__x__``, ``*x*``, ``_x_``); a lone ``_`` that starts or ends a name stays."""
+    while True:
+        for marker in _EMPHASIS:
+            if (len(text) > 2 * len(marker) and text.startswith(marker)
+                    and text.endswith(marker)):
+                text = text[len(marker):-len(marker)].strip()
+                break
+        else:
+            return text
+
+
 def _plain(line: str) -> str:
-    """An ``Updated tests:`` line without its markdown (bold, code spans): a builder that
-    writes ``**Updated tests:** <id>`` names ``<id>``, not ``** <id>``."""
-    return line.replace("**", "").replace("`", "").lstrip("*_ \t").rstrip("* \t")
+    """An ``Updated tests:`` line without its markdown: code spans, and emphasis paired
+    around the whole line or around one word of it. A builder that writes
+    ``**Updated tests:** **<id>**`` names ``<id>``; a test path that starts or ends with
+    ``_`` keeps it."""
+    text = _unwrap(line.replace("`", "").strip())
+    return " ".join(_unwrap(word) for word in text.split())
 
 
 def _updated_tests_section(ctx: Any) -> str:

@@ -1530,6 +1530,52 @@ def test_acknowledge_takes_a_stopped_checkpoint_that_left_a_pending_marker(tmp_p
     recovery.prepare(root, 'test-run', skip_configuration=True)
 
 
+def _stopped_run(tmp_path: Path, status: str, owner_pid: int) -> Path:
+    root = tmp_path / status
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True)
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps({
+        'status': status, 'run_id': str(root), 'graph': {'name': 'test-run'},
+        'owner_pid': owner_pid, 'file_fingerprints': {}}))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': status}))
+    (refactory / 'run-config.json').write_text(json.dumps({'mode': 'test/run', 'project': str(root)}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+    (refactory / 'agent-delivery/pending').mkdir(parents=True)
+    (refactory / 'agent-delivery/pending/emit.json').write_text(json.dumps({'node': 'emit'}))
+    (refactory / 'graph-controls').mkdir()
+    (refactory / 'graph-controls/001-stop.json').write_text(json.dumps({'action': 'stop', 'id': '001-stop'}))
+    return root
+
+
+@pytest.mark.parametrize('status', ['failed', 'paused', 'executing'])
+def test_acknowledge_keeps_a_queued_stop_on_a_checkpoint_that_is_not_stopped(tmp_path, status):
+    """Only a stopped (ready or halted) checkpoint has its queued stop set aside: on any
+    other the stop is still the person's request, and the next owner applies it."""
+    root = _stopped_run(tmp_path, status, _dead_pid())
+    result = graph_control.request(root, 'acknowledge')
+    assert result['status'] == 'acknowledged' and result['withdrawn_controls'] == []
+    assert (root / '.refactory/graph-controls/001-stop.json').exists()
+
+
+@pytest.mark.parametrize('status', ['ready', 'executing'])
+def test_acknowledge_refuses_an_owner_running_as_another_user(tmp_path, monkeypatch, status):
+    """The signal probe of another user's process is refused (EPERM), which `is_alive`
+    reads as dead; acknowledge must not set aside a live owner's markers."""
+    owner = _dead_pid()
+    root = _stopped_run(tmp_path, status, owner)
+    real_kill = os.kill
+
+    def kill(pid, sig):
+        if pid == owner:
+            raise PermissionError(1, 'Operation not permitted')
+        return real_kill(pid, sig)
+
+    monkeypatch.setattr(os, 'kill', kill)
+    with pytest.raises(ValueError, match='still alive'):
+        graph_control.request(root, 'acknowledge')
+    assert (root / '.refactory/agent-delivery/pending/emit.json').exists()
+
+
 # ── dm-252: Preview returns graph_revision ────────────────────────────────
 
 def test_preview_returns_graph_revision(tmp_path):

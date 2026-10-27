@@ -696,15 +696,73 @@ def test_a_new_attempts_first_self_check_clears_the_last_attempts_judge_verdict(
     assert not (run / design_ops.EARLY_ASKS_VERDICT).exists()
 
 
-@pytest.mark.parametrize("said", ["**Updated tests:** `{line}`", "**Updated tests**: {line}",
-                                  "> _Updated tests:_ **{line}**"])
-def test_markdown_around_the_updated_tests_line_is_not_part_of_the_test_id(tmp_path, monkeypatch, said):
+@pytest.mark.parametrize("said, named", [
+    ("**Updated tests:** `{line}`", "{line}"), ("**Updated tests**: {line}", "{line}"),
+    ("> _Updated tests:_ **{line}**", "{line}"),
+    ("* Updated tests: **tests/test_pin.py::test_pin** (follows ask 1)", "{line}"),
+    # A path that starts or ends with `_` is a name, not emphasis.
+    ("Updated tests: _private/test_pin.py::test_pin (follows ask 1)",
+     "_private/test_pin.py::test_pin (follows ask 1)"),
+    ("Updated tests: tests/test_pin.py::test_pin_ (follows ask 1)",
+     "tests/test_pin.py::test_pin_ (follows ask 1)"),
+    ("Updated tests: tests/test_x.py::test__init__", "tests/test_x.py::test__init__")])
+def test_markdown_around_the_updated_tests_line_is_not_part_of_the_test_id(tmp_path, monkeypatch,
+                                                                            said, named):
     T._Chunks(monkeypatch, fails=set())
     line = "tests/test_pin.py::test_pin (follows ask 1)"
     model = _Builder(T._answers(CLEAN), [f"Done.\n{said.format(line=line)}\n"])
     result = T._design(tmp_path / "run", model, T._target(tmp_path / "repo", PINNED))
     assert result.exit_ok, result.error
-    assert result.facts["updated_tests"] == f"- {line}"
+    assert result.facts["updated_tests"] == f"- {named.format(line=line)}"
+
+
+def test_past_the_budget_a_failure_that_names_no_test_still_stops_with_the_unbuilt_items(
+        tmp_path, monkeypatch):
+    """A whole check that fails naming no test (a build error) is the attempt's failure, not
+    a pass: past the budget it takes the early stop with the judge's not-built items, and
+    the attempt never reaches the reviews."""
+    broken = SandboxResult(ok=False, returncode=2, elapsed_s=0.1,
+                           stdout="error TS2304: Cannot find name 'x'.\nbuild failed\n")
+    real = repo_change.run_check
+
+    def run_check(ctx, command, timeout, **kwargs):
+        if kwargs.get("prepared") and command == CHECK:
+            return broken
+        return real(ctx, command, timeout, **kwargs)
+
+    monkeypatch.setattr(repo_change, "run_check", run_check)
+    run = T._spine_run(T._target(tmp_path / "repo", PINNED), tmp_path, monkeypatch, "abcdef700063",
+                       self_check_fixups=0)
+    T._emit(run, BREAKS, monkeypatch)
+    code, out, err = T._prepare(run, monkeypatch, judge=NEVER_BUILT[0])
+    assert code == 0 and T._label(out) not in ("proceed", "first"), err
+    [record] = T._records(run)
+    assert record["outcome"] == "exhausted" and record["unparsed"]
+    assert "not_built_to_reviews" not in record
+    assert HELPER in T._facts(run)["validation"]
+
+
+def test_an_earlier_attempts_unbuilt_items_are_not_listed_for_a_later_attempt(tmp_path, monkeypatch):
+    """Attempt 1 goes to the reviews past the budget with an item not built, and the QA judge
+    sends it back; attempt 2's judge finds everything built. The synthesis the QA judge and
+    the overwatch read for attempt 2 lists nothing from attempt 1."""
+    from tests_support import qa_judgment
+
+    T._Chunks(monkeypatch, fails=set())
+    held = {"source": "qa", "where": "helper.py:1", "what": "the helper is not there",
+            "why": "the brief's second ask", "severity": "high"}
+    second = render({"tool.py": "VERSION = 1\nNAME = 'tool'\n", "helper.py": "def helper():\n    return 1\n"})
+    answers = T._answers(CLEAN)
+    model = FakeModel([*answers[:-1], qa_judgment("redo", must_fix=[held]), second,
+                       *answers[-5:]], early_asks=[NEVER_BUILT[0]])
+    run = tmp_path / "run"
+    result = T._design(run, model, T._target(tmp_path / "repo", PINNED),
+                       T._mode(self_check_fixups=0), brief=TWO_ASKS)
+    assert result.exit_ok, result.error
+    first, later = T._records(run)
+    assert first["not_built_to_reviews"] and "not_built_to_reviews" not in later
+    assert sum("You are the QA judge." in prompt for prompt in model.prompts) == 2
+    assert "## Asks and corrections not built" not in (run / "reviews/qa-synthesized.md").read_text()
 
 
 # ── the judge on the spine: an agent node the worker dispatches ───────────────

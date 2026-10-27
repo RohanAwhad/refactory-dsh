@@ -305,11 +305,12 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
 
     A stopped checkpoint (``ready`` or ``halted``) is acknowledged too when a
     dispatched worker's pending marker is all that keeps recovery from it (dm-275):
-    a stop during an agent node ends the worker, and the spine records the failed
-    node as retryable (``ready``) while the marker stays. A stop control still queued
-    for the owner that died is set aside with the markers: the run already stopped,
-    and the owner a later resume starts would otherwise apply it as if the person
-    had just asked (dm-244).
+    when the worker dies while its owner lives on (a ``refactory stop`` SIGINT, a kill,
+    a crash), the spine records the failed node as retryable (``ready``) and the
+    marker stays. On such a stopped checkpoint a stop control still queued for the
+    owner that exited is set aside with the markers: the run already stopped, and the
+    owner a later resume starts would otherwise apply it as if the person had just
+    asked (dm-244).
     """
     import fcntl
     from refactory_dsh.run_state import is_alive as _is_alive
@@ -328,9 +329,10 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
             "or a stopped (ready or halted) one that left a dispatched worker's outcome unknown"
         )
 
-    # 2. Verify owner is dead
+    # 2. Verify owner is dead. A process of another user answers the signal probe
+    #    with EPERM, which `is_alive` reads as dead; here it is a live owner.
     owner_pid = saved.get('owner_pid')
-    if isinstance(owner_pid, int) and _is_alive(owner_pid):
+    if isinstance(owner_pid, int) and (_is_alive(owner_pid) or _signal_denied(owner_pid)):
         raise ValueError(
             f'the owner process {owner_pid} is still alive; '
             'wait for it to exit or stop it before acknowledging'
@@ -369,10 +371,13 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
             'size': dest.stat().st_size,
         })
 
-    # Move stop controls queued for the owner that died: the run is stopped already.
+    # Move stop controls queued for the owner that died, on a stopped checkpoint only:
+    # that run is stopped already. On an executing, failed or paused one a queued stop
+    # is still the person's standing request, and the next owner applies it.
     controls_dir = root / '.refactory/graph-controls'
     withdrawn_stops: list[str] = []
-    for control in sorted(controls_dir.glob('*.json')) if controls_dir.is_dir() else []:
+    stopped = status in STOPPED_WITH_MARKERS
+    for control in sorted(controls_dir.glob('*.json')) if stopped and controls_dir.is_dir() else []:
         try:
             queued = json.loads(control.read_text())
         except (OSError, json.JSONDecodeError):
@@ -466,6 +471,17 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
                       if withdrawn_stops else '')
                    + '. Run "refactory graph-control resume" to continue.',
     }
+
+
+def _signal_denied(pid: int) -> bool:
+    """Whether ``pid`` exists but belongs to another user (the probe is refused)."""
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 # ── withdraw ───────────────────────────────────────────────────────────────
