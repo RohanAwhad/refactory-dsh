@@ -2097,19 +2097,25 @@ and each cost a full round: a second emit and a second review fork.
 
 ### What runs, and when
 
-`prepare_check` runs the self-check (`design_ops._self_check`) on every applied
-attempt, round 1 included: after `prepare_attempt` has installed, run `generate`
-(amending what it writes into the attempt) and run `setup`, and before the review
-fork. The repository's `docs:generate` now also regenerates the lowering
-snapshots (`regenerate_snapshots`), so the run's generate step keeps them current.
-It runs the selected tests in the attempt's prepared worktree through
-`repo_change.run_check(prepared=True)` and `check_digest.build_probe_command`.
+The self-check runs on every applied emission, before the review fork: after
+`prepare_attempt` has installed, run `generate` (amending what it writes into the
+attempt) and run `setup`. The repository's `docs:generate` now also regenerates the
+lowering snapshots (`regenerate_snapshots`), so the run's generate step keeps them
+current. It runs in the attempt's prepared worktree through
+`repo_change.run_check(prepared=True)`.
+
+- **An attempt's first emission** runs the whole check once (b48a; "The first
+  self-check, beside the early asks judge" below): the builder gets every failure in
+  one pass.
+- **A fix-up's emission** runs the selection below in chunks within the self-check's
+  time limit (`check_digest.build_probe_command`), in `prepare_check`
+  (`design_ops._fixup_self_check`).
 
 ### The selection (`test_selection`)
 
 The engine reads the repository's own imports; it names no test or file.
 
-- **On a fix-up, the tests the last self-check found failing,** first, as ids.
+- **The tests the last self-check found failing,** first, as ids.
 - **Engine tests, when the emission changed a hub.** A hub is a source
   module at least a quarter of the check's Python test files import (here the
   `nn` package, the registry and the design graph). The engine tests are the
@@ -2117,9 +2123,11 @@ The engine reads the repository's own imports; it names no test or file.
   files: the boundary record, the docs), and the tests that import every hub,
   the ones built on the whole engine (lowering smoke, the edit-design tests with
   their mode validation, the design worktree tests).
-- **The test files the emission touched.**
+- **The test files the fix-up changed**: the diff from the commit the last self-check
+  ran on, not the whole attempt's, which the first self-check ran whole
+  (`design_ops._fixup_changes`; the record's `how_selected.fixup_changed`).
 - **The last check's failures** that are not inherited (dm-128's set), as ids.
-- **The tests that import a changed module**, depth 1 (`from package import name`
+- **The tests that import a module the fix-up changed**, depth 1 (`from package import name`
   resolves to the submodule), and the structural tests when a source changed but no
   hub did: **cheapest first**, so a slow file at the limit does not hide cheap ones
   behind it. A file's cost is the seconds an earlier self-check of the run timed it
@@ -2168,26 +2176,37 @@ and how long each chunk took.
 
 ### Only the change's failures go back
 
-A failure counts only by the check's own rule (`base_check.compare_failures`).
-Failures that could be inherited (the change did not touch their file and neither
-the brief nor the design names them) are looked up on the base
-(`base_check.targeted_base_failures`): the check's cached base result when there
-is one; otherwise only those tests run in the base worktree base_check prepares,
+Design mode has one rule for what is inherited, in the self-check and in the whole
+check beside the reviews alike (`base_check.design_comparison`, b48a): a failure the
+unchanged base fails too is the base's, whatever file the attempt touched and whatever
+design.md says, unless the brief or an approved correction names the test, by its id,
+its name or its file, as a whole word or path (`base_check.names_test`: `test_a` is not
+named by `test_all_paths`). A test the run exists to fix goes back while it fails. The
+fast modes keep the three-condition rule (`base_check.compare_failures`). Every failure
+whose file is on the base is looked up there (`base_check.targeted_base_failures`):
+the check's cached base result when there is one; otherwise only those tests run in
+the base worktree base_check prepares,
 after the run's generate and setup there, with the base's own HOME. What a base
 run learns about a test is kept (`.refactory/base-targeted.json`), with whether the
 base was prepared for that base commit, setup and generate, so a fix-up runs only
 new tests there and does not prepare the base again. A failure id the parser cut
 (a parametrized test whose parameter holds a space, `test_x[a b]` read as
 `test_x[a`) cannot be passed back to pytest, so its whole file runs instead, on the
-base and on a fix-up's rerun. A base that cannot be prepared, runs out of time or
-names no result is unavailable, and then nothing is inherited.
+base and on a fix-up's rerun. A test in a file the attempt added has no base to fail
+on. A base that cannot be prepared, runs out of time or names no result is
+unavailable, and then nothing is inherited.
 
 ### The fix-up, and its bound
 
-The change's failures go back to emit through prepare_check's existing reloop, as
-a refused emission does: `validation` carries them on the walker and the
-verdict's reason on the spine. The feedback leads with "self-check fix-up N of M",
-then the failing ids, their digest, the design's `[left: …]` constraint lines
+The change's failures go back to emit through a reloop, as a refused emission does
+(`prepare_check`'s for a fix-up's self-check, `gate_self_check`'s for the first):
+`validation` carries them on the walker and the verdict's reason on the spine. The
+feedback leads with "self-check fix-up N of M", then the failing ids, their digest,
+the asks the early asks judge found not built, the brief and the approved corrections
+whole (the brief cut at about 6,000 characters, with a note) with what to do about a
+test that pins behaviour they change (dm-270: update it, keeping what it guards, and
+name it in the completion message as `Updated tests: <test id> (follows <the ask or
+correction>)`; otherwise fix the code), the design's `[left: …]` constraint lines
 (R5), and the failures that are the base's. Nothing is spent: `attempts_used`,
 `check_attempts_used` and `review_attempts_used` do not move, and no review runs.
 The next emission is amended into the attempt (`worktree.commit_attempt(amending=True)`,
@@ -2207,13 +2226,17 @@ before its fix-ups (`review_feedback`).
   intercepted as ``empty_diff_fixup``: if the fix-up budget allows, the attempt
   loops back to emit; otherwise the build early-stops as exhausted.
 - A result that says nothing (a chunk stopped at the limit, a runner it cannot
-  target, nothing collected, a failure that names no test) goes on to the reviews
-  and the whole check.
+  target, nothing collected, a chunk failure that names no test) goes on to the
+  reviews and the whole check. A first self-check whose whole check fails without
+  naming a test (a build error) is the attempt's failure, not a pass: it goes back
+  with what the check printed, and the fix-up's self-check, with nothing to target,
+  runs the whole check again.
 
 prepare_check's `max_iterations` follows the knobs (`design.prepare_check_iterations`,
 applied by `DesignMode.graph` and `DesignMode.state_dict`, so the walker and the
 lowered graph get the same number). Its reloops are fix-ups, early stops and
-refusals: applied emissions are at most the attempts (`check_attempt_cap` when it is
+refusals (the first self-check's go through `gate_self_check`, below, under the same
+bound): applied emissions are at most the attempts (`check_attempt_cap` when it is
 above `check_attempts`) plus the run's fix-ups, each after at most
 `refusal_attempts − 1` refusals, so the limit is
 (attempts + fix-ups + 1) × refusals + fix-ups + attempts + 1: 45 with the defaults
@@ -2228,7 +2251,9 @@ directory: the attempt, the commit, the fix-ups before it, the selection and how
 it was made, what ran and what was cut, the commands, the limit, the duration,
 the outcome (`pass`, `fixup`, `exhausted`, `inherited`, `inconclusive`,
 `nothing selected`, `empty_diff_fixup`), the failing ids, the ones inherited and
-what the base said. Each chunk's timing carries its tests' seconds when it has them,
+what the base said; a first self-check's also what the early asks judge said
+(`judge`: `judged`, or `failed` with why) and the items it found not built
+(`not_built`), and a whole check that failed without naming a test (`unparsed`). Each chunk's timing carries its tests' seconds when it has them,
 and `how_selected.alone` names the files run one per chunk.
 It also prints one `refactory: self-check …` line, as a gate logs. `refactory
 status` shows a fix-up through the lines it already prints: the gate's reloop
@@ -2244,8 +2269,68 @@ and a bracket-less ``tests/test_x.py::test_p`` covers
 tests.  When the rerun succeeds, its failures are recorded; when no time remains
 for the rerun, a lower-bound timing entry is recorded and the chunk is cut.
 
+### The first self-check, beside the early asks judge (b48a)
+
+**Why.** b47a_model_source (2026-10-26) spent three build rounds after approval. Its
+first self-check ran 82 files in chunks, found 25 failures and cut 10 files at the
+300 s limit; the fix-up then found 5 more in a file the cut had hidden. Its refusal
+function was defined but never called for three rounds, its tests passing, until the
+QA judge saw it.
+
+**The graph.** `prepare_check` routes an attempt's first emission `first`, to a fork:
+
+- **`first_self_check`** (op) runs the brief's whole check once in the prepared
+  worktree and compares what fails with the base (`design_ops._whole_self_check`),
+  then writes `self-check-first.json`. `prepare_check` names the attempt it is for in
+  `self-check-ticket.json`.
+- **`early_asks_check`** (agent, an optional branch, no workspace of its own) reads
+  `changes.diff` against the brief's asks and the approved corrections and writes
+  `early-asks.json`: for each ask and correction, built or not built, with
+  `path:line` evidence for a built one. It judges presence, not quality: the QA
+  judge's bar is unchanged. On the spine the worker dispatches it, as it does every
+  agent node.
+
+**`gate_self_check`** (gate, after `join_self_check`) sends the attempt's own failures
+and every item the judge found not built back as one fix-up, with the self-check's
+budget and limits: the not-built items even when every test passes. A verdict that
+is missing, is not one JSON object, lists no ask (or no correction when the person
+gave some), or calls an item built without a `path:line` is unreadable, never "all
+built" (`design_ops.parse_early_asks`): the judge is asked again (`reread` to the
+fork, which runs again; `first_self_check` keeps its result, so the check does not run
+twice) as often as `judge_rereads` allows (1), then the attempt goes on without a
+verdict, with `judge.status: failed` in the record and a run warning. A failed judge
+branch is recorded missing (`reviews/early_asks_check-missing.txt` on the spine) and
+read the same way. `gate_self_check`'s limit is `(1 + judge_rereads) ×
+prepare_check_iterations + 1` (`design.gate_self_check_iterations`, 91 with the
+defaults): it runs once an attempt's first self-check, so it never ends a run.
+
+**Reuse.** When the first self-check goes on to the reviews (a pass, or failures all
+inherited), its whole-check result is kept (`.refactory/first-check-cache.json`) and the
+check beside the reviews uses it instead of running the check again while the commit,
+the check command, and the setup and generate commands are the ones it ran with; its
+evidence says `reused from the first self-check, commit <sha>`. Only `gate_self_check`
+keeps one, so a fix-up's partial run never stands for the whole check, which stays
+binding.
+
+**Updated tests (dm-270).** The builder names each test it updated, and the change it
+follows, on one line of its completion message (`Updated tests: …`).
+`design_materialise` keeps the attempt's lines (`updated-tests.json`, the
+`updated_tests` fact); the code reviewer and the QA director read them as they start,
+and the QA judge reads them, beside the test files that failed in a self-check and
+changed since, in `qa-synthesized.md`'s `## Updated tests`. A test weakened to pass is
+a must-fix unless the update follows an ask or correction.
+
 ### Tests
 
+`refactory/tests/test_first_self_check.py`: the graph on both runtimes, the judge's
+verdict (unreadable, never all built), every failure in round 1 with a slow file a
+chunked run cuts, the reuse and each field of its key, no reuse after a fix-up, a whole
+check that names no test, the one inheritance rule through both checks (a touched test
+file, a test named only in design.md, one the brief or a correction names, a name that
+only starts a word), b47a's first two self-checks replayed from its records, the judge
+on the walker and through the worker on the spine (not built with failing tests and
+with passing ones, asked again, failing, never ending the run), the message, the
+updated tests, and a fix-up's selection.
 `refactory/tests/test_self_check.py`: the loop through the walker's design graph
 (a stale generated file and a pinned test fixed inside the attempt; a clean
 emission; the bound and the early stop; the worst case with two refusals before
@@ -2524,9 +2609,10 @@ to 10 minutes (dm-149), so the reviews' whole time was added to every round.
 1. **`prepare_check`** (gate, before the review fork) settles the commit the check and
    the reviewers both see: `repo_change.prepare_attempt` installs the environment, runs
    the `generate` command (its tracked-file changes amended into the attempt) and the
-   `setup` build in the run's worktree. Nothing moves the commit after this. It also
-   reruns last attempt's failing tests there (the targeted pre-pass): an attempt that
-   still fails them goes back to the builder without a review. A preparation that fails
+   `setup` build in the run's worktree. Nothing moves the commit after this. Then the
+   self-check ("Self-check inside the attempt"): an attempt's first runs the whole check
+   beside the early asks judge, and an attempt that fails it goes back to the builder
+   without a review. A preparation that fails
    is judged right there by the whole sequential check (`check_artifact`), which reports
    it with its triage as before. It first clears what a last attempt prepared or
    decided, records the attempt in `check-prep.json`, and sets `review_feedback` (what
@@ -2539,7 +2625,10 @@ to 10 minutes (dm-149), so the reviews' whole time was added to every round.
    keeps what it wrote into HOME points at the copy. The reviewers read and run the delivered files in the
    run's worktree meanwhile; neither sees, or deletes, what the other leaves. The copy is
    kept across attempts (moved to the new commit, the last check's files put back, its
-   installed environment kept) and removed with the base worktree. The op records its
+   installed environment kept) and removed with the base worktree. When the attempt's
+   first self-check ran the whole check on this commit, with this command, setup and
+   generate, and went on, the op uses that result instead of running the check again,
+   and its evidence says so. The op records its
    decision, with the check command it ran, in `check-verdict.json`; a node inside a
    fork may not send the run outside it. A check that raises (an unrepairable failure)
    is recorded and raised by `gate_check`, because the node runner retries a failed op

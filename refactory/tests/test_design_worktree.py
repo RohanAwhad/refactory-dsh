@@ -1917,18 +1917,56 @@ def test_base_check_cannot_run_stops_unavailable(tmp_path):
 
 
 def test_design_named_failure_not_excused(tmp_path):
-    """A test named in the brief is not excused even if it also fails on the base:
-    the self-check sends it back (b41a, updated for b48a: only brief/corrections
-    naming prevents inheritance, not design.md naming)."""
+    """A test named only in design.md, failing on the base too, is the base's: design mode's
+    one rule (b48a) lets the brief and the corrections keep a test, not the design. The
+    self-check calls it inherited and the attempt goes on; a brief that names it keeps it
+    (`test_a_brief_named_failure_is_not_excused`)."""
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_oblique.py", "def test_oblique():\n    assert False\n")
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
     fixed = render({"test_oblique.py": "def test_oblique():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
 
+    naming_appendix = "\n\n## Tests to fix\n- test_oblique.py::test_oblique\n"
+
+    class DesignNamingModel(FakeModel):
+        """Intercepts the design_doc prompt to write a design.md that names the test."""
+        def complete(self, prompt, *, system="", workdir=None):
+            answer = super().complete(prompt, system=system, workdir=workdir)
+            if "Write the design document" in prompt and workdir is not None:
+                design_path = Path(workdir) / "design.md"
+                if design_path.exists():
+                    existing = design_path.read_text()
+                else:
+                    existing = answer
+                design_path.write_text(existing + naming_appendix)
+            return answer
+
     result = DesignMode().run(
         tmp_path / "run",
-        model=FakeModel(_answers(not_fixed, fixed,
-                                 )),
+        model=DesignNamingModel(_answers(not_fixed, fixed,
+                                         )),
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "the validation test for contract X fails",
+              "check": "python -m pytest -q", "target": str(repo)},
+    )
+    assert result.exit_ok, result.error
+    assert "test_oblique.py::test_oblique" in (tmp_path / "run" / "design.md").read_text()
+    [inherited] = _self_checks(tmp_path / "run")
+    assert inherited["outcome"] == "inherited" and inherited["failing_ids"] == []
+    assert inherited["inherited_filtered"] == ["test_oblique.py::test_oblique"]
+    assert result.facts["inherited_failures"] == ["test_oblique.py::test_oblique"]
+
+
+def test_a_brief_named_failure_is_not_excused(tmp_path):
+    """A test the brief names is not excused even when the base fails it too: the self-check
+    sends it back (b41a, b48a)."""
+    repo = git_repo(tmp_path / "repo")
+    _commit(repo, "test_oblique.py", "def test_oblique():\n    assert False\n")
+    not_fixed = render({"tool.py": "print('did not fix it')\n"})
+    fixed = render({"test_oblique.py": "def test_oblique():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
+    result = DesignMode().run(
+        tmp_path / "run",
+        model=FakeModel(_answers(not_fixed, fixed)),
         verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": "fix test_oblique.py::test_oblique — the validation test for contract X fails",
               "check": "python -m pytest -q", "target": str(repo)},

@@ -349,9 +349,71 @@ describe('design-graph fixture fork_qa carries optional_targets', () => {
     const s = new Spine(graph)
     advance(s, 'prepare_check', 'proceed')
     expect(spineEdges(graph, 'prepare_check')).toEqual(
-      [['emit', 'reloop'], ['fork_qa', 'proceed'], ['report', 'draft']])
+      [['emit', 'reloop'], ['fork_qa', 'proceed'], ['fork_self_check', 'first'], ['report', 'draft']])
     s.verdict('prepare_check', 'draft', 'emissions refused 3 consecutive times')
     expect(ids(s)).toEqual(['report'])
+  })
+
+  /** One build round from emit to the gate after the first self-check's fork (b48a). */
+  function firstSelfCheck(s: Spine): void {
+    s.complete('emit')
+    s.complete('materialise')
+    s.verdict('prepare_check', 'first')
+    expect(ids(s)).toEqual(['fork_self_check'])
+    s.complete('fork_self_check')
+    // The whole check and the early asks judge run at once.
+    expect(ids(s).sort()).toEqual(['early_asks_check', 'first_self_check'])
+    expect(s.view('early_asks_check')._type).toBe('AgentNode')
+    s.complete('first_self_check')
+    expect(ids(s)).toEqual(['early_asks_check'])
+    s.complete('early_asks_check')
+    s.complete('join_self_check')
+    expect(ids(s)).toEqual(['gate_self_check'])
+  }
+
+  it('an attempt\'s first self-check runs beside the early asks judge, and a fix-up\'s runs alone', () => {
+    const s = new Spine(graph)
+    advance(s, 'emit', 'proceed')
+    expect(spineEdges(graph, 'gate_self_check')).toEqual(
+      [['emit', 'reloop'], ['fork_qa', 'proceed'], ['fork_self_check', 'reread'], ['report', 'draft']])
+    firstSelfCheck(s)
+    s.verdict('gate_self_check', 'reloop', 'self-check fix-up 1 of 2: the early asks judge found 1 ask(s) or correction(s) not built')
+    expect(ids(s)).toEqual(['emit'])
+    // The fix-up's self-check runs in prepare_check: no fork, no judge.
+    s.complete('emit')
+    s.complete('materialise')
+    s.verdict('prepare_check', 'proceed')
+    expect(ids(s)).toEqual(['fork_qa'])
+  })
+
+  it('a judge asked again reruns only the fork, and the gate never ends the run however often its pair is used', () => {
+    const s = new Spine(graph)
+    advance(s, 'emit', 'proceed')
+    let judged = 0
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      firstSelfCheck(s)
+      judged += 1
+      // The judge's verdict could not be read: the fork runs again, the gate is due again.
+      s.verdict('gate_self_check', 'reread', 'the early asks judge\'s verdict could not be read')
+      expect(ids(s)).toEqual(['fork_self_check'])
+      s.complete('fork_self_check')
+      s.complete('first_self_check')
+      s.complete('early_asks_check')
+      s.complete('join_self_check')
+      judged += 1
+      s.verdict('gate_self_check', 'reloop', 'self-check fix-up 1 of 2')
+      expect(s.isHalted()).toBe(false)
+      // The fix-up's self-check spends the attempt (the early stop), back to emit.
+      s.complete('emit')
+      s.complete('materialise')
+      s.verdict('prepare_check', 'reloop', 'check attempts: the early stop')
+      expect(s.isHalted()).toBe(false)
+    }
+    expect(judged).toBe(16)
+    expect(s.reloops('gate_self_check')).toEqual({ used: 16, cap: 91, target: 'emit' })
+    firstSelfCheck(s)
+    s.verdict('gate_self_check', 'proceed')
+    expect(ids(s)).toEqual(['fork_qa'])
   })
 })
 

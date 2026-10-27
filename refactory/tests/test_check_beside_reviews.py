@@ -34,8 +34,7 @@ def _edges(graph):
 def test_the_check_is_a_branch_of_the_review_fork():
     graph = DesignMode().build()
     edges = _edges(graph)
-    assert ("materialise", "early_asks_check", None) in edges
-    assert ("early_asks_check", "prepare_check", None) in edges
+    assert ("materialise", "prepare_check", None) in edges
     assert ("prepare_check", "emit", "reloop") in edges
     assert ("prepare_check", "fork_qa", "proceed") in edges
     assert "check" in graph.nodes["fork_qa"].targets
@@ -238,25 +237,17 @@ def test_a_check_that_stops_the_run_is_recorded_once_and_raised_after_the_review
 def test_prepare_check_sends_back_before_the_reviews_when_last_attempts_failures_remain(
         tmp_path, monkeypatch):
     from refactory_dsh import failfast, repo_change, test_selection
-    from refactory_dsh.design_ops import EARLY_ASKS_FILE
-    from types import SimpleNamespace
+    from refactory_dsh.sandbox import SandboxResult
+    from tests_support import early_asks_judgment
 
     ctx = _ctx(tmp_path)
     monkeypatch.setattr(repo_change, "prepare_attempt", lambda ctx, timeout: [])
-    # The first self-check (b48a) runs the full check command, not targeted_prepass.
-    # Give test_selection.select a non-empty selection so the full command runs.
+    # The attempt's first self-check (b48a) runs the whole check once, beside the judge.
     monkeypatch.setattr(test_selection, "select",
                         lambda *a, **k: test_selection.Selection(tests=["t.py"]))
-    # Mock run_check to return a failing result for the first self-check.
-    _fail = SimpleNamespace(
-        ok=False, returncode=1,
-        stdout="FAILED t.py::x - AssertionError\n1 failed in 0.01s\n",
-        stderr="", timed_out=False, elapsed_s=0.1, timeout_s=60)
-    _fail.problem = lambda: "exit code 1"
-    monkeypatch.setattr(repo_change, "run_check", lambda *a, **kw: _fail)
-    # Write the early-asks-check result (the graph node runs before prepare_check).
-    ea_path = ctx.workdir / EARLY_ASKS_FILE
-    ea_path.write_text('{"items": []}')
+    failed = SandboxResult(ok=False, returncode=1, elapsed_s=0.1,
+                           stdout="FAILED t.py::x - AssertionError\n1 failed in 0.01s\n")
+    monkeypatch.setattr(repo_change, "run_check", lambda *a, **kw: failed)
     early_stops = []
     monkeypatch.setattr(design_ops, "_early_stop", lambda ctx, prepass, prev, base: (
         early_stops.append(prepass.failing_ids) or nn.Verdict("reloop", "still failing")))
@@ -264,13 +255,17 @@ def test_prepare_check_sends_back_before_the_reviews_when_last_attempts_failures
     ctx.write_json(CHECK_PREP, {"attempt": "a0", "commit": "c1", "root": str(tmp_path)})
     ctx.write_json(CHECK_VERDICT, _decision("proceed", attempt="a0"))
     ctx.set_fact("validation", "what went wrong last time")
-    sent_back = design_ops.prepare_check(ctx)
+    assert design_ops.prepare_check(ctx) == "first"
+    assert not ctx.exists(CHECK_PREP) and not ctx.exists(CHECK_VERDICT)
+    assert design_ops.first_self_check(ctx) == {}
+    ctx.write_text(design_ops.EARLY_ASKS_VERDICT, early_asks_judgment())
+    sent_back = design_ops.gate_self_check(ctx)
     # A still-failing test goes back as a fix-up first, spending nothing.
     assert sent_back == "reloop" and sent_back.reason.startswith("self-check fix-up 1 of 2")
     assert early_stops == [] and not ctx.facts.get("attempts_used")
     assert not ctx.exists(CHECK_PREP)  # no review starts on this attempt
     assert not ctx.exists(CHECK_VERDICT)
-    # Second call: fix-up self-check uses targeted_prepass (b48a).
+    # A fix-up's self-check runs in prepare_check, on what failed and what the fix-up changed.
     go = failfast.PrepassResult(
         ran=True, early_stop=False, targeted_command="pytest t.py::x", check_mode="full",
         result=None, digest_text="", selection=["t.py::x"], ran_ids=["t.py::x"],
