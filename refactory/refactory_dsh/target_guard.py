@@ -8,11 +8,14 @@ through its declared output (#319). A run with its own worktree (`worktree.py`, 
 never works in the target, so this module is its backstop rather than its isolation:
 the baseline is recorded at `prepare`, and every agent node of a worktree run fails
 when it changes the target while it ran (dm-159). An output-only agent also fails
-when the run's own worktree changed.
+when the run's own worktree changed. Every agent node of a recorded run also fails
+when it changes refactory's own checkout -- the driver, or the run's pin -- where that
+is not the target (:func:`checkouts`, dm-164).
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -476,12 +479,14 @@ def _read_stray_record(root: Path) -> dict[str, Any]:
 
 
 def restore_target(root: Path, before: dict[str, Any],
-                   baseline_dir: Path, workdir: Path) -> dict[str, Any]:
+                   baseline_dir: Path, workdir: Path, *,
+                   exclude: tuple[Path, ...] = ()) -> dict[str, Any]:
     """Restore the target to its pre-node state on refusal.
 
     Moves current target files to ``target-set-aside/``, writes pre-node bytes back.
     Uses a per-target stray record under ``fcntl`` lock to prevent parallel agents
-    from undoing each other's restores (dm-159).
+    from undoing each other's restores (dm-159). ``exclude`` names the directories
+    ``before`` was taken without, so they are compared, and touched, no more than then.
 
     Returns ``{'restored': [paths], 'set_aside': str, 'errors': [msgs], 'head_moved': bool}``.
     """
@@ -496,7 +501,7 @@ def restore_target(root: Path, before: dict[str, Any],
         result["errors"].append("too many paths to compare")
         return result
 
-    after = state(root, exclude=(Path(workdir),))
+    after = state(root, exclude=(Path(workdir), *exclude))
     if after.get("changes") is None:
         result["errors"].append("too many paths to compare")
         return result
@@ -619,3 +624,212 @@ def restore_target(root: Path, before: dict[str, Any],
         lock_fd.close()
 
     return result
+
+
+# ── refactory's own checkouts (dm-164) ───────────────────────────────────────
+#
+# An agent that runs a refactory tool with the contract's Python imports refactory from
+# the checkout that Python belongs to -- the driver the run launched from, or the pin it
+# moved to when the driver moved -- and the tool writes there from any directory: an emit
+# builder ran a generator that way and wrote into the driver (b32l, 2026-10-21). When that
+# checkout is not the run's target, nothing above watches it, so every agent node of a
+# recorded run gets a snapshot of it, and a change there is refused and restored exactly
+# as one to the target is.
+
+#: Where a run's launch is recorded: `refactory ceo` writes the ``driver`` (`pin.record_driver`)
+#: and a pinned resume adds its ``pin_checkout`` (`pin.resolve_pin`).
+RUN_CONFIG = Path(".refactory/run-config.json")
+
+
+def _overlaps(one: Path, other: Path) -> bool:
+    return one == other or one.is_relative_to(other) or other.is_relative_to(one)
+
+
+def _recorded_driver(workdir: Path) -> Path | None:
+    """The checkout the run's record says its workers import refactory from: the pin, else the driver."""
+    try:
+        driver = json.loads((Path(workdir) / RUN_CONFIG).read_text()).get("driver")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(driver, dict):
+        return None
+    found = driver.get("pin_checkout") or driver.get("checkout")
+    return Path(found) if isinstance(found, str) and found else None
+
+
+def checkouts(workdir: Path, source: Path) -> list[Path]:
+    """The refactory checkouts an agent node of this run must leave alone, besides its target.
+
+    ``source`` is the directory the contract's Python imports refactory from (the
+    contract's ``refactory_source``): the driver on the walker, and the pin on a pinned
+    run's spine worker, which re-executes under the pin's Python. The run's record
+    (:data:`RUN_CONFIG`) adds the pin when the run is pinned and the driver otherwise,
+    for a dispatch whose own Python is not the run's. Only git checkouts count (not an
+    install a checkout ignores, such as one in its .venv), and none that is, holds or
+    lies in the run's target or its worktree: those are the target
+    guard's own, so a run on refactory itself is watched exactly as before. A run that
+    recorded no target (no `record`) is not watched here either.
+    """
+    baseline = _read(workdir)
+    if baseline is None:
+        return []
+    candidates: list[Path] = []
+    top = _source_checkout(str(source))
+    if top is not None:
+        candidates.append(Path(top))
+    recorded = _recorded_driver(workdir)
+    if recorded is not None:
+        candidates.append(recorded)
+    own = [Path(baseline["root"]).resolve(), *(Path(path).resolve() for path in baseline.get("also") or ())]
+    found: list[Path] = []
+    for candidate in candidates:
+        path = candidate.expanduser().resolve()
+        if path in found or not (path / ".git").exists() or any(_overlaps(path, mine) for mine in own):
+            continue
+        found.append(path)
+    return found
+
+
+@functools.lru_cache(maxsize=None)
+def _source_checkout(source: str) -> str | None:
+    """The checkout a package directory belongs to, asked once per process: it never moves under one.
+
+    A package a checkout ignores (an install in its .venv) is not that checkout's code.
+    """
+    top = _git(Path(source), "rev-parse", "--show-toplevel")
+    if not top or not top.strip() or _git(Path(source), "check-ignore", "-q", source) is not None:
+        return None
+    return top.strip()
+
+
+#: How many space-separated fields come before the path in each `git status --porcelain=v2`
+#: entry: changed, renamed or copied (whose old path follows as a field of its own), unmerged,
+#: untracked.
+_V2_FIELDS = {"1": 8, "2": 9, "u": 10, "?": 1}
+
+
+def _porcelain_v2(listing: str) -> tuple[str | None, list[str]]:
+    """The HEAD commit and the paths `git status --porcelain=v2 --branch -z` names.
+
+    As :func:`_porcelain` reads v1, a rename's old path is skipped.
+    """
+    fields = listing.split("\0")
+    head: str | None = None
+    paths: list[str] = []
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if entry.startswith("# branch.oid "):
+            oid = entry.removeprefix("# branch.oid ").strip()
+            head = None if oid == "(initial)" else oid
+            continue
+        count = _V2_FIELDS.get(entry[:1])
+        if count is None:
+            continue
+        parts = entry.split(" ", count)
+        if len(parts) > count:
+            paths.append(parts[count])
+        if entry.startswith("2 "):
+            index += 1
+    return head, paths
+
+
+def _checkout_state(root: Path, workdir: Path) -> dict[str, Any]:
+    """What :func:`state` says of a whole git checkout, in one git call rather than seven.
+
+    Every agent node takes two of these, so they are kept cheap. The root is the
+    checkout's top (:func:`checkouts` takes only those), and its HEAD stands for its
+    committed content, so a commit there is a change, as one in a worktree run's target is.
+    """
+    root = Path(root).resolve()
+    skipped = [root / ".factory", *(Path(path).resolve() for path in _checkout_excludes(root, workdir))]
+    specs = [f":(exclude,literal){path.relative_to(root)}" for path in skipped
+             if path != root and path.is_relative_to(root)]
+    listing = _git(root, "status", "--porcelain=v2", "--branch", "--no-ahead-behind", "-z",
+                   "--untracked-files=all", "--", ".", *specs)
+    if listing is None:
+        raise ValueError(f"git cannot report the state of {root}")
+    head, paths = _porcelain_v2(listing)
+    found: dict[str, Any] = {"root": str(root), "git": True, "head": head, "branch": None, "tree": head}
+    if root in skipped:
+        # The run's own directory is the checkout: everything in it is the run's.
+        return {**found, "changes": {}}
+    if len(paths) > LIMIT:
+        return {**found, "changes": None}
+    return {**found, "changes": {path: _digest(root / path) for path in sorted(paths)}}
+
+
+def _checkout_excludes(root: Path, workdir: Path) -> tuple[Path, ...]:
+    """What a checkout's snapshot leaves out: the run's own directory and the environments installs create."""
+    return (Path(workdir), root / ".venv", root / "node_modules")
+
+
+def watch_checkouts(workdir: Path, paths: list[Path]) -> dict[str, dict[str, Any]]:
+    """Each checkout's state before an agent node runs, keyed by its path.
+
+    A checkout git cannot report on is left unwatched with a warning, not a refusal: the
+    node has done nothing yet, and the target's own guard still holds.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        try:
+            snapshot = _checkout_state(path, workdir)
+        except (OSError, ValueError) as error:
+            warn(f"refactory's own checkout {path} cannot be watched during this node: {error}")
+            continue
+        found[str(path)] = {**snapshot, "watched_at": datetime.now(timezone.utc).isoformat()}
+    return found
+
+
+def strayed_checkouts(workdir: Path, before: dict[str, dict[str, Any]] | None) -> dict[str, list[str]]:
+    """What changed in each watched checkout since :func:`watch_checkouts`; unchanged ones are left out.
+
+    Read like the target of a worktree run: its files and its committed content, and a
+    change another node's refusal already undid is not this node's (:func:`_discount_strays`).
+    """
+    changed: dict[str, list[str]] = {}
+    for path, earlier in (before or {}).items():
+        root = Path(path)
+        now = _discount_strays(earlier, _checkout_state(root, workdir))
+        differences = _compare(earlier, now, commits=False)
+        if differences:
+            changed[path] = differences
+    return changed
+
+
+def checkout_baseline(directory: Path, path: str | Path) -> Path:
+    """Where one dispatch keeps a checkout's pre-node bytes; its set-aside copies go beside it."""
+    return Path(directory) / "checkouts" / _target_slot(Path(path)) / "target-baseline"
+
+
+def restore_checkout(path: str, before: dict[str, Any], directory: Path, workdir: Path) -> dict[str, Any]:
+    """Put a checkout back as it was before the node, as :func:`restore_target` puts a target back."""
+    root = Path(path)
+    return restore_target(root, before, checkout_baseline(directory, path), workdir,
+                          exclude=_checkout_excludes(root, workdir)[1:])
+
+
+def checkout_refusal(node: str, target: str | None, changed: dict[str, list[str]],
+                     restored: dict[str, dict[str, Any]], *, set_aside: str | None = None) -> str:
+    """Why an agent node that changed one of refactory's own checkouts is refused."""
+    parts: list[str] = []
+    for path, differences in changed.items():
+        text = f"refactory's own checkout {path} changed while agent {node!r} ran: {'; '.join(differences)}."
+        result = restored.get(path) or {}
+        if result.get("head_moved"):
+            text += " HEAD moved during the node; commits are not rewritten."
+        if result.get("restored"):
+            text += (f" It was restored to its state before the agent ran: {len(result['restored'])} "
+                     f"path(s) restored. The agent's copies are in {result['set_aside']}.")
+        if result.get("errors"):
+            text += f" Could not restore: {'; '.join(result['errors'])}."
+        parts.append(text)
+    where = f"this run's target, {target}" if target else "this run's target"
+    moved = (f" This attempt's output was moved to {set_aside}, so the redo writes its own."
+             if set_aside else "")
+    return (f"{' '.join(parts)} It is not {where}: it is the checkout the contract's Python imports "
+            "refactory from (the run's driver, or its pin), so a refactory tool run with that Python "
+            "writes there from any directory. A node's work goes only to its declared outputs and "
+            "the run's own steps (materialise, generate, the check), never into refactory's checkout; "
+            f"redo {node} without writing there.{moved}")

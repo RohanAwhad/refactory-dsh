@@ -2053,8 +2053,8 @@ In a self-targeting run, a pull or commit in the driver checkout during an
 output-only node now refuses that node. The driver checkout must stay still
 while runs are in flight.
 
-The driver or pin checkout is not watched when it is not the target. That is
-tracker dm-164, a follow-up, not this run.
+The driver or pin checkout, when it is not the target, is watched too: see
+[Refactory's own checkout](#32-refactorys-own-checkout-dm-164).
 
 ### Behaviour changes
 
@@ -3183,3 +3183,56 @@ design mode, because nothing reads them; validation V7 refuses an unused knob.
 - `test_design_contract_extensions.py::test_prompt_contract_requires_only_summary_changes_and_tests`
 - `test_design_contract_extensions.py::test_an_optional_section_left_out_is_not_checked`
 - `spine.spec.ts`: "a scoped change skips the perspectives step, and no reviewer runs at either scale"
+
+
+## 32. Refactory's own checkout (dm-164)
+
+### The problem
+
+An agent that runs a refactory tool with the contract's Python imports refactory from
+the checkout that Python belongs to: the driver, or for a pinned run the pin. The tool
+writes there from any directory. On 2026-10-21 (b32l) an emit builder ran a generator
+that way and wrote into the driver checkout. The target guard watched only the target
+and the run's worktree, and gave the launcher checkout a warning, so nothing refused it.
+
+### The rule
+
+Every agent node of a run that recorded a target (`target_guard.record`) gets a
+snapshot of refactory's own checkout when that checkout is not the target, on every
+route (walker, the spine's worker bridge, the CEO subagent), because the snapshot is
+taken in `agent_delivery.begin`. A change there fails the node and is restored
+losslessly, as a target change is (`restore_target`): the agent's copies are kept under
+the delivery's `checkouts/` folder, and the message names the checkout.
+
+`target_guard.checkouts` finds the checkouts:
+
+- **The contract's own import root.** `refactory_source`, the directory
+  `agent_delivery` is imported from, is what the contract's Python imports. On the
+  walker (`python -m refactory_dsh.design` and the outer loop) that is the driver. On
+  the spine, a pinned run's worker re-executes under the pin's Python
+  (`worker_node.main`), so it is the pin.
+- **The run's record.** `refactory ceo` records the driver in
+  `.refactory/run-config.json` (`pin.record_driver`), and a pinned resume adds
+  `pin_checkout` (`pin.resolve_pin`). The pin is watched when the run is pinned, the
+  driver otherwise.
+
+Only git checkouts count. A checkout that is, holds or lies in the target or the run's
+worktree is left to the target guard, so a run on refactory itself is unchanged. The
+run's own directory, `.venv` and `node_modules` are never part of the snapshot.
+
+### Cost
+
+The snapshot is the target guard's `state()`: one `git status`, plus a hash of each
+uncommitted file. It is taken once at `begin` and once at `finish`.
+
+### Tests that hold it
+
+- `test_target_guard_checkouts.py::test_walker_emit_generator_writing_into_the_driver_is_refused_and_restored`
+- `test_target_guard_checkouts.py::test_walker_pinned_run_guards_its_pin`
+- `test_target_guard_checkouts.py::test_walker_run_whose_driver_is_its_target_is_unchanged`
+- `test_target_guard_checkouts.py::test_walker_legitimate_writes_pass_with_the_driver_watched`
+- `test_target_guard_checkouts.py::test_spine_emit_writing_into_the_recorded_driver_is_refused_and_restored`
+- `test_target_guard_checkouts.py::test_spine_pinned_run_guards_its_pin`
+- `test_target_guard_checkouts.py::test_spine_run_whose_driver_is_its_target_is_unchanged`
+- `test_target_guard_checkouts.py::test_spine_legitimate_writes_to_the_run_and_its_worktree_pass`
+- `test_target_guard_checkouts.py::test_checkouts_skip_the_target_its_worktree_and_anything_not_a_checkout`
