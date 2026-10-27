@@ -203,6 +203,12 @@ def main(argv: list[str]) -> int:
     if workspace.get("collect") == "diff" and _is_emission(text):
         from tests_support import apply_in_workspace
 
+        # The agent runs in the workspace its contract names: a runtime that starts it
+        # anywhere else fails here rather than having its changes made for it.
+        if cwd.resolve() != Path(workspace["path"]).resolve():
+            print(f"parity_dsh: node {node!r} ran in {cwd}, not in its workspace {workspace['path']}",
+                  file=sys.stderr)
+            return 4
         apply_in_workspace(text, Path(workspace["path"]))
     judge = answer.get("judge")
     if judge == "early_asks":

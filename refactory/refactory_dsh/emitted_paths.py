@@ -27,9 +27,14 @@ def _unprintable(path: str) -> str:
     Control characters (Unicode category Cc: the C0 range, DEL and the C1 range) and the
     format characters in `HIDDEN_FORMAT` (bidirectional controls such as U+202E, zero-width
     space, word joiner, byte-order mark), which a terminal, a diff or a review hides or
-    shows as something else (dm-208).
+    shows as something else (dm-208). And a lone surrogate (category Cs): a file name
+    that is not UTF-8, which git and Python decode to U+DC80..U+DCFF, and which no emission
+    can be written with (dm-278).
     """
     for char in path:
+        if unicodedata.category(char) == "Cs":
+            byte = f"the byte 0x{ord(char) - 0xDC00:02X}" if 0xDC80 <= ord(char) <= 0xDCFF else "a lone surrogate"
+            return f"U+{ord(char):04X} ({byte}, which is not UTF-8)"
         if unicodedata.category(char) == "Cc" or char in HIDDEN_FORMAT:
             name = unicodedata.name(char, "")
             return f"U+{ord(char):04X} " + (name if name else "(a control character)")
@@ -45,6 +50,6 @@ def unprintable_refusal(path: str) -> str:
     """
     found = _unprintable(path)
     return (f"the emitted path {path!r} holds {found}, and no emitted path may hold a control "
-            "character or a hidden format character (DEL, a C1 control, a bidirectional "
-            "control, a zero-width space): it is hidden or misshown wherever the path is read. "
+            "character, a hidden format character (DEL, a C1 control, a bidirectional "
+            "control, a zero-width space) or a byte that is not UTF-8: it is hidden or misshown wherever the path is read. "
             "Name the file without it") if found else ""

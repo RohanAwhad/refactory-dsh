@@ -356,8 +356,10 @@ def _undo(*names: str) -> Callable[[Path], None]:
     (render({"tool.py": "print('built')\n"}), _executable, _undo("app.py"),
      "app.py changes its file mode (100644 to 100755)"),
     # A name a terminal or a review misshows is refused by name, as an emitted block's is
-    # (`repo_change.unprintable_refusal`, dm-208, dm-278).
+    # (`repo_change.unprintable_refusal`, dm-208), and by collect itself, before materialise
+    # sees it (dm-278): the reason carries collect's own prefix.
     (render({"tool.py": "print('built')\n"}), _bidi, _undo("tool\u202e.py"),
+     "cannot be carried as text files, so nothing of it was applied: the emitted path "
      "'tool\\u202e.py' holds U+202E RIGHT-TO-LEFT OVERRIDE"),
 ], ids=["truncated-read", "no-change", "binary", "symlink", "mode-change", "bidi-path"])
 def test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason(repo, tmp_path, emission,

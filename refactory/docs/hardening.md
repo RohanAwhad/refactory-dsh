@@ -937,7 +937,9 @@ zero-width space (U+200B), a word joiner (U+2060) or a byte-order mark (U+FEFF) 
 refused, naming the character, for example `U+202E RIGHT-TO-LEFT OVERRIDE`. A terminal,
 a diff or a review hides such a character or shows the name as something else, so the
 file a reviewer reads about would not be the file written. Other format characters are
-allowed: U+200C and U+200D join letters in Persian names and emoji sequences.
+allowed: U+200C and U+200D join letters in Persian names and emoji sequences. A name
+that is not UTF-8 (a workspace file such as `tool\xff.py`, which git decodes to a lone
+surrogate) is refused the same way, naming the byte, rather than crashing collect (dm-278).
 `unprintable_refusal` (in the core module `emitted_paths`, re-exported by `repo_change`)
 is the one check, for any place that takes a path from an agent: materialise, create
 mode, and a workspace's collect step (dm-278).

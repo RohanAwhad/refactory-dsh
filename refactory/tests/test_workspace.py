@@ -855,6 +855,26 @@ def test_a_name_no_emitted_path_may_hold_is_refused_as_an_emitted_blocks_is(tmp_
     assert name not in (run / "emit.txt").read_text(), "no block names it"
 
 
+def test_a_file_name_that_is_not_utf8_is_refused_and_goes_back_to_emit(tmp_path):
+    """dm-278: git decodes ``tool\\xff.py`` to a lone surrogate, which once crashed collect
+    writing emit.txt (UnicodeEncodeError); it is refused by name like any unprintable path."""
+    name = os.fsdecode(b"tool\xff.py")
+    run, place = _workspace_with(tmp_path)
+    (place.path / name).write_text("x = 1\n")
+    (place.path / "ok.py").write_text("y\n")
+    workspace.collect(place, run, ["emit.txt"], final_response="done")
+    refusal = workspace.refusal_for(run, "emit.txt", (run / "emit.txt").read_text())
+    assert refusal is not None and "U+DCFF (the byte 0xFF, which is not UTF-8)" in refusal
+    assert repo_change.unprintable_refusal(name) in refusal
+    # Materialise sends the reason back to emit rather than applying any of it.
+    ctx = RunContext(run, knobs={}, facts={"name": "tool"}, task={})
+    ctx.enforce_writes = False
+    result = repo_change.materialise(ctx)
+    assert "the byte 0xFF" in result["emission_refused"]
+    found = worktree.recorded(run)
+    assert found.head == found.base, "nothing of a refused change is committed"
+
+
 def test_a_nested_manifest_change_installs_again(tmp_path, monkeypatch):
     log = _logging_tools(tmp_path, monkeypatch)
     run, repo, found = _run_with_worktree(tmp_path, {"pyproject.toml": "[project]\nname = 'x'\n",
