@@ -8,6 +8,7 @@
     "refactory_dsh.control",
     "refactory_dsh.dsh_profile",
     "refactory_dsh.dsh_runtime",
+    "refactory_dsh.emitted_paths",
     "refactory_dsh.evaluators",
     "refactory_dsh.events",
     "refactory_dsh.finished_control",

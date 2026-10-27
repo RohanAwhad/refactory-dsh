@@ -835,6 +835,26 @@ def test_a_path_the_emission_cannot_carry_is_refused_by_name(tmp_path):
     assert refusal and "'my notes.md' has a whitespace" in refusal
 
 
+@pytest.mark.parametrize("name, character", [
+    ("tool\u202e.py", "U+202E RIGHT-TO-LEFT OVERRIDE"),
+    ("tool\x7f.py", "U+007F"),
+    ("tool\x85.py", "U+0085"),
+], ids=["bidi", "del", "c1"])
+def test_a_name_no_emitted_path_may_hold_is_refused_as_an_emitted_blocks_is(tmp_path, name, character):
+    """dm-278: a file the builder made in its workspace is refused by the check an emitted
+    block's path gets (`emitted_paths.unprintable_refusal`), not an ASCII-only one of its own."""
+    assert workspace.unprintable_refusal is repo_change.unprintable_refusal
+    run, place = _workspace_with(tmp_path)
+    (place.path / name).write_text("x = 1\n")
+    (place.path / "ok.py").write_text("y\n")
+    workspace.collect(place, run, ["emit.txt"])
+    refusal = workspace.refusal_for(run, "emit.txt", (run / "emit.txt").read_text())
+    expected = repo_change.unprintable_refusal(name)
+    assert character in expected
+    assert refusal is not None and expected in refusal and "has a whitespace" not in refusal
+    assert name not in (run / "emit.txt").read_text(), "no block names it"
+
+
 def test_a_nested_manifest_change_installs_again(tmp_path, monkeypatch):
     log = _logging_tools(tmp_path, monkeypatch)
     run, repo, found = _run_with_worktree(tmp_path, {"pyproject.toml": "[project]\nname = 'x'\n",

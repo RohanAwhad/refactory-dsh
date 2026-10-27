@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from refactory_dsh.emitted_paths import unprintable_refusal
 from refactory_dsh.nn.graph import workspace_declaration
 
 #: Where a run keeps its workspaces, one directory per node.
@@ -729,9 +730,14 @@ def derive_emission(path: Path, base: str, *, conflicts: tuple[str, ...] = (), d
         present = target.exists() or target.is_symlink()
         if name in skip and skip[name] == (_content_digest(target) if present else "deleted"):
             continue
-        if not re.fullmatch(EMISSION_PATH, name) or "\\" in name or any(ord(char) < 32 for char in name):
-            refused.append(f"{name!r} has a whitespace, '=', quote, backtick, backslash or control character "
-                           "in its path, which an emission header cannot carry: rename it")
+        # The same refusal an emitted block's path gets (`emitted_paths`, dm-278): a control
+        # character, DEL or a bidirectional control, named.
+        if refusal := unprintable_refusal(name):
+            refused.append(refusal)
+            continue
+        if not re.fullmatch(EMISSION_PATH, name) or "\\" in name:
+            refused.append(f"{name!r} has a whitespace, '=', quote, backtick or backslash in its path, "
+                           "which an emission header cannot carry: rename it")
             continue
         if status == "D" or not present:
             if not deletes:

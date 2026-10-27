@@ -98,8 +98,10 @@ an emitted one. create, edit and fast-create keep the emission-only builder.
   the agent left it as made. A binary file, a symlink, a mode change, a new executable,
   a submodule, a line the emission would read as a block header, or (without a
   worktree) a deletion is refused, as is a path an emission header cannot carry (with
-  whitespace, `=`, a quote, a backtick or a backslash), a file over 50 MB, a change over
-  200 MB in all, and a workspace with no change: the refusal is left beside the emission
+  whitespace, `=`, a quote, a backtick or a backslash) or one holding a control or hidden
+  format character (the same `unprintable_refusal` an emitted block gets, dm-278), a
+  file over 50 MB, a change over 200 MB in all, and a workspace with no change: the
+  refusal is left beside the emission
   (`.refactory/workspace-refusal.json`, keyed by its digest) and materialise sends it
   back to the builder like any refused emission. Line endings and end-of-file newlines
   are normalised by the blocks, with a warning, and the next dispatch tells the agent
@@ -936,8 +938,9 @@ refused, naming the character, for example `U+202E RIGHT-TO-LEFT OVERRIDE`. A te
 a diff or a review hides such a character or shows the name as something else, so the
 file a reviewer reads about would not be the file written. Other format characters are
 allowed: U+200C and U+200D join letters in Persian names and emoji sequences.
-`repo_change.unprintable_refusal` is the one check, for any place that takes a path
-from an agent.
+`unprintable_refusal` (in the core module `emitted_paths`, re-exported by `repo_change`)
+is the one check, for any place that takes a path from an agent: materialise, create
+mode, and a workspace's collect step (dm-278).
 
 **A malformed header goes back to the builder in every mode (dm-215).** In create and
 the fast modes, as in design mode, `materialise` records a malformed header as
