@@ -53,7 +53,13 @@ class RunRecord:
             self._uncomplete_between(graph, target, gate)
 
     def _uncomplete_between(self, graph: Graph, target: str, gate: str) -> None:
-        """``target`` and its unconditional downstream up to ``gate``, as the spine walks it."""
+        """``target`` and its unconditional downstream up to ``gate``, as the spine walks it.
+        A ``target`` that is a gate reopens every node it routes to, but for its own retries
+        (design mode's send-backs onto ``pick_corrections``, dm-226)."""
+        from .loops import loop_edges
+
+        head = target in graph.nodes and graph.nodes[target].kind == "gate"
+        retries = loop_edges(graph) if head else set()
         seen: set[str] = set()
         queue = [target]
         for node in queue:
@@ -61,7 +67,9 @@ class RunRecord:
                 continue
             seen.add(node)
             queue.extend(edge.target for edge in graph.out_edges(node)
-                         if not edge.condition and edge.target != gate and edge.target not in seen)
+                         if (not edge.condition or (head and node == target
+                                                   and edge.key() not in retries))
+                         and edge.target != gate and edge.target not in seen)
             body = graph.nodes.get(node)
             if body is not None and body.kind == "fork":
                 queue.extend(child for child in body.targets if child != gate and child not in seen)

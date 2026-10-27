@@ -502,11 +502,18 @@ export class Spine {
   private uncompleteBetween(target: string, gate: string): void {
     const seen = new Set<string>()
     const queue: string[] = [target]
+    // A reloop onto a gate (design mode's send-backs onto `pick_corrections`, dm-226)
+    // reopens every node that gate routes to, not only its unconditional successor:
+    // otherwise the node it routes to stays completed, and its rerun is never recorded.
+    const head = this.nodes.get(target)?._type === 'GateNode'
+    const retries = head ? this.retryEdges() : new Set<string>()
     for (const node of queue) {
       if (seen.has(node) || node === gate) continue
       seen.add(node)
       for (const edge of this.outgoing(node)) {
-        if (edge.condition == null && edge.target !== gate && !seen.has(edge.target)) {
+        const routed = edge.condition == null || (head && node === target
+          && !retries.has(retryKey(node, edge.target, edge.condition)))
+        if (routed && edge.target !== gate && !seen.has(edge.target)) {
           queue.push(edge.target)
         }
       }

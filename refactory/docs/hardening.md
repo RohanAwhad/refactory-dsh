@@ -2239,7 +2239,8 @@ unavailable, and then nothing is inherited.
 ### The fix-up, and its bound
 
 The change's failures go back to emit through a reloop, as a refused emission does
-(`prepare_check`'s for a fix-up's self-check, `gate_self_check`'s for the first):
+(`prepare_check`'s for a fix-up's self-check, `gate_self_check`'s for the first), by way
+of `pick_corrections`, which every send-back to the builder passes (dm-226):
 `validation` carries them on the walker and the verdict's reason on the spine. The
 feedback leads with "self-check fix-up N of M", then the failing ids, their digest,
 the asks the early asks judge found not built, the brief and the approved corrections
