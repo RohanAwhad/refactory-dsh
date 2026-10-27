@@ -334,8 +334,8 @@ class DesignMode(Mode):
                             "approval gate as it is; every other finding is advisory and "
                             "never sends it back",
             ),
-            # As in create: the walker passes these in the run's task, and a run on
-            # DSH carries them as knobs.
+            # Both mains pass these as knobs (`run_flags`, dm-134); a caller of the
+            # walker's API may still give them in the run's task.
             "name": Knob("", "str", description="the artifact to design (empty takes the name from the brief)"),
             "brief": Knob("", "str", required=True, description="what to build, in the asker's words"),
             "check": Knob("", "str", description="the command that decides whether the artifact works"),
@@ -1178,116 +1178,57 @@ class DesignMode(Mode):
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``python -m refactory_dsh.design --name <n> --brief <text> --check <cmd>``."""
+    """``python -m refactory_dsh.design --name <n> --brief <text> --check <cmd>``.
+
+    The walker's main. Its run flags are `refactory ceo`'s (`run_flags`, dm-134): the same
+    spelling and the same knobs, so a run started either way is configured the same.
+    """
     import argparse
     import json
     import sys
+
+    from refactory_dsh import run_flags
+    from refactory_dsh.run_preparation import ACKNOWLEDGE_HELP, RESUME_HELP
 
     parser = argparse.ArgumentParser(
         prog="python -m refactory_dsh.design",
         description="Design, emit and check a software artifact from a brief.",
     )
-    parser.add_argument("--name", required=False, default="", help="the artifact's name")
     parser.add_argument("--brief", required=False, default="", help="what to build")
-    parser.add_argument("--check", required=False, default="",
-                        help="the command that decides whether it works")
-    parser.add_argument("--attempts", type=int, default=2)
     parser.add_argument("--fast", action="store_true", help="use the inspectable design_fast graph with focused QA")
-    parser.add_argument("--repair-attempts", type=int, default=1, help="fast graph repair limit (0..3)")
-    parser.add_argument("--source-project", default="",
-                        help="fast design: copy this directory and apply the change there, instead of a worktree")
-    parser.add_argument("--target", default="", help="the git repository to change (default: a new project)")
-    parser.add_argument("--base", default="", help="the commit the run starts from (default: the target's HEAD)")
-    parser.add_argument("--no-worktree", action="store_true",
-                        help="write the artifact under .factory/artifacts instead of a worktree")
-    parser.add_argument("--setup", default="", help="a command run in the worktree before each check, such as a build")
-    parser.add_argument("--generate", default="",
-                        help=repo_change.knobs()["generate"].description)
-    parser.add_argument("--no-pr", action="store_true",
-                        help="keep the work on the run's local branch instead of opening a pull request")
-    parser.add_argument("--refine", default="", metavar="PR",
-                        help="follow up an open pull request: start from its branch and update it")
-    parser.add_argument("--refine-design", default=None, choices=["light", "full"],
-                        help="with --refine: light (default) skips research and strategy; "
-                             "full walks the whole design phase")
-    parser.add_argument("--review-comments", action="store_true",
-                        help="with --refine: add the pull request's reviews and comments to the steering")
-    from refactory_dsh.budgets import add_arguments, arguments
-
-    add_arguments(parser)
-    # Per artifact name, for the same reason a creation is: one fixed directory
-    # means runs overwrite each other's state.
-    parser.add_argument("--workdir", default="")
-    parser.add_argument(
-        "--resume", default="", metavar="RUN_DIR",
-        help="continue a failed run from its own directory instead of starting a "
-             "new one; every node that already finished is kept",
-    )
-    parser.add_argument("--model", default="")
-    parser.add_argument("--provider", default="", help="provider route that model is on")
-    parser.add_argument(
-        "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
-        help="seconds one model completion may take before it is called hung",
-    )
-    parser.add_argument(
-        "--verdict", action="append", default=[], metavar="GATE=VALUE",
-        help="answer a gate a person owns, as <gate>=<value> (repeatable)",
-    )
+    run_flags.add_arguments(parser)
+    parser.add_argument("--resume", default="", metavar="RUN_DIR", help=RESUME_HELP)
+    parser.add_argument("--acknowledge-failure", action="store_true", help=ACKNOWLEDGE_HELP)
     args = parser.parse_args(argv)
-    if not args.resume:
-        if not args.name:
-            parser.error("--name is required when not resuming")
-        if not args.brief:
-            parser.error("--brief is required when not resuming")
-    delivered = [flag for flag, given in (("--no-pr", args.no_pr), ("--refine", args.refine),
-                                          ("--review-comments", args.review_comments)) if given]
-    if args.fast and delivered:
-        parser.error(f"--fast does not take {', '.join(delivered)}: design_fast has no approval gate, so it "
-                     "opens no pull request, and its work stays on the run's branch")
-    if args.refine_design and not args.refine:
-        parser.error("--refine-design goes with --refine: it says how a refine designs its change")
+    if args.acknowledge_failure and not args.resume:
+        parser.error("--acknowledge-failure goes with --resume: it acknowledges the boundary a run stopped at")
 
-    from refactory_dsh.model import DshModelClient
+    from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
     from refactory_dsh.paths import project_root
 
     if args.resume:
+        problem = run_flags.resume_refusal(parser, args)
+        if problem:
+            parser.error(problem)
         workdir = Path(args.resume)
-        # Read fast from run-config.json when available.
-        fast = args.fast
-        config_path = workdir / '.refactory/run-config.json'
-        if config_path.exists():
-            try:
-                run_config = json.loads(config_path.read_text())
-                fast = run_config.get('fast', fast)
-            except (json.JSONDecodeError, OSError):
-                pass
-        from refactory_dsh.model import ModelChoiceError, require_model_choice
-
         try:
-            client = require_model_choice(DshModelClient(
-                project=None,
-                timeout_s=int(args.model_timeout_s) if args.model_timeout_s else DEFAULT_TIMEOUT_S,
-                model=args.model, provider=args.provider,
-            ), interactive=sys.stdin.isatty())
+            client = require_model_choice(DshModelClient(project=None), interactive=sys.stdin.isatty())
         except ModelChoiceError as exc:  # dm-258
             print(f"refactory: {exc}", file=sys.stderr)
             return 1
-        from refactory_dsh.run_ownership import ownership
+        from refactory_dsh.fast import DesignFastMode
+        from refactory_dsh.run_preparation import resume_walked
 
         try:
-            with ownership(workdir):
-                from refactory_dsh.fast import DesignFastMode
-
-                run = (DesignFastMode if fast else DesignMode).resume(
-                    workdir, model=client, resource_limits=arguments(args),
-                    enable_recovery=True,
-                )
+            mode_class, run = resume_walked(workdir, "design", (DesignMode, DesignFastMode), model=client,
+                                            acknowledge_failure=args.acknowledge_failure,
+                                            resource_limits=run_flags.resource_limits(args))
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
         if run.gate_stop:
             from refactory_dsh.run_preparation import print_gate_stop
-            print_gate_stop(run.gate_stop, workdir, graph=(DesignFastMode if fast else DesignMode)().build())
+            print_gate_stop(run.gate_stop, workdir, graph=mode_class().build())
             return 2
         print(json.dumps({
             "resumed": str(workdir), "exit_ok": run.exit_ok, "error": run.error,
@@ -1296,8 +1237,7 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2, default=str))
         if not run.exit_ok:
             try:
-                resume_mode = DesignFastMode() if args.fast else DesignMode()
-                node = resume_mode.graph().nodes.get(str(run.error or "").split(":", 1)[0])
+                node = mode_class().graph().nodes.get(str(run.error or "").split(":", 1)[0])
                 if node is not None and node.kind == "gate" and node.gate_kind == "user":
                     from refactory_dsh.design_ops import design_review_status
                     drs = design_review_status(run.facts or {})
@@ -1307,57 +1247,60 @@ def main(argv: list[str] | None = None) -> int:
                 pass
         return 0 if run.exit_ok else 2
 
+    if not args.name:
+        parser.error("--name is required when not resuming")
+    if not args.brief:
+        parser.error("--brief is required when not resuming")
+    mode_id = "default_pack/design_fast" if args.fast else "default_pack/design"
+    problem = run_flags.refusal(args, mode_id, runtime=run_flags.WALKER, label="--fast" if args.fast else "design")
+    if problem:
+        parser.error(problem)
+
+    from refactory_dsh.create import parse_verdicts
     from refactory_dsh.fast import DesignFastMode
+    from refactory_dsh.interactive import with_knobs
 
     mode = DesignFastMode() if args.fast else DesignMode()
-    state = mode.state_dict()
-    state["knobs"]["repair_attempts" if args.fast else "check_attempts"]["value"] = int(args.repair_attempts if args.fast else args.attempts)
-    if args.no_worktree:
-        state["knobs"]["worktree"]["value"] = False
-    if args.no_pr:
-        state["knobs"]["pr"]["value"] = False
-    if args.review_comments:
-        state["knobs"]["review_comments"]["value"] = True
-    if args.refine_design:
-        state["knobs"]["refine_design"]["value"] = args.refine_design
-    mode.load_state_dict(state)
-    from refactory_dsh.create import parse_verdicts
-
-    verdicts = parse_verdicts(args.verdict)
+    # The run's settings travel as the knobs `refactory ceo` gives the spine, not as a task.
+    knobs = run_flags.knobs(args, mode_id, brief=args.brief, name=args.name)
+    try:
+        mode.load_state_dict(with_knobs(mode.state_dict(), knobs))
+        verdicts = parse_verdicts(args.verdict)
+        resource_limits = run_flags.resource_limits(args)
+    except ValueError as exc:
+        print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
+        return 2
     workdir = Path(args.workdir or f".factory/design/{args.name}")
-    mode_name = "design_fast" if args.fast else "design"
-    from refactory_dsh.model import ModelChoiceError, require_model_choice
+    mode_name = mode_id.split("/", 1)[1]
 
     try:
-        client = require_model_choice(DshModelClient(
-            project=project_root(),
-            timeout_s=int(args.model_timeout_s) if args.model_timeout_s else DEFAULT_TIMEOUT_S,
-            model=args.model, provider=args.provider,
-        ), interactive=sys.stdin.isatty())
+        client = require_model_choice(DshModelClient(project=project_root(), **run_flags.model_options(args)),
+                                      interactive=sys.stdin.isatty())
     except ModelChoiceError as exc:  # dm-258
         print(f"refactory: {exc}", file=sys.stderr)
         return 1
     from refactory_dsh.run_ownership import ownership
-    from refactory_dsh.nn.executor import GateStop, HaltStop
 
     try:
         with ownership(workdir):
             # Run preparation.
-            from refactory_dsh.run_preparation import prepare_run
+            from refactory_dsh.run_preparation import prepare_run, walker_context
             from refactory_dsh import steering
 
             prepare_run(
-                state, workdir,
+                mode.state_dict(), workdir,
                 invocation_name=f"default_pack-{mode_name}",
-                mode_id=f"default_pack/{mode_name}",
+                mode_id=mode_id,
                 intent=args.brief,
                 transform=lambda workflow, stage_dir=None: steering.for_run(workflow, stage_dir or workdir),
                 runtime="walker",
-                command=f"python -m refactory_dsh.design",
+                command="python -m refactory_dsh.design",
                 resume_command=f"python -m refactory_dsh.design --resume {workdir}",
                 fast=args.fast,
                 worker_backend=client.route().get("worker_backend", "") if callable(getattr(client, "route", None)) else "",
                 project=project_root(),
+                knobs=knobs,
+                model_context=walker_context(client),
             )
 
             # Persist up-front verdicts as run-scoped ledger entries.
@@ -1369,20 +1312,12 @@ def main(argv: list[str] | None = None) -> int:
                 # A gate answered up front shows nobody delivery.md, so the plan is said here (#350).
                 from refactory_dsh import delivery
 
-                knob_values = {"name": args.name, "brief": args.brief, "target": args.target, "base": args.base,
-                         "refine": args.refine, **{name: state["knobs"][name]["value"]
-                                                   for name in ("worktree", "pr", "repo_owner", "repo_visibility")}}
+                values = mode.values()
+                knob_values = {name: values[name] for name in ("name", "brief", "target", "base", "refine", "worktree",
+                                                               "pr", "repo_owner", "repo_visibility")}
                 (delivery.announce if "gate_strategy" in verdicts else delivery.forget)(knob_values, workdir)
 
-            result = mode.run(
-                workdir,
-                model=client,
-                task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project,
-                      "target": args.target, "base": args.base, "setup": args.setup, "generate": args.generate,
-                      "refine": args.refine},
-                resource_limits=arguments(args),
-                enable_recovery=True,
-            )
+            result = mode.run(workdir, model=client, task={}, resource_limits=resource_limits, enable_recovery=True)
     except Exception as exc:
         print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
         return 2

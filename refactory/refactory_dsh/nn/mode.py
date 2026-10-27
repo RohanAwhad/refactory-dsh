@@ -270,7 +270,7 @@ class Mode:
     @classmethod
     def resume(
         cls, workdir: Path, *, model: Any = None, max_steps: int = 2000,
-        resource_limits: Any = None, enable_recovery: bool = False,
+        resource_limits: Any = None, enable_recovery: bool = False, acknowledged: bool = False,
     ) -> "RunResult":
         """Continue a run where it failed, from the record it left in its directory.
 
@@ -279,6 +279,11 @@ class Mode:
         ``.refactory/progress.json`` — the node that failed, the facts, the knobs and
         the task — and starts there. A missing record is refused by name rather than
         silently replaying the whole graph.
+
+        A node whose outcome is unknown (the walk died in it, or saw it time out) is
+        refused unless ``acknowledged``: a person inspected its side effects and set
+        aside what it left (the product's ``recovery.acknowledge_walked``). A run that
+        completed resumes to its result, as the spine's does.
         """
         import json
 
@@ -295,7 +300,12 @@ class Mode:
         except json.JSONDecodeError as exc:
             raise ValueError(f"{path} is not readable JSON: {exc}") from exc
         node = str(record.get("node") or "").strip()
-        if record.get("outcome") in ("running", "unknown"):
+        if record.get("outcome") == "completed":
+            from .record import RunRecord
+
+            return RunResult(facts=dict(record.get("facts") or {}), exit_ok=True, workdir=Path(workdir),
+                             gate_verdicts=dict(RunRecord.from_progress(record).gate_verdicts))
+        if record.get("outcome") in ("running", "unknown") and not acknowledged:
             raise ValueError(
                 f"node {node!r} has an unknown side-effect outcome; inspect its artifacts "
                 "before an explicit restart; automatic replay refused"

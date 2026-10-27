@@ -511,6 +511,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
+    "acknowledge_failure": {
+      "default": false,
+      "description": "with --resume: go on from a failed boundary, or one whose last outcome is unknown, once you have inspected it",
+      "flags": [
+        "--acknowledge-failure"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "attempts": {
       "default": 3,
       "description": "",
@@ -604,7 +615,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "resume": {
       "default": "",
-      "description": "continue a failed run from its directory",
+      "description": "continue a stopped run from its directory",
       "flags": [
         "--resume"
       ],
@@ -676,7 +687,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Create a reusable mode package from a brief; declare task or singleShot. For user gates prefer wf_open default_pack/create; headless approvals require explicit authorization.",
-  "reviewed_schema": "392bb3377f80dc6b560c3662f78581d47992bc348e6e46c7f8cdd456c8efad96"
+  "reviewed_schema": "525ebb0eb8d1c1d2320ad534d22f9b1ec3341763fe053a6a2c06d4a83d0352fc"
 }
 ```
 
@@ -768,6 +779,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
+    "acknowledge_failure": {
+      "default": false,
+      "description": "with --resume: go on from a failed boundary, or one whose last outcome is unknown, once you have inspected it",
+      "flags": [
+        "--acknowledge-failure"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "attempts": {
       "default": 3,
       "description": "",
@@ -891,7 +913,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "resume": {
       "default": "",
-      "description": "continue a failed run from its directory",
+      "description": "continue a stopped run from its directory",
       "flags": [
         "--resume"
       ],
@@ -960,7 +982,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-  "reviewed_schema": "9865d7c964228209f020ece1e9b0d0db15b4b5866d22d1111b1fbfaf10fe5d83"
+  "reviewed_schema": "3ef0b8b154a559cefd20015bde750558aa5e267b2d8f3a0e5c1e99b9c8475c65"
 }
 ```
 
@@ -1156,6 +1178,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
+    "acknowledge_failure": {
+      "default": false,
+      "description": "with --resume: go on from a failed boundary, or one whose last outcome is unknown, once you have inspected it",
+      "flags": [
+        "--acknowledge-failure"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "allow_regression": {
       "default": false,
       "description": "skip original-mode execution and comparison; still validate the revision",
@@ -1235,7 +1268,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "resume": {
       "default": "",
-      "description": "continue a failed run from its directory",
+      "description": "continue a stopped run from its directory",
       "flags": [
         "--resume"
       ],
@@ -1285,7 +1318,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Revise a reusable mode package and validate it before QA and final intent audit. allow_regression skips original execution/comparison; revised validation remains mandatory. Prefer wf_open default_pack/edit when a person is present.",
-  "reviewed_schema": "e21f29fdd1ffcb453ded9719de1a0b18d9b784ce46b60e6e44bc11605a43af46"
+  "reviewed_schema": "fcfa464c1a53ff47dfac1e23493ac9de705925788de558a58856e5dc7ba23df5"
 }
 ```
 
@@ -4532,7 +4565,7 @@ Documentation: [refactory/docs/worker-routing.md](../../../refactory/docs/worker
 
 ## cli:ceo
 
-Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.
+Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct. Its run flags are the walker mains' own (python -m refactory_dsh.design, create, edit): the same knobs, route and limits either way; --verdict is an alias of --approve, and --attempts of the mode's attempts knob.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -4586,6 +4619,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
+    "attempts": {
+      "default": null,
+      "description": "an alias: --knob check_attempts=N for design, attempts=N for create and edit, repair_attempts=N for their _fast variants",
+      "flags": [
+        "--attempts"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "integer"
+    },
     "base": {
       "default": "",
       "description": "design and design_fast: the commit, branch or tag to start from",
@@ -4610,7 +4654,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "effort": {
       "default": "",
-      "description": "",
+      "description": "the workers' reasoning effort",
       "flags": [
         "--effort"
       ],
@@ -4632,7 +4676,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "headless": {
       "default": false,
-      "description": "run without a conversation: one task, one report, then exit, for scripts and CI; without it the run is live and a line you type between turns reaches the CEO",
+      "description": "run without a conversation: one task, one report, then exit, for scripts and CI; without it a spine run is live and a line you type between turns reaches the CEO. The walker always runs this way",
       "flags": [
         "--headless"
       ],
@@ -4654,7 +4698,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "knob": {
       "default": [],
-      "description": "set one of the authoring mode's knobs for this run, e.g. allow_regression=1",
+      "description": "set one of the mode's knobs for this run, e.g. allow_regression=1 (repeatable)",
       "flags": [
         "--knob"
       ],
@@ -4668,7 +4712,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "max_elapsed_s": {
       "default": null,
-      "description": "",
+      "description": "shared elapsed seconds, including nested work and validation",
       "flags": [
         "--max-elapsed-s"
       ],
@@ -4679,7 +4723,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "max_tokens": {
       "default": null,
-      "description": "",
+      "description": "shared tokens; requires provider usage telemetry",
       "flags": [
         "--max-tokens"
       ],
@@ -4701,7 +4745,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "model": {
       "default": "",
-      "description": "model id for this run, e.g. deepseek-v4-pro (default: the settings default)",
+      "description": "model id for this run, e.g. deepseek-v4-pro (default: the stored choice; see `refactory model set`)",
       "flags": [
         "--model"
       ],
@@ -4754,9 +4798,20 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "boolean"
     },
+    "node_routes": {
+      "default": null,
+      "description": "per-node worker routes, as a JSON object",
+      "flags": [
+        "--node-routes"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "object"
+    },
     "permission_mode": {
       "default": "",
-      "description": "",
+      "description": "worker permissions: skip (new-run default), default (native policy), or a backend-specific mode",
       "flags": [
         "--permission-mode"
       ],
@@ -4767,7 +4822,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "provider": {
       "default": "",
-      "description": "provider route for this run's model (default: the settings default)",
+      "description": "provider route for this run's model (default: the stored choice; see `refactory model set`)",
       "flags": [
         "--provider"
       ],
@@ -4804,7 +4859,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "repair_attempts": {
       "default": null,
-      "description": "",
+      "description": "an alias: --knob repair_attempts=N, the _fast modes' repair limit (0..3)",
       "flags": [
         "--repair-attempts"
       ],
@@ -4834,6 +4889,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "positional": false,
       "required": false,
       "type": "string"
+    },
+    "role_routes": {
+      "default": null,
+      "description": "per-role worker routes, as a JSON object",
+      "flags": [
+        "--role-routes"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "object"
     },
     "setup": {
       "default": "",
@@ -4920,7 +4986,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "timeout": {
       "default": 0,
-      "description": "run a mode: seconds to wait at a gate; 0 waits for you",
+      "description": "seconds the spine's run may take, waiting at a gate included; 0 waits for you. The walker never waits at a gate: bound it with --max-elapsed-s",
       "flags": [
         "--timeout"
       ],
@@ -4931,7 +4997,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "validation_reserve_s": {
       "default": null,
-      "description": "",
+      "description": "elapsed seconds retained for required final validation",
       "flags": [
         "--validation-reserve-s"
       ],
@@ -4942,7 +5008,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "validation_reserve_tokens": {
       "default": null,
-      "description": "",
+      "description": "tokens retained for required final validation",
       "flags": [
         "--validation-reserve-tokens"
       ],
@@ -4953,9 +5019,10 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "verdict": {
       "default": [],
-      "description": "answer a gate up front, e.g. gate_strategy=proceed, for a run with nobody sitting at it; a gate a person would be asked at is theirs, so run without this and answer it, or drive the mode node by node with wf_open",
+      "description": "answer a gate up front, e.g. gate_strategy=proceed, for a run with nobody sitting at it (repeatable; --verdict is an alias of --approve)",
       "flags": [
-        "--approve"
+        "--approve",
+        "--verdict"
       ],
       "items": {
         "type": "string"
@@ -4964,6 +5031,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "positional": false,
       "required": false,
       "type": "array"
+    },
+    "warn_tokens": {
+      "default": null,
+      "description": "per-step token warning threshold; emits a run_warning once per step (does not stop the run)",
+      "flags": [
+        "--warn-tokens"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "integer"
     },
     "what": {
       "default": null,
@@ -4988,7 +5066,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "worker_backend": {
       "default": "",
-      "description": "",
+      "description": "the backend every agent node runs on: dsh (default), codex or claude_code",
       "flags": [
         "--worker-backend"
       ],
@@ -4998,8 +5076,8 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     }
   },
-  "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "3902398310a6273664b11e2f428b3477347d6b54204466a6947b61d6727a7ff5"
+  "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct. Its run flags are the walker mains' own (python -m refactory_dsh.design, create, edit): the same knobs, route and limits either way; --verdict is an alias of --approve, and --attempts of the mode's attempts knob.",
+  "reviewed_schema": "c15be6ad5cf100457ed6fcc98d0c766748e2c20d4a31c9f2b8015c86c1d1ccdc"
 }
 ```
 

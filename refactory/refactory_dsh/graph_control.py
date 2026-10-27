@@ -34,6 +34,14 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
     root = Path(root).resolve()
     checkpoint = root / '.refactory/spine-checkpoint.json'
     if not checkpoint.exists():
+        from refactory_dsh import run_state
+        if run_state.walked(root):
+            # The walker's controls are its main's own flags (dm-160): name them.
+            config = read(root / '.refactory/run-config.json')
+            resume = config.get('resume_command') or f'<the main that started it> --resume {root}'
+            raise ValueError(f'this run is walked, and the walker has no graph controls; continue it with '
+                             f'`{resume}`, adding --acknowledge-failure once you have inspected a failed '
+                             'or unknown boundary')
         raise ValueError('this run has no durable graph checkpoint; controls require its owning runtime')
     saved = read(checkpoint)
     current_revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
@@ -314,7 +322,6 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     """
     import fcntl
     from refactory_dsh.run_state import is_alive as _is_alive
-    from refactory_dsh.recovery import fingerprint as _fp
 
     # 1. Verify checkpoint is executing, failed or paused, or stopped with an
     #    unknown worker outcome
@@ -354,83 +361,28 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
         finally:
             os.close(sfd)
 
-    # 4. Move pending delivery markers and fingerprint-mismatched outputs to set-aside
-    timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    set_aside_dir = root / '.refactory/set-aside' / timestamp
-    set_aside_dir.mkdir(parents=True, exist_ok=True)
-    manifest_files: list[dict[str, Any]] = []
-
-    # Move pending delivery markers
-    for pending_file in pending_markers:
-        dest = set_aside_dir / 'pending' / pending_file.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        pending_file.rename(dest)
-        manifest_files.append({
-            'original_path': str(pending_file.relative_to(root)),
-            'set_aside_path': str(dest.relative_to(root)),
-            'size': dest.stat().st_size,
-        })
-
-    # Move stop controls queued for the owner that died, on a stopped checkpoint only:
-    # that run is stopped already. On an executing, failed or paused one a queued stop
-    # is still the person's standing request, and the next owner applies it.
+    # 4. Move pending delivery markers, stop controls queued for the owner that died
+    #    (on a stopped checkpoint only: that run is stopped already; on an executing,
+    #    failed or paused one a queued stop is still the person's standing request, and
+    #    the next owner applies it) and fingerprint-mismatched outputs to set-aside.
     controls_dir = root / '.refactory/graph-controls'
-    withdrawn_stops: list[str] = []
+    stops: list[Path] = []
     stopped = status in STOPPED_WITH_MARKERS
     for control in sorted(controls_dir.glob('*.json')) if stopped and controls_dir.is_dir() else []:
         try:
             queued = json.loads(control.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(queued, dict) or queued.get('action') != 'stop':
-            continue
-        dest = set_aside_dir / 'graph-controls' / control.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        control.rename(dest)
-        withdrawn_stops.append(control.stem)
-        manifest_files.append({
-            'original_path': str(control.relative_to(root)),
-            'set_aside_path': str(dest.relative_to(root)),
-            'size': dest.stat().st_size,
-        })
+        if isinstance(queued, dict) and queued.get('action') == 'stop':
+            stops.append(control)
+    checkpoint_status = saved.get('status', 'executing')
+    set_aside_dir, manifest_files = recovery.set_aside(
+        root, fingerprints=saved.get('file_fingerprints', {}), markers=pending_markers,
+        controls=stops, status=checkpoint_status, owner_pid=owner_pid)
+    withdrawn_stops = [control.stem for control in stops]
     for control_id in withdrawn_stops:
         emit(root, 'control_requested', state='withdrawn',
              summary=f'stop {control_id} withdrawn: the run stopped before its owner applied it')
-
-    # Move outputs whose fingerprint differs from the checkpoint's recorded one.
-    # This restores the filesystem to the state the fingerprints describe, so
-    # recovery.prepare()'s fingerprint guard sees consistent state. Completed
-    # fork branches' outputs match the recorded fingerprints and stay in place;
-    # in-flight branches' partial outputs differ and are set aside.
-    for fp_path, expected in saved.get('file_fingerprints', {}).items():
-        output_path = root / fp_path
-        if not output_path.exists():
-            continue
-        current = _fp(output_path)
-        if current == expected:
-            continue
-        dest = set_aside_dir / 'outputs' / fp_path
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if output_path.is_dir():
-            import shutil
-            shutil.move(str(output_path), str(dest))
-        else:
-            output_path.rename(dest)
-        manifest_files.append({
-            'original_path': fp_path,
-            'set_aside_path': str(dest.relative_to(root)),
-            'size': dest.stat().st_size if dest.is_file() else -1,
-        })
-
-    # Write manifest
-    checkpoint_status = saved.get('status', 'executing')
-    manifest = {
-        'at': datetime.now(timezone.utc).isoformat(),
-        'checkpoint_status_before': checkpoint_status,
-        'owner_pid': owner_pid,
-        'files': manifest_files,
-    }
-    (set_aside_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2))
 
     # 5. Write acknowledgement bound to the checkpoint's SHA into resume-request.json.
     #    Do NOT rewrite spine-checkpoint.json or spine-status.json: the spine is their

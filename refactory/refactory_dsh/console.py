@@ -1528,7 +1528,10 @@ def _parser() -> argparse.ArgumentParser:
              "--task or --single is required",
     )
     make.add_argument("--workdir", default="", help="the run directory (default: .factory/create/<name>)")
-    make.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")
+    make.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a stopped run from its directory")
+    make.add_argument("--acknowledge-failure", action="store_true",
+                       help="with --resume: go on from a failed boundary, or one whose last outcome is unknown, "
+                            "once you have inspected it")
     make.add_argument(
         "--sample", action="append", default=[], metavar="NAME=VALUE",
         help="a knob value the validation run should use (repeatable), so the smoke "
@@ -1555,7 +1558,10 @@ def _parser() -> argparse.ArgumentParser:
                         help="skip original-mode execution and comparison; still validate the revision")
     revise.add_argument("--attempts", type=int, default=3)
     revise.add_argument("--workdir", default="", help="the run directory (default: .factory/edit/<name>)")
-    revise.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")
+    revise.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a stopped run from its directory")
+    revise.add_argument("--acknowledge-failure", action="store_true",
+                       help="with --resume: go on from a failed boundary, or one whose last outcome is unknown, "
+                            "once you have inspected it")
     revise.add_argument(
         "--sample", action="append", default=[], metavar="NAME=VALUE",
         help="a knob value the validation run should use (repeatable)",
@@ -1573,7 +1579,10 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--check", default="", help="the command that proves the artifact works")
     artifact.add_argument("--attempts", type=int, default=3)
     artifact.add_argument("--workdir", default="", help="the run directory (default: .factory/design/<name>)")
-    artifact.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")
+    artifact.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a stopped run from its directory")
+    artifact.add_argument("--acknowledge-failure", action="store_true",
+                       help="with --resume: go on from a failed boundary, or one whose last outcome is unknown, "
+                            "once you have inspected it")
     artifact.add_argument("--target", default="",
                           help="the git repository to change, in a worktree of its own (default: a new project)")
     artifact.add_argument("--base", default="", help="the commit, branch or tag the run starts from")
@@ -1596,6 +1605,20 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _resume_argv(args: argparse.Namespace) -> list[str]:
+    """An authoring verb's ``--resume``, as the walker's mains take it (dm-160)."""
+    forwarded = ["--resume", args.resume]
+    if getattr(args, "acknowledge_failure", False):
+        forwarded.append("--acknowledge-failure")
+    for pair in args.verdict:
+        forwarded += ["--verdict", pair]
+    if args.provider:
+        forwarded += ["--provider", args.provider]
+    if args.model:
+        forwarded += ["--model", args.model]
+    return forwarded
 
 
 def _forward(module: str, argv: list[str]) -> dict[str, Any]:
@@ -2056,6 +2079,10 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded += ["--provider", args.provider]
             if args.model:
                 forwarded += ["--model", args.model]
+            if args.resume:
+                # A resume keeps what its run was saved with: only what the person gave
+                # goes on, and the walker's main refuses anything that would change it.
+                forwarded = _resume_argv(args)
             payload = _forward("create", forwarded)
             review = _design_review(project, args.name)
             if review:
@@ -2080,6 +2107,10 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded += ["--provider", args.provider]
             if args.model:
                 forwarded += ["--model", args.model]
+            if args.resume:
+                # A resume keeps what its run was saved with: only what the person gave
+                # goes on, and the walker's main refuses anything that would change it.
+                forwarded = _resume_argv(args)
             payload = _forward("edit", forwarded)
         elif args.verb == "design":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
@@ -2112,6 +2143,10 @@ def main(argv: list[str] | None = None) -> int:
                 delivery.announce({"name": args.name, "brief": args.brief, "target": args.target,
                                    "base": args.base, "refine": args.refine, "worktree": not args.no_worktree,
                                    "pr": not args.no_pr}, Path(args.workdir or f".factory/design/{args.name}"))
+            if args.resume:
+                # A resume keeps what its run was saved with: only what the person gave
+                # goes on, and the walker's main refuses anything that would change it.
+                forwarded = _resume_argv(args)
             payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")

@@ -293,8 +293,41 @@ What the two share, rather than each doing its own way:
   alive is its progress's and its walking process's to say (`run_state.walked`,
   `run_state.owner_pid`): the worktree, artifact-name and console readers ask those, the
   console reports its kind as `walker` and offers no graph controls, graph-control
-  refuses it as before, and `invocations.prepare` archives a walked directory's files
-  for a new run even when it was walked without declarations.
+  refuses it naming the walker's own resume command, and `invocations.prepare` archives a
+  walked directory's files for a new run even when it was walked without declarations.
+- **One set of run flags** (`run_flags`, dm-134). `refactory ceo` and the walker's mains
+  (`python -m refactory_dsh.design | create | edit`) add the same flags, and turn them
+  into the same `NAME=VALUE` knob list, model route and resource limits: the brief, the
+  name and the check travel as knobs on both, not as the walker's task. `--verdict` is
+  an alias of `--approve`, and `--attempts N` of the mode's attempts knob
+  (`check_attempts` for design, `attempts` for create and edit, `repair_attempts` for
+  their `_fast` variants). A flag a runtime cannot honour is refused with the
+  equivalent named (the walker never waits at a gate, so it refuses `--timeout` and
+  names `--max-elapsed-s`; an authoring run refuses `--intent` and `--source`), and a
+  knob a mode does not declare is refused by name on both.
+- **One run configuration** (dm-160). Both write `.refactory/run-config.json` through
+  `run_preparation.prepare_run`: the mode, project, knobs, model route, resource
+  limits, configuration fingerprints and driver record. Three fields name the runtime
+  (`runtime`, `command`, `resume_command`); a spine run also records `owner_argv`, the
+  fragment its supervisor restarts the owner with, and a walked run, which has no
+  supervisor, records none.
+- **One resume check** (dm-160). The walker's progress outcome is read as the spine's
+  status (`recovery.WALKER_STATUSES`: pending→ready, completed→done, failed→failed,
+  running or unknown→executing), and `recovery.resume_status_check` decides with the
+  spine's allowed set and messages; only the command it names is the runtime's own. A
+  walked run is refused, as the spine's is, while a dispatched worker's outcome is
+  unknown, when a declared input or output changed since its progress record
+  fingerprinted it (at every boundary, as the spine's checkpoint does), or when its
+  prepared configuration changed. The driver checkout's own files are not held to their
+  launch fingerprints on either: the spine re-runs under its pin, and the walker, which
+  has none, goes on with the code checked out now, as it always has. `--acknowledge-failure` on the walker's mains is the
+  spine's `graph-control acknowledge` plus `resume --acknowledge-failure` in one: it
+  sets aside what the boundary cannot vouch for (`recovery.set_aside`, shared with
+  graph-control), records the acknowledgement bound to the progress record, and the
+  resume consumes it.
+- **A gate waiting for a person is not a visit.** The walker reads a user gate's answer
+  before the visit starts, so a gate nobody answered leaves the run `refused` with no
+  started or failed node, as the spine logs none.
 
 **A run that stops is a failure with a name, on both.** On DSH the graph runner reads
 the cursor's own status after the CEO's turn: anything but `done` writes a line naming

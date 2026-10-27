@@ -238,37 +238,102 @@
         <code>data</code> node and a <code>Task</code> (<code>--data-node --task my_pack.tasks:MyTask</code>) and
         the validate gate <em>checks</em> you got one instead of taking your word for it.
       </div>
-      <details><summary>Every option, from the command's own <code>--help</code></summary><pre><code>usage: python -m refactory_dsh.create [-h] [--name NAME] [--brief BRIEF]
-                                      [--extends EXTENDS]
-                                      [--attempts ATTEMPTS] [--fast]
+      <details><summary>Every option, from the command's own <code>--help</code></summary><pre><code>usage: python -m refactory_dsh.create [-h] [--brief BRIEF] [--extends EXTENDS]
+                                      [--fast] [--name NAME] [--check CHECK]
+                                      [--knob NAME=VALUE] [--workdir WORKDIR]
+                                      [--attempts N]
                                       [--repair-attempts REPAIR_ATTEMPTS]
-                                      [--check CHECK]
+                                      [--source-project SOURCE_PROJECT]
+                                      [--target REPO] [--base BASE]
+                                      [--no-worktree] [--setup SETUP]
+                                      [--generate GENERATE] [--no-pr]
+                                      [--refine PR] [--review-comments]
+                                      [--refine-design {light,full}]
+                                      [--worker-backend WORKER_BACKEND]
+                                      [--effort EFFORT]
+                                      [--permission-mode PERMISSION_MODE]
+                                      [--role-routes JSON]
+                                      [--node-routes JSON]
+                                      [--model-timeout MODEL_TIMEOUT_S]
                                       [--max-elapsed-s MAX_ELAPSED_S]
                                       [--max-tokens MAX_TOKENS]
                                       [--validation-reserve-s VALIDATION_RESERVE_S]
                                       [--validation-reserve-tokens VALIDATION_RESERVE_TOKENS]
                                       [--warn-tokens WARN_TOKENS]
+                                      [--provider PROVIDER] [--model MODEL]
+                                      [--approve GATE=VALUE] [--intent INTENT]
+                                      [--source PATH]
+                                      [--source-format {,directory,jsonl,csv}]
+                                      [--timeout TIMEOUT] [--headless]
                                       [--data-node] [--input NAME]
                                       [--sample NAME=VALUE] [--task TASK_REF]
-                                      [--single] [--workdir WORKDIR]
-                                      [--resume RUN_DIR] [--model MODEL]
-                                      [--provider PROVIDER]
-                                      [--model-timeout MODEL_TIMEOUT_S]
+                                      [--single] [--resume RUN_DIR]
+                                      [--acknowledge-failure]
                                       [--smoke-timeout SMOKE_TIMEOUT_S]
-                                      [--verdict GATE=VALUE]
 
 Create a package of modes from a brief.
 
 options:
   -h, --help            show this help message and exit
-  --name NAME           the package name
   --brief BRIEF         what the package should do
   --extends EXTENDS     a &lt;package&gt;/&lt;mode&gt; to use as a reference
-  --attempts ATTEMPTS
   --fast                use the inspectable create_fast graph with focused QA
+  --name NAME           the package or artifact name (default: from what you
+                        said)
+  --check CHECK         required for design; optional focused check for
+                        create_fast/edit_fast
+  --knob NAME=VALUE     set one of the mode&#x27;s knobs for this run, e.g.
+                        allow_regression=1 (repeatable)
+  --workdir WORKDIR     the run directory
+  --attempts N          an alias: --knob check_attempts=N for design,
+                        attempts=N for create and edit, repair_attempts=N for
+                        their _fast variants
   --repair-attempts REPAIR_ATTEMPTS
-                        fast graph repair limit (0..3)
-  --check CHECK         fast graph&#x27;s explicit focused check command
+                        an alias: --knob repair_attempts=N, the _fast modes&#x27;
+                        repair limit (0..3)
+  --source-project SOURCE_PROJECT
+                        design_fast only: copy this directory into the
+                        artifact directory and apply the change there, instead
+                        of working in a worktree
+  --target REPO         design and design_fast: the git repository to change;
+                        the run works in a worktree of it on its own branch
+                        (default: a new project in ~/refactory-projects)
+  --base BASE           design and design_fast: the commit, branch or tag to
+                        start from
+  --no-worktree         design and design_fast: write the artifact under
+                        .factory/artifacts instead of a worktree
+  --setup SETUP         design and design_fast: a command run in the worktree
+                        before each check, such as a build
+  --generate GENERATE   design and design_fast: a command run in the worktree
+                        after dependencies are installed, before setup and
+                        each check; whatever it changes in tracked files is
+                        amended into the attempt. A generator that itself
+                        needs a build includes that build in its own command
+  --no-pr               design only: keep the work on the run&#x27;s local branch
+                        instead of opening a pull request once the reviews
+                        pass
+  --refine PR           design only: follow up an open pull request (its URL
+                        or owner/repo#number); the run starts from its branch
+                        and updates it
+  --review-comments     design only, with --refine: add the pull request&#x27;s
+                        reviews and comments to the run&#x27;s steering
+  --refine-design {light,full}
+                        design only, with --refine: light (default) skips
+                        research and strategy; full walks the whole design
+                        phase
+  --worker-backend WORKER_BACKEND
+                        the backend every agent node runs on: dsh (default),
+                        codex or claude_code
+  --effort EFFORT       the workers&#x27; reasoning effort
+  --permission-mode PERMISSION_MODE
+                        worker permissions: skip (new-run default), default
+                        (native policy), or a backend-specific mode
+  --role-routes JSON    per-role worker routes, as a JSON object
+  --node-routes JSON    per-node worker routes, as a JSON object
+  --model-timeout MODEL_TIMEOUT_S
+                        seconds one model completion may take before it is
+                        called hung (default: 1800); sets the per-completion
+                        limit for every agent step
   --max-elapsed-s MAX_ELAPSED_S
                         shared elapsed seconds, including nested work and
                         validation
@@ -281,6 +346,29 @@ options:
   --warn-tokens WARN_TOKENS
                         per-step token warning threshold; emits a run_warning
                         once per step (does not stop the run)
+  --provider PROVIDER   provider route for this run&#x27;s model (default: the
+                        stored choice; see `refactory model set`)
+  --model MODEL         model id for this run, e.g. deepseek-v4-pro (default:
+                        the stored choice; see `refactory model set`)
+  --approve GATE=VALUE, --verdict GATE=VALUE
+                        answer a gate up front, e.g. gate_strategy=proceed,
+                        for a run with nobody sitting at it (repeatable;
+                        --verdict is an alias of --approve)
+  --intent INTENT       run a mode: what this run is for, in your words;
+                        authored runs take the brief itself as the intent
+  --source PATH         run a mode: read the items from here instead of the
+                        source the mode declares, so a harness built for a
+                        class of work is pointed at items it has not seen
+  --source-format {,directory,jsonl,csv}
+                        run a mode: how to read --source (default: a directory
+                        of one item per subdirectory)
+  --timeout TIMEOUT     seconds the spine&#x27;s run may take, waiting at a gate
+                        included; 0 waits for you. The walker never waits at a
+                        gate: bound it with --max-elapsed-s
+  --headless            run without a conversation: one task, one report, then
+                        exit, for scripts and CI; without it a spine run is
+                        live and a line you type between turns reaches the
+                        CEO. The walker always runs this way
   --data-node           build the package as a DataNode that runs its subgraph
                         once per item; naming a Task implies this, so it is
                         only for a caller that wants to be explicit
@@ -299,21 +387,19 @@ options:
   --single              build a harness for one run of one thing, with no Task
                         binding — the explicit alternative to --task; one of
                         the two is required
-  --workdir WORKDIR
-  --resume RUN_DIR      continue a failed run from its own directory instead
+  --resume RUN_DIR      continue a stopped run from its own directory instead
                         of starting a new one; every node that already
-                        finished is kept
-  --model MODEL
-  --provider PROVIDER   provider route that model is on
-  --model-timeout MODEL_TIMEOUT_S
-                        seconds one model completion may take before it is
-                        called hung
+                        finished is kept. A failed run, or one stopped mid-
+                        node, needs --acknowledge-failure as well
+  --acknowledge-failure
+                        with --resume: you inspected a failed boundary, or one
+                        whose last node&#x27;s outcome is unknown, and want to go
+                        on from it; what that node left that the run cannot
+                        vouch for is set aside first, as `refactory graph-
+                        control acknowledge` sets it aside on the spine
   --smoke-timeout SMOKE_TIMEOUT_S
                         seconds for each full mode validation pass (default:
                         3600); independent of --model-timeout
-  --verdict GATE=VALUE  answer a gate a person owns, as &lt;gate&gt;=&lt;value&gt;
-                        (repeatable); gate_strategy is one, so a headless run
-                        must be told the answer
 </code></pre></details>
     </section>
 

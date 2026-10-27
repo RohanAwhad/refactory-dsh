@@ -207,9 +207,10 @@ def test_create_gate_stop(tmp_path, monkeypatch, capsys):
     _patch_model(monkeypatch, fake)
     monkeypatch.chdir(tmp_path)
 
+    # No --check: create declares none, so it is refused by name, as `refactory ceo` refuses it (dm-134).
     code = create.main([
         "--name", "probe_tool", "--brief", "a tool",
-        "--check", "python tool.py", "--single", "--workdir", RUN,
+        "--single", "--workdir", RUN,
     ])
     assert code == 2
     progress = json.loads((Path(RUN) / ".refactory/progress.json").read_text())

@@ -27,6 +27,9 @@ def prepare_run(
     worker_backend: str = "",
     resource_limits: dict[str, Any] | None = None,
     project: Path | None = None,
+    knobs: list[str] | None = None,
+    model_context: dict[str, Any] | None = None,
+    owner_argv: list[str] | None = None,
 ) -> Path:
     """Prepare a run directory for either runtime.
 
@@ -34,7 +37,14 @@ def prepare_run(
     1. Install and profile check (before anything is archived).
     2. ``invocations.prepare`` — archives the old invocation, seeds the ledger
        into the stage, folds it from there, and installs the result.
-    3. Write ``run-config.json``.
+    3. Write ``run-config.json``, the same record on both runtimes (dm-160): the mode,
+       the project, the run's knobs as its flags gave them, its model route, its
+       resource limits, the configuration fingerprints a resume checks, and the
+       driver checkout (`pin.record_driver`). Three fields name the runtime that runs
+       it: ``runtime`` (``walker`` or ``spine``, as the status file says), the
+       ``command`` that started it and the ``resume_command`` that continues it. A
+       spine run also records ``owner_argv``, the fragment its supervisor restarts the
+       owner with; a walked run has no supervisor and records none.
 
     Returns the installed graphs directory.
     """
@@ -76,10 +86,13 @@ def prepare_run(
         "runtime": runtime,
         "command": command,
         "resume_command": resume_command,
+        # The supervisor's fragment (`supervisor._build_owner_argv`), on the spine only: a
+        # walked run has no supervisor, and its main's `--resume` takes the run directory.
+        **({"owner_argv": list(owner_argv)} if owner_argv is not None else {}),
         "fast": fast,
         "project": str(Path(project).resolve()) if project else None,
-        "knobs": [],
-        "model_context": {},
+        "knobs": list(knobs or []),
+        "model_context": dict(model_context or {}),
         "resource_limits": resource_limits,
         "configuration_fingerprints": configuration_fingerprints(
             workdir, mode_id, Path(project) if project else Path(".")
@@ -88,7 +101,9 @@ def prepare_run(
     config_path = workdir / ".refactory/run-config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config, indent=2, default=str))
+    from refactory_dsh import pin
 
+    pin.record_driver(config_path)
     return graphs
 
 
@@ -144,3 +159,58 @@ def print_gate_stop(gate_id: str, workdir: Path, *, graph: Any = None) -> None:
     if resume_cmd:
         print(f"  Then continue the run:", file=sys.stderr)
         print(f"    {resume_cmd}", file=sys.stderr)
+
+
+# ── the walker's mains ─────────────────────────────────────────────────────
+
+#: What `--acknowledge-failure` says on every walker main.
+ACKNOWLEDGE_HELP = ("with --resume: you inspected a failed boundary, or one whose last node's outcome is "
+                    "unknown, and want to go on from it; what that node left that the run cannot vouch for "
+                    "is set aside first, as `refactory graph-control acknowledge` sets it aside on the spine")
+#: What `--resume` says on every walker main.
+RESUME_HELP = ("continue a stopped run from its own directory instead of starting a new one; every node "
+               "that already finished is kept. A failed run, or one stopped mid-node, needs "
+               "--acknowledge-failure as well")
+
+
+def saved_run_config(workdir: Path) -> dict[str, Any]:
+    """The run's ``run-config.json``, or nothing when it has none."""
+    try:
+        config = json.loads((Path(workdir) / ".refactory/run-config.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return config if isinstance(config, dict) else {}
+
+
+def resume_walked(workdir: Path, family: str, modes: tuple[type, type], *, model: Any,
+                  acknowledge_failure: bool = False, resource_limits: dict[str, Any] | None = None,
+                  **kwargs: Any) -> tuple[type, Any]:
+    """Continue a walked run, validated as the spine validates its own (dm-160).
+
+    ``modes`` are the main's full mode and its ``_fast`` variant; the run's
+    ``run-config.json`` says which it was. Under the run's ownership lock: with
+    ``acknowledge_failure``, what the stopped boundary cannot vouch for is set aside
+    first (`recovery.acknowledge_walked`); then `recovery.prepare_walked` refuses what
+    the spine's resume refuses, and the run goes on from its progress record. Returns
+    the mode class that ran it and its result.
+    """
+    from refactory_dsh import recovery
+    from refactory_dsh.run_ownership import ownership
+
+    workdir = Path(workdir)
+    fast = bool(saved_run_config(workdir).get("fast"))
+    full, quick = modes
+    mode_class = quick if fast else full
+    mode_id = f"default_pack/{family}{'_fast' if fast else ''}"
+    with ownership(workdir):
+        if acknowledge_failure:
+            recovery.acknowledge_walked(workdir, mode_id)
+        recovery.prepare_walked(workdir, mode_id, acknowledge_failed=acknowledge_failure)
+        run = mode_class.resume(workdir, model=model, resource_limits=resource_limits, enable_recovery=True,
+                                acknowledged=acknowledge_failure, **kwargs)
+    return mode_class, run
+
+
+def walker_context(client: Any) -> dict[str, Any]:
+    """The model route a walker run records in ``run-config.json``, as the spine records its own."""
+    return dict(client.context()) if callable(getattr(client, "context", None)) else {}
