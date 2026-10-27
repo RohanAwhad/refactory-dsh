@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from refactory_dsh import coverage_helpers
+
 VALID_RISKS = ("high", "medium", "low")
 VALID_CATEGORIES = (
     "pinning_tests", "repo_conventions", "shared_state",
@@ -148,6 +150,10 @@ def _quote(line: str, pid: str) -> str:
 #: A list item's start: a bullet or a number.
 _ITEM = re.compile(r"\s*(?:[-*+]|\d+[.)])\s")
 
+#: Any pitfall id in a design, and a heading that names one.
+_PIT_MENTION = re.compile(r"(?<![\w-])PIT-\d{3}(?!\d)")
+_HEADING_ID = re.compile(r"#{1,6}\s+.*(?<![\w-])PIT-\d{3}(?!\d)")
+
 #: The section whose lines the card quotes first: the one a design answers pitfalls in.
 ANSWERS_SECTION = "anti-patterns to avoid"
 
@@ -161,30 +167,42 @@ def pitfall_citations(
     shows the lines, at most `QUOTES_PER_PITFALL`, each with the heading it sits under,
     and says "not mentioned" only for an id the design never cites. Lines in
     ``## Anti-patterns to avoid`` come first, then the rest in design order; a list item
-    is quoted with the lines that continue it, where its answer often is. A ``#`` line
+    is quoted with the lines that continue it, where its answer often is, and a heading
+    that names a pitfall with the block under it (dm-219). A ``#`` line
     inside a code fence is code, not a heading. One entry per pitfall with an id, in
     order: ``{"id", "risk", "quotes": [(heading, text), ...]}``.
     """
     rows = design_text.splitlines()
     # (heading, in the answers section, the line, the line with what continues it)
     lines: list[tuple[str, bool, str, str]] = []
-    heading = section = ""
+    section = ""
+    # The headings the line sits under, outermost first: (level, text).
+    enclosing: list[tuple[int, str]] = []
     fenced = False
     for index, line in enumerate(rows):
         stripped = line.strip()
         if stripped.startswith(("```", "~~~")):
             fenced = not fenced
+        found = None if fenced else re.match(r"(#{1,6})\s+(.+)", stripped)
+        if found:
+            # A heading sits under the headings above its own level, not under its sibling.
+            enclosing = [(level, name) for level, name in enclosing if level < len(found[1])]
+        heading = enclosing[-1][1] if enclosing else ""
         text = line
-        if _ITEM.match(line):
+        if not fenced and _HEADING_ID.match(stripped):
+            # A pitfall answered under its own heading: the block under it is its answer.
+            text = " ".join(part.strip() for part in coverage_helpers.entry_lines(
+                rows, index, _PIT_MENTION) if part.strip())
+        elif _ITEM.match(line):
             for following in rows[index + 1:]:
                 if not following.strip() or not following[:1].isspace() or _ITEM.match(following):
                     break
                 text += " " + following.strip()
         lines.append((heading, section.lower() == ANSWERS_SECTION, line, text))
-        if not fenced and (found := re.match(r"(#{1,6})\s+(.+)", stripped)):
-            heading = found[2].strip()
+        if found:
+            enclosing.append((len(found[1]), found[2].strip()))
             if len(found[1]) <= 2:
-                section = heading
+                section = found[2].strip()
     cited: list[dict[str, Any]] = []
     for pitfall in pitfalls:
         pid = str(pitfall.get("id") or "")
