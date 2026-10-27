@@ -207,7 +207,11 @@ def _still_open(run: Path, claimant: Any = None) -> str | None:
     if not run.is_dir() or (run / "design.json").exists():
         return None
     spine = _json(run / ".refactory" / "spine-status.json")
-    if spine:
+    # A walked run writes the status file too, but no checkpoint names its owner: its
+    # liveness is the claimant's, read from its progress below.
+    from refactory_dsh.run_state import walked
+
+    if spine and not walked(run):
         status = str(spine.get("status") or "")
         owner = _json(run / ".refactory" / "spine-checkpoint.json").get("owner_pid")
         if status in FINISHED or not _alive(owner):

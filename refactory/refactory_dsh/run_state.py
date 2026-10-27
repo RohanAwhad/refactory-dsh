@@ -45,6 +45,48 @@ def is_alive(pid: int) -> bool:
     return True
 
 
+#: The status file, beside the walker's progress record and the spine's checkpoint.
+STATUS = '.refactory/spine-status.json'
+PROGRESS = '.refactory/progress.json'
+CHECKPOINT = '.refactory/spine-checkpoint.json'
+
+
+def write_status(root: Path, *, status: str, nodes: list[str], running_nodes: list[dict[str, str]],
+                 completed: list[str], error: str | None = None, wait_reason: str | None = None,
+                 last_failure: dict[str, str] | None = None) -> None:
+    """Write the status file in the spine's format (`recordStatus` in workflow-spine).
+
+    The walker writes it through here, so a walked run has the record every reader of a
+    run directory reads: where the run stands, what is due, and what completed. Whole
+    and atomic, so no reader sees half of it.
+    """
+    from datetime import datetime, timezone
+
+    at = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+    record: dict[str, Any] = {
+        'schema_version': 1, 'run_id': str(Path(root).resolve()), 'at': at, 'status': status,
+        'nodes': list(nodes), 'running_nodes': list(running_nodes), 'completed': list(completed),
+    }
+    if error is not None:
+        record['error'] = error
+    if wait_reason is not None:
+        record['wait_reason'] = wait_reason
+    if last_failure is not None:
+        record['last_failure'] = {**last_failure, 'at': at}
+    path = Path(root) / STATUS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_name(f'{path.name}.{os.getpid()}.tmp')
+    pending.write_text(json.dumps(record, indent=2))
+    pending.replace(path)
+
+
+def walked(root: Path) -> bool:
+    """Whether the walker drives this run: it keeps a progress record, and no spine
+    checkpoint names an owner. Its status file then says where the run stands, but not
+    whether the process walking it is alive -- that is the walker's own claim to read."""
+    return (Path(root) / PROGRESS).exists() and not (Path(root) / CHECKPOINT).exists()
+
+
 def spine_status(root: Path) -> str:
     """Read and return the status string from spine-status.json."""
     path = Path(root) / '.refactory/spine-status.json'

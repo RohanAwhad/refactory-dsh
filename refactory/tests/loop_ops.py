@@ -69,3 +69,32 @@ def record_item(ctx: Any) -> dict[str, Any]:
     seen.setdefault("ids", []).append(str(item.get("id")))
     ctx.write_json("seen.json", seen)
     return {"seen": seen["ids"]}
+
+
+def explained_passes_in_a_fact(ctx: Any) -> str:
+    """`explained_passes`, also leaving the reason as a fact a template can render."""
+    from refactory_dsh.nn import Verdict
+
+    visits = int(ctx.facts.get("passes", 0)) + 1
+    ctx.set_fact("passes", visits)
+    ctx.set_fact("why", f"pass {visits} of 3")
+    return Verdict("retry", f"pass {visits} of 3") if visits < 3 else "proceed"
+
+
+def pause(ctx: Any) -> None:
+    """Take a moment, so a sibling branch finishes first."""
+    import time
+
+    time.sleep(0.3)
+
+
+def retry_each_item_once(ctx: Any) -> str:
+    """Send the current item's pass back once, saying why; then go on."""
+    from refactory_dsh.nn import Verdict
+
+    item = str((ctx.read_json("current_item.json", {}) or {}).get("id"))
+    tried = ctx.read_json("tried.json", []) or []
+    if item in tried:
+        return "proceed"
+    ctx.write_json("tried.json", [*tried, item])
+    return Verdict("retry", f"item {item} needs another look")

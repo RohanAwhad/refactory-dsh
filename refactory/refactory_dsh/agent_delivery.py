@@ -82,6 +82,27 @@ def fill_feedback(workdir: Path, node: str, values: dict[str, Any], *,
     refill_fn = ep.load()
     return refill_fn(Path(workdir), feedback_keys, values)
 
+#: The heading a reloop's feedback travels under, ahead of the node's prompt.
+FEEDBACK_HEADING = '## Feedback for this visit'
+
+
+def with_feedback(prompt: str, feedback: str) -> str:
+    """``prompt`` with the feedback a reloop left for this visit, said once.
+
+    A gate that sends a node back says why, and the node's next prompt must carry it.
+    Most prompts already do -- their template renders the gate's reason from a fact
+    (design mode's `emit`: "What went wrong last time") -- and repeating it under a
+    second heading only doubles a long check log. So the feedback is added, under
+    :data:`FEEDBACK_HEADING` ahead of the prompt, only when the rendered prompt does not
+    already contain it. Both runtimes deliver through here: the spine's worker with the
+    feedback file the spine wrote, the walker with the reason its gate gave.
+    """
+    feedback = (feedback or '').strip()
+    if not feedback or feedback in prompt:
+        return prompt
+    return f'{FEEDBACK_HEADING}\n\n{feedback}\n\n{prompt}'
+
+
 CONTRACT_START = '<!-- refactory worker execution -->'
 CONTRACT_END = '<!-- end refactory worker execution -->'
 
@@ -157,7 +178,9 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
     real_refactory_source = str(Path(__file__).resolve().parent)
     execution = {
         'node': node, 'workdir': str(workdir),
-        'inputs': [str((workdir / name).resolve()) for name in reads],
+        # In name order on both runtimes: the lowered graph keeps a node's reads as a set,
+        # and the gate's review scope is fingerprinted over them sorted (`Ledger.review`).
+        'inputs': [str((workdir / name).resolve()) for name in sorted(reads)],
         'outputs': [str(_path(workdir, name)) for name in writes],
         'python': python, 'refactory_source': real_refactory_source,
     }

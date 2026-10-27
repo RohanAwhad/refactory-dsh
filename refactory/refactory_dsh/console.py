@@ -581,10 +581,13 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
             activity['start_failure'] = start_failure.get('reason', '')
     resources = activity.get('resources') or {}
     running = _running(run_root, console) or owner_alive is True
+    # A walked run writes the status file but no checkpoint: the process the console
+    # started for it is its owner, as before it wrote one.
+    walker_owner = console.get('pid') if run_state.walked(run_root) else None
     if resources.get('exhausted') and not finished:
         state = 'failed'
         activity['wait_reason'] = resources.get('reason') or 'resource budget exhausted'
-    elif spine and owner and not running and state not in ('finished', 'failed', 'halted', 'paused'):
+    elif spine and (owner or walker_owner) and not running and state not in ('finished', 'failed', 'halted', 'paused'):
         state = 'died'
         activity['wait_reason'] = 'owner exited; inspect the saved boundary before explicit recovery'
     return {
