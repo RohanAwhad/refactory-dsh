@@ -493,6 +493,25 @@ def test_the_instruction_names_the_ledger_path_so_a_mid_run_note_is_read(tmp_pat
     assert "Read the live ledger" in prompts
 
 
+def test_a_prepared_runs_prompts_cite_the_ledger_it_installed(tmp_path):
+    """dm-229: a new lowering is folded in a stage directory deleted once it is installed,
+    so its prompts must cite the ledger in the run directory, which is still there."""
+    import re
+
+    from refactory_dsh import invocations
+
+    workdir = (tmp_path / "run").resolve()
+    workdir.mkdir()
+    invocations.prepare(
+        _state(), workdir, name="default_pack-create", intent="build a counter mode",
+        transform=lambda workflow, stage_dir=None: steering.for_run(workflow, stage_dir or workdir))
+    cited = {path for graph in (workdir / "graphs").rglob("*.json")
+             for path in re.findall(r"Read the live ledger at `([^`]+)`", graph.read_text())}
+    assert cited == {str(workdir / steering.LEDGER)}, "a prompt cites a ledger that is not the run's"
+    assert Ledger(workdir).entries()[0]["text"] == "build a counter mode"
+    assert not list((workdir / ".refactory").glob("prepare-*")), "the stage outlived the install"
+
+
 def test_a_note_added_mid_run_is_live_for_a_later_node(tmp_path):
     """An agent that follows the instruction sees what the person said mid-run."""
     import refactory_dsh.nn as nn

@@ -36,8 +36,10 @@ import hashlib
 import json
 import sys
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 #: Where the ledger lives inside a run directory.
 LEDGER = "intent-ledger.md"
@@ -466,10 +468,32 @@ STEERING_START = "<!-- refactory steering context -->"
 STEERING_END = "<!-- end refactory steering context -->"
 
 
+#: Where the ledger being folded will live once its run is installed, while a new lowering
+#: is staged (`installing_to`); unset otherwise, when the ledger read is the run's own.
+_INSTALLED_ROOT: ContextVar[Path | None] = ContextVar("steering_installed_root", default=None)
+
+
+@contextmanager
+def installing_to(root: Path) -> Iterator[None]:
+    """Fold, inside this block, as for the run directory ``root`` (dm-229).
+
+    `invocations.prepare` stages a new lowering in a temporary directory and folds the
+    ledger from there, then moves the ledger into ``root`` and deletes the stage. The
+    entries are still read from the stage; the prompts cite the ledger where it will be.
+    """
+    token = _INSTALLED_ROOT.set(Path(root))
+    try:
+        yield
+    finally:
+        _INSTALLED_ROOT.reset(token)
+
+
 def _citation_block(ledger: Ledger) -> str:
     """Keep live steering instructions separate from the node's output format."""
+    installed = _INSTALLED_ROOT.get()
+    path = Ledger(installed).path if installed is not None else ledger.path
     return (
-        "\n\nRead the live ledger at `" + str(ledger.path) + "` before acting. "
+        "\n\nRead the live ledger at `" + str(path) + "` before acting. "
         "Respect its constraints while preserving the node's required output format. "
         "Do not append steering citations or other prose to code, JSON, or another "
         "declared artifact. The runtime records supplied ledger context and artifact "

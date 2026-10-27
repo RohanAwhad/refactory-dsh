@@ -29,6 +29,85 @@ def extract_section(text: str, heading: str) -> str:
     return "\n".join(result)
 
 
+#: What can open an inline code span: a run of backticks. A backslash escape is matched
+#: too, so an escaped backtick outside a span opens nothing.
+_SPAN_TOKEN = re.compile(r"\\.|`+", re.DOTALL)
+_BACKTICK_RUN = re.compile(r"`+")
+#: A blank line, which ends a paragraph and so any code span still open in it.
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+
+
+def code_spans(text: str) -> list[str]:
+    """The text's inline code spans, read the CommonMark way (dm-146), in order.
+
+    A run of N backticks opens a span that only a run of exactly N backticks closes, so
+    a double-backtick span holding a single backtick is one span and shifts nothing after
+    it. A run that nothing closes is literal text, a blank line ends any span, and outside
+    a span a backslash-escaped backtick opens nothing. Each span's line endings read as
+    spaces, and one space comes off each side when it has one on both and is not all spaces.
+    """
+    spans: list[str] = []
+    for paragraph in _PARAGRAPH_BREAK.split(text):
+        position = 0
+        while (opener := _SPAN_TOKEN.search(paragraph, position)) is not None:
+            position = opener.end()
+            run = opener.group()
+            if not run.startswith("`"):
+                continue  # an escape: what it escapes is literal
+            closer = next((found for found in _BACKTICK_RUN.finditer(paragraph, opener.end())
+                           if len(found.group()) == len(run)), None)
+            if closer is None:
+                continue  # no run of the same length closes it: the backticks are literal
+            content = paragraph[opener.end():closer.start()].replace("\n", " ")
+            if len(content) > 1 and content[0] == content[-1] == " " and content.strip():
+                content = content[1:-1]
+            spans.append(content)
+            position = closer.end()
+    return spans
+
+
+#: A markdown heading: its marks and its text.
+_HEADING = re.compile(r"(#{1,6})\s+(.*)")
+
+
+#: What may come before the id that starts an entry: heading marks, a bullet or a number,
+#: then bold or italic marks and a backtick.
+_ENTRY_LEAD = re.compile(r"\s*(?:#{1,6}\s+)?(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__|\*|_)?`?")
+
+
+def entry_lines(lines: list[str], index: int, ids: re.Pattern[str]) -> list[str]:
+    """The entry that ``lines[index]``, a line naming an id, starts (dm-219).
+
+    A heading's entry is the heading and the block under it, up to the next heading of the
+    same or a higher level, or the next line that starts with another id that ``ids``
+    matches (after any heading marks, bullet, or bold marks): an entry of its own. A line
+    that only mentions another id, as a cross-reference does, stays in the block. Any other
+    line is its own entry. A ``#`` line inside a code fence is code, not a heading.
+    """
+    found = _HEADING.match(lines[index].strip())
+    if found is None:
+        return [lines[index]]
+    level, own = len(found[1]), _ids_in(lines[index], ids)
+    entry = [lines[index]]
+    fenced = False
+    for line in lines[index + 1:]:
+        stripped = line.strip()
+        if stripped.startswith(("```", "~~~")):
+            fenced = not fenced
+        elif not fenced and (heading := _HEADING.match(stripped)) and len(heading[1]) <= level:
+            break
+        elif not fenced and (starts := ids.match(line, _ENTRY_LEAD.match(line).end())) \
+                and starts.group(0) not in own:
+            break
+        entry.append(line)
+    return entry
+
+
+def _ids_in(line: str, ids: re.Pattern[str]) -> set[str]:
+    """The whole ids ``ids`` finds in ``line``."""
+    return {found.group(0) for found in ids.finditer(line)}
+
+
 #: A cited site: a file and a line, ``path/to/file.py:12`` or ``file.py:12-20``.
 _SITE_CITATION = re.compile(r'[\w./-]*\w\.\w+:\d+(?:-\d+)?')
 #: A file name anywhere in a section: ``tool.py``, ``pkg/tool.py``.
@@ -59,8 +138,8 @@ def site_paths(text: str, source: str = "") -> list[str]:
 
             tracked = tracked_files(source)
         sites: list[str] = []
-        for m in re.finditer(r'`([^`]+)`', text):
-            token = m.group(1).strip()
+        for span in code_spans(text):
+            token = span.strip()
             if not _SITE_CITATION.fullmatch(token):
                 continue
             path = re.sub(r':\d+(-\d+)?$', '', token)
@@ -68,7 +147,7 @@ def site_paths(text: str, source: str = "") -> list[str]:
                 sites.append(token)
         return sites
     section = extract_section(text, "Rule and sites")
-    return [m.group(1).strip() for m in re.finditer(r'`([^`]+)`', section)]
+    return [span.strip() for span in code_spans(section) if span.strip()]
 
 
 def _in_checkout(source: str, path: str, tracked: set[str] | None) -> bool:
@@ -97,8 +176,8 @@ def headings(text: str) -> list[str]:
 def has_valid_reference(entry: str, sites: list[str], hdgs: list[str]) -> bool:
     """True when the entry references a valid site path or heading."""
     # Backticked paths matching a site from Rule and sites.
-    for m in re.finditer(r'`([^`]+)`', entry):
-        token = re.sub(r':\d+(-\d+)?$', '', m.group(1).strip())
+    for span in code_spans(entry):
+        token = re.sub(r':\d+(-\d+)?$', '', span.strip())
         for site in sites:
             site_clean = re.sub(r':\d+(-\d+)?$', '', site)
             if token == site_clean:
