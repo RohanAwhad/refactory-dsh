@@ -76,11 +76,13 @@ PROBES = {
     "heading with title, remedy in body": (
         "## Anti-patterns to avoid\n\n### PIT-001 (splitlines trap)\n\n"
         "Line counting uses `text.count('\\n')`, so a file without a final newline counts like wc.\n",
-        "PIT-001 (splitlines trap)", "Anti-patterns to avoid"),
+        "PIT-001 (splitlines trap) Line counting uses `text.count('\\n')`, so a file without a final "
+        "newline counts like wc.", "Anti-patterns to avoid"),
     "short heading with id": (
         "## Anti-patterns to avoid\n\n### PIT-001\n\nCounted with count, never splitlines, matching "
         "wc on every input.\n",
-        "PIT-001", "Anti-patterns to avoid"),
+        "PIT-001 Counted with count, never splitlines, matching wc on every input.",
+        "Anti-patterns to avoid"),
     "terse remedy (4 words)": (
         "## Anti-patterns to avoid\n\n- PIT-001: use `count('\\n')`, not `splitlines()`.\n",
         "PIT-001: use `count('\\n')`, not `splitlines()`.", "Anti-patterns to avoid"),

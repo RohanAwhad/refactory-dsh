@@ -694,6 +694,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 | function | `remove_check_copy` | `(target: 'Path', run_id: 'str') -> 'None'` |
 | function | `report` | `(ctx: 'Any', name: 'str', payload: 'dict[str, Any]') -> 'dict[str, Any]'` |
 | function | `run_check` | `(ctx: 'Any', command: 'str', timeout: 'float', *, triage_prep: 'bool' = True, prepared: 'bool' = False, beside_reviews: 'bool' = False) -> 'Any'` |
+| function | `unprintable_refusal` | `(path: 'str') -> 'str'` |
 | function | `wants_worktree` | `(ctx: 'Any') -> 'bool'` |
 
 - **`apply_emission`** — Parse emit.txt and resolve edits against the run worktree, read-only.
@@ -711,6 +712,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 - **`remove_check_copy`** — Remove the run's check copy, when the run ends or the copy cannot be reused.
 - **`report`** — Settle the run's place, write the mode's report ``name`` from ``payload``, and return it.
 - **`run_check`** — Run ``command`` where the run works, and return its `sandbox.SandboxResult`.
+- **`unprintable_refusal`** — Why ``path`` is refused when it holds a character `_unprintable` names; else ``""``.
 - **`wants_worktree`** — Whether the run's ``worktree`` knob asks for a worktree, as it does unless turned off.
 
 

@@ -151,8 +151,86 @@ def test_a_branch_the_run_did_not_make_is_refused_and_left_alone(repo, tmp_path)
     assert git(repo, "branch", "--list", "refactory/run-dededede4545")
 
 
+#: The real `worktree.git`, which a stand-in passes everything else to.
+_GIT = worktree.git
+
+#: git's words when an add read another add's half-written entry (CI, 2026-10-23).
+HALF_WRITTEN = "fatal: failed to read .git/worktrees/run-cccccccc0001/commondir: Success"
+
+
+def _refuse_adds(monkeypatch, said: str = HALF_WRITTEN, *, every: bool = False) -> list[tuple]:
+    """Fail the first `git worktree add` (or ``every`` one) in git's words ``said``.
+
+    git makes a new branch before it scans `.git/worktrees/`, so a refused ``-b`` add
+    leaves its branch behind, as it does in git. Returns the adds that were refused.
+    """
+    real = _GIT
+    refused: list[tuple] = []
+    lock = threading.Lock()
+
+    def git(path, *args, env=None):
+        if "worktree" in args and "add" in args:
+            with lock:
+                refuse = every or not refused
+                if refuse:
+                    refused.append(args)
+            if refuse:
+                if "-b" in args:
+                    real(path, "branch", args[args.index("-b") + 1], args[-1])
+                raise ValueError(f"git {' '.join(args)} failed in {path}: {said}")
+        return real(path, *args, env=env)
+
+    monkeypatch.setattr(worktree, "git", git)
+    monkeypatch.setattr(worktree, "ADD_JITTER_S", 0.01)
+    return refused
+
+
+def test_an_add_that_read_a_half_written_entry_is_tried_again(repo, tmp_path, monkeypatch):
+    """dm-197: concurrent adds on one repository collide in git; the one that fails is
+    retried, so every run still gets its own worktree."""
+    refused = _refuse_adds(monkeypatch)
+    made: list[worktree.Worktree] = []
+    threads = [threading.Thread(target=lambda index=index: made.append(
+        worktree.create(repo, "HEAD", f"cccccccc{index:04d}", _run(tmp_path, f"run{index}"))))
+        for index in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(refused) == 1, "the injected failure did not happen"
+    assert len({found.path for found in made}) == 4
+    assert all(Path(found.path, "app.py").exists() for found in made)
+    assert all(git(Path(found.path), "branch", "--show-current") == found.branch for found in made)
+
+
+def test_only_a_half_written_entry_is_retried_and_only_so_often(repo, tmp_path, monkeypatch):
+    """Any other failure, or one that left something behind, is refused at once."""
+    refused = _refuse_adds(monkeypatch, "fatal: refused for another reason", every=True)
+    with pytest.raises(ValueError, match="refused for another reason"):
+        worktree.create(repo, "HEAD", "dddddddd0000", _run(tmp_path))
+    assert len(refused) == 1
+    # Nor is one that left something where the worktree goes.
+    tried: list[tuple] = []
+
+    def leaves_a_path(path, *args, env=None):
+        tried.append(args)
+        (tmp_path / "elsewhere").mkdir()
+        raise ValueError(f"git worktree add failed in {path}: {HALF_WRITTEN}")
+
+    monkeypatch.setattr(worktree, "git", leaves_a_path)
+    with pytest.raises(ValueError, match="failed to read"):
+        worktree._add(repo, tmp_path / "elsewhere", "some-branch")
+    assert len(tried) == 1
+    # The half-written failure itself is retried a bounded number of times.
+    refused = _refuse_adds(monkeypatch, every=True)
+    with pytest.raises(ValueError, match="failed to read"):
+        worktree.create(repo, "HEAD", "dddddddd0001", _run(tmp_path, "run1"))
+    assert len(refused) == worktree.ADD_ATTEMPTS
+
+
 def test_two_runs_on_one_target_get_separate_worktrees_even_at_once(repo, tmp_path):
-    """remote-factory's ``TestFilelockConcurrency``: git keeps concurrent adds apart."""
+    """remote-factory's ``TestFilelockConcurrency``: concurrent adds each get a worktree;
+    an add that collides with another in git is retried (dm-197)."""
     made: list[worktree.Worktree] = []
     threads = [threading.Thread(target=lambda index=index: made.append(
         worktree.create(repo, "HEAD", f"cccccccc{index:04d}", _run(tmp_path, f"run{index}"))))

@@ -21,7 +21,7 @@ from refactory_dsh import registry
 from refactory_dsh.run import BuildLoopStop
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
-from refactory_dsh.repo_change import refuse_truncated, EMISSION_PATH
+from refactory_dsh.repo_change import refuse_truncated, EMISSION_PATH, unprintable_refusal
 
 #: Where a create/edit run stages its package inside the run directory, so two
 #: parallel runs of the same package name never collide.  A git worktree is not
@@ -776,6 +776,8 @@ def _package_relative(relative: str, name: str) -> str:
     """
     from pathlib import PurePosixPath
 
+    if refusal := unprintable_refusal(str(relative)):
+        raise ValueError(refusal)
     raw = str(relative).replace("\\", "/").strip()
     parts = [part for part in PurePosixPath(raw).parts if part not in ("", ".")]
     if raw.startswith("/") or not parts:
@@ -820,6 +822,13 @@ def materialise(ctx: Any) -> dict[str, Any]:
             "nothing to write"
         )
     name = str(ctx.facts["name"])
+    # Every path is placed before anything is removed or written, and a path that cannot be
+    # placed goes back to emit like a malformed header rather than ending the run.
+    try:
+        placed = {relative: _package_relative(relative, name) for relative in files}
+    except ValueError as exc:
+        from refactory_dsh.repo_change import _count_refusal
+        return _count_refusal(ctx, exc)
     # When the run has a staging directory (from prepare_create), write there
     # instead of the shared .factory/packages/<name>/.
     staging_root = ctx.facts.get("package_root")
@@ -832,7 +841,7 @@ def materialise(ctx: Any) -> dict[str, Any]:
     root.mkdir(parents=True)
     written: list[str] = []
     for relative, content in files.items():
-        inside = _package_relative(relative, name)
+        inside = placed[relative]
         refuse_truncated(Path(inside), content)
         target = root / inside
         if not target.resolve().is_relative_to(root.resolve()):

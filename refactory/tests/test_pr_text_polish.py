@@ -101,12 +101,12 @@ def test_only_sentences_about_the_empty_start_are_left_out(summary, kept):
     assert delivery._built_summary(summary) == (kept or summary)
 
 
-def test_the_title_is_cut_at_a_word_boundary():
+def test_the_title_is_the_whole_heading_when_github_takes_it():
+    """It was cut at 72 characters, mid-phrase; GitHub takes the whole heading (dm-217).
+    `test_delivery` holds the cut past GitHub's limit."""
     title = delivery._title(_Ctx({"design.md": DESIGN}))
     heading = DESIGN.splitlines()[0][2:]
-    assert title == "Add wordcount.py script and sample.txt with line, word, and character…"
-    assert len(title) <= delivery.TITLE_LIMIT
-    assert heading.startswith(title[:-1]) and heading[len(title) - 1] == " "
+    assert len(heading) > 72 and title == heading
 
 
 def test_a_follow_up_both_gates_name_is_listed_once(tmp_path):
