@@ -1319,9 +1319,11 @@ def test_builders_racing_a_live_writer_never_publish_a_torn_pair(tmp_path):
     Correctness survived that — the reader re-parses and rejects a torn pair — so
     what a test has to catch is the torn write itself, which forces every racing
     reader onto the full O(N) rebuild this index exists to remove. A per-writer
-    `O_EXCL` temp is what this asserts: a concurrent watcher never sees a derived
-    file that is not a complete JSON object, the answers still equal a full scan,
-    and no publish temp outlives its writer.
+    temp (PID + a per-process counter, so no two publishes share an inode; no
+    `O_EXCL`, which would wedge the index behind a crashed writer's leftover) is
+    what this asserts: a concurrent watcher never sees a derived file that is not
+    a complete JSON object, the answers still equal a full scan, and no publish
+    temp outlives its writer.
     """
     live.emit(tmp_path, 'seed')
     directory = tmp_path / '.refactory'

@@ -1,7 +1,10 @@
 # Refactory activity verbosity: keep the full history, render it at three levels
 
-Status: draft for review (revision 6). Authority: `.hai/state.yaml` at this
-worktree (`human_approved` INT-001, DEC-001, DEC-002; evidence H2 supports them).
+Status: draft for review (revision 7 — see the Revision log for round 7).
+Authority: `.hai/state.yaml` in the original build worktree
+(`human_approved` INT-001, DEC-001, DEC-002; evidence H2 supports them). That file
+is not carried on this branch, so for a reviewer of the diff the authority is the
+requirement set below plus the revision log, not a file in the tree.
 This spec covers INT-001 and nothing else. Everything below that is not traced to
 INT-001/DEC-001/DEC-002 is either marked **non-normative** or is an agent
 decision (`SD-*`) whose rationale and affected IDs are stated where it appears.
@@ -2133,6 +2136,18 @@ spec bending:
 | **R-4.3 was violated by the code, not by the spec** | `status()` fed one `after` to both `--after` and `--activity-after`, and `watchStream` advanced that number from the *journal* cursor, so on an optimizer run the journal index drove the progress delta and the streamed `status.events` emptied once it exceeded the progress file's length. The spec was right and unchanged; §6 already shows `status(run, after, activityAfter)` with `--activity-after: afterActivity`. The service now carries the two cursors separately, and `status` takes the journal cursor as an explicit argument defaulting to `after` for a first reader — no new Remote method, so SD-9 still holds. |
 | **§12 gates 1–7 hardcoded absolute worktree paths, and gate 1 tested a file not on this branch** | the gate block is now worktree-relative (`cd "$(git rev-parse --show-toplevel)"`, `cd refactory && ../.venv/bin/python …`) so it runs verbatim in any checkout including a CI runner. Gate 1 no longer names `.hai/state.yaml` (absent from the branch, so unexecutable); it asserts what a reviewer needs — the branch carries these commits and is not behind `main`. Gates 2 and 7 also record the `DSH_HOME` clearing a developer shell needs, since the suite's seal fails a run that reaches the operator's real DSH home. |
 | Gate 2's test roster | now lists T-27 and T-28, the two cases this round added. |
+
+One deliberate deviation from §4.6 `[R-6.5.2]`'s wording, recorded here rather than
+silently: that clause prescribes **write-to-temp-then-rename** for the provenance
+anchor and the overview, and this round keeps the rename but makes the temp
+*per-writer* (PID + a per-process counter) and deliberately **not** `O_EXCL`. A
+per-writer unique name already guarantees no two publishes share an inode, which is
+the property the rename needs; `O_EXCL` would add nothing and would turn a temp left
+behind by a crashed writer (or a recycled PID) into a permanent `FileExistsError`
+that wedges every later publish for that run. §4.6's *requirement* — a reader racing
+a builder sees a whole number of lines and an anchor that is either the previous
+version or this one — is unchanged and now holds without the collision that made a
+racing reader rebuild from the journal.
 
 Nothing in R-1…R-7 changed: the contract this document states was already correct
 on every point the review raised, and the corrections are in the gates (§12) and
