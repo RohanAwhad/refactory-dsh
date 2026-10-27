@@ -511,6 +511,10 @@ class Gap:
     tracker: str
     title: str
     rewrite: Rewrite
+    #: Whether the gap still shows in a difference its rewrite leaves alone. A rewrite that
+    #: explains only some forms of the gap (the feedback block when it repeats the prompt)
+    #: is a no-op on the other forms, which are open gaps all the same, not closed ones.
+    present: Callable[[Difference], bool] | None = None
 
     def __str__(self) -> str:
         return f"{self.name} ({self.tracker}): {self.title}"
@@ -688,7 +692,8 @@ GAPS = {gap.name: gap for gap in (
         "so its receipts lose the node's role; the walker records it (`ceo`, `code_reviewer`)", _worker_role),
     Gap("feedback-twice", "dm-123 #436 gap 5",
         "a node a gate sent back gets the gate's reason as `## Feedback for this visit` on the spine, ahead of a "
-        "prompt that already carries it; the walker sends it once", _feedback_twice),
+        "prompt that already carries it; the walker sends it once", _feedback_twice,
+        present=lambda difference: difference.aspect == "prompts" and FEEDBACK in (difference.spine or "")),
 )}
 
 #: The gaps open in each scenario. A gap that closes makes its xfail pass, which fails:
@@ -721,11 +726,12 @@ def unexplained(found: list[Difference], gaps: list[Gap]) -> list[Difference]:
 
 
 def shown(gap: Gap, found: list[Difference]) -> list[Difference]:
-    """The differences ``gap``'s rewrite still changes. A gap is closed only when its own
-    rewrite is a no-op on every difference, whatever else differs on the same key."""
+    """The differences ``gap`` still shows in: its rewrite changes them, or the gap says it is
+    present. A gap is closed only then on no difference, whatever else differs on the key."""
     return [difference for difference in found
             if gap.rewrite(difference.aspect, difference.key, "walker", difference.walker) != difference.walker
-            or gap.rewrite(difference.aspect, difference.key, "spine", difference.spine) != difference.spine]
+            or gap.rewrite(difference.aspect, difference.key, "spine", difference.spine) != difference.spine
+            or (gap.present is not None and gap.present(difference))]
 
 
 # ── the runs ──────────────────────────────────────────────────────────────────
