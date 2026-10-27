@@ -3200,9 +3200,14 @@ and the run's worktree, and gave the launcher checkout a warning, so nothing ref
 Every agent node of a run that recorded a target (`target_guard.record`) gets a
 snapshot of refactory's own checkout when that checkout is not the target, on every
 route (walker, the spine's worker bridge, the CEO subagent), because the snapshot is
-taken in `agent_delivery.begin`. A change there fails the node and is restored
-losslessly, as a target change is (`restore_target`): the agent's copies are kept under
-the delivery's `checkouts/` folder, and the message names the checkout.
+taken in `agent_delivery.begin`. A change there fails the node, and the message names
+the checkout.
+
+The snapshot holds the checkout's **tracked** files that differ from HEAD, and HEAD
+itself (`_checkout_state`, one `git status --porcelain=v2 --branch -uno`). Untracked
+files are not watched: an editor's swap or lock file, a log appended through an open
+handle, a new notes file and a copied tree were where false refusals came from, and a
+generator rewrites tracked files. The target guard's own snapshot is unchanged.
 
 `target_guard.checkouts` finds the checkouts:
 
@@ -3216,23 +3221,39 @@ the delivery's `checkouts/` folder, and the message names the checkout.
   `pin_checkout` (`pin.resolve_pin`). The pin is watched when the run is pinned, the
   driver otherwise.
 
-Only git checkouts count. A checkout that is, holds or lies in the target or the run's
-worktree is left to the target guard, so a run on refactory itself is unchanged. The
-run's own directory, `.venv` and `node_modules` are never part of the snapshot.
+Only git checkouts count, and not a package a checkout ignores. A checkout that is,
+holds or lies in the target or the run's worktree is left to the target guard, so a run
+on refactory itself is unchanged. Nor is a checkout `REFACTORY_GUARD_UNWATCHED` names:
+the test suite names its own checkout there (`tests/conftest.py`), so its scripted
+agents never snapshot it.
+
+### What a refusal does to the files
+
+One setting decides, `target_guard.CHECKOUT_POLICY`, and the person has not chosen yet:
+
+| Policy | What it does |
+|---|---|
+| `restore` (A, the default) | Puts the changed files back as they were before the node (`restore_target`); the changed copies are kept under the delivery's `checkouts/` folder |
+| `report` (B) | Leaves the files as they are and names them with their diff |
+| `restore-if-clean` (C) | Restores when the checkout had no uncommitted tracked change when the node began, and reports otherwise |
+
+Either way the person is told: a run warning, and a line in the checkout's own log,
+`~/.refactory/target-guard/<checkout hash>/restores.log`, naming the files and where
+their changed bytes went. A file whose pre-node bytes were not kept (larger than a
+baseline holds) is never moved away: `restore_target` decides how a path is given back
+before it moves anything, and leaves it in place when nothing can. A commit is not
+undone; the message prints the `git -C <checkout> reset --keep <head>` that undoes it.
+A checkout git cannot read after the node is named in a warning, not refused.
 
 ### Cost
 
-The snapshot is the target guard's `state()`: one `git status`, plus a hash of each
-uncommitted file. It is taken once at `begin` and once at `finish`.
+One `git status` per snapshot, two per agent node: 54 ms median on the lab driver, of
+which git's index refresh is 44 ms, and about 11 ms in a fresh worktree.
 
 ### Tests that hold it
 
-- `test_target_guard_checkouts.py::test_walker_emit_generator_writing_into_the_driver_is_refused_and_restored`
-- `test_target_guard_checkouts.py::test_walker_pinned_run_guards_its_pin`
-- `test_target_guard_checkouts.py::test_walker_run_whose_driver_is_its_target_is_unchanged`
-- `test_target_guard_checkouts.py::test_walker_legitimate_writes_pass_with_the_driver_watched`
-- `test_target_guard_checkouts.py::test_spine_emit_writing_into_the_recorded_driver_is_refused_and_restored`
-- `test_target_guard_checkouts.py::test_spine_pinned_run_guards_its_pin`
-- `test_target_guard_checkouts.py::test_spine_run_whose_driver_is_its_target_is_unchanged`
-- `test_target_guard_checkouts.py::test_spine_legitimate_writes_to_the_run_and_its_worktree_pass`
-- `test_target_guard_checkouts.py::test_checkouts_skip_the_target_its_worktree_and_anything_not_a_checkout`
+`test_target_guard_checkouts.py`: the walker and spine refusals of a driver and a pin
+write, a commit, a run on refactory itself, legitimate writes, untracked files, a file
+whose bytes were not kept, an unreadable checkout, a parallel stray, both retry routes,
+the launcher that is the driver, which checkouts are watched, the suite's own checkout,
+and each policy.

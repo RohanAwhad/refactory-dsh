@@ -372,7 +372,13 @@ def _save_checkout_baselines(directory: Path, checkouts: dict[str, Any] | None) 
         (directory / 'checkouts').rename(directory / f'checkouts-{uuid.uuid4().hex[:8]}')
     for path, snapshot in (checkouts or {}).items():
         if snapshot.get('changes'):
-            target_guard.save_baseline(Path(path), snapshot['changes'], target_guard.checkout_baseline(directory, path))
+            unsaved = target_guard.save_baseline(Path(path), snapshot['changes'],
+                                                 target_guard.checkout_baseline(directory, path))
+            if unsaved:
+                # A refusal leaves these where they are (`restore_target`), so say so now.
+                target_guard.warn(f"refactory's own checkout {path} has uncommitted files whose bytes could "
+                                  f"not be kept, so they cannot be put back if this node changes them: "
+                                  f"{target_guard._named(unsaved)}")
 
 
 def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bool = False,
@@ -509,8 +515,9 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     missing = [name for name in writes if name not in fresh]
     fail_changes, warn_changes = target_guard.strayed(
         workdir, record.get('target'))
-    # Refactory's own checkout, where it is not the target, is refused and restored for
-    # every agent node, a run with or without a worktree alike (dm-164).
+    # Refactory's own checkout, where it is not the target, is refused for every agent
+    # node, a run with or without a worktree alike; `target_guard.CHECKOUT_POLICY` says
+    # what happens to its files (dm-164).
     checkout_changes = target_guard.strayed_checkouts(workdir, record.get('checkouts'))
     # A launcher checkout that is also refactory's is refused below, not only warned about.
     warn_changes = [change for change in warn_changes
@@ -537,8 +544,9 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
         restored_info = target_guard.restore_target(
             Path(target_before['root']), target_before,
             baseline_dir, workdir)
-    checkouts_restored = {path: target_guard.restore_checkout(path, record['checkouts'][path], directory, workdir)
-                          for path in checkout_changes}
+    checkouts_settled = {path: target_guard.settle_checkout(path, record['checkouts'][path], directory, workdir,
+                                                             node=record['node'])
+                         for path in checkout_changes}
     all_changes = fail_changes + warn_changes
     receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target', 'checkouts')}
     receipt['prompt_hash'] = record.get('prompt_hash')
@@ -581,7 +589,7 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
                 is_output_only=is_oo))
         if checkout_changes:
             reasons.append(target_guard.checkout_refusal(
-                record['node'], (tg_bl or {}).get('root'), checkout_changes, checkouts_restored,
+                record['node'], (tg_bl or {}).get('root'), checkout_changes, checkouts_settled,
                 set_aside=None if fail_changes else set_aside))
         raise ValueError(' '.join(reasons))
     if missing:

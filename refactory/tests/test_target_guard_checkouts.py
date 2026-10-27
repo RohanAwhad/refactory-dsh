@@ -3,7 +3,9 @@
 An agent that runs a refactory tool with the contract's Python imports refactory from the
 driver checkout, or from a pinned run's pin, and the tool writes there from any directory
 (b32l, 2026-10-21). Each test pins one rule, on the walker (a scripted design run) and on
-the spine's worker bridge (`worker_node.execute`, which every spine agent node runs).
+the spine's worker bridge (`worker_node.execute`, which every spine agent node runs). The
+guard watches tracked files and HEAD only; what a refusal does to the files is
+`target_guard.CHECKOUT_POLICY`'s, and each policy is tested here.
 """
 
 from __future__ import annotations
@@ -28,26 +30,36 @@ pytestmark = pytest.mark.usefixtures("fake_gh")
 #: A refactory tool that, like the generators, writes beside the package it is imported from.
 GENERATOR = ("from pathlib import Path\n"
              "here = Path(__file__).resolve().parent\n"
-             "(here / 'generated.json').write_text('{}\\n')\n"
+             "(here / 'generated.json').write_text('{\"generated\": true}\\n')\n"
              "(here / 'mine.py').write_text('print(\"the agent rewrote this\")\\n')\n")
 
+#: What the committed generated file holds before a generator rewrites it.
+COMMITTED = "{}\n"
 
-def _checkout(root: Path) -> Path:
-    """A refactory checkout: a git repository holding refactory/refactory_dsh with a generator."""
+
+def _checkout(root: Path, *, dirty: bool = True) -> Path:
+    """A refactory checkout: a git repository holding refactory/refactory_dsh with a generator.
+
+    Its generated file is tracked, as refactory's generated files are; ``dirty`` leaves
+    the person's own uncommitted edit to a tracked file and untracked notes in it.
+    """
     git_repo(root)
     package = root / "refactory" / "refactory_dsh"
     package.mkdir(parents=True)
     (package / "gen.py").write_text(GENERATOR)
     (package / "mine.py").write_text("print('committed')\n")
+    (package / "generated.json").write_text(COMMITTED)
     git(root, "add", ".")
     git(root, "commit", "-q", "-m", "refactory")
-    # The person's own state there, which a restore must give back exactly.
-    (package / "mine.py").write_text("print('the person, uncommitted')\n")
-    (root / "notes.txt").write_text("the person's untracked notes\n")
-    # An environment its ignore rules do not cover: never part of a snapshot, so never restored.
-    (root / ".venv").mkdir()
-    (root / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    if dirty:
+        # The person's own state there, which a restore must give back exactly.
+        (package / "mine.py").write_text("print('the person, uncommitted')\n")
+        (root / "notes.txt").write_text("the person's untracked notes\n")
     return root
+
+
+def _generated(checkout: Path) -> str:
+    return (checkout / "refactory" / "refactory_dsh" / "generated.json").read_text()
 
 
 def _files(root: Path) -> dict[str, bytes]:
@@ -99,7 +111,7 @@ class Emit(FakeModel):
             generator = self.generator or Path(execution["refactory_source"]) / "gen.py"
             # From a scratch directory, as a builder's shell is: the tool writes where it lives.
             subprocess.run([sys.executable, str(generator)], cwd=workdir, check=True)
-            self.seen["wrote"] = (Path(generator).parent / "generated.json").exists()
+            self.seen["wrote"] = (Path(generator).parent / "generated.json").read_text() != COMMITTED
         return answer
 
 
@@ -125,7 +137,8 @@ def test_walker_emit_generator_writing_into_the_driver_is_refused_and_restored(t
     assert receipt["status"] == "failed"
     assert list(receipt["checkout_changes"]) == [str(driver.resolve())]
     kept = list((tmp_path / "run" / ad.ROOT / receipt["id"] / "checkouts").rglob("generated.json"))
-    assert kept, "the agent's copy is kept, not lost"
+    assert kept and kept[0].read_text() != COMMITTED, "the changed copy is kept, not lost"
+    assert "The changed copies are in" in result.error
 
 
 def test_walker_pinned_run_guards_its_pin(tmp_path, monkeypatch):
@@ -224,7 +237,7 @@ def _generate_in(checkout: Path):
     return act
 
 
-def test_spine_emit_writing_into_the_recorded_driver_is_refused_and_restored(tmp_path, monkeypatch):
+def test_spine_emit_writing_into_the_recorded_driver_is_refused_and_restored(tmp_path, monkeypatch, capsys):
     driver = _checkout(tmp_path / "driver")
     repo, run, _ = _spine_run(tmp_path, "dm164spine01")
     _record(run, checkout=driver)
@@ -238,6 +251,12 @@ def test_spine_emit_writing_into_the_recorded_driver_is_refused_and_restored(tmp
     assert receipt["status"] == "failed"
     assert not (run / "emit.txt").exists(), "the redo's worker must not find the refused answer"
     assert receipt["set_aside"] in str(refused.value)
+    # The person is told, and the checkout keeps its own record of what was done to it.
+    said = capsys.readouterr().err
+    assert f"refactory: run warning: agent 'emit' changed refactory's own checkout {driver.resolve()}" in said
+    logged = target_guard.restore_log(driver.resolve()).read_text()
+    set_aside = str(run / ad.ROOT / receipt["id"] / "checkouts")
+    assert "refactory/refactory_dsh/generated.json" in logged and set_aside in logged, logged
 
 
 def test_spine_pinned_run_guards_its_pin(tmp_path, monkeypatch):
@@ -272,11 +291,15 @@ def test_spine_commit_into_the_driver_is_refused(tmp_path, monkeypatch):
         git(driver, "add", "committed.py")
         git(driver, "commit", "-q", "-m", "agent commit")
 
+    head = git(driver, "rev-parse", "HEAD")
     with pytest.raises(ValueError, match="committed files under it changed") as refused:
         _dispatch(run, "code_reviewer", ["reviews/code.md"], monkeypatch, act)
 
     assert f"refactory's own checkout {driver.resolve()}" in str(refused.value)
-    assert "commits are not rewritten" in str(refused.value)
+    # Not undone, and not claimed to be: the exact command that undoes it is named.
+    assert f"`git -C {driver.resolve()} reset --keep {head}`" in str(refused.value)
+    assert "put back" not in str(refused.value)
+    assert (driver / "committed.py").exists()
 
 
 def test_spine_run_whose_driver_is_its_target_is_unchanged(tmp_path, monkeypatch):
@@ -336,13 +359,13 @@ def test_a_parallel_node_that_saw_the_stray_is_not_refused_for_its_undoing(tmp_p
     driver, _, run = _bracket_run(tmp_path)
     (run / "reviews").mkdir(parents=True)
     ad.begin(run, "code_reviewer", "Review.", ["reviews/code.md"])
-    (driver / "stray.py").write_text("print('stray')\n")
-    # qa_director starts while stray.py is in the driver.
+    (driver / "app.py").write_text("print('stray')\n")
+    # qa_director starts while the stray edit is in the driver.
     ad.begin(run, "qa_director", "QA.", ["reviews/qa.md"])
     (run / "reviews" / "code.md").write_text("VERDICT: pass\n")
     with pytest.raises(ValueError, match="refactory's own checkout .* changed while agent 'code_reviewer'"):
         ad.finish(run, "code_reviewer")
-    assert not (driver / "stray.py").exists()
+    assert (driver / "app.py").read_text() == "print('app')\n"
     (run / "reviews" / "qa.md").write_text("VERDICT: pass\n")
     assert ad.finish(run, "qa_director")["status"] == "delivered"
 
@@ -353,28 +376,140 @@ def test_a_retried_attempt_is_judged_from_a_fresh_snapshot(tmp_path):
     ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"], reuse=True)
     pending = ad._pending(run, "emit")
     kept = pending.read_text()
-    (driver / "stray.py").write_text("print('stray')\n")
+    (driver / "app.py").write_text("print('stray')\n")
     (run / "emit.txt").write_text("Done.\n")
     with pytest.raises(ValueError, match="refactory's own checkout"):
         ad.finish(run, "emit")
     pending.write_text(kept)
     # The person changes their own checkout between the attempts, and keeps it.
-    (driver / "notes.txt").write_text("the person's later notes\n")
+    mine = driver / "refactory" / "refactory_dsh" / "mine.py"
+    mine.write_text("print('the person, later')\n")
     ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"], reuse=True)
     (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
     assert ad.finish(run, "emit")["status"] == "delivered"
-    assert (driver / "notes.txt").read_text() == "the person's later notes\n"
+    assert mine.read_text() == "print('the person, later')\n"
+
+
+def test_a_retried_node_with_only_a_checkout_snapshot_is_judged_afresh(tmp_path):
+    """A node the target guard does not watch (not output-only, no worktree) still retries afresh."""
+    driver, _, run = _bracket_run(tmp_path)
+    (run / "reviews").mkdir(parents=True)
+    record = ad.begin(run, "code_reviewer", "Review.", ["reviews/code.md"], reuse=True)
+    assert record["target"] is None and record["checkouts"], record
+    pending = ad._pending(run, "code_reviewer")
+    kept = pending.read_text()
+    (driver / "app.py").write_text("print('stray')\n")
+    (run / "reviews" / "code.md").write_text("VERDICT: pass\n")
+    with pytest.raises(ValueError, match="refactory's own checkout"):
+        ad.finish(run, "code_reviewer")
+    pending.write_text(kept)
+    mine = driver / "refactory" / "refactory_dsh" / "mine.py"
+    mine.write_text("print('the person, later')\n")
+    ad.begin(run, "code_reviewer", "Review.", ["reviews/code.md"], reuse=True)
+    (run / "reviews" / "code.md").write_text("VERDICT: pass, again\n")
+    assert ad.finish(run, "code_reviewer")["status"] == "delivered"
 
 
 def test_a_launcher_that_is_the_driver_is_refused_not_only_warned_about(tmp_path, capsys):
     driver = tmp_path / "driver"
     driver, _, run = _bracket_run(tmp_path, warn_also=(driver,))
     ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
-    (driver / "stray.py").write_text("print('stray')\n")
+    (driver / "app.py").write_text("print('stray')\n")
     (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
     with pytest.raises(ValueError, match="refactory's own checkout"):
         ad.finish(run, "emit")
     assert "files outside its worktree changed" not in capsys.readouterr().err
+
+
+def test_untracked_files_in_the_checkout_are_not_watched(tmp_path):
+    """An editor's swap file, a log appended through an open handle, a new notes file."""
+    driver, _, run = _bracket_run(tmp_path)
+    log = (driver / "run.log").open("a")
+    ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    (driver / ".mine.py.swp").write_bytes(b"swap")
+    log.write("a line\n")
+    log.flush()
+    (driver / "notes.txt").write_text("the person's notes, later\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+    assert ad.finish(run, "emit")["status"] == "delivered"
+    log.close()
+    assert (driver / ".mine.py.swp").exists() and (driver / "notes.txt").read_text().endswith("later\n")
+
+
+def test_a_file_whose_bytes_were_not_kept_is_left_where_it_is(tmp_path, monkeypatch, capsys):
+    driver, _, run = _bracket_run(tmp_path)
+    # Its uncommitted bytes are larger than a baseline keeps.
+    monkeypatch.setattr(target_guard, "MAX_BASELINE_SIZE", 8)
+    mine = driver / "refactory" / "refactory_dsh" / "mine.py"
+    ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    assert "cannot be put back if this node changes them: refactory/refactory_dsh/mine.py" in capsys.readouterr().err
+    mine.write_text("print('changed during the node')\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+    with pytest.raises(ValueError, match="refactory/refactory_dsh/mine.py \\(its content before the node was not kept; left as it is\\)"):
+        ad.finish(run, "emit")
+    assert mine.read_text() == "print('changed during the node')\n", "never moved away with nothing to put back"
+
+
+def test_a_checkout_git_cannot_read_afterwards_is_warned_about_not_fatal(tmp_path, capsys):
+    driver, _, run = _bracket_run(tmp_path)
+    ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    (driver / ".git").rename(driver / ".git-away")
+    try:
+        (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+        assert ad.finish(run, "emit")["status"] == "delivered"
+    finally:
+        (driver / ".git-away").rename(driver / ".git")
+    assert "whether the node changed it is unknown" in capsys.readouterr().err
+
+
+# ── the restore policy: one setting, each choice tested ───────────────────────
+
+def _stray_edit(tmp_path: Path, monkeypatch, policy: str, *, dirty: bool) -> tuple[Path, str]:
+    """An emit that edits a tracked file in the driver, under ``policy``; the driver and the refusal."""
+    monkeypatch.setattr(target_guard, "CHECKOUT_POLICY", policy)
+    driver = _checkout(tmp_path / "driver", dirty=dirty)
+    repo = git_repo(tmp_path / "repo")
+    run = tmp_path / "run"
+    target_guard.record(run, repo, output_only=("emit",))
+    _record(run, checkout=driver)
+    ad.begin(run, "emit", "Write emit.txt.", ["emit.txt"])
+    (driver / "app.py").write_text("print('the agent edited this')\n")
+    (run / "emit.txt").write_text("===FILE: tool.py===\nprint(1)\n")
+    with pytest.raises(ValueError, match="refactory's own checkout") as refused:
+        ad.finish(run, "emit")
+    return driver, str(refused.value)
+
+
+def test_policy_restore_puts_the_files_back(tmp_path, monkeypatch):
+    driver, refusal = _stray_edit(tmp_path, monkeypatch, "restore", dirty=True)
+    assert (driver / "app.py").read_text() == "print('app')\n"
+    assert "put back as they were before the node: app.py" in refusal
+
+
+def test_policy_report_leaves_the_files_and_names_them_with_their_diff(tmp_path, monkeypatch, capsys):
+    driver, refusal = _stray_edit(tmp_path, monkeypatch, "report", dirty=False)
+    assert (driver / "app.py").read_text() == "print('the agent edited this')\n"
+    assert "They were left as they are: app.py." in refusal
+    said = capsys.readouterr().err
+    assert "left as they are: app.py" in said and "+print('the agent edited this')" in said
+    assert "left as they are: app.py" in target_guard.restore_log(driver.resolve()).read_text()
+
+
+def test_policy_restore_if_clean_restores_a_clean_checkout(tmp_path, monkeypatch):
+    driver, refusal = _stray_edit(tmp_path, monkeypatch, "restore-if-clean", dirty=False)
+    assert (driver / "app.py").read_text() == "print('app')\n"
+
+
+def test_policy_restore_if_clean_reports_on_a_checkout_the_person_was_editing(tmp_path, monkeypatch):
+    driver, refusal = _stray_edit(tmp_path, monkeypatch, "restore-if-clean", dirty=True)
+    assert (driver / "app.py").read_text() == "print('the agent edited this')\n"
+    assert "They were left as they are: app.py." in refusal
+
+
+def test_an_unknown_policy_is_refused(monkeypatch):
+    monkeypatch.setattr(target_guard, "CHECKOUT_POLICY", "rewind")
+    with pytest.raises(ValueError, match="must be one of restore, report, restore-if-clean"):
+        target_guard.restores({"changes": {}})
 
 
 # ── which checkouts are watched ───────────────────────────────────────────────
@@ -403,17 +538,29 @@ def test_checkouts_skip_the_target_its_worktree_and_anything_not_a_checkout(tmp_
     assert target_guard.checkouts(run, plain) == [], "nor is a recorded driver that is not a checkout"
 
 
+def test_the_suite_never_watches_its_own_checkout(tmp_path, monkeypatch):
+    from refactory_dsh.paths import REPO_ROOT
+
+    run = tmp_path / "run"
+    target_guard.record(run, git_repo(tmp_path / "repo"))
+    source = Path(ad.__file__).resolve().parent
+    assert target_guard.checkouts(run, source) == [], "conftest names this checkout as unwatched"
+    monkeypatch.delenv(target_guard.UNWATCHED_ENV)
+    assert target_guard.checkouts(run, source) == [REPO_ROOT.resolve()]
+
+
 def test_a_checkout_is_read_from_one_status_call(tmp_path):
     driver = _checkout(tmp_path / "driver")
-    (driver / "? odd.py").write_text("print('odd')\n")
-    git(driver, "add", "? odd.py")
+    # An old name that reads like a status entry of its own.
+    odd = "1 2 3 4 5 6 7 8 odd.py"
+    (driver / odd).write_text("print('odd')\n")
+    git(driver, "add", odd)
     git(driver, "commit", "-q", "-m", "odd")
-    git(driver, "mv", "? odd.py", "renamed odd.py")
+    git(driver, "mv", odd, "renamed odd.py")
     (driver / "new dir").mkdir()
     (driver / "new dir" / "u.txt").write_text("untracked\n")
-    found = target_guard._checkout_state(driver, tmp_path / "run")
+    found = target_guard._checkout_state(driver)
     assert found["head"] == found["tree"] == git(driver, "rev-parse", "HEAD")
-    # A rename names its new path only, however its old one reads; environments are left out.
-    assert sorted(found["changes"]) == ["new dir/u.txt", "notes.txt", "refactory/refactory_dsh/mine.py",
-                                        "renamed odd.py"]
-    assert target_guard._porcelain_v2("# branch.oid (initial)\0? a\0")[0] is None
+    # Tracked files only, and a rename names its new path only, however its old one reads.
+    assert sorted(found["changes"]) == ["refactory/refactory_dsh/mine.py", "renamed odd.py"]
+    assert target_guard._porcelain_v2("# branch.oid (initial)\0")[0] is None
