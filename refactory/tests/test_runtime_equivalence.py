@@ -412,6 +412,20 @@ def _artifacts(run: Path) -> dict[str, str]:
     return found
 
 
+STATUS = ".refactory/spine-status.json"
+
+
+def _status_identity(artifacts: dict[str, str], runtime: str) -> dict[str, str]:
+    """The status file with the two fields that name who wrote it -- its runtime and its
+    owning process -- checked and set aside: each runtime names itself, by design."""
+    if STATUS not in artifacts:
+        return artifacts
+    status = json.loads(artifacts[STATUS])
+    assert status.get("runtime") == runtime and isinstance(status.get("owner_pid"), int), status
+    status.update(runtime="<RUNTIME>", owner_pid="<PID>")
+    return {**artifacts, STATUS: json.dumps(status)}
+
+
 def _prompts(world: World) -> dict[str, str]:
     calls = [json.loads(line) for line in (world.dsh / "calls.jsonl").read_text().splitlines()]
     return {f"{call['node']}#{call['visit']}": call["prompt"] for call in calls}
@@ -459,7 +473,7 @@ def observe(world: World, runtime: str, tmp_root: Path) -> dict[str, dict[str, s
         "visits": {"order and outcome": "\n".join(_grouped(visits))},
         "verdicts": _verdicts(world.run, runtime),
         "facts": _facts(world.run, runtime),
-        "artifacts": _artifacts(world.run),
+        "artifacts": _status_identity(_artifacts(world.run), runtime),
         "prompts": _prompts(world),
         "routes": _routes(world),
         "commits": _commits(world),

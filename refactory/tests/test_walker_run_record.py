@@ -10,6 +10,7 @@ readers that ask whether a walked run is still alive keep asking its own progres
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
@@ -95,12 +96,54 @@ def test_feedback_is_for_the_visit_it_was_given_for(tmp_path):
 def test_a_reloop_reason_the_template_renders_is_not_repeated(tmp_path):
     """A template that renders the reason already says it: no second copy (gap 5)."""
     model = FakeModel()
-    result = nn.execute(_reloop_to_agent("loop_ops:explained_passes_in_a_fact", "Write it. Last time: {{why}}"),
+    result = nn.execute(_reloop_to_agent("loop_ops:explained_passes_in_a_fact", "Write it.\nLast time:\n{{why}}"),
                         tmp_path, model=model)
     assert result.exit_ok, result.error
     second = model.prompts[1][1]
     assert "## Feedback for this visit" not in second
     assert second.count("pass 1 of 3") == 1
+
+
+def test_feedback_counts_as_said_only_as_whole_lines():
+    """A note the prompt contains only inside a longer line is not said: "add tests" is not
+    "add tests for every change", nor "fails" "The test suite fails often"."""
+    from refactory_dsh.agent_delivery import FEEDBACK_HEADING, with_feedback
+
+    for prompt, note in (("Do it.\nPlease add tests for every change.", "add tests"),
+                         ("The test suite fails often.", "fails"),
+                         ("first line\nsecond", "first line\nsecond line")):
+        assert with_feedback(prompt, note) == f"{FEEDBACK_HEADING}\n\n{note}\n\n{prompt}", (prompt, note)
+    said = "Do it.\n## What went wrong last time\nadd tests\nfor the widget\n\nGo."
+    assert with_feedback(said, "add tests\nfor the widget") == said
+
+
+def test_a_reason_past_the_runners_limit_the_template_renders_is_said_once(tmp_path):
+    """Clipped to the runner's limit (head, marker, tail), a long check log is still the
+    one the template rendered in full: it is not prepended a second time."""
+    from loop_ops import LONG_REASON
+
+    model = FakeModel()
+    result = nn.execute(_reloop_to_agent("loop_ops:long_reason_once", "Write it.\n\n## Last time\n{{why}}\n"),
+                        tmp_path, model=model)
+    assert result.exit_ok, result.error
+    second = model.prompts[1][1]
+    assert "## Feedback for this visit" not in second and "clipped from" not in second
+    assert second.count("check log line 149:") == 1 and len(LONG_REASON) > 6000
+
+
+def test_a_reason_past_the_runners_limit_reaches_the_node_clipped_as_the_spine_clips_it(tmp_path):
+    """A template that does not render it gets the reason the spine's worker would: clipped
+    to the runner's limit, head and tail, under the feedback heading."""
+    from loop_ops import LONG_REASON
+
+    from refactory_dsh.run import REASON_LIMIT, _clipped
+
+    model = FakeModel()
+    result = nn.execute(_reloop_to_agent("loop_ops:long_reason_once", "Write it."), tmp_path, model=model)
+    assert result.exit_ok, result.error
+    second = model.prompts[1][1]
+    assert f"## Feedback for this visit\n\n{_clipped(LONG_REASON)}\n\nWrite it." in second
+    assert len(_clipped(LONG_REASON)) <= REASON_LIMIT
 
 
 def test_a_nodes_inputs_are_listed_in_name_order(tmp_path):
@@ -141,6 +184,8 @@ def test_the_walker_leaves_the_spines_facts_and_status(tmp_path):
     assert (status["status"], status["nodes"], status["running_nodes"]) == ("done", [], [])
     assert status["completed"] == ["gate", "write", "done"]
     assert status["run_id"] == str(tmp_path.resolve()) and status["at"].endswith("Z")
+    # Like the spine's, it names its runtime and the process that owns the run.
+    assert (status["runtime"], status["owner_pid"]) == ("walker", os.getpid())
 
 
 def test_a_gates_verdict_is_the_runs_record_not_a_fact(tmp_path):
@@ -167,6 +212,96 @@ def test_a_forks_branches_complete_in_branch_order(tmp_path):
     result = nn.execute(graph, tmp_path)
     assert result.exit_ok, result.error
     assert _status(tmp_path)["completed"] == ["fork", "slow", "fast", "join", "end"]
+
+
+def _progress(run) -> dict:
+    return json.loads((run / PROGRESS).read_text())
+
+
+def test_a_gate_out_of_reloops_is_recorded_halted_with_nothing_gone_back_over(tmp_path):
+    """Past its cap the spine records the gate `halt`, keeps the nodes before it completed
+    and hands nobody feedback (`Spine.verdict`); the walker's record says the same."""
+    graph = _reloop_to_agent("loop_ops:explained_passes", "Write it.")
+    graph.nodes["gate"].max_iterations = 1
+    result = nn.execute(graph, tmp_path, model=FakeModel())
+    assert result.exit_ok is False and "max_iterations" in (result.error or "")
+    progress = _progress(tmp_path)
+    assert (progress["completed"], progress["gate_verdicts"], progress["feedback"]) == (
+        ["gate", "write"], {"gate": "halt"}, {})
+
+
+def _with_fork_in_the_loop() -> nn.Graph:
+    """pre, a fork of p and q, their join, then a gate that sends the run back to pre."""
+    graph = nn.Graph()
+    graph.add(nn.Node("pre", "op", call="loop_ops:noop"))
+    graph.add(nn.Node("f", "fork", targets=("p", "q")))
+    graph.add(nn.Node("p", "op", call="loop_ops:noop"))
+    graph.add(nn.Node("q", "op", call="loop_ops:noop"))
+    graph.add(nn.Node("j", "join", sources=("p", "q")))
+    graph.add(nn.Node("gate", "gate", evaluator="loop_ops:three_passes", max_iterations=4, produces=("passes",)))
+    graph.add(nn.Node("end", "op", call="loop_ops:noop"))
+    for source, target in (("pre", "f"), ("f", "j"), ("p", "j"), ("q", "j"), ("j", "gate")):
+        graph.connect(source, target)
+    graph.connect("gate", "pre", condition="retry")
+    graph.connect("gate", "end", condition="proceed")
+    return graph
+
+
+def test_a_reloop_goes_back_over_a_fork_and_its_branches(tmp_path):
+    """The spine un-completes a fork's branches with it (`uncompleteBetween` follows a
+    fork's targets), so they complete again in order after the gate."""
+    assert nn.execute(_with_fork_in_the_loop(), tmp_path).exit_ok
+    assert _status(tmp_path)["completed"] == ["gate", "pre", "f", "p", "q", "j", "end"]
+
+
+def test_a_reloop_forgets_the_verdict_of_a_gate_it_goes_back_over(tmp_path):
+    """A gate between the reloop's target and its gate is un-completed and its verdict
+    dropped, as the spine drops it; the walk back stops at that gate's own edges."""
+    graph = nn.Graph()
+    graph.add(nn.Node("pre", "op", call="loop_ops:fail_on_second_visit", writes=("visits.json",)))
+    graph.add(nn.Node("inner", "gate", evaluator="loop_ops:always_proceed"))
+    graph.add(nn.Node("mid", "op", call="loop_ops:noop"))
+    graph.add(nn.Node("outer", "gate", evaluator="loop_ops:reloop_twice", max_iterations=4, produces=("passes",)))
+    graph.add(nn.Node("end", "op", call="loop_ops:noop"))
+    graph.connect("pre", "inner")
+    graph.connect("inner", "mid", condition="proceed")
+    graph.connect("mid", "outer")
+    graph.connect("outer", "pre", condition="reloop")
+    graph.connect("outer", "end", condition="proceed")
+    result = nn.execute(graph, tmp_path)
+    assert result.exit_ok is False and "second visit" in (result.error or "")
+    progress = _progress(tmp_path)
+    assert (progress["completed"], progress["gate_verdicts"]) == (["mid", "outer"], {"outer": "reloop"})
+
+
+class FailsSecondCall(FakeModel):
+    """Answers once, then fails: a branch that stops right after its gate sent it back."""
+
+    def complete(self, prompt: str, *, system: str = "") -> str:
+        if self.prompts:
+            raise RuntimeError("the model is down")
+        return super().complete(prompt, system=system)
+
+
+def test_a_resumed_fork_branch_gets_the_feedback_its_last_reloop_left(tmp_path):
+    """The run's pending feedback is a branch's too: a branch whose reloop target failed
+    before it ran gets the reason when the fork is resumed, as the spine's checkpoint
+    keeps it for the node."""
+    graph = nn.Graph()
+    graph.add(nn.Node("f", "fork", targets=("write",)))
+    graph.add(nn.Node("write", "agent", prompt_template="Write it.", writes=("answer.txt",)))
+    graph.add(nn.Node("gate", "gate", evaluator="loop_ops:explained_passes", max_iterations=4, produces=("passes",)))
+    graph.add(nn.Node("j", "join", sources=("gate",)))
+    graph.connect("f", "j")
+    graph.connect("write", "gate")
+    graph.connect("gate", "write", condition="retry")
+    graph.connect("gate", "j", condition="proceed")
+    stopped = nn.execute(graph, tmp_path, model=FailsSecondCall())
+    assert stopped.exit_ok is False and _progress(tmp_path)["feedback"] == {"write": "pass 1 of 3"}
+    model = FakeModel()
+    resumed = nn.execute(graph, tmp_path, model=model, start="f")
+    assert resumed.exit_ok, resumed.error
+    assert "## Feedback for this visit\n\npass 1 of 3\n\nWrite it." in model.prompts[0][1]
 
 
 def _user_gate_graph() -> nn.Graph:
@@ -215,11 +350,14 @@ def _dead_pid() -> int:
     return process.pid
 
 
-def _walked_run_left_running(run):
-    """A walked run whose process died mid-node: its status still says it is executing."""
-    (run / ".refactory").mkdir(parents=True)
+def _walked_run_left_running(run, runtime: str = "walker"):
+    """A run whose process died mid-node: its status still says it is executing. A stale
+    spine checkpoint from an earlier run in the directory changes nothing."""
+    (run / ".refactory").mkdir(parents=True, exist_ok=True)
     (run / PROGRESS).write_text(json.dumps({"node": "emit", "error": None, "outcome": "running"}))
-    (run / ".refactory/spine-status.json").write_text(json.dumps({"status": "executing", "nodes": ["emit"]}))
+    (run / ".refactory/spine-checkpoint.json").write_text(json.dumps({"owner_pid": os.getpid()}))
+    (run / ".refactory/spine-status.json").write_text(json.dumps(
+        {"runtime": runtime, "owner_pid": _dead_pid(), "status": "executing", "nodes": ["emit"]}))
 
 
 def test_a_walked_run_whose_process_died_has_ended_for_its_worktree(tmp_path):
@@ -227,8 +365,9 @@ def test_a_walked_run_whose_process_died_has_ended_for_its_worktree(tmp_path):
 
     _walked_run_left_running(tmp_path)
     assert worktree.state(tmp_path, _dead_pid()) == "ended"
+    assert worktree.state(tmp_path) == "ended", "the status file's owner answers when no claimant does"
     # A driven run's status is the spine's word, whoever claimed it.
-    (tmp_path / ".refactory/spine-checkpoint.json").write_text("{}")
+    _walked_run_left_running(tmp_path, runtime="spine")
     assert worktree.state(tmp_path, _dead_pid()) == "active"
 
 
@@ -239,9 +378,28 @@ def test_a_walked_run_whose_process_died_no_longer_holds_its_artifact(tmp_path):
     assert repo_change._still_open(tmp_path, _dead_pid()) is None
 
 
-def test_the_console_says_a_walked_run_whose_process_died_died(tmp_path):
+def test_the_console_says_a_walked_run_whose_process_died_died_and_offers_no_graph_controls(tmp_path):
     from refactory_dsh import console
 
     _walked_run_left_running(tmp_path)
-    (tmp_path / "console.json").write_text(json.dumps({"pid": _dead_pid(), "mode": "default_pack/design"}))
-    assert console.status(tmp_path)["state"] == "died"
+    (tmp_path / "graphs").mkdir()
+    (tmp_path / "graphs/default_pack-design.graph.json").write_text("{}")
+    frame = console.status(tmp_path)
+    assert (frame["state"], frame["kind"]) == ("died", "walker")
+
+
+def test_a_directory_walked_without_lowering_can_be_prepared_for_a_new_run(tmp_path):
+    """A bare `nn.execute` (an outer-loop candidate, a user's graph) leaves facts and a
+    status file but no declarations; preparing a run there archives them as any earlier
+    run's are, instead of refusing the directory."""
+    from refactory_dsh import invocations, registry
+    from refactory_dsh.paths import REPO_ROOT
+
+    run = (tmp_path / "run").resolve()
+    assert nn.execute(_user_gate_graph(), run, verdicts={"gate": "proceed"}).exit_ok
+    assert (run / "facts.json").exists() and not (run / ".refactory/declarations.json").exists()
+    state = registry.resolve(REPO_ROOT, "default_pack/create")[1]().state_dict()
+    invocations.prepare(state, run, name="default_pack-create", intent="build it",
+                        transform=lambda workflow, stage_dir=None: workflow)
+    assert (run / ".refactory/declarations.json").exists()
+    assert not (run / ".refactory/spine-status.json").exists() and not (run / PROGRESS).exists()

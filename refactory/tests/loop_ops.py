@@ -98,3 +98,37 @@ def retry_each_item_once(ctx: Any) -> str:
         return "proceed"
     ctx.write_json("tried.json", [*tried, item])
     return Verdict("retry", f"item {item} needs another look")
+
+
+#: A reason past the runner's 4000-character limit: a whole check log, line by line.
+LONG_REASON = "\n".join(f"check log line {number}: tests/test_widget.py::test_{number} failed"
+                        for number in range(150))
+
+
+def long_reason_once(ctx: Any) -> str:
+    """Send the work back once with a reason longer than the runner keeps, left as a fact too."""
+    from refactory_dsh.nn import Verdict
+
+    visits = int(ctx.facts.get("passes", 0)) + 1
+    ctx.set_fact("passes", visits)
+    ctx.set_fact("why", LONG_REASON)
+    return Verdict("retry", LONG_REASON) if visits < 2 else "proceed"
+
+
+def always_proceed(ctx: Any) -> str:
+    return "proceed"
+
+
+def fail_on_second_visit(ctx: Any) -> None:
+    """Pass the first time, fail every time after: a run stopped right after a reloop."""
+    visits = (ctx.read_json("visits.json", 0) or 0) + 1
+    ctx.write_json("visits.json", visits)
+    if visits > 1:
+        raise RuntimeError("this op fails on its second visit")
+
+
+def reloop_twice(ctx: Any) -> str:
+    """`three_passes` on an explicit `reloop` edge, for a cycle with another gate in it."""
+    visits = int(ctx.facts.get("passes", 0)) + 1
+    ctx.set_fact("passes", visits)
+    return "reloop" if visits < 3 else "proceed"

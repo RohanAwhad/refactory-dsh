@@ -554,6 +554,8 @@ class Executor:
     _next_after_completion: str | None = field(default=None, init=False, repr=False)
     _retries: set[tuple[str, str, str]] | None = field(default=None, init=False, repr=False)
     _status: str = field(default="", init=False, repr=False)
+    #: The retry counters of the walk visiting the current node (a data pass has its own).
+    _visits: dict[str, int] | None = field(default=None, init=False, repr=False)
 
     def _record(
         self, node: str, *, error: str | None = None,
@@ -738,6 +740,7 @@ class Executor:
             step_started = time.time()
             verdict: str | None = None
             try:
+                self._visits = visits
                 current, verdict = self._try_visit(node, step_started)
                 self.ctx._check_produces()  # noqa: SLF001
                 self._count_retry(node, current, verdict, retries, visits)
@@ -857,6 +860,7 @@ class Executor:
             started = time.time()
             verdict: str | None = None
             try:
+                self._visits = visits
                 current, verdict = self._try_visit(node, started)
                 self.ctx._check_produces()  # noqa: SLF001
                 self._count_retry(node, current, verdict, retries, visits)
@@ -1189,9 +1193,15 @@ class Executor:
         why = str(getattr(verdict, "reason", "") or "")
         from refactory_dsh.run import _clipped
 
-        self.record.gate(self.graph, node.id, verdict, target=selected.target,
-                         retry=self._is_retry(node.id, selected.target, selected.condition or ""),
-                         reason=_clipped(why.strip()))
+        retry = self._is_retry(node.id, selected.target, selected.condition or "")
+        visits = self._gate_iterations if self._visits is None else self._visits
+        if retry and visits.get(node.id, 0) + 1 > node.max_iterations:
+            # Out of reloops: the spine records the gate halted and goes back over nothing
+            # (`Spine.verdict`); the retry itself is refused below (`_count_retry`).
+            self.record.gate(self.graph, node.id, "halt", target=None, retry=False)
+        else:
+            self.record.gate(self.graph, node.id, verdict, target=selected.target, retry=retry,
+                             reason=_clipped(why.strip()))
         return selected.target, Verdict(selected.condition or "", reason=why)
 
 
