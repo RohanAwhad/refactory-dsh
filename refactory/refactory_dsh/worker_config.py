@@ -68,10 +68,20 @@ def resolve(project: Path, overrides: dict[str, Any] | None = None, *,
         inherited = json.loads(os.environ.get("REFACTORY_WORKER_CONTEXT") or "{}")
     if not isinstance(inherited, dict):
         raise ValueError("REFACTORY_WORKER_CONTEXT must contain an object")
-    route: dict[str, Any] = {"worker_backend": "dsh", "provider": "", "model": "",
+    # The one model choice is the bottom layer (dm-258): what a run uses when no flag,
+    # environment variable, project file or route map names a model. An inherited
+    # context was resolved once already, with the choice in it, and is not re-read.
+    stored = {"provider": "", "model": ""}
+    if not inherited:
+        from refactory_dsh.dsh_profile import stored_model_choice
+
+        stored = stored_model_choice()
+    route: dict[str, Any] = {"worker_backend": "dsh", "provider": stored["provider"], "model": stored["model"],
                             "effort": "", "permission_mode": "skip"}
     maps: dict[str, Any] = {"role_routes": {}, "node_routes": {}, "provider_config": {}}
     sources = {key: "default" for key in FIELDS}
+    if stored["provider"]:
+        sources["provider"] = sources["model"] = "stored-choice"
     layers: list[tuple[str, dict[str, Any]]] = []
     file_info: dict[str, Any] = {"path": str(project / FILENAME), "loaded": False}
     if inherited:
@@ -112,10 +122,17 @@ def resolve(project: Path, overrides: dict[str, Any] | None = None, *,
                 sources[key] = source
                 if key in maps:
                     maps[key] = values[key]
+    if (stored["provider"] and sources["model"] == "stored-choice" and sources["provider"] != "stored-choice"
+            and route.get("provider") != stored["provider"]):
+        # The stored model belongs to the stored provider. A provider named by a flag,
+        # the environment or the project file without a model gets none of it, so the
+        # gate refuses the half route instead of pairing it with another provider's model.
+        route["model"] = ""
+        sources["model"] = "default"
     settings = {**route, **maps}
     validate(settings)
     return {"settings": settings, "provenance": {"project": str(project), "file": file_info,
-             "fields": sources, "precedence": "node > role > run; explicit launch/profile > project > environment > defaults; inherited/saved contexts bypass project files"}}
+             "fields": sources, "precedence": "node > role > run; explicit launch/profile > project > environment > the stored model choice; inherited/saved contexts bypass project files"}}
 
 
 def effective(project: Path) -> dict[str, Any]:
