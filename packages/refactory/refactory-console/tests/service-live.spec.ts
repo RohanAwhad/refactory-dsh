@@ -131,6 +131,28 @@ describe('the picker service against the real loop', () => {
     expect(failure.message).toContain('does not exist (checked')
   }, 120_000)
 
+  it('pages a real journal through the console the service builds argv for', async () => {
+    // T-14/T-15 against the real parser: the two activity flags the service now
+    // always sends must be options this console accepts, and the answer they
+    // produce must be the page the next poll continues from. A console that
+    // refused them would answer through the one-shot fallback, so the answer's own
+    // `after`/`page_size`/`total` is what proves it understood the flags.
+    const { service } = await setup()
+    const run = mkdtempSync(join(tmpdir(), 'refactory-page-'))
+    try {
+      mkdirSync(join(run, '.refactory'), { recursive: true })
+      writeFileSync(join(run, '.refactory', 'events.jsonl'), Array.from({ length: 250 }, (_, index) =>
+        JSON.stringify({ schema_version: 1, run_id: run, invocation: 'inv-1', kind: 'worker_event', i: index }) + '\n')
+        .join(''))
+      const frame = await service.status(run, 200, signal())
+      expect(frame.activity).toMatchObject({ after: 200, page_size: 200, total: 250, has_more: false })
+      expect(frame.activity?.events).toHaveLength(50)
+      expect(frame.activity?.cursor).toBe(250)
+    } finally {
+      rmSync(run, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('steers a real run: a note is read back, and a `user` gate reports its verdicts', async () => {
     const { service } = await setup()
     const run = mkdtempSync(join(tmpdir(), 'refactory-steer-'))

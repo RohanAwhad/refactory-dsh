@@ -24,8 +24,10 @@
  * Failures are one `RemoteError` per reason: `gateway/bad-request` for an
  * address the picker must supply, `refactory/unknown-mode`,
  * `refactory/authoring-mode` and `refactory/package-disabled` for the three
- * described-choice refusals, and `refactory/console-failed` for a console
- * refusal, carrying the console's own message and the argv to reproduce it.
+ * described-choice refusals, `refactory/console-failed` for a console refusal
+ * carrying the console's own message and the argv to reproduce it, and
+ * `refactory/console-truncated` for a payload the collection cap cut before the
+ * console printed JSON — a size problem, not a refusal, and reported as one.
  * @module @deepseek-ai/dsh-refactory-console
  */
 
@@ -598,8 +600,15 @@ export class RefactoryConsole extends TypertRemoteService {
 
   /**
    * Where one run is, and what is new since the reader last looked.
+   *
+   * The caller's `after` feeds two cursors with one number. They index different
+   * files and never derive from one another, so both flags travel — `--after` for
+   * progress, and the same index as `--activity-after` so a poll continues the
+   * journal where the last answer left it instead of re-reading it from 0. The
+   * page size is this service's own choice, passed explicitly, so the console's
+   * clamp stays a safety net rather than the policy owner.
    * @param run - the run id or absolute run directory.
-   * @param after - how many progress lines the caller has already read.
+   * @param after - the cursor the caller has already read, in both files.
    * @param signal - caller cancellation.
    * @returns the run's state, the new events, and the offset for the next look.
    */
@@ -607,7 +616,10 @@ export class RefactoryConsole extends TypertRemoteService {
   async status(run: string, after: number, signal: AbortSignal): Promise<RefactoryRunStatus> {
     const addressed = this.runAddress(run)
     const answer = objectOf(
-      await this.call({ verb: 'status', options: { run: addressed, after } }, signal),
+      await this.call({
+        verb: 'status',
+        options: { run: addressed, after, 'activity-after': after, 'activity-limit': ACTIVITY_PAGE },
+      }, signal),
       'run status',
     )
     return {
@@ -636,13 +648,30 @@ export class RefactoryConsole extends TypertRemoteService {
     } }, signal), 'graph control receipt')
   }
 
-  /** Stream persisted changes; closing this reader never cancels its run. */
+  /**
+   * Stream persisted changes; closing this reader never cancels its run.
+   *
+   * The journal cursor is the stream's own state, not the caller's: the caller
+   * hands one `after` to start from, and every later poll continues from the
+   * cursor the last frame answered with. Re-sending the caller's `after` would
+   * re-read the journal from the same index on every poll, which is the whole
+   * cost this paging exists to remove — and a reset to 0 mid-stream would splice
+   * the same records onto the history twice.
+   * @param run - the run id or absolute run directory.
+   * @param after - the cursor the caller's history already reaches.
+   * @param signal - the transport's cancellation for this stream.
+   * @returns each changed frame of the run, and the steering read beside it.
+   */
   @Remote({ mode: 'stream' })
   async *watchStream(run: string, after: number, signal: AbortSignal): AsyncGenerator<RefactoryWatchFrame> {
     let previous = ''
+    let activityAfter = after
     while (!signal.aborted) {
-      const status = await this.status(run, after, signal)
+      const status = await this.status(run, activityAfter, signal)
       const steering = await this.steer({ run }, signal)
+      // Advance before yielding, so a frame's own cursor is what this poll asked
+      // for rather than a value the next poll has already moved past.
+      activityAfter = status.activity?.cursor ?? activityAfter
       const frame = { status, steering }
       const encoded = JSON.stringify(frame)
       if (encoded !== previous) { yield frame; previous = encoded }
@@ -891,6 +920,12 @@ export class RefactoryConsole extends TypertRemoteService {
 
   /**
    * One console call, with its refusal turned into a Remote error.
+   *
+   * A truncated payload is its own code, not the console's refusal: nothing was
+   * refused — the collection cap cut stdout before an answer printed — and a
+   * caller that renders it as `console-failed` would show "printed no JSON" for
+   * a size problem it can fix. The cap and the retained tail travel with it so
+   * the notice can name both.
    * @param invocation - the verb, positionals, and options.
    * @param signal - caller cancellation.
    * @returns the console's decoded JSON.
@@ -898,6 +933,13 @@ export class RefactoryConsole extends TypertRemoteService {
   private async call(invocation: ConsoleInvocation, signal: AbortSignal): Promise<unknown> {
     const result = await this.consoleCall(invocation, signal)
     if (!result.ok) {
+      if (result.truncation !== undefined) {
+        throw new RemoteError('refactory/console-truncated', result.error, {
+          argv: result.argv,
+          capBytes: result.truncation.capBytes,
+          retainedBytes: result.truncation.retainedBytes,
+        })
+      }
       throw new RemoteError('refactory/console-failed', result.error, { argv: result.argv })
     }
     return result.value
@@ -908,13 +950,21 @@ export class RefactoryConsole extends TypertRemoteService {
    *
    * `run` reports where a run stopped in the same payload as the reason it did not
    * finish, so a caller reading that payload cannot take the error-shaped path.
+   * An answer that only arrived by dropping the paging options says so on its
+   * `activity`, because an unpaged journal is something the reader has to be
+   * told about rather than something it can infer from a missing member.
    * @param invocation - the verb, positionals, and options.
    * @param signal - caller cancellation.
    * @returns the console's answer, successful or not.
    */
   private async consoleCall(invocation: ConsoleInvocation, signal: AbortSignal): Promise<ConsoleResult> {
     if (signal.aborted) throw new RemoteError('gateway/cancelled', 'the refactory call was cancelled', {})
-    return this.console.run(invocation, signal)
+    const result = await this.console.run(invocation, signal)
+    const suppressed = result.suppressed ?? []
+    if (suppressed.length === 0 || !result.ok || !isRecord(result.value) || !isRecord(result.value.activity)) {
+      return result
+    }
+    return { ...result, value: { ...result.value, activity: { ...result.value.activity, paged: false } } }
   }
 
   /**
@@ -943,6 +993,15 @@ export class RefactoryConsole extends TypertRemoteService {
     return named
   }
 }
+
+/**
+ * Journal records one `status` answer carries, the same window the panel renders.
+ *
+ * Sent explicitly rather than left to the console's default: the service decides
+ * how much history one poll frame holds, and the console's clamp stays a bound on
+ * a caller's mistake instead of a policy this service inherits by accident.
+ */
+const ACTIVITY_PAGE = 200
 
 /** The strategy choices one level-two registry answered with. */
 function choices(value: unknown, what: string): readonly RefactoryStrategyChoice[] {
