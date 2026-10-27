@@ -218,3 +218,63 @@ running GUI, and the sub-pixel scrollbar thumb on a 269,900-record run.
 - Throwaway probes removed (`zz-cap-probe.spec.ts`, `zz-interact.probe.spec.tsx`); only the
   permanent test in `service-live.spec.ts` remains. `git status` shows 5 intentional files.
 - Mutations reverted with `diff -q` proof; `lib/` build output is gitignored.
+
+---
+
+# Live GUI verification (2026-10-27)
+
+The panel was finally checked in a **running GUI serving this branch**, not only in jsdom.
+This closes the last human-shaped gap for the *logic*; the remaining human check is only taste
+(the feel of virtual scrolling), not behaviour.
+
+## How the checkout is deployed with its own harness home
+The repository ships a launcher (`./refactory-dsh`) that boots DSH over the pinned harness. The
+machine-state parts live in a DSH home, and the source checkout used an **isolated one**
+(`<checkout>/.dsh-home`, gitignored) rather than the global `~/.dsh`, so Refactory's sessions,
+profiles and credentials do not mix with the global harness:
+
+- `DSH_HOME=<checkout>/.dsh-home` — honoured by `dsh_profile.dsh_home()` (`dsh_profile.py:189-192`: explicit env value, then `~/.dsh`);
+- `profiles/{graph,refactory}` hold **link:** dependencies pointing at this checkout's
+  `packages/bundle/*`, so the GUI loads the checkout's own bundles;
+- credentials come from that home's `.credentials.yaml` / `.env`.
+
+To serve **this branch** instead of `main`, the same pattern was repeated in the worktree:
+
+```
+cd <worktree_root>
+mkdir -p .dsh-home                                   # copy credentials in, chmod 600
+DSH_HOME=$PWD/.dsh-home <provision the 3 profiles>   # graph, refactory (init from web), refactory-web
+pnpm build                                           # bundles carry the branch's panel code
+DSH_HOME=$PWD/.dsh-home ./refactory-dsh --no-open --port 3081
+```
+
+Verification that the served app is this branch, not `main`:
+- the profile's dependencies resolve to `<worktree_root>/packages/bundle/...`;
+- the Modes panel header reads **"Modes project · INT-001-activity-verbosity"**;
+- `packages/client/ui-refactory/lib/client.js` (231,983 B, built at 10:05) contains the new
+  panel identifiers.
+
+## Observed in the live GUI (Playwright, real server on 127.0.0.1:3081)
+Fixture: a synthetic but realistic run at `/tmp/demo-run` — 4,200 journal records, a three-node
+graph checkpoint, one worker receipt, `facts.json` — attached through the panel's
+"Existing run directory → Read this run" field.
+
+| Level | Radio selected | DOM rows | History | "Outputs and validation" | Console errors |
+|---|---|---|---|---|---|
+| default (none clicked) | **standard** | **200** | 200/4200 | shown | none |
+| after clicking Verbose | verbose | **200** | 200/4200 | shown | none |
+| after clicking Compact | compact | **200** | 200/4200 | **hidden** | none |
+
+Reading of that table against the intent:
+- **DEC-002** — three levels, and the default really is `standard` with nothing clicked.
+- **DEC-001** — at *every* level, including compact, the history stays reachable (`200/4200`),
+  so no level is a tail.
+- **R-2.5 / SD-12** — the DOM holds 200 rows whatever is held or selected.
+- The page-size and total shown are the console's real paged answer for this run
+  (`total=4200 events=200 has_more=True page_size=200` from `console status`).
+
+Screenshots: `/tmp/pr-shots/live-{standard,verbose,compact}.png` (panel section, cropped).
+
+## Still a human check
+Whether virtual scrolling *feels* right, and whether the scrollbar thumb is usable on a
+269,900-record run. Both are taste/usability judgements that a screenshot cannot settle.
