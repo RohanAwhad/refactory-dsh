@@ -14,10 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from refactory_dsh import lowering
+from refactory_dsh import lowering, run_state
 from refactory_dsh.nn.executor import ITEMS_OVERRIDE
 from refactory_dsh.run_artifacts import archive_root, overlaps, owned_outputs
-from refactory_dsh.steering import LEDGER as STEERING_LEDGER
+from refactory_dsh.steering import LEDGER as STEERING_LEDGER, installing_to
 from refactory_dsh.run_ownership import LOCK, ownership
 
 # ── constants that core and product share ──────────────────────────────────────
@@ -147,7 +147,11 @@ def prepare(
             prior = json.loads(declaration_path.read_text())
             if not isinstance(prior, dict):
                 raise ValueError('existing run declarations must contain an object; use a new work directory')
-        elif (workdir / 'facts.json').exists() or (runtime / 'spine-status.json').exists():
+        elif ((workdir / 'facts.json').exists() or (runtime / 'spine-status.json').exists()) \
+                and not run_state.walked(workdir):
+            # A graph walked without lowering (`nn.execute`: an outer-loop candidate, a
+            # user's graph) leaves its facts and status but no declarations; its files
+            # are archived below like any earlier run's.
             raise ValueError('existing run has no ownership declarations; use a new work directory')
         writes = [name for node in prior.values() if isinstance(node, dict) for name in node.get('writes', [])]
         targets, retained = owned_outputs(workdir, writes, _inputs(workdir, lowering.node_declarations(state)))
@@ -157,6 +161,7 @@ def prepare(
                     Path('.refactory/graph-controls'), Path('.refactory/graph-control-receipt.json'),
                     Path('.refactory/resource-usage.json'), Path('.refactory/workers'),
                     Path('.refactory/resume-request.json'), Path('.refactory/run-config.json'),
+                    Path('.refactory/progress.json'),
                     TARGET_RECORD, WORKTREE_RECORD, PENDING, WRAPPER,
                     CHECK_HOME, BASE_CHECK_HOME, DELIVERY_SHOWN, INVOCATION]
         for relative in metadata:
@@ -185,10 +190,12 @@ def prepare(
             if intent:
                 from refactory_dsh import steering as steering_mod
                 steering_mod.Ledger.seed(stage, intent)
-            lowering.write_mode_graph(
-                state, stage / 'graphs', name=name,
-                transform=lambda workflow: transform(workflow, stage_dir=stage),
-            )
+            # Folded from the stage, cited where the ledger will be installed (dm-229).
+            with installing_to(workdir):
+                lowering.write_mode_graph(
+                    state, stage / 'graphs', name=name,
+                    transform=lambda workflow: transform(workflow, stage_dir=stage),
+                )
             lowering.write_declarations(state, stage)
             (stage / INVOCATION).write_text(json.dumps(record, indent=2) + '\n')
             fresh_metadata: list[Path] = []

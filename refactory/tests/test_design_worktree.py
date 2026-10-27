@@ -325,6 +325,10 @@ def _executable(clone: Path) -> None:
     (clone / "app.py").chmod(0o755)
 
 
+def _bidi(clone: Path) -> None:
+    (clone / "tool\u202e.py").write_text("x = 1\n")
+
+
 def _undo(*names: str) -> Callable[[Path], None]:
     def undo(clone: Path) -> None:
         for name in names:
@@ -351,7 +355,11 @@ def _undo(*names: str) -> Callable[[Path], None]:
     (render({"tool.py": "print('built')\n"}), _symlink, _undo("link.py"), "link.py is a symlink"),
     (render({"tool.py": "print('built')\n"}), _executable, _undo("app.py"),
      "app.py changes its file mode (100644 to 100755)"),
-], ids=["truncated-read", "no-change", "binary", "symlink", "mode-change"])
+    # A name a terminal or a review misshows is refused by name, as an emitted block's is
+    # (`repo_change.unprintable_refusal`, dm-208, dm-278).
+    (render({"tool.py": "print('built')\n"}), _bidi, _undo("tool\u202e.py"),
+     "'tool\\u202e.py' holds U+202E RIGHT-TO-LEFT OVERRIDE"),
+], ids=["truncated-read", "no-change", "binary", "symlink", "mode-change", "bidi-path"])
 def test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason(repo, tmp_path, emission,
                                                                                first, retry, reason):
     """It once ended the run (#330 E5); now the retry is told why, and nothing of it is committed."""
@@ -2125,6 +2133,34 @@ def test_absolute_path_is_refused_naming_the_path():
     import re as _re
     with pytest.raises(worktree.AttemptRefused, match=_re.escape("/etc/passwd")):
         repo_change._emitted("===FILE: /etc/passwd===\ncontent\n", edits=True)
+
+
+# ── dm-208: a control or format character in a path is refused by name ─────
+#: One character of each class a path may not hold, and how a refusal names it.
+UNPRINTABLE = [("\x7f", "U+007F (a control character)"), ("\x9b", "U+009B (a control character)"),
+               ("\u202e", "U+202E RIGHT-TO-LEFT OVERRIDE"), ("\u200f", "U+200F RIGHT-TO-LEFT MARK"),
+               ("\u2067", "U+2067 RIGHT-TO-LEFT ISOLATE"), ("\u061c", "U+061C ARABIC LETTER MARK"),
+               ("\u200b", "U+200B ZERO WIDTH SPACE"), ("\u2060", "U+2060 WORD JOINER"),
+               ("\ufeff", "U+FEFF ZERO WIDTH NO-BREAK SPACE")]
+UNPRINTABLE_IDS = ["DEL", "C1-control", "bidi-override", "bidi-mark", "bidi-isolate", "arabic-mark",
+                   "zero-width-space", "word-joiner", "byte-order-mark"]
+
+
+@pytest.mark.parametrize("char, named", UNPRINTABLE, ids=UNPRINTABLE_IDS)
+def test_a_path_holding_a_control_or_format_character_is_refused_by_name(char, named):
+    import re as _re
+    with pytest.raises(worktree.AttemptRefused, match=_re.escape(named)):
+        repo_change._emitted(f"===FILE: src/a{char}b.py===\ncontent\n", edits=True)
+    with pytest.raises(worktree.AttemptRefused, match=_re.escape(named)):
+        repo_change._emitted(f"===DELETE: src/a{char}b.py===\n", edits=True)
+
+
+def test_a_path_with_a_joiner_that_names_are_written_with_is_accepted():
+    """U+200C joins letters in Persian names; it is a format character a path may hold."""
+    persian = "docs/\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.md"
+    files, _edits, _deletes = repo_change._emitted(f"===FILE: {persian}===\ncontent\n", edits=True)
+    assert Path(persian) in files
+    assert repo_change.unprintable_refusal(persian) == ""
 
 
 # ── T5: malformed header refused, quoting the line in _emitted ─────────────

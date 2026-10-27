@@ -396,3 +396,71 @@ def test_a_timed_out_optional_verifier_does_not_stop_a_later_resume(runs):
     assert run.status()['status'] == 'done'
     assert run.dispatched()[-1] == 'emit'
     assert not (run.refactory / 'set-aside').exists(), 'nothing was set aside by hand or by acknowledge'
+
+
+# ── dm-275: a stop during a dispatched agent node, then acknowledge and resume ──
+
+def _held_agent(node_id: str, run: Path) -> dict[str, Any]:
+    """A dispatched agent node, as `workers.lower_workflow` makes one: a worker process that
+    begins its delivery (the pending marker), works while `hold` exists, then finishes it."""
+    def delivery(call: str) -> str:
+        return (f'{sys.executable} -c "from pathlib import Path; from refactory_dsh import agent_delivery; '
+                f"agent_delivery.{call}\"")
+
+    begin = delivery(f"begin(Path('{run}'), '{node_id}', 'Build.', [])")
+    finish = delivery(f"finish(Path('{run}'), '{node_id}')")
+    return {'_type': 'AgentNode', 'id': node_id, 'role': 'builder', 'prompt_template': 'Build.',
+            'reads': [], 'writes': [],
+            'dispatch_command': (f'echo {node_id} >> {run}/dispatch.log; {begin} && '
+                                 f'echo $$ > {run}/worker.pid && '
+                                 f'while [ -e {run}/hold ]; do sleep 0.1; done && {finish}')}
+
+
+def _through_an_agent(run: Path) -> dict[str, Any]:
+    return graph('gate_strategy', [fn('gate_strategy', run), _held_agent('emit', run), fn('after', run)],
+                 [('gate_strategy', 'emit', None), ('emit', 'after', None)])
+
+
+@pytest.mark.parametrize('stopped_by', ['graph-control stop', 'the worker ending'])
+def test_a_run_stopped_during_an_agent_node_goes_on_after_acknowledge_with_no_file_moved(runs,
+                                                                                    stopped_by):
+    """dm-275: a stop while emit's worker runs ends the worker, and the spine records the
+    failed node as retryable: the checkpoint is `ready`, the worker's delivery marker stays
+    pending, and a `graph-control stop` stays queued for the owner that exited. Resume then
+    refuses on the marker; acknowledge takes the stopped checkpoint, sets the marker and the
+    stale stop aside, and resume goes on to the end, with no file moved by hand."""
+    run = runs(_through_an_agent)
+    (run.root / 'hold').write_text('')
+    run.start_live_owner()
+    run.wait_until(lambda: (run.root / 'worker.pid').exists())
+    if stopped_by == 'graph-control stop':
+        code, out = run.cli('stop')
+        assert code == 0 and out['status'] == 'queued', out
+    worker = int((run.root / 'worker.pid').read_text())
+    subprocess.run(['pkill', '-TERM', '-P', str(worker)], check=False)
+    os.kill(worker, signal.SIGTERM)
+    run.wait_live_owner()
+    pending = run.refactory / 'agent-delivery/pending'
+    assert run.status()['status'] == 'ready' and run.checkpoint()['status'] == 'ready'
+    assert len(list(pending.glob('*.json'))) == 1
+    stops = run.queued()
+    assert len(stops) == (1 if stopped_by == 'graph-control stop' else 0)
+
+    code, out = run.cli('resume')
+    assert code == 2 and 'acknowledge' in out['error'], out
+
+    code, out = run.cli('acknowledge')
+    assert code == 0 and out['status'] == 'acknowledged', out
+    assert out['checkpoint_status_before'] == 'ready'
+    assert list(pending.glob('*.json')) == [] and run.queued() == []
+    [aside] = list((run.refactory / 'set-aside').iterdir())
+    assert len(list((aside / 'pending').glob('*.json'))) == 1
+    assert sorted(p.name for p in (aside / 'graph-controls').glob('*.json')) == stops
+
+    (run.root / 'hold').unlink()
+    code, out = run.cli('resume')
+    assert code == 0, out
+    run.wait_for_supervisor()
+    assert run.status()['status'] == 'done'
+    assert run.dispatched() == ['gate_strategy', 'emit', 'emit', 'after']
+    assert list(pending.glob('*.json')) == []

@@ -918,6 +918,47 @@ head+tail for non-refactory commands.
 - `correction.spec.ts: "acknowledged rerun after exit-3 stop runs the stopped node again"`
 - `correction.spec.ts: "failureDetailOf with run warnings before marker shows reason first"`
 
+## Emission parsing and materialise (#494, dm-208, dm-215)
+
+**Emission path validation.** The path in a `===FILE:`, `===EDIT:` or `===DELETE:`
+header may contain any character except whitespace, `=`, backtick, single quote and
+double quote. Structural safety is enforced after parsing, by `_artifact_paths` in
+`repo_change` (design and design_fast) and `_package_relative` in `create_ops` (create,
+create_fast, edit and edit_fast): no absolute path, no `..`, no backslash, no trailing
+`/`, and no control or hidden format character. A line that starts like a header but
+does not match the format is refused with the offending line quoted, in both parsers.
+
+**Control and hidden format characters are refused by name (dm-208).** A path holding
+a character of Unicode category Cc (the C0 controls, DEL, the C1 controls), a
+bidirectional control (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069), a
+zero-width space (U+200B), a word joiner (U+2060) or a byte-order mark (U+FEFF) is
+refused, naming the character, for example `U+202E RIGHT-TO-LEFT OVERRIDE`. A terminal,
+a diff or a review hides such a character or shows the name as something else, so the
+file a reviewer reads about would not be the file written. Other format characters are
+allowed: U+200C and U+200D join letters in Persian names and emoji sequences.
+`repo_change.unprintable_refusal` is the one check, for any place that takes a path
+from an agent.
+
+**A malformed header goes back to the builder in every mode (dm-215).** In create and
+the fast modes, as in design mode, `materialise` records a malformed header as
+`emission_refused`, and the gate sends the reason back to `emit` with the line quoted;
+the run does not end there. So does a path create mode cannot place inside the package
+(absolute, `..`, or a refused character): every path is placed before the package
+directory is cleared. The refusal bound above still applies.
+
+**Emitted paths are literal pathspecs (dm-215).** Every worktree git call runs with
+`GIT_LITERAL_PATHSPECS=1`: those through `worktree.git`, which delivery's go through
+too, and the check's own in `base_check` and `failfast`. A path such as
+`app/[id]/page.ts` names that one file and is never read as a pattern, so deleting it
+can no longer delete `app/i/page.ts`.
+
+Tests: `test_design_worktree.py::test_a_path_holding_a_control_or_format_character_is_refused_by_name`,
+`test_create.py::test_an_emit_path_holding_a_control_or_format_character_is_refused_by_name`,
+`test_design_worktree.py::test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason`,
+`test_create.py::test_create_fast_mode_loops_back_on_malformed_header`,
+`test_create.py::test_create_fast_sends_a_path_it_cannot_place_back_to_emit` and
+`test_worktree.py::test_delete_bracket_path_does_not_glob_expand`.
+
 ## Judges decide QA in design mode (b37b, measure4-dm149, b39b)
 
 ### The evidence
@@ -1221,7 +1262,6 @@ emission, budget exhaustion, or a person's stop — leaves the worktree clean.
   (default 3). At the limit, it raises an error naming the conflicting files
   without starting a merge. `graph-control redeliver` accepts a run stopped
   there.
-- *Emission path validation.* The path in a `===FILE:`/`===EDIT:`/`===DELETE:` header may contain any character except whitespace, `=`, backtick, single quote, and double quote. Structural safety (`_artifact_paths`: no absolute paths, no `..`, no backslash, no control characters, no trailing `/`) is enforced after parsing. A line that starts like a header but does not match the format is refused with the offending line quoted, in both repo_change and create-mode parsing.
 - *Delivery advance (dm-116).* When delivery pushes a merge commit, the
   finally block advances the worktree record (head = merge, base = main's
   tip) so a later push fast-forwards.
@@ -2379,15 +2419,21 @@ QA judge saw it.
 
 **`gate_self_check`** (gate, after `join_self_check`) sends the attempt's own failures
 and every item the judge found not built back as one fix-up, with the self-check's
-budget and limits: the not-built items even when every test passes. A verdict that
+budget and limits: the not-built items even when every test passes. Past that budget,
+failures are the early stop, which spends the attempt, and the not-built items go with
+them; not-built items alone go on to the reviews instead, listed in
+`qa-synthesized.md`'s `## Asks and corrections not built`, which the QA judge and the
+overwatch both read (dm-276: they used to spend the attempts unreviewed and end in a
+draft marked check failing though the check passed). A verdict that
 is missing, is not one JSON object, lists no ask (or no correction when the person
 gave some), or calls an item built without a `path:line` is unreadable, never "all
 built" (`design_ops.parse_early_asks`): the judge is asked again (`reread` to the
 fork, which runs again; `first_self_check` keeps its result, so the check does not run
 twice) as often as `judge_rereads` allows (1), then the attempt goes on without a
 verdict, with `judge.status: failed` in the record and a run warning. A failed judge
-branch is recorded missing (`reviews/early_asks_check-missing.txt` on the spine) and
-read the same way. `gate_self_check`'s limit is `(1 + judge_rereads) ×
+branch is recorded missing with its error (`reviews/early_asks_check-missing.txt`,
+written by the worker on the spine and by the fork on the walker) and read the same
+way. `gate_self_check`'s limit is `(1 + judge_rereads) ×
 prepare_check_iterations + 1` (`design.gate_self_check_iterations`, 91 with the
 defaults): it runs once an attempt's first self-check, so it never ends a run.
 
@@ -2405,7 +2451,8 @@ follows, on one line of its completion message (`Updated tests: …`).
 `updated_tests` fact); the code reviewer and the QA director read them as they start,
 and the QA judge reads them, beside the test files that failed in a self-check and
 changed since, in `qa-synthesized.md`'s `## Updated tests`. A test weakened to pass is
-a must-fix unless the update follows an ask or correction.
+a must-fix unless the update follows an ask or correction. Markdown around the line
+(`**Updated tests:**`, a code span) is not part of what it names.
 
 ### Tests
 

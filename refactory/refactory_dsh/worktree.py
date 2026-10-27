@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
 import shlex
 import shutil
@@ -209,8 +210,8 @@ def _locked(path: Path) -> Iterator[None]:
     """Hold an exclusive lock on ``path`` while two runs could race on the same repository.
 
     Two runs that start on one target at once both prune it, so they take turns: one
-    never removes a worktree the other is still deciding about. Creating needs no lock;
-    git keeps concurrent `git worktree add`s apart itself.
+    never removes a worktree the other is still deciding about. Creating takes no lock:
+    an add that reads another's half-written entry is retried (`_add`).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     if sys.platform == "win32":  # pragma: no cover - posix only
@@ -304,7 +305,7 @@ def create(target: Path, rev: str, run_id: str, run: Path) -> Worktree:
                                   "run": str(run), "pid": os.getpid(), "shared": _shared_state(target),
                                   "created": datetime.now(timezone.utc).isoformat()})
         try:
-            git(target, *NO_HOOKS, "worktree", "add", "-q", "-b", branch, str(path), base)
+            _add(target, path, branch, base)
         except ValueError:
             # git keeps the branch it made when only the checkout failed (a smudge filter,
             # say); the record stays with it, so a redo finds the branch and adds the worktree.
@@ -316,6 +317,39 @@ def create(target: Path, rev: str, run_id: str, run: Path) -> Worktree:
                      target=str(target), run=str(run))
     _write_json(run / RECORD, asdict(found))
     return found
+
+
+#: How many times `git worktree add` is tried when it fails on another add's half-written
+#: entry, and the most it waits, in seconds, before the next try.
+ADD_ATTEMPTS = 5
+ADD_JITTER_S = 0.2
+
+#: git's words when an add read another add's entry under `.git/worktrees/` half-written.
+_HALF_WRITTEN = re.compile(r"failed to read \S*\.git/worktrees/")
+
+
+def _add(target: Path, path: Path, branch: str, base: str | None = None) -> None:
+    """Add the worktree at ``path`` of ``branch``, made from ``base`` when one is given.
+
+    Two adds on one repository at once can collide: one scans `.git/worktrees/` while the
+    other has written only part of its entry there, and fails on it ("failed to read
+    .git/worktrees/<name>/commondir"). Nothing of the failed add is at ``path`` then, so it
+    is tried again, a bounded number of times, after a short random wait (dm-197). git
+    makes a new branch before it scans, so a retry checks out a branch the failed add made
+    rather than making it again. Any other failure, or one that left something at
+    ``path``, is refused in git's words.
+    """
+    for attempt in range(ADD_ATTEMPTS):
+        made = base is None or (attempt > 0 and _branch_exists(target, branch))
+        try:
+            git(target, *NO_HOOKS, "worktree", "add", "-q",
+                *((str(path), branch) if made else ("-b", branch, str(path), str(base))))
+            return
+        except ValueError as error:
+            if (attempt == ADD_ATTEMPTS - 1 or not _HALF_WRITTEN.search(str(error))
+                    or path.exists()):
+                raise
+        time.sleep(random.uniform(0, ADD_JITTER_S))
 
 
 def resolve_base(target: Path, rev: str) -> str:
@@ -334,7 +368,7 @@ def _readd(target: Path, path: Path, branch: str) -> None:
     """
     if _registered(target, path, branch):
         git(target, "worktree", "remove", str(path))
-    git(target, *NO_HOOKS, "worktree", "add", "-q", str(path), branch)
+    _add(target, path, branch)
     _isolate_hooks(target, path)
 
 
@@ -971,10 +1005,17 @@ def state(run: Path, claimant: Any = None, *, branch: str = "") -> str:
         if held(run) or any((run / pending).glob("*.json")):
             return "active"
         spine = run / spine_status
-        if spine.exists():
+        # A walked run writes the status file too, but whether it is over is its progress's
+        # and its walking process's to say (`run_state.walked`).
+        from refactory_dsh.run_state import walked
+
+        if spine.exists() and not walked(run):
             return "ended" if _json(spine).get("status") in ENDED else "active"
         progress = _json(run / progress_path)
-        if progress.get("error") or not _alive(claimant):
+        # A walked run names its walking process in its status file when no claimant did.
+        from refactory_dsh.run_state import owner_pid
+
+        if progress.get("error") or not _alive(claimant if claimant is not None else owner_pid(run)):
             return "ended"
         return "active"
     except OSError:

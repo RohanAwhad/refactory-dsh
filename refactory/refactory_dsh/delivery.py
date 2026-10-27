@@ -99,8 +99,13 @@ from refactory_dsh.invocations import DELIVERY_SHOWN as SHOWN  # was: SHOWN = Pa
 #: The visibilities a new repository may have. Private unless the person says otherwise.
 VISIBILITIES = ("private", "internal", "public")
 
-#: How long a pull request's title may be before it is shortened.
-TITLE_LIMIT = 72
+#: How long GitHub lets a pull request's title be.
+GITHUB_TITLE_LIMIT = 256
+
+#: How long the design's heading may be as a pull request's title before it is cut (dm-217):
+#: GitHub's limit, less the prefixes delivery may put in front of it (`DRAFT_TITLE`,
+#: `CHECK_FAILING_TITLE`), so a title is never cut short of what GitHub takes.
+TITLE_LIMIT = GITHUB_TITLE_LIMIT - len("[draft] ") - len("[check failing] ")
 
 #: How many times a new head is read back from GitHub, and how long to wait between reads,
 #: before a pull request that shows another head counts as not delivered.
@@ -981,8 +986,8 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
         # abandoned merge -- is reported and recorded as without the fact: nothing was
         # delivered, so nothing is called a draft.  (The pull request text and the
         # finishing commands still open a draft.)
-        result = _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed,
-                       title=title, finish=finish, merge=merge)
+        result = _kept(ctx, approved, found, _scope_refusal(str(reason)) or str(reason),
+                       reason.pull_request, reason.pushed, title=title, finish=finish, merge=merge)
         if merge is not None and merge.conflicts:
             result["delivery_conflict_files"] = merge.conflicts
             result["delivery_conflict_detail"] = merge.conflict_detail
@@ -1791,6 +1796,30 @@ def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
     return failure[:2000], False
 
 
+#: GitHub's refusal of a push that changes a workflow file, from a credential without the
+#: scope (an OAuth app's or a token's) or the permission (a GitHub App's) that takes.
+_SCOPE_REFUSED = re.compile(r"refusing to allow an? [^()\n]*? to create or update workflow "
+                            r"`([^`]+)` without `([\w:-]+)` (scope|permission)")
+
+
+def _scope_refusal(said: str) -> str:
+    """A push GitHub refused for a missing scope, said in one sentence (dm-75); else ``""``.
+
+    git's own output names the file and the scope inside a ``[remote rejected]`` line. The
+    finishing commands the delivery result gives after it push the branch and open the
+    pull request; they are run where the credential has the scope. Credentials are not
+    changed here.
+    """
+    found = _SCOPE_REFUSED.search(said)
+    if found is None:
+        return ""
+    path, scope, kind = found.groups()
+    return (f"GitHub refused the push because it changes {path}, and the credential delivery "
+            f"pushed with lacks the `{scope}` {kind} that changing a workflow file takes; run "
+            f"the finishing commands where a GitHub credential with the `{scope}` {kind} is "
+            "signed in")
+
+
 def _push(path: Path, slug: str, commit: str, branch: str, *, default: str, first: bool = False) -> None:
     """Push ``commit`` to ``branch`` on GitHub: a new branch or a fast-forward, never forced.
 
@@ -1840,6 +1869,27 @@ def _shorten(text: str, limit: int) -> str:
     return text[:cut].rstrip() + "…"
 
 
+#: Where a title may be cut between phrases: before a comma, semicolon, colon or dash
+#: that separates two of them, or before a parenthesis.
+_PHRASE_BREAK = re.compile(r"[,;:](?=\s)|\s[\u2014\u2013-]\s|\s\(")
+
+
+def _cut_title(text: str, limit: int = TITLE_LIMIT) -> str:
+    """``text`` whole when it fits in ``limit``; else cut between phrases, never inside one.
+
+    The cut falls at the last phrase break that keeps at least half of ``limit`` and opens
+    no backtick pair, and otherwise at a word boundary (`_shorten`); an ellipsis says it was
+    cut (dm-217).
+    """
+    if len(text) <= limit:
+        return text
+    breaks = [found.start() for found in _PHRASE_BREAK.finditer(text, 0, limit - 1)
+              if found.start() >= limit // 2 and text[:found.start()].count("`") % 2 == 0]
+    if breaks:
+        return text[:breaks[-1]].rstrip() + "\u2026"
+    return _shorten(text, limit)
+
+
 def _title(ctx: Any, *, draft_delivery: dict[str, Any] | None = None) -> str:
     """The pull request's title: from the design's heading, or the brief as a fallback.
 
@@ -1851,12 +1901,12 @@ def _title(ctx: Any, *, draft_delivery: dict[str, Any] | None = None) -> str:
     title = ""
     if ctx.exists("design.md"):
         parsed = design_contract.parse(ctx.read_text("design.md"), run_name)
-        title = _shorten(parsed.title, TITLE_LIMIT) if parsed.title else ""
+        title = _cut_title(parsed.title) if parsed.title else ""
     if not title:
         # Fallback: first sentence of the brief.
         brief = _public(str(ctx.facts.get("brief") or ""))
         first = next((line.strip() for line in brief.splitlines() if line.strip()), "") or run_name
-        title = _shorten(first, TITLE_LIMIT)
+        title = _cut_title(first)
     if draft_delivery and draft_delivery.get("check_failing"):
         return CHECK_FAILING_TITLE + title
     return title

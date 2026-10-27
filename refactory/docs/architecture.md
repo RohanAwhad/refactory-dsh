@@ -257,8 +257,44 @@ read the journal. That is a known gap; see §11.
   to accept the result, recording the two modes it refuses as limits of that
   validator. It is installed only with `uv sync --group reference`.
 
-A debug runtime that disagrees with the real one is worse than none, so
-`refactory/tests/test_equivalence.py` runs the same mode both ways and compares.
+A debug runtime that disagrees with the real one is worse than none, so two tests run
+the same thing both ways and compare:
+
+- `refactory/tests/test_equivalence.py` runs a deterministic mode (`circle_packing/adaptive`)
+  on the walker and on a real DSH session, and compares the score and the facts. It makes
+  real model calls, so it runs only with `--run-integration`.
+- `refactory/tests/test_runtime_equivalence.py` runs one scripted design run on each
+  runtime through its real entry point: `python -m refactory_dsh.design` on the walker,
+  `refactory ceo` on the spine, with the real lowering, spine and workers, and one fake
+  `dsh` answering by node id. It compares node visits and outcomes, gate verdicts, facts,
+  run files, each agent's prompt and model route, the commits pushed and the pull request.
+  It runs in the ordinary suite.
+
+  Every difference it finds is either equal or explained by a named parity gap in its
+  `GAPS`, each a strict xfail. **When you close a gap, remove it from `SCENARIO_GAPS`**:
+  its xfail starts passing, which fails the suite until you do.
+
+What the two share, rather than each doing its own way:
+
+- **One prompt.** An agent node is sent its rendered template and nothing else: its
+  notes say what it does (its event summary, a gate's question), and are not part of
+  its prompt. A reloop's feedback is said once (`agent_delivery.with_feedback`: added
+  unless the prompt already carries it as whole lines), and
+  the execution block lists its inputs in name order, as the lowered graph keeps them
+  and as `Ledger.review` fingerprints a gate's. The session is opened with the node's
+  role on both (`worker_node` reads it from the worker spec).
+- **One set of run files.** The walker writes `facts.json` (`run.write_facts`) and
+  `.refactory/spine-status.json` (`run_state.write_status`) as the spine does, keeping
+  the completed nodes and each gate's last verdict by the spine's rules
+  (`nn/record.py`). A gate's verdict is the run's record, in the spine's checkpoint and
+  the walker's progress record (and `RunResult.gate_verdicts`), never a fact; a gate out
+  of reloops is recorded `halt` on both. Each status file names its `runtime` (`walker`
+  or `spine`) and `owner_pid`. A walked run has no checkpoint, so whether it is still
+  alive is its progress's and its walking process's to say (`run_state.walked`,
+  `run_state.owner_pid`): the worktree, artifact-name and console readers ask those, the
+  console reports its kind as `walker` and offers no graph controls, graph-control
+  refuses it as before, and `invocations.prepare` archives a walked directory's files
+  for a new run even when it was walked without declarations.
 
 **A run that stops is a failure with a name, on both.** On DSH the graph runner reads
 the cursor's own status after the CEO's turn: anything but `done` writes a line naming

@@ -50,6 +50,16 @@ def _settle_missing(workdir: Path, members: list[Node], error: str) -> None:
             "could not settle the delivery markers of %s: %s", ", ".join(agents), settle_error)
 
 
+def _record_missing(workdir: Path, node: str, error: str) -> None:
+    """Record why an optional branch's node failed, where the spine records it: the worker
+    and `refactory_dsh.run` write ``reviews/<node>-missing.txt`` with the error, and a gate
+    that reads the branch's output says why it is missing from it (the early asks judge's
+    error reaches `design_ops._read_early_asks` this way on both runtimes)."""
+    reviews = Path(workdir) / "reviews"
+    reviews.mkdir(parents=True, exist_ok=True)
+    (reviews / f"{node}-missing.txt").write_text(f"{error}\n")
+
+
 def _branches(executor: Executor, fork: Node, barrier: str) -> list[list[Node]]:
     """Admit disjoint flat branches before any branch can have side effects."""
     from .executor import ExecutionError
@@ -92,9 +102,7 @@ def _branches(executor: Executor, fork: Node, barrier: str) -> list[list[Node]]:
 
     writes = [paths(nodes, "writes") for nodes in branches]
     reads = [paths(nodes, "reads") for nodes in branches]
-    facts = [{name for node in nodes for name in node.produces}
-             | {f"{node.id}_verdict" for node in nodes if node.kind == "gate"}
-             for nodes in branches]
+    facts = [{name for node in nodes for name in node.produces} for nodes in branches]
     # A sibling's newly produced fact is no more available than its file. A fact
     # from before the fork can be read by all branches, but not concurrently reset.
     import re
@@ -118,6 +126,7 @@ def _branches(executor: Executor, fork: Node, barrier: str) -> list[list[Node]]:
 def run_fork(executor: Executor, node: Node) -> str | None:
     """Wait for all scheduled work; merge in target order; never join on failure."""
     from .executor import ExecutionError, Executor, RunContext
+    from .record import RunRecord
 
     edges = executor.graph.out_edges(node.id)
     if len(edges) != 1 or edges[0].condition is not None:
@@ -183,8 +192,11 @@ def run_fork(executor: Executor, node: Node) -> str | None:
             verdicts=copy.deepcopy(ctx.verdicts), task=copy.deepcopy(ctx.task),
             model=branch_model, memory=ctx.memory, enforce_writes=ctx.enforce_writes,
         )
+        # Each branch keeps its own record, starting from the run's pending feedback;
+        # the branches' records are folded into the run's once they are done.
         child = Executor(executor.graph, child_ctx, max_steps=executor.max_steps,
-                         enable_recovery=executor.enable_recovery)
+                         enable_recovery=executor.enable_recovery,
+                         record=RunRecord(feedback=dict(executor.record.feedback)))
         child_ctx.budget = ctx.budget
         # Branch gate IDs are disjoint. Keep their own counters across a later
         # outer re-entry of this fork, as the DSH spine does; a new child object
@@ -205,7 +217,6 @@ def run_fork(executor: Executor, node: Node) -> str | None:
         try:
             error = child._walk_branch(target, barrier)
             allowed = {key for member in branches[index] for key in member.produces}
-            allowed.update(f"{member.id}_verdict" for member in branches[index] if member.kind == "gate")
             changed = {key for key in ctx.facts.keys() | child.ctx.facts.keys()
                        if key not in ctx.facts or key not in child.ctx.facts
                        or ctx.facts[key] != child.ctx.facts[key]}
@@ -272,6 +283,8 @@ def run_fork(executor: Executor, node: Node) -> str | None:
         raise
     # All workers have finished, so no branch can still write after we return or
     # after the join begins. Order does not depend on completion timing.
+    executor.record.merge_branches([child.record for child in children],
+                                   [{member.id for member in branch} for branch in branches])
     for index, child in enumerate(children):
         if errors[index] and node.targets[index] in optional:
             # A failed optional branch is missing, not failed: keep its steps in
@@ -279,6 +292,7 @@ def run_fork(executor: Executor, node: Node) -> str | None:
             # step scan (Executor.run) does not fail the run on it.
             for step in child.steps:
                 if step.error:
+                    _record_missing(ctx.workdir, step.node, step.error)
                     step.reason, step.error = f"missing: {step.error}", None
             _settle_missing(ctx.workdir, branches[index], errors[index])
         executor.steps.extend(child.steps)
@@ -296,7 +310,6 @@ def run_fork(executor: Executor, node: Node) -> str | None:
             if errors[index] and target in optional:
                 continue
             produced = {key for member in branches[index] for key in member.produces}
-            produced.update(f"{member.id}_verdict" for member in branches[index] if member.kind == "gate")
             for key in sorted(produced):
                 if key in child.ctx.facts:
                     ctx.facts[key] = child.ctx.facts[key]

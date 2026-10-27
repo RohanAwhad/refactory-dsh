@@ -35,6 +35,7 @@ import re
 import shutil
 import sys
 import tempfile
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
@@ -206,14 +207,20 @@ def _still_open(run: Path, claimant: Any = None) -> str | None:
     if not run.is_dir() or (run / "design.json").exists():
         return None
     spine = _json(run / ".refactory" / "spine-status.json")
-    if spine:
+    # A walked run writes the status file too, but no checkpoint names its owner: its
+    # liveness is the claimant's, or else the walking process its status file names,
+    # read from its progress below.
+    from refactory_dsh.run_state import owner_pid, walked
+
+    if spine and not walked(run):
         status = str(spine.get("status") or "")
         owner = _json(run / ".refactory" / "spine-checkpoint.json").get("owner_pid")
         if status in FINISHED or not _alive(owner):
             return None
         return f"status {status!r} since {spine.get('at')}"
     progress = _json(run / ".refactory" / "progress.json")
-    if progress and not progress.get("error") and _alive(claimant):
+    walker = claimant if claimant is not None else owner_pid(run)
+    if progress and not progress.get("error") and _alive(walker):
         return f"walking, last at {progress.get('node')!r}"
     return None
 
@@ -269,14 +276,54 @@ def _require_owner(name: str, run: Path) -> None:
         )
 
 
+#: The format characters a path may not hold (dm-208): the bidirectional controls, which
+#: make a name read in another order than it is stored, and the invisible ones that make
+#: two different names look the same. Other format characters stay allowed: U+200C and
+#: U+200D join letters in Persian and other scripts, and characters in emoji sequences.
+HIDDEN_FORMAT = frozenset(
+    "\u061c\u200e\u200f" + "".join(map(chr, range(0x202A, 0x202F)))
+    + "".join(map(chr, range(0x2066, 0x206A))) + "\u200b\u2060\ufeff")
+
+
+def _unprintable(path: str) -> str:
+    """The first character of ``path`` that a file name may not hold, named; else ``""``.
+
+    Control characters (Unicode category Cc: the C0 range, DEL and the C1 range) and the
+    format characters in `HIDDEN_FORMAT` (bidirectional controls such as U+202E, zero-width
+    space, word joiner, byte-order mark), which a terminal, a diff or a review hides or
+    shows as something else (dm-208).
+    """
+    for char in path:
+        if unicodedata.category(char) == "Cc" or char in HIDDEN_FORMAT:
+            name = unicodedata.name(char, "")
+            return f"U+{ord(char):04X} " + (name if name else "(a control character)")
+    return ""
+
+
+def unprintable_refusal(path: str) -> str:
+    """Why ``path`` is refused when it holds a character `_unprintable` names; else ``""``.
+
+    The one check for emitted paths: `_artifact_paths` and create mode's
+    `create_ops._package_relative` use it, and so should any other place that takes a
+    path from an agent.
+    """
+    found = _unprintable(path)
+    return (f"the emitted path {path!r} holds {found}, and no emitted path may hold a control "
+            "character or a hidden format character (DEL, a C1 control, a bidirectional "
+            "control, a zero-width space): it is hidden or misshown wherever the path is read. "
+            "Name the file without it") if found else ""
+
+
 def _artifact_paths(names: list[str]) -> list[Path]:
     """The emitted paths, refused unless each names a distinct file inside the artifact."""
     checked: list[Path] = []
     for relative in names:
         path = Path(relative)
+        if refusal := unprintable_refusal(relative):
+            raise AttemptRefused(refusal)
         if (path.is_absolute() or PureWindowsPath(relative).drive
                 or "\\" in relative or ".." in path.parts or not path.parts
-                or relative.endswith("/") or any(ord(char) < 32 for char in relative)):
+                or relative.endswith("/")):
             raise AttemptRefused(f"{relative!r} is not a file inside the artifact directory; name it by its "
                                  "path from the artifact's root")
         if path in checked:

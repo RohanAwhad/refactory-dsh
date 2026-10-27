@@ -562,3 +562,23 @@ def test_absent_claim_rejects_absolute_and_escape_paths():
     }])
     problems = pitfalls_mod.validate_pitfalls(raw_escape)
     assert any("escapes" in p for p in problems)
+
+
+def test_a_pitfall_answered_under_its_own_heading_is_quoted_with_the_block_under_it():
+    """dm-219: a ``### PIT-001`` entry's answer is the block under its heading."""
+    design = _contract(anti="### PIT-001 (high) - Verifier format\n\n"
+                            "The verifier reads it at `file.py:1`.\n\n"
+                            "### PIT-002 (low)\n\nOther.")
+    assert _citations(design, _pit(), _pit("PIT-002", "low")) == {
+        "PIT-001": [("Anti-patterns to avoid",
+                     "PIT-001 (high) - Verifier format The verifier reads it at `file.py:1`.")],
+        "PIT-002": [("Anti-patterns to avoid", "PIT-002 (low) Other.")]}
+
+
+def test_a_cross_reference_under_a_pitfalls_heading_stays_in_its_quote():
+    """Review of #519: "Unlike PIT-002, ..." is PIT-001's answer, not the start of PIT-002's."""
+    design = _contract(anti="### PIT-001 (high)\n\nUnlike PIT-002, fixed at `file.py:1`.\n\n"
+                            "- **PIT-002** (low): see \u00a7 Changes")
+    quotes = _citations(design, _pit(), _pit("PIT-002", "low"))
+    assert quotes["PIT-001"] == [("Anti-patterns to avoid",
+                                  "PIT-001 (high) Unlike PIT-002, fixed at `file.py:1`.")]
