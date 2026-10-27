@@ -111,7 +111,9 @@ def test_feedback_counts_as_said_only_as_whole_lines():
 
     for prompt, note in (("Do it.\nPlease add tests for every change.", "add tests"),
                          ("The test suite fails often.", "fails"),
-                         ("first line\nsecond", "first line\nsecond line")):
+                         ("first line\nsecond", "first line\nsecond line"),
+                         # Every line is there, but not in a row: not the same words.
+                         ("add tests\nunrelated\nfor the widget", "add tests\nfor the widget")):
         assert with_feedback(prompt, note) == f"{FEEDBACK_HEADING}\n\n{note}\n\n{prompt}", (prompt, note)
     said = "Do it.\n## What went wrong last time\nadd tests\nfor the widget\n\nGo."
     assert with_feedback(said, "add tests\nfor the widget") == said
@@ -144,6 +146,18 @@ def test_a_reason_past_the_runners_limit_reaches_the_node_clipped_as_the_spine_c
     second = model.prompts[1][1]
     assert f"## Feedback for this visit\n\n{_clipped(LONG_REASON)}\n\nWrite it." in second
     assert len(_clipped(LONG_REASON)) <= REASON_LIMIT
+
+
+def test_a_clipped_reason_is_said_only_when_its_tail_is_too():
+    """The head alone does not say a clipped reason: a prompt that renders only the start of
+    the log still gets the reason under the heading."""
+    from loop_ops import LONG_REASON
+
+    from refactory_dsh.agent_delivery import FEEDBACK_HEADING, with_feedback
+    from refactory_dsh.run import _clipped
+
+    prompt = LONG_REASON[:4000]
+    assert with_feedback(prompt, _clipped(LONG_REASON)).startswith(f"{FEEDBACK_HEADING}\n\n")
 
 
 def test_a_nodes_inputs_are_listed_in_name_order(tmp_path):
@@ -376,6 +390,11 @@ def test_a_walked_run_whose_process_died_no_longer_holds_its_artifact(tmp_path):
 
     _walked_run_left_running(tmp_path)
     assert repo_change._still_open(tmp_path, _dead_pid()) is None
+    assert repo_change._still_open(tmp_path) is None, "the status file's owner answers when no claimant does"
+    # A live owner keeps the name while it walks.
+    status = json.loads((tmp_path / ".refactory/spine-status.json").read_text())
+    (tmp_path / ".refactory/spine-status.json").write_text(json.dumps({**status, "owner_pid": os.getpid()}))
+    assert repo_change._still_open(tmp_path) == "walking, last at 'emit'"
 
 
 def test_the_console_says_a_walked_run_whose_process_died_died_and_offers_no_graph_controls(tmp_path):

@@ -208,8 +208,9 @@ def _still_open(run: Path, claimant: Any = None) -> str | None:
         return None
     spine = _json(run / ".refactory" / "spine-status.json")
     # A walked run writes the status file too, but no checkpoint names its owner: its
-    # liveness is the claimant's, read from its progress below.
-    from refactory_dsh.run_state import walked
+    # liveness is the claimant's, or else the walking process its status file names,
+    # read from its progress below.
+    from refactory_dsh.run_state import owner_pid, walked
 
     if spine and not walked(run):
         status = str(spine.get("status") or "")
@@ -218,7 +219,8 @@ def _still_open(run: Path, claimant: Any = None) -> str | None:
             return None
         return f"status {status!r} since {spine.get('at')}"
     progress = _json(run / ".refactory" / "progress.json")
-    if progress and not progress.get("error") and _alive(claimant):
+    walker = claimant if claimant is not None else owner_pid(run)
+    if progress and not progress.get("error") and _alive(walker):
         return f"walking, last at {progress.get('node')!r}"
     return None
 
