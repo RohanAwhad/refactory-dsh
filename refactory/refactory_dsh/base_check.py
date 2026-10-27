@@ -8,6 +8,10 @@ all three conditions hold:
 (b) its test file is not one the attempt changes;
 (c) its test id or leaf name appears in neither the brief text nor design.md.
 
+Design mode uses one rule instead, in its self-check and its whole check alike
+(`design_comparison`): a failure the base has too is inherited unless the brief or an
+approved correction names the test or its file (`names_test`).
+
 When the check cannot identify individual tests, no failure is excused (conservative
 fallback), and an excusal stands only if the identified failures are the whole of what
 failed and nothing was left unrun behind them (`excusal_blocker`). When the base
@@ -363,6 +367,61 @@ def compare_failures(
         all_excused=len(new_failures) == 0 and len(inherited) > 0,
         base_ok=not bool(base_failures),
     )
+
+
+# ── design mode's rule: what the base fails, less what the asks name ─────
+
+#: A test file's extensions, which a name that is followed by one is part of.
+_FILE_SUFFIX = r"\.(?:py|[cm]?[tj]sx?)\b"
+
+
+def names_test(text: str, test_id: str) -> bool:
+    """Whether ``text`` names ``test_id``: by its id, a qualified or leaf name, or its file.
+
+    A name counts only whole: ``test_a`` is not named by ``test_all_paths``, nor by
+    ``tests.test_a`` or ``test_a.py`` (a module and a file, which the file rule reads).
+    A file counts as a path or a trailing part of one (``tests/test_a.py`` is named by
+    ``refactory/tests/test_a.py`` and by ``test_a.py``), but not when it is followed by
+    ``::``: that names one test in the file, which the id rule reads.
+    """
+    if not text or not test_id:
+        return False
+    parts = _test_name_parts(test_id)
+    # A parametrized test is named by its name without the parameters too.
+    parts += [re.sub(r"\[[^\]]*\]$", "", part) for part in parts if part.endswith("]")]
+    for part in parts:
+        if re.search(rf"(?<![\w/.]){re.escape(part)}(?!\w)(?!{_FILE_SUFFIX})", text, re.IGNORECASE):
+            return True
+    path = _test_file(test_id)
+    if not path:
+        return False
+    pieces = path.split("/")
+    for start in range(len(pieces)):
+        tail = "/".join(pieces[start:])
+        if re.search(rf"(?<![\w.\-]){re.escape(tail)}(?![\w/\-])(?!\.\w)(?!::)", text,
+                     re.IGNORECASE):
+            return True
+    return False
+
+
+def design_comparison(base_failures: set[str], attempt_failures: set[str],
+                      named_text: str) -> ComparisonResult:
+    """Design mode's one inheritance rule, for its self-check and its whole check alike.
+
+    A failure is inherited when the unchanged base fails the same test, whatever file the
+    attempt touched and whatever design.md says, unless ``named_text`` (the brief and
+    the approved corrections) names it (`names_test`): a test the run exists to fix is
+    sent back while it fails.
+    """
+    if not attempt_failures:
+        return ComparisonResult(inherited=set(), new_failures=set(), all_excused=False,
+                                base_ok=not bool(base_failures))
+    inherited = {failure for failure in attempt_failures
+                 if failure in base_failures and not names_test(named_text, failure)}
+    new_failures = set(attempt_failures) - inherited
+    return ComparisonResult(inherited=inherited, new_failures=new_failures,
+                            all_excused=not new_failures and bool(inherited),
+                            base_ok=not bool(base_failures))
 
 
 # ── base worktree lifecycle ──────────────────────────────────────────────
@@ -1936,12 +1995,14 @@ def compute_site_reverts(
 
 def filter_check(
     ctx: Any, result: Any, command: str, timeout: float,
-    guardedness: dict | None = None,
+    guardedness: dict | None = None, *, named_text: str | None = None,
 ) -> FilteredCheckResult:
     """The integration point: run the base check, compare, reuse guardedness.
 
     ``guardedness`` is passed in (correction 2: computed once per attempt,
-    reused here rather than recomputed).
+    reused here rather than recomputed). ``named_text`` selects design mode's rule
+    (`design_comparison`, the same one its self-check uses); without it, the
+    three-condition rule (`compare_failures`) the fast modes use.
     """
     found = worktree.recorded(ctx.workdir)
     if found is None:
@@ -1980,10 +2041,10 @@ def filter_check(
         design_text = ctx.read_text("design.md")
 
     # Compare
-    comparison = compare_failures(
-        base_result.failures, attempt_failures, changed_files,
-        brief_text, design_text,
-    )
+    comparison = (design_comparison(base_result.failures, attempt_failures, named_text)
+                  if named_text is not None else compare_failures(
+                      base_result.failures, attempt_failures, changed_files,
+                      brief_text, design_text))
     blocker = excusal_blocker(command, attempt_output, attempt_failures) if comparison.all_excused else None
     if blocker:
         comparison = ComparisonResult(inherited=set(), new_failures=set(), all_excused=False,

@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from refactory_dsh import base_check, delivery, nn, sandbox, worktree
+from refactory_dsh import base_check, delivery, design_ops, nn, sandbox, worktree
 from refactory_dsh import authoring_evidence as evidence
 from refactory_dsh import design_contract
 from refactory_dsh.create_ops import repair
@@ -573,32 +573,31 @@ def test_repair_feedback_includes_left_sites_and_broken_guarantees(tmp_path):
         stderr="",
     )
 
-    # Now use the design_contract.parse + augmentation logic directly.
-    parsed = design_contract.parse(design_md, "test_design")
-    left_lines: list[str] = []
-    for site in parsed.rule_sites:
-        if site.get("status") == "left" and site.get("reason"):
-            left_lines.append(
-                f"Design constraint: {site['path']} [left: {site['reason']}] "
-                "— do not change this; fix the tests or callers instead."
-            )
-
-    guarantee_lines: list[str] = []
-    attempt_failures = base_check.parse_test_failures(result.stdout)
-    changed_files = set()  # no changed files
-    for failure in sorted(attempt_failures):
-        if failure not in filtered.base_failures:
-            test_file = base_check._test_file(failure)
-            if test_file and test_file not in changed_files:
-                guarantee_lines.append(
-                    f"Broken guarantee: {failure} passes on the base but "
-                    "fails on this attempt — the attempt must not break it."
-                )
+    # The guidance the whole check gives the builder, from the real code (`_full_check`'s).
+    ctx = nn.RunContext(run_dir, facts={"name": "test_design", "brief": "make the guard strict",
+                                        "gate_corrections": "- keep the safety check"})
+    guidance = design_ops._check_failure_guidance(ctx, result, filtered, found)
+    lines = guidance.splitlines()
+    left_lines = [line for line in lines if line.startswith("Design constraint:")]
+    guarantee_lines = [line for line in lines if line.startswith("Broken guarantee:")]
 
     assert left_lines, "should have at least one [left] site"
     assert any("the safety check is correct" in line for line in left_lines)
-    assert guarantee_lines, "should have at least one broken guarantee"
-    assert any("test_guard" in line for line in guarantee_lines)
+    assert guarantee_lines == ["Broken guarantee: tests/test_guard.py::test_guard passes on the "
+                               "base but fails on this attempt."]
+    assert "the attempt must not break it" not in guidance
+    # dm-270: beside them, the brief and the corrections, and when to update a test instead.
+    assert "## Brief\nmake the guard strict" in guidance
+    assert "## Approved corrections\n- keep the safety check" in guidance
+    assert "update the test, keeping what it guards" in guidance
+    # A test the attempt's own diff touches is not a broken guarantee.
+    (Path(found.path) / "tests").mkdir(exist_ok=True)
+    (Path(found.path) / "tests" / "test_guard.py").write_text("def test_guard():\n    assert False\n")
+    subprocess.run(["git", "-C", found.path, "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", found.path, "-c", "user.email=t@e", "-c", "user.name=t", "commit",
+                    "-qm", "touch the test"], check=True, capture_output=True)
+    touched = design_ops._check_failure_guidance(ctx, result, filtered, found)
+    assert "Broken guarantee" not in touched and "Design constraint" in touched
 
 
 def test_vitest_broken_guarantee_detected(tmp_path):

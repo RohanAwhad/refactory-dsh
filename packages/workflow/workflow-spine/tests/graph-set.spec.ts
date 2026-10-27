@@ -39,9 +39,12 @@ describe('graph shape invariants', () => {
         })
       })
 
+      // It replays the whole run once for each node the run completed, so its time grows
+      // with the square of the run's length: design's run (its first self-check's fork
+      // and gate among it) takes several seconds on a CI runner.
       it('redo invariant', () => {
         checkRedoInvariant(runs[0]!, shape)
-      })
+      }, 60_000)
     })
   }
 })
