@@ -39,6 +39,9 @@ refactory: <gate> is waiting for a person.
     refactory graph-control resume --run <dir>
 ```
 
+A walker run names its own main instead (`python -m refactory_dsh.design --resume <dir>`):
+graph-control has no controls for a walked run and refuses it by naming that command.
+
 You can also answer via the native panel, the owning CEO session, or an explicit verdict:
 
 ```bash

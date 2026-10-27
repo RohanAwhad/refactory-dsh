@@ -426,6 +426,27 @@ def _status_identity(artifacts: dict[str, str], runtime: str) -> dict[str, str]:
     return {**artifacts, STATUS: json.dumps(status)}
 
 
+CONFIG = ".refactory/run-config.json"
+
+
+def _config_identity(artifacts: dict[str, str], world: World, runtime: str) -> dict[str, str]:
+    """`run-config.json` with the four fields that name the runtime that runs it -- the
+    runtime, the command that started it, the one that continues it and the owner a
+    continuation runs -- checked and set aside, as the status file's are. Every other
+    field (mode, project, knobs, model route, limits, fingerprints, driver) is compared."""
+    config = json.loads(artifacts[CONFIG])
+    expected = ({"runtime": "walker", "command": "python -m refactory_dsh.design",
+                 "resume_command": f"python -m refactory_dsh.design --resume {world.run}",
+                 "owner_argv": ["-m", "refactory_dsh.design", "--resume", str(world.run)]}
+                if runtime == "walker" else
+                {"runtime": "spine", "command": "refactory ceo",
+                 "resume_command": f"refactory graph-control resume --run {world.run}",
+                 "owner_argv": ["-m", "refactory_dsh.interactive", "default_pack/design"]})
+    assert {key: config.get(key) for key in expected} == expected, config
+    config.update({key: f"<{key.upper()}>" for key in expected})
+    return {**artifacts, CONFIG: json.dumps(config)}
+
+
 def _prompts(world: World) -> dict[str, str]:
     calls = [json.loads(line) for line in (world.dsh / "calls.jsonl").read_text().splitlines()]
     return {f"{call['node']}#{call['visit']}": call["prompt"] for call in calls}
@@ -473,7 +494,7 @@ def observe(world: World, runtime: str, tmp_root: Path) -> dict[str, dict[str, s
         "visits": {"order and outcome": "\n".join(_grouped(visits))},
         "verdicts": _verdicts(world.run, runtime),
         "facts": _facts(world.run, runtime),
-        "artifacts": _status_identity(_artifacts(world.run), runtime),
+        "artifacts": _config_identity(_status_identity(_artifacts(world.run), runtime), world, runtime),
         "prompts": _prompts(world),
         "routes": _routes(world),
         "commits": _commits(world),
@@ -545,21 +566,6 @@ def _note_kind(aspect: str, key: str, side: str, value: str | None) -> str | Non
     return value
 
 
-def _check_as_task(aspect: str, key: str, side: str, value: str | None) -> str | None:
-    """The walker's empty check setting in the authoring evidence, given the run's check."""
-    if value is None or side != "walker":
-        return value
-    return re.sub(r'("allow_regression": null,\s*"check": )""', lambda found: found.group(1) + json.dumps(CHECK),
-                  value)
-
-
-def _gate_stop(aspect: str, key: str, side: str, value: str | None) -> str | None:
-    """The walker's stopped visit to the user gate, dropped."""
-    if aspect == "visits" and side == "walker" and value:
-        return value.replace("gate_strategy: stopped\n", "")
-    return value
-
-
 def _second_visit(aspect: str, key: str, side: str, value: str | None) -> str | None:
     """The walker ledger's record of the gate's second visit and the verdict's use, dropped."""
     if value is None or side != "walker" or aspect not in ("artifacts", "facts"):
@@ -569,54 +575,24 @@ def _second_visit(aspect: str, key: str, side: str, value: str | None) -> str | 
 
 
 
-#: The keys only one runtime's `run-config.json` has.
-RUN_CONFIG_ONLY = {"walker": ("runtime", "command", "resume_command", "fast"), "spine": ("owner_argv", "driver")}
-#: The keys both have, which the walker leaves empty.
-RUN_CONFIG_EMPTY_ON_WALKER = ("knobs", "model_context")
-
-
-def _run_config(aspect: str, key: str, side: str, value: str | None) -> str | None:
-    """Each runtime's `run-config.json` without its one-sided keys, and with the knobs and
-    model route the walker leaves empty marked as the spine's alone. Every other key both
-    have (mode, project, resource limits, configuration fingerprints) is still compared."""
-    if aspect != "artifacts" or key != ".refactory/run-config.json" or value is None:
-        return value
-    config = json.loads(value)
-    for name in RUN_CONFIG_ONLY[side]:
-        config.pop(name, None)
-    for name in RUN_CONFIG_EMPTY_ON_WALKER:
-        if name in config and (side == "spine" or config[name] in ([], {})):
-            config[name] = "<recorded by the spine only>"
-    return json.dumps(config, indent=1, sort_keys=True)
-
-
-
-
 
 GAPS = {gap.name: gap for gap in (
     Gap("gate-note-kind", "new, under dm-123 (#436 gap 5)",
         "a note given with the answer at the gate's question is recorded as a `constraint` from `interactive`; "
         "the same note through `console steer` (the walker's only channel) as a `correction` from `steer`",
         _note_kind),
-    Gap("check-as-task", "dm-134 (#436 gap 12)",
-        "the walker passes the check as a task, not a knob, so the authoring evidence records no check setting",
-        _check_as_task),
-    Gap("walker-refuses-gate", "dm-123 #436 gap 7",
-        "the walker refuses a user gate at once (a stopped visit) instead of asking the person", _gate_stop),
     Gap("gate-revisited-on-resume", "dm-123 #436 gap 7",
         "answered by steer and resume, the gate is visited twice, and the ledger records the second visit and "
-        "the verdict's use; answered at the question, once", _second_visit),
-    Gap("run-config", "dm-160 (#436 gaps 9, 22)",
-        "the walker's `run-config.json` records its command, resume command and `fast`, and leaves the knobs "
-        "and model route empty; the spine's records the knobs and route recovery replays, the owner and the "
-        "driver pin", _run_config),
+        "the verdict's use; answered at the question, once. The walker has no question to answer: it stops "
+        "at the gate, which is how the spine's `resumed` run goes too, and there the two agree",
+        _second_visit),
 )}
 
 #: The gaps open in each scenario. A gap that closes makes its xfail pass, which fails:
 #: take it out of here then.
-SCENARIO_GAPS = {
-    "card": ["gate-note-kind", "check-as-task", "walker-refuses-gate", "gate-revisited-on-resume", "run-config"],
-    "resumed": ["check-as-task", "walker-refuses-gate", "run-config"],
+SCENARIO_GAPS: dict[str, list[str]] = {
+    "card": ["gate-note-kind", "gate-revisited-on-resume"],
+    "resumed": [],
 }
 
 
@@ -738,8 +714,9 @@ def test_the_review_branches_run_at_once(runs, runtime):
 def test_no_gap_explains_a_difference_it_was_not_written_for(runs):
     """The gaps are precise: with all of them applied, a fact dropped on one side, a changed
     route, a changed prompt, a missing file, a feedback block on one side, a reviewer on
-    another model or role, a status file that completed other nodes, a missing facts file
-    and an emptied run configuration each stay unexplained."""
+    another model or role, a status file that completed other nodes, a missing facts file,
+    an emptied run configuration and a run configuration with a knob dropped each stay
+    unexplained."""
     gaps = list(GAPS.values())
     walker, spine = runs["observed"]["walker"], runs["observed"]["card"]
     end = "<!-- end refactory worker execution -->\n\n"
@@ -766,6 +743,9 @@ def test_no_gap_explains_a_difference_it_was_not_written_for(runs):
         ("artifacts", "facts.json", None, spine["artifacts"]["facts.json"]),
         ("artifacts", ".refactory/run-config.json",
          json.dumps({**config, "configuration_fingerprints": {}}, indent=1, sort_keys=True),
+         spine["artifacts"][".refactory/run-config.json"]),
+        ("artifacts", ".refactory/run-config.json",
+         json.dumps({**config, "knobs": config["knobs"][:-1]}, indent=1, sort_keys=True),
          spine["artifacts"][".refactory/run-config.json"]),
     ):
         made = Difference(aspect, key, left, right)

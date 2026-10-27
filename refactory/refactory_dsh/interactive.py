@@ -198,24 +198,17 @@ def prepare(
             transform=lambda workflow, stage_dir=None: workers.lower_workflow(
                 steering.for_run(workflow, stage_dir or workdir),
                 workdir, model_context, lowering.node_declarations(state)),
-            runtime="dsh",
+            runtime="spine",
             command="refactory ceo",
             resume_command=f"refactory graph-control resume --run {workdir}",
+            fast=identifier.endswith("_fast"),
             worker_backend=model_context.get("worker_backend", "dsh"),
             resource_limits=resource_limits,
             project=project,
+            knobs=list(knobs or []),
+            model_context=model_context,
+            owner_argv=['-m', 'refactory_dsh.interactive', identifier],
         )
-        import json
-        from refactory_dsh.recovery import configuration_fingerprints
-
-        owner_argv = ['-m', 'refactory_dsh.interactive', identifier]
-        (workdir / '.refactory/run-config.json').write_text(json.dumps({'mode': identifier,
-            'project': str(project.resolve()), 'knobs': knobs or [], 'model_context': model_context,
-            'resource_limits': resource_limits,
-            'owner_argv': owner_argv,
-            'configuration_fingerprints': configuration_fingerprints(workdir, identifier, project)}))
-        from refactory_dsh import pin
-        pin.record_driver(workdir / '.refactory/run-config.json')
         return name, graphs
 
 
@@ -716,8 +709,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--validation-reserve-s", type=float, default=0)
     parser.add_argument("--validation-reserve-tokens", type=int, default=0)
+    parser.add_argument("--warn-tokens", type=int, default=None)
     args = parser.parse_args(argv)
 
+    from refactory_dsh import run_flags
     from refactory_dsh.model import ModelChoiceError
 
     workdir = Path(args.workdir) if args.workdir else None
@@ -737,10 +732,7 @@ def main(argv: list[str] | None = None) -> int:
             headless=args.headless, resume=args.resume, worker_backend=args.worker_backend,
             effort=args.effort, permission_mode=args.permission_mode,
             role_routes=args.role_routes, node_routes=args.node_routes,
-            resource_limits={"max_elapsed_s": args.max_elapsed_s, "max_tokens": args.max_tokens,
-                             "validation_reserve_s": args.validation_reserve_s,
-                             "validation_reserve_tokens": args.validation_reserve_tokens}
-            if args.max_elapsed_s is not None or args.max_tokens is not None else None,
+            resource_limits=run_flags.resource_limits(args),
         )
     except ModelChoiceError as exc:  # no model to run on: the message says how to choose one
         print(f"refactory: {exc}", file=sys.stderr)

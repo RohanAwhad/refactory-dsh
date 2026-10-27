@@ -145,7 +145,8 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
     so it delivers nothing and refuses ``refine``.
     """
     task = dict(getattr(ctx, "task", {}) or {})
-    # The walker passes these in the run's task; a run on DSH carries them as knobs.
+    # Both runtimes' mains pass these as knobs (`run_flags`); a caller of the walker's
+    # API may still give them in the run's task.
     name = str(task.get("name") or ctx.knob("name", "") or "").strip()
     brief = str(task.get("brief") or ctx.knob("brief", "") or "").strip()
     check = str(task.get("check") or ctx.knob("check", "") or "").strip()

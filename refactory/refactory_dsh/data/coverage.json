@@ -549,8 +549,8 @@
         "cli": "refactory ceo",
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
-      "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-      "reviewed_schema": "3902398310a6273664b11e2f428b3477347d6b54204466a6947b61d6727a7ff5"
+      "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct. Its run flags are the walker mains' own (python -m refactory_dsh.design, create, edit): the same knobs, route and limits either way; --verdict is an alias of --approve, and --attempts of the mode's attempts knob.",
+      "reviewed_schema": "c15be6ad5cf100457ed6fcc98d0c766748e2c20d4a31c9f2b8015c86c1d1ccdc"
     },
     "cli:doctor": {
       "doc": "refactory/docs/cli.md",
@@ -806,7 +806,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Create a reusable mode package from a brief; declare task or singleShot. For user gates prefer wf_open default_pack/create; headless approvals require explicit authorization.",
-      "reviewed_schema": "392bb3377f80dc6b560c3662f78581d47992bc348e6e46c7f8cdd456c8efad96"
+      "reviewed_schema": "525ebb0eb8d1c1d2320ad534d22f9b1ec3341763fe053a6a2c06d4a83d0352fc"
     },
     "design": {
       "chat": {
@@ -888,7 +888,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-      "reviewed_schema": "9865d7c964228209f020ece1e9b0d0db15b4b5866d22d1111b1fbfaf10fe5d83"
+      "reviewed_schema": "3ef0b8b154a559cefd20015bde750558aa5e267b2d8f3a0e5c1e99b9c8475c65"
     },
     "docs": {
       "chat": {
@@ -974,7 +974,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Revise a reusable mode package and validate it before QA and final intent audit. allow_regression skips original execution/comparison; revised validation remains mandatory. Prefer wf_open default_pack/edit when a person is present.",
-      "reviewed_schema": "e21f29fdd1ffcb453ded9719de1a0b18d9b784ce46b60e6e44bc11605a43af46"
+      "reviewed_schema": "fcfa464c1a53ff47dfac1e23493ac9de705925788de558a58856e5dc7ba23df5"
     },
     "graph-control": {
       "doc": "refactory/docs/live-control.md",

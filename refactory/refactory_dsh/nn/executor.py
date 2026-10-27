@@ -583,6 +583,7 @@ class Executor:
                 "steps": len(self.steps),
                 "outcome": outcome,
                 "graph": self.graph.to_state(),
+                "file_fingerprints": self._file_fingerprints(),
                 **({"model_context": self.ctx.model.context()} if callable(getattr(self.ctx.model, "context", None)) else {}),
                 **({"branches": branches} if branches is not None else {}),
                 **({"schedule": schedule} if schedule is not None else {}),
@@ -602,6 +603,17 @@ class Executor:
             self._write_status("failed", nodes, error=error, failed=node or None)
         else:
             self._write_status("executing", nodes)
+
+    def _file_fingerprints(self) -> dict[str, Any]:
+        """Every declared input and output, fingerprinted as the spine fingerprints them in
+        its checkpoint at each boundary it records (`recordStatus`), with the run's
+        configuration: a resume refuses a run whose files changed since (dm-160)."""
+        from refactory_dsh.recovery import fingerprint
+
+        names = {name for node in self.graph.nodes.values() for name in (*node.reads, *node.writes)}
+        if (self.ctx.workdir / ".refactory/run-config.json").exists():
+            names.add(".refactory/run-config.json")
+        return {name: fingerprint(self.ctx.workdir / name) for name in sorted(names)}
 
     def _write_status(self, status: str, nodes: list[str], *, error: str | None = None,
                       failed: str | None = None) -> None:
@@ -799,6 +811,9 @@ class Executor:
 
         if self._reserve_step is None:
             if error is None:
+                # The walk's end is a boundary of its own: a resume of it goes on from
+                # nothing, as the spine's resume of a done run does.
+                self._record("", outcome="completed")
                 self._write_status("done", [])
             elif self._status not in ("refused", "halted", "failed"):
                 self._write_status("failed", [current] if current else [], error=error, failed=current)
@@ -1050,12 +1065,16 @@ class Executor:
         self._outcome = "pending"
         if self.ctx.budget is not None:
             self.ctx.budget.checkpoint_node(node.resource_phase)
+        # A user gate with no answer yet waits for a person, which is the run's status, not
+        # a visit: the spine logs no visit for it either. So its answer is read before the
+        # visit starts, and a `GateStop` leaves no started or failed node behind.
+        answer = self._answered_verdict(node) if node.kind == "gate" and node.gate_kind == "user" else None
         self._outcome = "running"
         if self._reserve_step is None:
             self._record(node.id, outcome="running")
         emit(self.ctx.workdir, "node_started", node_id=node.id, state="running", summary=render(node.notes, self.ctx))
         try:
-            result = self._dispatch(node)
+            result = self._dispatch(node, answer)
         except BaseException as exc:
             emit(self.ctx.workdir, "node_failed", node_id=node.id, state="failed", summary=f"{type(exc).__name__}: {exc}")
             raise
@@ -1068,8 +1087,9 @@ class Executor:
             self.ctx.budget.checkpoint()
         return result
 
-    def _dispatch(self, node: Node) -> tuple[str | None, str | None]:
-        """Execute a node after resource admission and the durable start marker."""
+    def _dispatch(self, node: Node, answer: str | None = None) -> tuple[str | None, str | None]:
+        """Execute a node after resource admission and the durable start marker. ``answer``
+        is a user gate's, read before its visit started."""
         if node.kind == "op":
             timeout = self._effective_timeout(node)
             if timeout is not None:
@@ -1083,7 +1103,7 @@ class Executor:
         elif node.kind == "agent":
             self._visit_agent(node)
         else:
-            return self._visit_gate(node)
+            return self._visit_gate(node, answer)
         out = self.graph.out_edges(node.id)
         return (out[0].target if out else None), None
 
@@ -1167,8 +1187,10 @@ class Executor:
             )
         return str(verdict)
 
-    def _visit_gate(self, node: Node) -> tuple[str, str]:
-        if node.gate_kind != "fn":
+    def _visit_gate(self, node: Node, answer: str | None = None) -> tuple[str, str]:
+        if answer is not None:
+            verdict = answer
+        elif node.gate_kind != "fn":
             verdict = self._answered_verdict(node)
         else:
             timeout = self._effective_timeout(node)

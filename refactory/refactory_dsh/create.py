@@ -654,6 +654,9 @@ class CreateConfig:
     check: str = ""
     check_timeout_s: int = 60
     resource_limits: dict[str, Any] | None = None
+    #: The run's knobs as its flags gave them (`run_flags.knobs`), applied last, as
+    #: `refactory ceo` applies its own: the same flags configure the same run.
+    knobs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -724,6 +727,12 @@ def create(config: CreateConfig, client: Any = None, *, enable_recovery: bool = 
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
     state["knobs"]["requires_input"]["value"] = config.requires_input
     state["knobs"]["sample_knobs"]["value"] = json.dumps(list(config.samples))
+    from refactory_dsh.interactive import with_knobs
+
+    try:
+        state = with_knobs(state, list(config.knobs))
+    except ValueError as exc:
+        raise CreateError(str(exc)) from exc
     mode.load_state_dict(state)
 
     workdir = Path(config.workdir)
@@ -734,7 +743,7 @@ def create(config: CreateConfig, client: Any = None, *, enable_recovery: bool = 
 
     with ownership(workdir):
         # Run preparation.
-        from refactory_dsh.run_preparation import prepare_run
+        from refactory_dsh.run_preparation import prepare_run, walker_context
         from refactory_dsh import steering
         from refactory_dsh.paths import project_root
 
@@ -750,6 +759,9 @@ def create(config: CreateConfig, client: Any = None, *, enable_recovery: bool = 
             fast=config.fast,
             worker_backend=client.route().get("worker_backend", "") if client and callable(getattr(client, "route", None)) else "",
             project=project_root(),
+            knobs=list(config.knobs),
+            model_context=walker_context(client),
+            owner_argv=["-m", "refactory_dsh.create", "--resume", str(workdir)],
         )
 
         # Persist up-front verdicts as run-scoped ledger entries.
@@ -805,24 +817,24 @@ def result_from_run(run: RunResult) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``python -m refactory_dsh.create --name <n> --brief <text> [--extends <mode>]``."""
+    """``python -m refactory_dsh.create --name <n> --brief <text> [--extends <mode>]``.
+
+    The walker's main. Its run flags are `refactory ceo`'s (`run_flags`, dm-134).
+    """
     import argparse
     import sys
+
+    from refactory_dsh import run_flags
+    from refactory_dsh.run_preparation import ACKNOWLEDGE_HELP, RESUME_HELP
 
     parser = argparse.ArgumentParser(
         prog="python -m refactory_dsh.create",
         description="Create a package of modes from a brief.",
     )
-    parser.add_argument("--name", required=False, default="", help="the package name")
     parser.add_argument("--brief", required=False, default="", help="what the package should do")
     parser.add_argument("--extends", default="", help="a <package>/<mode> to use as a reference")
-    parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--fast", action="store_true", help="use the inspectable create_fast graph with focused QA")
-    parser.add_argument("--repair-attempts", type=int, default=1, help="fast graph repair limit (0..3)")
-    parser.add_argument("--check", default="", help="fast graph's explicit focused check command")
-    from refactory_dsh.budgets import add_arguments, arguments
-
-    add_arguments(parser)
+    run_flags.add_arguments(parser)
     # The two creation directives, reachable from the shell. One of them is required:
     # a Task names the class of work, and naming one implies the data node.
     parser.add_argument(
@@ -854,76 +866,59 @@ def main(argv: list[str] | None = None) -> int:
         help="build a harness for one run of one thing, with no Task binding — the "
              "explicit alternative to --task; one of the two is required",
     )
-    # Per package name, not one fixed directory. Two runs for different packages
-    # used to write `brief.json`, `research/` and the strategy documents into the
-    # same place, so each overwrote the other's state and a cancelled run's
-    # leftovers were read by the next one. A run is addressed by this directory.
-    parser.add_argument("--workdir", default="")
     parser.add_argument(
-        "--resume", default="", metavar="RUN_DIR",
-        help="continue a failed run from its own directory instead of starting a "
-             "new one; every node that already finished is kept",
+        "--resume", default="", metavar="RUN_DIR", help=RESUME_HELP,
     )
-    parser.add_argument("--model", default="")
-    parser.add_argument("--provider", default="", help="provider route that model is on")
-    parser.add_argument(
-        "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
-        help="seconds one model completion may take before it is called hung",
-    )
+    parser.add_argument("--acknowledge-failure", action="store_true", help=ACKNOWLEDGE_HELP)
     parser.add_argument(
         "--smoke-timeout", type=int, default=DEFAULT_MODEL_SMOKE_TIMEOUT_S, dest="smoke_timeout_s",
         help="seconds for each full mode validation pass (default: 3600); independent of --model-timeout",
     )
-    parser.add_argument(
-        "--verdict", action="append", default=[], metavar="GATE=VALUE",
-        help="answer a gate a person owns, as <gate>=<value> (repeatable); "
-             "gate_strategy is one, so a headless run must be told the answer",
-    )
     args = parser.parse_args(argv)
-    if not args.resume:
+    if args.acknowledge_failure and not args.resume:
+        parser.error("--acknowledge-failure goes with --resume: it acknowledges the boundary a run stopped at")
+    if args.resume:
+        problem = run_flags.resume_refusal(parser, args)
+        if problem:
+            parser.error(problem)
+    else:
         if not args.name:
             parser.error("--name is required when not resuming")
         if not args.brief:
             parser.error("--brief is required when not resuming")
+        mode_id = "default_pack/create_fast" if args.fast else "default_pack/create"
+        problem = run_flags.refusal(args, mode_id, runtime=run_flags.WALKER,
+                                    label="create --fast" if args.fast else "create")
+        if problem:
+            parser.error(problem)
 
     from refactory_dsh.model import DshModelClient, ModelChoiceError, require_model_choice
     from refactory_dsh.paths import project_root
 
     try:
         # Every agent node calls a model, so the route is settled before anything runs (dm-258).
-        client = require_model_choice(DshModelClient(
-            project=None if args.resume else project_root(),
-            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
-        ), interactive=sys.stdin.isatty())
+        client = require_model_choice(
+            DshModelClient(project=None) if args.resume
+            else DshModelClient(project=project_root(), **run_flags.model_options(args)),
+            interactive=sys.stdin.isatty())
     except ModelChoiceError as exc:
         print(f"refactory: {exc}", file=sys.stderr)
         return 1
     if args.resume:
         workdir = Path(args.resume)
-        fast = args.fast
-        config_path = workdir / '.refactory/run-config.json'
-        if config_path.exists():
-            try:
-                run_config = json.loads(config_path.read_text())
-                fast = run_config.get('fast', fast)
-            except (json.JSONDecodeError, OSError):
-                pass
-        from refactory_dsh.run_ownership import ownership
+        from refactory_dsh.fast import CreateFastMode
+        from refactory_dsh.run_preparation import resume_walked
 
         try:
-            with ownership(workdir):
-                from refactory_dsh.fast import CreateFastMode
-
-                run = (CreateFastMode if fast else CreateMode).resume(
-                    workdir, model=client, max_steps=200, resource_limits=arguments(args),
-                    enable_recovery=True,
-                )
+            mode_class, run = resume_walked(workdir, "create", (CreateMode, CreateFastMode), model=client,
+                                            max_steps=200, acknowledge_failure=args.acknowledge_failure,
+                                            resource_limits=run_flags.resource_limits(args))
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
         if run.gate_stop:
             from refactory_dsh.run_preparation import print_gate_stop
-            print_gate_stop(run.gate_stop, workdir, graph=(CreateFastMode if fast else CreateMode)().build())
+            print_gate_stop(run.gate_stop, workdir, graph=mode_class().build())
             return 2
         if run.halted:
             print(json.dumps({"halted": True, "error": run.error}), file=sys.stderr)
@@ -939,29 +934,32 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2, default=str))
         return 0 if run.exit_ok else 2
 
+    workdir = Path(args.workdir or f".factory/create/{args.name}")
     try:
         result = create(
             CreateConfig(
                 name=args.name,
                 brief=args.brief,
                 extends=args.extends,
-                attempts=args.attempts,
-                workdir=Path(args.workdir or f".factory/create/{args.name}"),
+                workdir=workdir,
                 data_node=bool(args.data_node),
                 task_ref=str(args.task_ref or ""),
                 single_shot=bool(args.single_shot),
                 requires_input=", ".join(args.inputs),
                 samples=list(args.samples),
-                model_timeout_s=int(args.model_timeout_s),
+                model_timeout_s=int(args.model_timeout_s or DEFAULT_TIMEOUT_S),
                 smoke_timeout_s=int(args.smoke_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
-                fast=args.fast, repair_attempts=args.repair_attempts, check=args.check,
-                resource_limits=arguments(args),
+                fast=args.fast,
+                resource_limits=run_flags.resource_limits(args),
+                # The attempts, the check and every other knob the flags set travel as
+                # the knobs `refactory ceo` gives the spine.
+                knobs=run_flags.knobs(args, mode_id, brief=args.brief, name=args.name),
             ),
             client=client,
             enable_recovery=True,
         )
-    except CreateError as exc:
+    except (CreateError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
     from refactory_dsh.nn.mode import RunResult
@@ -969,8 +967,7 @@ def main(argv: list[str] | None = None) -> int:
         if result.gate_stop:
             from refactory_dsh.run_preparation import print_gate_stop
             from refactory_dsh.fast import CreateFastMode
-            print_gate_stop(result.gate_stop, Path(args.workdir or f".factory/create/{args.name}"),
-                            graph=(CreateFastMode if args.fast else CreateMode)().build())
+            print_gate_stop(result.gate_stop, workdir, graph=(CreateFastMode if args.fast else CreateMode)().build())
             return 2
         if result.halted:
             print(json.dumps({"halted": True, "error": result.error}), file=sys.stderr)

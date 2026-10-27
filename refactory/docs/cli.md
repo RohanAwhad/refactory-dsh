@@ -33,7 +33,8 @@ variants). The refusal names which argument was empty.
 | `--mode <mode>` | `design` (the default), `create`, `edit`, `design_fast`, `create_fast`, `edit_fast`, or `<package>/<mode>`. |
 | `--name <name>` | the package or artifact name; without it your words become the name. |
 | `--check "<command>"` | run in the Design run's worktree, or its artifact directory; fast Create/Edit also accept a focused package check. Failures enter the bounded repair path. |
-| `--repair-attempts <n>` | fast authoring repairs after the first implementation, from 0 to 3 (default 1). |
+| `--repair-attempts <n>` | fast authoring repairs after the first implementation, from 0 to 3 (default 1); `--knob repair_attempts=<n>`, which the other modes refuse by name. |
+| `--attempts <n>` | an alias of the mode's attempts knob: `check_attempts` for design, `attempts` for create and edit, `repair_attempts` for their `_fast` variants. A named mode, which may declare none, refuses it. |
 | `--source-project <dir>` | fast Design: copy an existing directory into the artifact directory and apply the change there, instead of working in a worktree; it takes no `--target`, `--base`, `--setup` or `--generate`. |
 | `--target <repo>` | Design and fast Design: the git repository to change, given by its root. The run works in a worktree of it on its own branch, `refactory/run-<id>`, and your checkout is left as it is. Without it, the run starts a new project in `~/refactory-projects/<name>`. |
 | `--base <rev>` | Design and fast Design: the commit, branch or tag to start from (default: the target's HEAD, or a new project's `main`). |
@@ -50,6 +51,8 @@ variants). The refusal names which argument was empty.
 | `--model-timeout <seconds>` | seconds one model completion may take before it is called hung; default 1800 (30 min). Sets the per-completion limit for every agent step of the run. Each step's spine limit is `attempts × model-timeout + 600`. Not the same as `--timeout` (seconds to wait at a gate) or `--max-elapsed-s` (wall-clock cap on the entire run). |
 | `--max-elapsed-s <n>` / `--max-tokens <n>` | the shared resource allocation, including nested work and validation. |
 | `--validation-reserve-s <n>` / `--validation-reserve-tokens <n>` | keep part of that allocation available for required final validation. |
+| `--warn-tokens <n>` | warn once per step when a step reaches this many tokens; the run goes on. |
+| `--role-routes <JSON>` / `--node-routes <JSON>` | per-role and per-node worker routes; a node's route takes precedence over its role's, then the run's. |
 | `--revise <package>/<mode>` | edit only: the mode being revised. |
 | `--task <module:Class>` | create only: the class of work the produced harness binds a `data` node to. One of `--task` or `--single` is required. |
 | `--single` | create only: build a harness for one run of one thing. |
@@ -57,9 +60,14 @@ variants). The refusal names which argument was empty.
 | `--workdir <dir>` | where the run's evidence lands (default `.factory/interactive/<package>-<mode>`). |
 | `--provider <route>` | the provider route that model is on, e.g. `deepseek-official`. |
 | `--model <id>` | the model this run uses, e.g. `deepseek-v4-pro`. |
-| `--approve <gate>=<value>` | answer a gate up front, e.g. `gate_strategy=proceed`, for a run with nobody at it. In live mode, a user gate is shown at the terminal with its prompt and accepted verdicts; pick one and optionally add a multi-line note (end with a line containing only `.`) that is recorded as steering. Without `--approve`, run it and answer the gate when it reaches you. `modes` marks a person's gate `(user)`. |
+| `--approve <gate>=<value>` | answer a gate up front, e.g. `gate_strategy=proceed`, for a run with nobody at it; `--verdict` is an alias. In live mode, a user gate is shown at the terminal with its prompt and accepted verdicts; pick one and optionally add a multi-line note (end with a line containing only `.`) that is recorded as steering. Without `--approve`, run it and answer the gate when it reaches you. `modes` marks a person's gate `(user)`. |
 | `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. When a headless run reaches a user gate, it prints the exact `refactory steer --run <dir> --verdict <gate>=<value>` and `refactory graph-control resume --run <dir>` commands. Without it the run is live — step progress prints as it happens during each turn, and a line you type between turns reaches the CEO. |
-| `--timeout <seconds>` | bound the interactive graph process, including authoring; 0 supplies no separate wait limit. An explicit shared elapsed allocation can impose a shorter deadline. |
+| `--timeout <seconds>` | bound the interactive graph process, including authoring; 0 supplies no separate wait limit. An explicit shared elapsed allocation can impose a shorter deadline. The walker's mains, which never wait at a gate, refuse it and name `--max-elapsed-s`. |
+
+The walker's mains (`python -m refactory_dsh.design | create | edit`, below) take these same
+run flags, and turn them into the same knobs, route and limits. A flag only for running a
+named mode (`--intent`, `--source`, `--source-format`) is refused by an authoring run, which
+takes its brief as its intent; it used to be dropped.
 
 Fast Create and Design use one strategist, coder and QA agent sequentially. Fast
 Design works where Design works, but has no approval gate, so it opens no pull
@@ -231,16 +239,32 @@ python -m refactory_dsh.edit --mode <pkg>/<mode> --name <n>
 
 ### Common flags
 
+The walker's mains take `refactory ceo`'s run flags, spelled and parsed the same way
+(`run_flags`): `--name`, `--check`, `--knob`, `--workdir`, `--target` and the other
+worktree and delivery flags, `--worker-backend`, `--effort`, `--permission-mode`,
+`--role-routes`, `--node-routes`, `--model-timeout`, the resource limits, `--provider`,
+`--model` and `--approve`. A run started either way gets the same knobs and route.
+
 | flag | what it does |
 |---|---|
 | `--brief <text>` | what to build (required for design and create when not resuming) |
-| `--resume <dir>` | continue a stopped run; no other arguments needed |
-| `--verdict <gate>=<value>` | answer a user gate (repeatable) |
-| `--model <id>` | model id for this run |
-| `--provider <route>` | provider route |
-| `--model-timeout <s>` | seconds one completion may take |
-| `--workdir <dir>` | the run directory |
-| `--attempts <n>` | how many repair cycles |
+| `--resume <dir>` | continue a stopped run; no other arguments needed, and any flag that would change the run is refused |
+| `--acknowledge-failure` | with `--resume`: go on from a failed boundary, or one whose last node's outcome is unknown, once you have inspected it; what it left that the run cannot vouch for is set aside first |
+| `--approve <gate>=<value>` | answer a user gate up front (repeatable); `--verdict` is an alias |
+| `--attempts <n>` | an alias of the mode's attempts knob: `check_attempts` (design), `attempts` (create, edit), `repair_attempts` (the `_fast` modes) |
+
+The walker never waits at a gate, so it refuses `--timeout` and names `--max-elapsed-s`.
+An authoring run takes its brief as its intent, so both commands refuse `--intent` and
+`--source`. A knob a mode does not declare (`--repair-attempts` on design, `--check` on
+create) is refused by name, on both.
+
+### Resume
+
+A resume is checked as the spine's is: a stopped gate, a halt or a boundary between
+nodes goes on; a failed boundary, or one stopped mid-node, needs `--acknowledge-failure`;
+and a run whose declared inputs or outputs, or prepared configuration, changed since is
+refused (`input/output 'design.md' changed; dependent results need explicit
+invalidation`). A run is resumed by the main that started it.
 
 ### Gate flow
 

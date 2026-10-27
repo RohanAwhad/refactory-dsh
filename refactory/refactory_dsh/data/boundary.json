@@ -95,6 +95,7 @@
     "refactory_dsh.readable",
     "refactory_dsh.replay_harness",
     "refactory_dsh.repo_change",
+    "refactory_dsh.run_flags",
     "refactory_dsh.tools.check_recipes",
     "refactory_dsh.tools.export_design_graph",
     "refactory_dsh.tools.gen_api_reference",

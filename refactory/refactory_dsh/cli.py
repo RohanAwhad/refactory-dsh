@@ -32,6 +32,9 @@ import sys
 from pathlib import Path
 
 from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
+# One spelling of a run's flags for every command that starts one (dm-134); kept here by
+# name for the callers that read them from this module.
+from refactory_dsh.run_flags import DELIVERY_FLAGS, slug  # noqa: F401
 
 #: The authoring modes, by the verb a person names them with.
 AUTHORING: dict[str, str] = {
@@ -54,16 +57,6 @@ PACKAGE_VERBS: tuple[str, ...] = (
     "list", "show", "verify", "smoke", "tools", "add", "import", "remove", "enable", "disable",
 )
 
-#: The flags that say how a design run is delivered (#350). design_fast, which has no
-#: approval gate, takes none of them.
-DELIVERY_FLAGS: tuple[str, ...] = ("--no-pr", "--refine", "--review-comments")
-
-
-def slug(text: str, *, words: int = 3) -> str:
-    """A name for what was asked for, when the asker did not give one."""
-    kept = [part for part in re.findall(r"[a-z0-9]+", text.lower()) if part]
-    name = "_".join(kept[:words]) or "new_mode"
-    return f"pkg_{name}" if name[0].isdigit() else name[:40]
 
 
 def _forward(module: str, argv: list[str]) -> int:
@@ -86,6 +79,8 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
     are forwarded only when the target actually names a mode. An option nobody gave
     is left out, so the interactive defaults are the ones that apply.
     """
+    from refactory_dsh import run_flags
+
     forwarded = [identifier]
     if args.intent:
         forwarded += ["--intent", str(args.intent)]
@@ -105,42 +100,14 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
         forwarded += ["--provider", str(args.provider)]
     if args.model:
         forwarded += ["--model", str(args.model)]
-    if getattr(args, 'model_timeout_s', None) is not None:
-        forwarded += ["--model-timeout", str(args.model_timeout_s)]
-    for key in ("worker_backend", "effort", "permission_mode", "max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
-        value = getattr(args, key, None)
-        if value is not None and value != "":
-            forwarded += ["--" + key.replace("_", "-"), str(value)]
-    if args.headless:
-        forwarded += ["--headless"]
-    return forwarded
+    return forwarded + run_flags.interactive_options(args)
 
 
 def _worktree_knobs(args: argparse.Namespace, *, deliver: bool = True) -> list[str]:
     """`--target`, `--base`, `--no-worktree`, `--setup`, `--generate` and, with ``deliver``, delivery's, as knobs."""
-    knobs = []
-    if args.target:
-        # Absolute, because the run resolves it from its own directory, not this shell's.
-        knobs.append(f"target={Path(args.target).expanduser().resolve()}")
-    if args.base:
-        knobs.append(f"base={args.base}")
-    if args.no_worktree:
-        knobs.append("worktree=0")
-    if args.setup:
-        knobs.append(f"setup={args.setup}")
-    if args.generate:
-        knobs.append(f"generate={args.generate}")
-    if not deliver:
-        return knobs
-    if args.no_pr:
-        knobs.append("pr=0")
-    if args.refine:
-        knobs.append(f"refine={args.refine}")
-    if args.review_comments:
-        knobs.append("review_comments=1")
-    if getattr(args, "refine_design", None):
-        knobs.append(f"refine_design={args.refine_design}")
-    return knobs
+    from refactory_dsh.run_flags import worktree_knobs
+
+    return worktree_knobs(args, deliver=deliver)
 
 
 def _names_a_mode(text: str) -> bool:
@@ -167,59 +134,35 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     `--mode` says what to do about it. That is the whole contract, and it is why the
     default is `design`: the headline case is "I have an idea", not "I have a mode".
     """
+    from refactory_dsh import run_flags
+
     target = str(args.what)
     mode = str(args.mode or "")
-    # A flag a mode would ignore is refused, not dropped: the person meant it.
-    located = [flag for flag, given in (("--target", args.target), ("--base", args.base),
-                                        ("--no-worktree", args.no_worktree), ("--setup", args.setup),
-                                        ("--generate", args.generate),
-                                        ("--no-pr", args.no_pr), ("--refine", args.refine),
-                                        ("--review-comments", args.review_comments)) if given]
-    in_worktree = [flag for flag in located if flag not in ("--no-worktree", "--no-pr")]
-    if args.no_worktree and in_worktree:
-        print(
-            f"refactory: --no-worktree cannot take {', '.join(in_worktree)}: without a worktree the "
-            "artifact is written under .factory/artifacts",
-            file=sys.stderr,
-        )
-        return 2
-    if args.refine and args.base:
-        print("refactory: --refine starts from the pull request's head, so it takes no --base", file=sys.stderr)
-        return 2
-    if args.review_comments and not args.refine:
-        print("refactory: --review-comments goes with --refine: they are the pull request's comments",
-              file=sys.stderr)
-        return 2
-    if getattr(args, "refine_design", None) and not args.refine:
-        print("refactory: --refine-design goes with --refine: it says how a refine designs its change",
-              file=sys.stderr)
-        return 2
-    model_timeout_s = getattr(args, 'model_timeout_s', None)
-    if model_timeout_s is not None and not (1 <= model_timeout_s <= 7200):
-        print(
-            f"refactory: --model-timeout must be between 1 and 7200 seconds, got {model_timeout_s}",
-            file=sys.stderr,
-        )
-        return 2
     runs_a_mode = "/" in mode if mode else _names_a_mode(target)
-    # A named mode takes them as its knobs; one that does not declare them refuses them by name.
-    args.knob = [*_worktree_knobs(args), *args.knob] if runs_a_mode else args.knob
-    if runs_a_mode and not mode:
-        return _forward("refactory_dsh.interactive", _run_argv(target, args))
-
-    if mode == "" or mode == "design":
-        identifier, authoring = AUTHORING["design"], "design"
-    elif mode in AUTHORING:
-        identifier, authoring = AUTHORING[mode], mode
-    elif "/" in mode:
-        return _forward("refactory_dsh.interactive", _run_argv(mode, args))
-    else:
-        print(
-            f"refactory: --mode {mode!r} is not one of "
-            f"{', '.join(sorted(AUTHORING))} or <package>/<mode>",
-            file=sys.stderr,
-        )
+    identifier, authoring = "", ""
+    if not runs_a_mode:
+        if mode == "" or mode == "design":
+            identifier, authoring = AUTHORING["design"], "design"
+        elif mode in AUTHORING:
+            identifier, authoring = AUTHORING[mode], mode
+        else:
+            print(
+                f"refactory: --mode {mode!r} is not one of "
+                f"{', '.join(sorted(AUTHORING))} or <package>/<mode>",
+                file=sys.stderr,
+            )
+            return 2
+    # A flag a run would ignore is refused, not dropped: the person meant it. The walker's
+    # mains refuse the same flags with the same messages (`run_flags`, dm-134).
+    problem = run_flags.refusal(args, identifier or None, runtime=run_flags.SPINE,
+                                label=f"--mode {mode or 'design'}")
+    if problem:
+        print(problem, file=sys.stderr)
         return 2
+    if runs_a_mode:
+        # A named mode takes them as its knobs; one that does not declare them refuses them by name.
+        args.knob = run_flags.knobs(args, None, name=args.name, revision=args.revise)
+        return _forward("refactory_dsh.interactive", _run_argv(mode or target, args))
 
     from refactory_dsh.brief_guard import require_brief
     try:
@@ -246,32 +189,6 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         )
         return 2
 
-    if located and identifier not in (AUTHORING["design"], AUTHORING["design_fast"]):
-        print(
-            f"refactory: --mode {mode} does not take {', '.join(located)}: only --mode design and "
-            "design_fast work in a worktree of their target",
-            file=sys.stderr,
-        )
-        return 2
-    if identifier == AUTHORING["design_fast"]:
-        delivered = [flag for flag in located if flag in DELIVERY_FLAGS]
-        if delivered:
-            print(
-                f"refactory: --mode {mode} does not take {', '.join(delivered)}: it has no approval "
-                "gate, so it opens no pull request, and its work stays on the run's branch",
-                file=sys.stderr,
-            )
-            return 2
-        placed = [flag for flag in located if flag in ("--target", "--base", "--setup", "--generate")]
-        if args.source_project and placed:
-            print(
-                f"refactory: --source-project cannot take {', '.join(placed)}: it copies a directory "
-                "into the artifact, and they place the run in a worktree of a repository instead",
-                file=sys.stderr,
-            )
-            return 2
-
-    knobs = [f"brief={target}", f"name={args.name or slug(target)}"]
     if authoring == "create" and not args.revise:
         # The mode refuses this at its own first node, which is a profile boot later; a
         # directive nobody gave is worth saying in milliseconds instead.
@@ -281,22 +198,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         if not args.task_ref and not args.single_shot and not ({"task_ref", "single_shot"} & given):
             print(f"refactory: {CREATION_DIRECTIVE}", file=sys.stderr)
             return 2
-        if args.task_ref:
-            knobs.append(f"task_ref={args.task_ref}")
-        if args.single_shot:
-            knobs.append("single_shot=1")
-    if check:
-        knobs.append(f"check={check}")
-    if getattr(args, "repair_attempts", None) is not None:
-        knobs.append(f"repair_attempts={args.repair_attempts}")
-    if getattr(args, "source_project", ""):
-        knobs.append(f"source_project={args.source_project}")
-    if identifier in (AUTHORING["design"], AUTHORING["design_fast"]):
-        knobs.extend(_worktree_knobs(args, deliver=identifier == AUTHORING["design"]))
-    if args.revise:
-        knobs.append(f"revision_of={args.revise}")
-    # Last, so a person's own setting wins over the one derived from the flags above.
-    knobs.extend(str(pair) for pair in args.knob)
+    knobs = run_flags.knobs(args, identifier, brief=target, name=args.name or slug(target), revision=args.revise)
     forwarded = [identifier, "--intent", target]
     if args.timeout:
         forwarded += ["--timeout", str(args.timeout)]
@@ -312,14 +214,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     # with nobody sitting there, and it is an explicit act rather than a default.
     for pair in args.verdict:
         forwarded += ["--approve", pair]
-    if getattr(args, 'model_timeout_s', None) is not None:
-        forwarded += ["--model-timeout", str(args.model_timeout_s)]
-    for key in ("worker_backend", "effort", "permission_mode", "max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
-        value = getattr(args, key, None)
-        if value is not None and value != "":
-            forwarded += ["--" + key.replace("_", "-"), str(value)]
-    if args.headless:
-        forwarded += ["--headless"]
+    forwarded += run_flags.interactive_options(args)
     first = target.split('\n', 1)[0]
     short = first[:80] + '…' if len(first) > 80 else first
     print(f"refactory: {authoring} — {short}", file=sys.stderr)
@@ -601,8 +496,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode", default="",
         help="design (the default), create, edit, their _fast variants, or <package>/<mode>",
     )
-    ceo.add_argument("--name", default="", help="the package or artifact name (default: from what you said)")
-    ceo.add_argument("--check", default="", help="required for design; optional focused check for create_fast/edit_fast")
     ceo.add_argument("--revise", default="", metavar="PKG/MODE", help="edit only: the mode to revise")
     ceo.add_argument(
         "--task", default="", metavar="TASK_REF", dest="task_ref",
@@ -615,90 +508,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="create only: build a harness for one run of one thing, with no Task "
              "binding; one of --task or --single is required",
     )
-    ceo.add_argument(
-        "--knob", action="append", default=[], metavar="NAME=VALUE",
-        help="set one of the authoring mode's knobs for this run, e.g. allow_regression=1",
-    )
-    ceo.add_argument("--workdir", default="", help="the run directory")
-    ceo.add_argument("--repair-attempts", type=int, default=None)
-    ceo.add_argument("--source-project", default="",
-                     help="design_fast only: copy this directory into the artifact directory and apply "
-                          "the change there, instead of working in a worktree")
-    ceo.add_argument("--target", default="", metavar="REPO",
-                     help="design and design_fast: the git repository to change; the run works in a "
-                          "worktree of it on its own branch (default: a new project in ~/refactory-projects)")
-    ceo.add_argument("--base", default="",
-                     help="design and design_fast: the commit, branch or tag to start from")
-    ceo.add_argument("--no-worktree", action="store_true",
-                     help="design and design_fast: write the artifact under .factory/artifacts instead "
-                          "of a worktree")
-    ceo.add_argument("--setup", default="",
-                     help="design and design_fast: a command run in the worktree before each check, "
-                          "such as a build")
-    from refactory_dsh import repo_change as _rc
-    ceo.add_argument("--generate", default="",
-                     help="design and design_fast: " + _rc.knobs()["generate"].description)
-    ceo.add_argument("--no-pr", action="store_true",
-                     help="design only: keep the work on the run's local branch instead of opening a pull "
-                          "request once the reviews pass")
-    ceo.add_argument("--refine", default="", metavar="PR",
-                     help="design only: follow up an open pull request (its URL or owner/repo#number); the "
-                          "run starts from its branch and updates it")
-    ceo.add_argument("--review-comments", action="store_true",
-                     help="design only, with --refine: add the pull request's reviews and comments to the "
-                          "run's steering")
-    ceo.add_argument("--refine-design", default=None, choices=["light", "full"],
-                     help="design only, with --refine: light (default) skips research and strategy; "
-                          "full walks the whole design phase")
-    for key in ("worker_backend", "effort", "permission_mode"):
-        ceo.add_argument("--" + key.replace("_", "-"), default="")
-    ceo.add_argument(
-        "--model-timeout", type=int, default=None, dest="model_timeout_s",
-        help="seconds one model completion may take before it is called hung "
-             "(default: 1800); sets the per-completion limit for every agent step",
-    )
-    for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
-        ceo.add_argument("--" + key.replace("_", "-"), type=int if "tokens" in key else float, default=None)
-    ceo.add_argument(
-        "--provider", default="",
-        help="provider route for this run's model (default: the settings default)",
-    )
-    ceo.add_argument(
-        "--model", default="",
-        help="model id for this run, e.g. deepseek-v4-pro (default: the settings default)",
-    )
-    ceo.add_argument(
-        "--approve", dest="verdict", action="append", default=[], metavar="GATE=VALUE",
-        help="answer a gate up front, e.g. gate_strategy=proceed, for a run with nobody "
-             "sitting at it; a gate a person would be asked at is theirs, so run without "
-             "this and answer it, or drive the mode node by node with wf_open",
-    )
-    ceo.add_argument(
-        "--intent", default="",
-        help="run a mode: what this run is for, in your words; authored runs take the "
-             "brief itself as the intent",
-    )
-    ceo.add_argument(
-        "--source", default="", metavar="PATH",
-        help="run a mode: read the items from here instead of the source the mode "
-             "declares, so a harness built for a class of work is pointed at items it "
-             "has not seen",
-    )
-    ceo.add_argument(
-        "--source-format", default="", choices=["", "directory", "jsonl", "csv"],
-        help="run a mode: how to read --source (default: a directory of one item per "
-             "subdirectory)",
-    )
-    ceo.add_argument(
-        "--timeout", type=int, default=0,
-        help="run a mode: seconds to wait at a gate; 0 waits for you",
-    )
-    ceo.add_argument(
-        "--headless", action="store_true", default=False,
-        help="run without a conversation: one task, one report, then exit, for scripts "
-             "and CI; without it the run is live and a line you type between turns "
-             "reaches the CEO",
-    )
+    # Every other flag is a run's, spelled as the walker's mains spell it (dm-134).
+    from refactory_dsh import run_flags
+    run_flags.add_arguments(ceo)
 
     optimize = sub.add_parser("optimize", help="search a mode's architecture and knobs")
     optimize.add_argument("mode", help="the mode, as <package>/<name>")
