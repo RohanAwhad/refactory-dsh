@@ -130,8 +130,18 @@ did, and it produced real bugs.
 
 ### The two runtimes must agree
 
-The walker is a debug runtime; DSH ships. `tests/test_equivalence.py` runs the
-same mode both ways and compares the score.
+The walker is a debug runtime; DSH ships. Two tests run the same thing both ways:
+
+- `tests/test_equivalence.py` runs a deterministic mode on the walker and on a real DSH
+  session and compares the score and facts (`--run-integration`, real model calls).
+- `tests/test_runtime_equivalence.py` runs one scripted design run (a gate answered with
+  a correction, a self-check fix-up, the reviews, a pull request) through each runtime's
+  real entry point, and compares visits, verdicts, facts, run files, prompts, model routes,
+  commits and the delivery.
+
+Its known differences are named parity gaps (`GAPS`), each a strict xfail. When you
+close one, remove it from `SCENARIO_GAPS` in the same change; a difference that no gap
+explains fails the test.
 
 - If you change the executor, change nothing that makes a node behave differently
   on DSH. The lowering in `lowering.py` is the seam, and `refactory_dsh/ir.py` owns
