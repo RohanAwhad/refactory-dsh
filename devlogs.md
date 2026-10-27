@@ -87,6 +87,27 @@ the run and `refactory status --follow` stayed healthy. Three causes stacked:
   269,900 rows): the logic is covered by tests; the human checks are still open.
 - `pnpm build` for the browser bundle was not run (`tsc -b` covers types).
 
+**Continuation, 2026-10-27 — the three disclosed gaps closed**
+
+- **A real `collectBytes` overflow now has a permanent test.** The first pass proved truncation
+  only with a fake reader and a fake console; the end-to-end probe had failed because it built
+  `Console` without a subprocess-providing context. Using the `LocalSubprocessRuntime` harness
+  `service-live.spec.ts` already had, a real console subprocess with `collectBytes: 2048` now
+  answers `refactory/console-truncated` naming the cap, and does not say "printed no JSON".
+  Mutation-proven: disabling the `lossy` branch makes it fail with `console-failed`, which is
+  exactly the reported symptom.
+- **`pnpm build` was red, and this change caused it.** `gen_api_reference --check` reported
+  `refactory/docs/api/reference.md` stale because `console.status` gained the two paging
+  parameters. §12's gates included `gen_discovery --check` but not `gen_api_reference --check`
+  or `pnpm build`, so a stale generated artifact passed the whole first loop. Regenerated the
+  four generated files (reviewed; lowering snapshots unchanged) and the build is green.
+  **Gate lesson: a generated-artifact gate that is not in the done-gates is not a gate.**
+- **Panel gestures are now asserted, not just screenshotted.** Clicking the level radio moves
+  `standard` → `compact`; scrolling a whole window moves the drawn rows from 0–199 to 200–399
+  while still drawing exactly 200; the scroll container is `N × 24 px` (120,000 px at 5,000);
+  compact keeps the history control and drops the outputs disclosure. The *feel* of virtual
+  scrolling and the sub-pixel thumb at 269,900 records remain genuine human checks.
+
 **Future work**
 
 - `readStatusStream` is declared but not populated: the panel reaches paged status

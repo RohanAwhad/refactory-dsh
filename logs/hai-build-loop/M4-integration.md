@@ -126,3 +126,95 @@ is pre-existing and environment-dependent, not introduced here.
 **Conclusion: no failure set introduced by INT-001.** Every module in scope is either unchanged,
 strictly better, or has an identical pre-existing failure set. The 93-vs-23 spread is load
 sensitivity in probe/cleanup tests measured on a host running concurrent builds, not a regression.
+
+---
+
+# Continuation (2026-10-27): the three unverified items, closed
+
+The loop was restarted against the same execution tree (worktree verified, `source_changes: []`,
+`.hai/state.yaml` unchanged at `6dbab33c…`, spec unchanged at revision 6 `ad48b753…`). All three
+items the first pass disclosed as unproven were closed rather than re-reported.
+
+## Item 1 — a REAL `collectBytes` overflow (was: not proven end-to-end) — CLOSED
+
+The earlier attempts failed because the probe constructed `Console` without a context that
+provides a subprocess service. The correct harness is the one `service-live.spec.ts` already
+uses: a `Context` with `LocalSubprocessRuntime`, then the service over it.
+
+Added as a **permanent** test in `packages/refactory/refactory-console/tests/service-live.spec.ts`
+(a one-off probe was not kept):
+`it('names a real capped payload as truncation, not as missing JSON')` — a real console
+subprocess over a 400-record journal with `collectBytes: 2048`.
+
+Observed (real process, not a fake reader):
+```
+code:    refactory/console-truncated
+message: the console's output was truncated at the 2048-byte collection cap before it
+         printed JSON (only 2048 bytes were retained); raise collectBytes or page the read
+         <exact argv>
+details: { capBytes: 2048, retainedBytes: 2048, argv: [...] }
+says "printed no JSON": NO
+```
+
+**Mutation-proven**: setting `if (false && read.lossy)` in `console.ts:355` makes exactly this
+test fail with `expected 'refactory/console-failed' to be 'refactory/console-truncated'` —
+i.e. it reproduces the reported issue's symptom — and the suite returns to 10 passed after the
+source is restored byte-identically.
+
+## Item 3 — `pnpm build` (was: not run) — CLOSED, and it exposed a real gate gap
+
+Running it failed first:
+```
+gen-api-reference: refactory/docs/api/reference.md is stale
+[ELIFECYCLE] Command failed with exit code 1.
+```
+
+**Root cause: this change caused it.** `console.status` gained `activity_after`/`activity_limit`,
+so the generated API reference was stale. The spec's §12 gates included
+`gen_discovery --check` but **not** `gen_api_reference --check` or `pnpm build`, so a stale
+generated artifact shipped green through the entire first pass. That is a gate gap, not a doc nit.
+
+Regenerated with `pnpm run docs:generate` and reviewed the diff:
+- `refactory/docs/api/reference.md` — `status` signature gains `activity_after`/`activity_limit`
+- `refactory/docs/tutorial.html` — the `status` action text now names the two flags
+- `refactory/refactory_dsh/data/documentation.json`, `packages/refactory/tool-refactory/src/generated-help.ts` — the generated help/docs identity
+- lowering snapshots and the design-graph fixture: **unchanged**
+
+Then `pnpm build` → **exit 0** (`docs:check` + `typecheck` + both `tsdown` faces, including
+`@deepseek-ai/dsh-client-ui-refactory/client` at 231.98 kB). `pnpm run docs:check` → exit 0.
+
+**Recommendation for the spec:** §12 should include `pnpm run docs:check` (or `pnpm build`) in
+the gate list. Left as a recorded finding rather than silently amended into the accepted spec.
+
+## Item 2 — browser-level panel checks (was: deferred to a human) — CLOSED as far as automation can
+
+The first pass screenshotted static states. This pass drove the real gestures through the real
+component and asserted the outcomes:
+
+| Gesture | Method | Observed | Result |
+|---|---|---|---|
+| Switch level by clicking the radio | `fireEvent.click` on the real `<input type="radio">` | `standard` → `compact`; 3 radios `compact,standard,verbose` | pass |
+| Scroll a whole window in verbose | set `scrollTop = 24 × 200`, `fireEvent.scroll` | drawn rows move **0–199 → 200–399**, still exactly **200** rows | pass |
+| Scroll container spans history at N=5,000 | read `style.height` | **120,000 px** (`5000 × 24`) | pass |
+| Compact keeps history reachable (DEC-001) | render at `compact` | history disclosure **present**, "Load earlier activity" **present** | pass |
+| Compact hides outputs (R-2 table) | render at `compact` | `[data-refactory-activity-outputs]` **absent** | pass |
+
+Still a **genuine human check**, not claimed by automation: the *feel* of virtual scrolling in the
+running GUI, and the sub-pixel scrollbar thumb on a 269,900-record run.
+
+## Gates after the continuation (all re-run on this tree)
+| Gate | Result |
+|---|---|
+| 1 state valid | unchanged `6dbab33c…`, valid |
+| 2 python ×4 | **129 passed** |
+| 3 observer | **pass 1 / fail 0** |
+| 4 vitest | **19 files / 367 tests passed** (was 366; +1 real-overflow test) |
+| 5 typecheck | exit 0 |
+| 6 discovery | exit 0 |
+| 7 bounded activity page | 1 passed |
+| **8 `pnpm build`** | **exit 0** (new: `docs:check` green) |
+
+## Cleanup
+- Throwaway probes removed (`zz-cap-probe.spec.ts`, `zz-interact.probe.spec.tsx`); only the
+  permanent test in `service-live.spec.ts` remains. `git status` shows 5 intentional files.
+- Mutations reverted with `diff -q` proof; `lib/` build output is gitignored.
