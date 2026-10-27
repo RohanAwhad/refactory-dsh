@@ -602,6 +602,9 @@ def test_a_judge_that_still_fails_is_a_warning_on_record_never_everything_built(
     assert "also when it was asked again" in record["judge"]["problem"]
     assert "refactory: run warning: the early asks judge failed" in capfd.readouterr().err
     assert len(_judged(model)) == 2 and len(_emits(model)) == 1
+    # The walker records the raising judge's error as the spine's worker does, so the
+    # judge asked again is told why (#517 follow-up).
+    assert "(the judge failed: RuntimeError: the judge's session ended)" in _judged(model)[1]
 
 
 def test_the_judges_limits_never_end_the_run_however_often_the_pair_is_used(tmp_path, monkeypatch):
@@ -620,6 +623,88 @@ def test_the_judges_limits_never_end_the_run_however_often_the_pair_is_used(tmp_
     assert outcomes == ["fixup", "exhausted"] * 3
     assert len(_judged(model)) == 6  # asked twice an attempt: the pair was used again and again
 
+
+
+# ── dm-276: past the fix-up budget, not-built items alone go on to the reviews ──
+
+#: #517's probe P18: a judge that keeps finding the helper not built.
+NEVER_BUILT = [early_asks_judgment(BUILT, not_built(HELPER))] * 6
+
+
+def test_past_the_fixup_budget_unbuilt_asks_alone_go_on_to_the_reviews(tmp_path, monkeypatch):
+    """P18: no fix-up budget, a judge that keeps answering not built, every test passing.
+    The attempt goes on to the reviews with the not-built items listed for the QA judge and
+    the overwatch (both read the synthesis), instead of spending attempts unreviewed and
+    delivering a draft marked check failing."""
+    T._Chunks(monkeypatch, fails=set())
+    model = FakeModel(T._answers(CLEAN), early_asks=list(NEVER_BUILT))
+    run = tmp_path / "run"
+    result = T._design(run, model, T._target(tmp_path / "repo", PINNED),
+                       T._mode(self_check_fixups=0), brief=TWO_ASKS)
+    assert result.exit_ok, result.error
+    [record] = T._records(run)
+    assert record["outcome"] == "pass" and record["failing_ids"] == []
+    assert record["not_built_to_reviews"] == "0 of 0 fix-ups used on this attempt"
+    assert len(_emits(model)) == 1 and T._count(model, T.HEALTH) == 1
+    assert not result.facts.get("draft_delivery") and not result.facts.get("attempts_used")
+    synthesis = (run / "reviews/qa-synthesized.md").read_text()
+    section = synthesis.split("## Asks and corrections not built", 1)[1]
+    assert f"- (ask) {HELPER}" in section and "judge each one" in section
+    for judge in ("You are the QA judge.", "You are the overwatch."):
+        assert any(judge in prompt and "reviews/qa-synthesized.md" in prompt for prompt in model.prompts)
+
+
+def test_on_the_spine_past_the_budget_unbuilt_asks_go_on_and_failing_tests_still_stop(
+        tmp_path, monkeypatch):
+    """The same on the spine, node by node: gate_self_check proceeds and synthesize_qa lists
+    the items. Failing tests past the budget keep the early stop, the items with them."""
+    T._Chunks(monkeypatch, fails=set())
+    run = T._spine_run(T._target(tmp_path / "repo", PINNED), tmp_path, monkeypatch, "abcdef700060",
+                       self_check_fixups=0)
+    T._emit(run, CLEAN, monkeypatch)
+    code, out, err = T._prepare(run, monkeypatch, judge=NEVER_BUILT[0])
+    assert code == 0 and T._label(out) == "proceed", err
+    [record] = T._records(run)
+    assert record["outcome"] == "pass" and record["not_built_to_reviews"]
+    code, _, err = T._node(run, f"{design_ops.__name__}:synthesize_qa", "synthesize_qa", "op",
+                           monkeypatch)
+    assert code == 0, err
+    assert f"- (ask) {HELPER}" in (run / "reviews/qa-synthesized.md").read_text().split(
+        "## Asks and corrections not built", 1)[1]
+
+    T._Chunks(monkeypatch, fails={PIN})
+    failing = T._spine_run(T._target(tmp_path / "repo2", PINNED), tmp_path / "f", monkeypatch,
+                           "abcdef700061", self_check_fixups=0)
+    T._emit(failing, BREAKS, monkeypatch)
+    code, out, err = T._prepare(failing, monkeypatch, judge=NEVER_BUILT[0])
+    assert code == 0 and T._label(out) != "proceed", err
+    [record] = T._records(failing)
+    assert record["outcome"] == "exhausted" and "not_built_to_reviews" not in record
+    assert HELPER in T._facts(failing)["validation"]
+
+
+def test_a_new_attempts_first_self_check_clears_the_last_attempts_judge_verdict(tmp_path, monkeypatch):
+    """#517's M33: an early-asks.json an earlier attempt's judge left is set aside before
+    the fork, so a judge that writes nothing this time is never read as the old verdict."""
+    T._Chunks(monkeypatch, fails=set())
+    run = T._spine_run(T._target(tmp_path / "repo", PINNED), tmp_path, monkeypatch, "abcdef700062")
+    T._emit(run, CLEAN, monkeypatch)
+    (run / design_ops.EARLY_ASKS_VERDICT).write_text(early_asks_judgment(BUILT))
+    code, out, err = T._node(run, f"{design_ops.__name__}:prepare_check", "prepare_check", "gate",
+                             monkeypatch)
+    assert code == 0 and T._label(out) == "first", err
+    assert not (run / design_ops.EARLY_ASKS_VERDICT).exists()
+
+
+@pytest.mark.parametrize("said", ["**Updated tests:** `{line}`", "**Updated tests**: {line}",
+                                  "> _Updated tests:_ **{line}**"])
+def test_markdown_around_the_updated_tests_line_is_not_part_of_the_test_id(tmp_path, monkeypatch, said):
+    T._Chunks(monkeypatch, fails=set())
+    line = "tests/test_pin.py::test_pin (follows ask 1)"
+    model = _Builder(T._answers(CLEAN), [f"Done.\n{said.format(line=line)}\n"])
+    result = T._design(tmp_path / "run", model, T._target(tmp_path / "repo", PINNED))
+    assert result.exit_ok, result.error
+    assert result.facts["updated_tests"] == f"- {line}"
 
 
 # ── the judge on the spine: an agent node the worker dispatches ───────────────

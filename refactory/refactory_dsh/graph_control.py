@@ -23,6 +23,10 @@ _OWNER_EXIT_TIMEOUT = 3.0
 #: `refused` at a user gate); its owner exits after printing the next commands.
 OWNER_STOPPED = frozenset({'done', 'halted', 'failed', 'refused', 'cancelled'})
 
+#: Stopped checkpoint statuses recovery accepts, which acknowledge also takes when a
+#: dispatched worker's pending marker is what keeps recovery from them (dm-275).
+STOPPED_WITH_MARKERS = frozenset({'ready', 'halted'})
+
 
 def request(root: Path, action: str, *, node: str = '', text: str = '', revision: str = '',
             acknowledge_failure: bool = False,
@@ -298,16 +302,30 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     Pending delivery markers and outputs whose fingerprints differ from the
     checkpoint's recorded fingerprints are set aside under
     .refactory/set-aside/<timestamp>/.
+
+    A stopped checkpoint (``ready`` or ``halted``) is acknowledged too when a
+    dispatched worker's pending marker is all that keeps recovery from it (dm-275):
+    a stop during an agent node ends the worker, and the spine records the failed
+    node as retryable (``ready``) while the marker stays. A stop control still queued
+    for the owner that died is set aside with the markers: the run already stopped,
+    and the owner a later resume starts would otherwise apply it as if the person
+    had just asked (dm-244).
     """
     import fcntl
     from refactory_dsh.run_state import is_alive as _is_alive
     from refactory_dsh.recovery import fingerprint as _fp
 
-    # 1. Verify checkpoint is executing, failed, or paused
-    if saved.get('status') not in ('executing', 'failed', 'paused'):
+    # 1. Verify checkpoint is executing, failed or paused, or stopped with an
+    #    unknown worker outcome
+    pending_dir = root / '.refactory/agent-delivery/pending'
+    pending_markers = sorted(pending_dir.glob('*.json')) if pending_dir.is_dir() else []
+    status = saved.get('status')
+    if status not in ('executing', 'failed', 'paused') and not (
+            status in STOPPED_WITH_MARKERS and pending_markers):
         raise ValueError(
-            f"checkpoint status is {saved.get('status')!r}; "
-            "acknowledge applies to an executing, failed, or paused checkpoint whose owner died"
+            f"checkpoint status is {status!r}; "
+            "acknowledge applies to an executing, failed, or paused checkpoint whose owner died, "
+            "or a stopped (ready or halted) one that left a dispatched worker's outcome unknown"
         )
 
     # 2. Verify owner is dead
@@ -341,17 +359,38 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     manifest_files: list[dict[str, Any]] = []
 
     # Move pending delivery markers
-    pending_dir = root / '.refactory/agent-delivery/pending'
-    if pending_dir.is_dir():
-        for pending_file in sorted(pending_dir.glob('*.json')):
-            dest = set_aside_dir / 'pending' / pending_file.name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            pending_file.rename(dest)
-            manifest_files.append({
-                'original_path': str(pending_file.relative_to(root)),
-                'set_aside_path': str(dest.relative_to(root)),
-                'size': dest.stat().st_size,
-            })
+    for pending_file in pending_markers:
+        dest = set_aside_dir / 'pending' / pending_file.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        pending_file.rename(dest)
+        manifest_files.append({
+            'original_path': str(pending_file.relative_to(root)),
+            'set_aside_path': str(dest.relative_to(root)),
+            'size': dest.stat().st_size,
+        })
+
+    # Move stop controls queued for the owner that died: the run is stopped already.
+    controls_dir = root / '.refactory/graph-controls'
+    withdrawn_stops: list[str] = []
+    for control in sorted(controls_dir.glob('*.json')) if controls_dir.is_dir() else []:
+        try:
+            queued = json.loads(control.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(queued, dict) or queued.get('action') != 'stop':
+            continue
+        dest = set_aside_dir / 'graph-controls' / control.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        control.rename(dest)
+        withdrawn_stops.append(control.stem)
+        manifest_files.append({
+            'original_path': str(control.relative_to(root)),
+            'set_aside_path': str(dest.relative_to(root)),
+            'size': dest.stat().st_size,
+        })
+    for control_id in withdrawn_stops:
+        emit(root, 'control_requested', state='withdrawn',
+             summary=f'stop {control_id} withdrawn: the run stopped before its owner applied it')
 
     # Move outputs whose fingerprint differs from the checkpoint's recorded one.
     # This restores the filesystem to the state the fingerprints describe, so
@@ -401,9 +440,9 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
         request_data['acknowledge_failed'] = True
     elif checkpoint_status == 'executing':
         request_data['acknowledge_executing'] = True
-    # For paused checkpoints: only checkpoint_sha256 is needed — paused is
-    # already in the allowed set for recovery.prepare() and restoreRequested()
-    # clears pause_before for any status.
+    # For paused, ready and halted checkpoints: only checkpoint_sha256 is needed —
+    # they are already in the allowed set for recovery.prepare(), and
+    # restoreRequested() clears pause_before for any status.
     tmp = request_path.with_suffix('.tmp')
     tmp.write_text(json.dumps(request_data))
     tmp.replace(request_path)
@@ -420,8 +459,12 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
         'checkpoint_status_before': checkpoint_status,
         'set_aside': str(set_aside_dir.relative_to(root)),
         'files': manifest_files,
+        'withdrawn_controls': withdrawn_stops,
         'message': f'Checkpoint ({checkpoint_status}) acknowledged; {len(manifest_files)} file(s) set aside under '
-                   f'{set_aside_dir.name}. Run "refactory graph-control resume" to continue.',
+                   f'{set_aside_dir.name}'
+                   + (f', including {len(withdrawn_stops)} queued stop(s) the run no longer needs'
+                      if withdrawn_stops else '')
+                   + '. Run "refactory graph-control resume" to continue.',
     }
 
 

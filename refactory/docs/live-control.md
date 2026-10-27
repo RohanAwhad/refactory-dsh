@@ -257,7 +257,7 @@ retried with the new one, without anyone editing the checkpoint.
 Follow with `refactory graph-control resume --run /absolute/run` to start a new
 owner. For a failed checkpoint, add `--acknowledge-failure` to the amend-command.
 
-### Acknowledge an executing, failed or paused checkpoint
+### Acknowledge an executing, failed, paused or stopped checkpoint
 
 When the owner dies while nodes are running, the checkpoint stays `executing`.
 When a run is stopped during an agent node, the checkpoint may be `failed` with
@@ -295,6 +295,18 @@ and the acknowledgement carries only the checkpoint's SHA, since a pause needs
 no failure acknowledged. An optional fork branch that is recorded missing, a
 verifier past its time limit say, settles its own marker on both runtimes, so
 that case no longer needs it.
+
+A stop during a dispatched agent node ends its worker, and the spine records the
+failed node as retryable: the checkpoint is `ready` (or `halted`), the worker's
+marker stays pending, and recovery refuses it (dm-275). Acknowledge takes such a
+stopped checkpoint when a pending marker is there, the same way, with only the
+checkpoint's SHA; a stopped checkpoint with nothing pending has nothing to
+acknowledge and is refused. A `stop` still queued for the owner that exited is set
+aside with the markers and journalled as withdrawn: the run already stopped, and
+the owner `resume` starts would otherwise apply it and halt again. So
+`stop`, `acknowledge`, `resume` continues the run with no file moved by hand. The
+walker has no graph controls: `graph-control` refuses a run without a spine
+checkpoint.
 
 Acknowledge refuses while the owner or the supervisor is alive. When the
 supervisor stops on the dm-70 refusal, `start-failure.json` and
