@@ -23,6 +23,14 @@ from refactory_dsh.design_ops import (EARLY_ASKS_JUDGE_MARK, EARLY_ASKS_VERDICT,
 
 OPS = "refactory_dsh.design_ops"
 
+#: The recovery every report-writing agent of design mode declares (`Node.retry`): a
+#: session that times out is run once more, fresh, with twice the limit. Remote-factory's
+#: CEO did this by judgment; here it is the graph's rule, on both runtimes, and the CEO
+#: never decides it. Each node that declares it writes only its own report files
+#: (`outputs_only`), which are set aside before the retry writes them afresh. The builder
+#: (`emit`) and `apply_corrections` change what later steps build on, and declare none.
+TIMEOUT_RETRY = {"on": ["timeout"], "times": 1, "timeout_factor": 2}
+
 #: Design mode's verifier runs beside the check, in the review fork.
 BESIDE_CHECK_VERIFIER_NOTE = (
     "\n\n## The check runs beside this review\n"
@@ -387,6 +395,7 @@ class DesignMode(Mode):
         # ── design-v2's head: research, perspectives, then the design itself ──
         graph.add(Node(
             "research_director", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=(
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
                 "It will be checked by running, from {{check_root}}:\n"
@@ -457,6 +466,7 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "pitfalls_researcher", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=(
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
                 "Repository: {{source}}\n\n"
@@ -520,6 +530,7 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "strategy_director", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=(
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
                 "It is built in {{source}}; read what is there before choosing.\n\n"
@@ -546,6 +557,7 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "synthesize_strategy", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=(
                 "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\n"
                 "The check, run from {{check_root}}:\n    {{check}}\n\n"
@@ -764,6 +776,7 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "early_asks_check", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=EARLY_ASKS_PROMPT,
             reads=("brief.json", "changes.diff"),
             writes=(EARLY_ASKS_VERDICT,),
@@ -806,11 +819,12 @@ class DesignMode(Mode):
         ))
 
         # ── design-v2's three reviews, in parallel, and the overwatch pass ──
-        from refactory_dsh.verification import VERIFIER_PROMPT, VERIFIER_TIMEOUT_S
+        from refactory_dsh.verification import DESIGN_VERIFIER_TIMEOUT_S, VERIFIER_PROMPT
         graph.add(Node(
             "verifier", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=VERIFIER_PROMPT + BESIDE_CHECK_VERIFIER_NOTE,
-            timeout_s=VERIFIER_TIMEOUT_S,
+            timeout_s=DESIGN_VERIFIER_TIMEOUT_S,
             # Not test-guardedness.json: the check beside it writes that file.
             reads=("brief.json", "changes.diff"),
             writes=("reviews/verification.md",),
@@ -827,6 +841,7 @@ class DesignMode(Mode):
                        notes="start the three reviews, the verifier and the check"))
         graph.add(Node(
             "health_checker", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=(
                 "Artifact directory (absolute): {{artifact}}\n"
                 "Read and run the delivered files at this exact path; do not infer it "
@@ -852,6 +867,7 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "code_reviewer", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=(
                 "## Pitfalls\n{{pitfalls}}\n\n"
                 "Check the built change against every high-risk pitfall. A high pitfall "
@@ -890,6 +906,7 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "qa_director", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=(
                 "Artifact directory (absolute): {{artifact}}\n"
                 "Read and run the delivered files at this exact path; do not infer it "
@@ -936,6 +953,7 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "qa_judge", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=QA_JUDGE_PROMPT,
             # Not reviews/verification.md: the verifier is optional, and a declared input
             # must exist on the spine. The synthesis carries its report when it gave one.
@@ -970,6 +988,7 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "overwatch", "agent",
+            retry=TIMEOUT_RETRY, outputs_only=True,
             prompt_template=OVERWATCH_PROMPT,
             # Not qa-judge.json, intent-audit.json or correction-audit.json: a declared input
             # must exist on the spine, and a QA judge or a correction audit a person skipped

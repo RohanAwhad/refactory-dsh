@@ -75,7 +75,7 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
                 }}
         except Exception:
             pass
-    from refactory_dsh.agent_delivery import begin, finish, _path
+    from refactory_dsh.agent_delivery import _path
     from refactory_dsh.model import DshModelClient
     if spec.get('schema_version') != 1:
         raise ValueError('unsupported worker spec version')
@@ -116,10 +116,15 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
     # The reloop's feedback once: after rendering, so a template that renders the gate's
     # reason already carries it (`with_feedback`).
     from refactory_dsh.agent_delivery import with_feedback
-    delivery = begin(workdir, node, with_feedback(render(prompt, context), feedback), spec['writes'],
-                     reads=spec['reads'], model_context=client.context())
-    output = client.complete(delivery['prompt'], workdir=workdir)
-    receipt = finish(workdir, node, final_response=output, capture_final=client.route()["worker_backend"] == "dsh")
+    # The delivery bracket and the node's declared retry, as the walker runs them.
+    from refactory_dsh.node_retry import base_wall_s, deliver
+    output, receipt = deliver(
+        workdir, node, prompt=with_feedback(render(prompt, context), feedback),
+        writes=spec['writes'], reads=spec['reads'], client=client,
+        ask=lambda attempt, sent: attempt.complete(sent, workdir=workdir),
+        capture_final=client.route()["worker_backend"] == "dsh", rule=spec.get('retry'),
+        base_s=base_wall_s(spec['model_context'].get('node_wall_s'), spec['model_context']),
+        budget=getattr(client, '_budget', None))
     for check in spec.get('post_checks', []):
         artifact = _path(workdir, check['path'])
         if check.get('must_exist', True) and not artifact.exists():

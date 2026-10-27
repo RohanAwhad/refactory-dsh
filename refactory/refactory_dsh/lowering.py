@@ -116,6 +116,8 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
             }
         if node.feedback_keys:
             entry["feedback_keys"] = list(node.feedback_keys)
+        if node.retry is not None:
+            entry["retry"] = {**node.retry, "on": list(node.retry["on"])}
         declarations[node_id] = entry
     return declarations
 
@@ -264,6 +266,11 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 # dispatched session this bound and the command it plus the dispatch
                 # overhead; the walker gives its model client the same bound.
                 **({"timeout": node.timeout_s} if node.timeout_s is not None else {}),
+                # The node's declared recovery: `workers.lower_workflow` reserves the
+                # spine's envelope for every attempt and hands the rule to the worker,
+                # which runs it (`node_retry.deliver`), as the walker does.
+                **({"retry": {**node.retry, "on": list(node.retry["on"])}}
+                   if node.retry is not None else {}),
             )
 
     edges = [
