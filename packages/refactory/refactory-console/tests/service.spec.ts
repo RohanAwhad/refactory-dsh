@@ -953,4 +953,54 @@ describe('refactoryConsole — the console boundary', () => {
       '--activity-after', '4', '--activity-limit', '200',
     ])
   })
+
+  it('carries the progress cursor and the activity cursor separately (R-4.3)', async () => {
+    // T-16 (R-4.3, SD-9): the two cursors index different files and never derive
+    // from one another. An optimizer run writes progress.jsonl *and* a journal, and
+    // the journal cursor runs far ahead of the progress line count, so advancing
+    // `--after` from the activity cursor makes the console answer an empty progress
+    // delta for every frame after the first. Each flag must advance from the answer
+    // that belongs to its own file: `--after` from the progress `cursor`,
+    // `--activity-after` from `activity.cursor`.
+    const { service, subprocess } = await setup()
+    const progressAsked: string[] = []
+    const activityAsked: string[] = []
+    const original = subprocess.spawn.bind(subprocess)
+    subprocess.spawn = (spec: SubprocessSpawnSpec): SubprocessHandle => {
+      if (spec.argv.includes('status')) {
+        const after = spec.argv[spec.argv.indexOf('--after') + 1] ?? ''
+        const activityAt = spec.argv[spec.argv.indexOf('--activity-after') + 1] ?? ''
+        progressAsked.push(after)
+        activityAsked.push(activityAt)
+        subprocess.script = [{
+          stdout: JSON.stringify({
+            ...FRAME,
+            // The progress file has 3 lines, so its cursor stops at 3 while the
+            // journal's cursor keeps climbing — exactly the mismatch R-4.3 names.
+            cursor: 3,
+            events: [{ at: '2026-10-26T09:00:00+00:00', kind: 'progress' }],
+            activity: {
+              cursor: Number(activityAt) + 40, total: 500, has_more: true, events: [{ kind: 'worker_event' }], outputs: {},
+            },
+          }),
+        }]
+      } else {
+        subprocess.script = [{
+          stdout: JSON.stringify({ run: 'live', entries: [], constraints: [], verdicts: {}, gates: [], problems: [] }),
+        }]
+      }
+      return original(spec)
+    }
+    const controller = new AbortController()
+    const cursors: (number | undefined)[] = []
+    for await (const frame of service.watchStream('live', 0, controller.signal)) {
+      cursors.push(frame.status.activity?.cursor)
+      if (cursors.length === 2) controller.abort()
+    }
+    // The journal advances 0 → 40. The progress cursor is 3 on both polls: it is
+    // advanced from the progress answer, never from the journal's 40.
+    expect(activityAsked).toEqual(['0', '40'])
+    expect(progressAsked).toEqual(['0', '3'])
+    expect(cursors).toEqual([40, 80])
+  })
 })

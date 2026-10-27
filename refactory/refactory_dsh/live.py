@@ -24,6 +24,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,10 @@ _STRIDE_LINE = (len(b'{"s":') + 10 + len(b',"g":[') + STRIDE * 9 + (STRIDE - 1)
 
 #: Records one activity page carries by default, and the most it may carry.
 PAGE_DEFAULT, PAGE_MAX = 200, 1000
+
+#: Distinguishes two temp files one writer publishes in the same process, so a
+#: PID alone cannot collide and every temp is private to one publish.
+_PUBLISH_SERIAL = count()
 
 #: A gap record is what a malformed complete line becomes; it has no `at`.
 _GAP_SUMMARY = 'An incomplete or malformed activity record could not be recovered.'
@@ -310,13 +315,25 @@ def _rebuild(root: Path, journal: Path, size: int) -> _Coverage:
 def _write(root: Path, journal: Path, coverage: _Coverage, fresh: list[bytes]) -> None:
     """Publish the derived files; the journal itself is never written here.
 
-    Each new index line is one complete line written through a descriptor opened
-    O_APPEND, and the overview and provenance are each written to a temporary file
-    and renamed, so a reader racing a builder sees a whole number of lines and an
-    anchor that is either the previous version or this one. Lines this coverage
-    did not produce (a torn tail, another journal's lines) are cut away first.
-    A run directory a reader may not write to is not an error: the index is an
-    optimisation, so the answer already computed is still the answer.
+    The index append is an in-place truncate-then-write through a descriptor opened
+    without O_APPEND: lines this coverage did not produce (a torn tail, another
+    journal's lines) are cut away, then the new complete lines are written at that
+    offset. There is deliberately no O_APPEND here — an append cannot cut a torn
+    tail. What keeps two racing builders consistent is that a record's byte offset
+    in the journal never changes once written (DEC-001 forbids in-place journal
+    rewrites), so any builder's coverage of the same journal prefix yields the same
+    stride lines at the same offsets. The overview and provenance are each written
+    to a temporary file and renamed, so a reader racing a builder sees a whole
+    number of lines and an anchor that is either the previous version or this one.
+
+    Each temporary is per-writer (PID + a per-process counter), so no two
+    publishes share an inode: every concurrent reader is also a writer of these
+    derived files, and a fixed temp name would let two builders truncate the same
+    file mid-flight and publish a torn one. The reader re-parses and rejects a
+    torn pair, so a collision is not silent corruption — it is a forced full
+    O(N) rebuild, the whole scan this index exists to avoid. A run directory a
+    reader may not write to is not an error: the index is an optimisation, so the
+    answer already computed is still the answer.
     """
     index = root / INDEX
     link = _link(journal)
@@ -336,11 +353,33 @@ def _write(root: Path, journal: Path, coverage: _Coverage, fresh: list[bytes]) -
         finally:
             os.close(fd)
         for name, value in ((OVERVIEW, overview), (PROVENANCE, anchor)):
-            temp = root / (name.name + '.tmp')
-            temp.write_text(json.dumps(value, sort_keys=True) + '\n')
-            os.replace(temp, root / name)
+            _publish(root, name, value)
     except OSError:
+        # Best-effort by contract: the answer already computed stands, and the next
+        # reader rebuilds. A lost temp-file race is benign (the winner publishes the
+        # same content); a real error (permissions, disk full) leaves every later
+        # reader on the slow path rather than wrong.
         return
+
+
+def _publish(root: Path, name: Path, value: dict[str, Any]) -> None:
+    """Write one derived JSON file atomically, through a temp private to this writer.
+
+    The name carries the PID and a per-process serial, so no two publishes — in
+    this process or another — ever share an inode, and nothing here truncates
+    another writer's in-flight bytes. There is deliberately no ``O_EXCL``: a temp
+    left by a crashed writer (or a recycled PID) would then make every later
+    publish fail with ``FileExistsError``, wedging the index for the run forever.
+    A unique name needs no exclusivity — the file is this writer's alone, and the
+    ``finally`` removes it whatever happens, including a lost ``os.replace``.
+    """
+    payload = json.dumps(value, sort_keys=True) + '\n'
+    temp = root / f'{name.name}.{os.getpid()}.{next(_PUBLISH_SERIAL)}.tmp'
+    try:
+        temp.write_text(payload)
+        os.replace(temp, root / name)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _extend(root: Path, journal: Path, size: int) -> _Coverage:
@@ -443,6 +482,12 @@ def page(root: Path, *, after: int = 0, limit: int = PAGE_DEFAULT) -> dict[str, 
     `total` and `last_event_at` come from the overview line, and the page seeks to
     the stride that holds `after`, so a reader that polls pays for its page and
     the suffix appended since — never for the history behind it.
+
+    `after` past the journal's end is not caller error: it answers an empty page,
+    and the cursor is clamped back to `total` so a returned cursor never points
+    beyond the records that exist (R-1.3 leaves this open; a caller trusting
+    `cursor <= total` would otherwise be surprised by 5000 on a 1,100-record
+    journal). `has_more` stays `false` either way.
     """
     if after < 0:
         raise ValueError('event cursor must be nonnegative')
@@ -451,9 +496,10 @@ def page(root: Path, *, after: int = 0, limit: int = PAGE_DEFAULT) -> dict[str, 
     try:
         size = journal.stat().st_size
     except FileNotFoundError:
-        return {'events': [], 'after': after, 'cursor': after, 'total': 0, 'page_size': limit,
+        return {'events': [], 'after': after, 'cursor': 0, 'total': 0, 'page_size': limit,
                 'has_more': False, 'last_event_at': None}
     coverage = _extend(root, journal, size)
+    cursor_end = min(after, coverage.total)
     events: list[dict[str, Any]] = []
     if after < coverage.total:
         # A missing or unreadable index line is answered by the journal, never by
@@ -463,7 +509,7 @@ def page(root: Path, *, after: int = 0, limit: int = PAGE_DEFAULT) -> dict[str, 
             coverage = _rebuild(root, journal, size)
             lines = _lines(root, coverage, after, limit) or []
         if not lines:      # a journal that moved while it was read serves no page
-            return {'events': [], 'after': after, 'cursor': after, 'total': coverage.total,
+            return {'events': [], 'after': after, 'cursor': cursor_end, 'total': coverage.total,
                     'page_size': limit, 'has_more': after < coverage.total,
                     'last_event_at': coverage.last_at}
         with journal.open('rb') as handle:
@@ -473,7 +519,7 @@ def page(root: Path, *, after: int = 0, limit: int = PAGE_DEFAULT) -> dict[str, 
                 # the index has no line for it, so the page ends before it.
                 if line.endswith(b'\n') and line.strip():
                     events.append(_record(root, line))
-    cursor = after + len(events)
+    cursor = min(cursor_end + len(events), coverage.total)
     return {'events': events, 'after': after, 'cursor': cursor, 'total': coverage.total,
             'page_size': limit, 'has_more': cursor < coverage.total,
             'last_event_at': coverage.last_at}

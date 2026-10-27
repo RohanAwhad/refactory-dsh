@@ -601,24 +601,28 @@ export class RefactoryConsole extends TypertRemoteService {
   /**
    * Where one run is, and what is new since the reader last looked.
    *
-   * The caller's `after` feeds two cursors with one number. They index different
-   * files and never derive from one another, so both flags travel — `--after` for
-   * progress, and the same index as `--activity-after` so a poll continues the
-   * journal where the last answer left it instead of re-reading it from 0. The
-   * page size is this service's own choice, passed explicitly, so the console's
-   * clamp stays a safety net rather than the policy owner.
+   * The two cursors index different files and never derive from one another
+   * (R-4.3), so they travel as two flags: `--after` for the progress delta and
+   * `--activity-after` for the journal page. `activityAfter` defaults to `after`
+   * so a first reader still gets a journal page seeded from where it stopped,
+   * but a streaming caller passes its own journal cursor — feeding the journal
+   * index into `--after` would drive the progress delta off a count that can
+   * exceed the progress file and empty `events` for the whole stream. The page
+   * size is this service's own choice, passed explicitly, so the console's clamp
+   * stays a safety net rather than the policy owner.
    * @param run - the run id or absolute run directory.
-   * @param after - the cursor the caller has already read, in both files.
+   * @param after - the progress cursor the caller has already read.
    * @param signal - caller cancellation.
+   * @param activityAfter - the journal cursor to page from; defaults to `after`.
    * @returns the run's state, the new events, and the offset for the next look.
    */
   @Remote
-  async status(run: string, after: number, signal: AbortSignal): Promise<RefactoryRunStatus> {
+  async status(run: string, after: number, signal: AbortSignal, activityAfter: number = after): Promise<RefactoryRunStatus> {
     const addressed = this.runAddress(run)
     const answer = objectOf(
       await this.call({
         verb: 'status',
-        options: { run: addressed, after, 'activity-after': after, 'activity-limit': ACTIVITY_PAGE },
+        options: { run: addressed, after, 'activity-after': activityAfter, 'activity-limit': ACTIVITY_PAGE },
       }, signal),
       'run status',
     )
@@ -651,11 +655,14 @@ export class RefactoryConsole extends TypertRemoteService {
   /**
    * Stream persisted changes; closing this reader never cancels its run.
    *
-   * The journal cursor is the stream's own state, not the caller's: the caller
-   * hands one `after` to start from, and every later poll continues from the
-   * cursor the last frame answered with. Re-sending the caller's `after` would
-   * re-read the journal from the same index on every poll, which is the whole
-   * cost this paging exists to remove — and a reset to 0 mid-stream would splice
+   * The two cursors are the stream's own state, not the caller's: the caller
+   * hands one `after` to start from, and every later poll advances each cursor
+   * from the answer that reported it — the progress delta from `status.cursor`,
+   * the journal page from `status.activity.cursor`. They index different files
+   * and never derive from one another (R-4.3), so advancing one from the other
+   * would re-read the journal from the same index on every poll — the whole cost
+   * this paging exists to remove — or drive the progress delta off a journal
+   * count the progress file need not reach. A reset to 0 mid-stream would splice
    * the same records onto the history twice.
    * @param run - the run id or absolute run directory.
    * @param after - the cursor the caller's history already reaches.
@@ -665,12 +672,14 @@ export class RefactoryConsole extends TypertRemoteService {
   @Remote({ mode: 'stream' })
   async *watchStream(run: string, after: number, signal: AbortSignal): AsyncGenerator<RefactoryWatchFrame> {
     let previous = ''
+    let progressAfter = after
     let activityAfter = after
     while (!signal.aborted) {
-      const status = await this.status(run, activityAfter, signal)
+      const status = await this.status(run, progressAfter, signal, activityAfter)
       const steering = await this.steer({ run }, signal)
-      // Advance before yielding, so a frame's own cursor is what this poll asked
-      // for rather than a value the next poll has already moved past.
+      // Advance before yielding, so a frame's own cursors are what this poll asked
+      // for rather than values the next poll has already moved past.
+      progressAfter = status.cursor
       activityAfter = status.activity?.cursor ?? activityAfter
       const frame = { status, steering }
       const encoded = JSON.stringify(frame)

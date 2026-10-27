@@ -1634,24 +1634,45 @@ but must stay green).
 
 ## 12. Done gates
 
-Objective and executable. Run each from the worktree root unless marked. Every
-gate uses this worktree's own `.venv`.
+Objective and executable, and runnable in any checkout: every command is
+worktree-relative and resolves this worktree's own `.venv`, so the block runs
+verbatim in a CI runner as well as on the machine that built it. Export the
+worktree root once and the gates follow it:
 
-1. State still valid:
-   `cd /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity && node .hai-validate.mjs .hai/state.yaml`
-   → prints `valid: …`, exit 0.
+```sh
+cd "$(git rev-parse --show-toplevel)"
+```
+
+1. Branch and merge state: the branch carries this PR's commits and the branch
+   is not behind `main`.
+   ```sh
+   git fetch origin main && test "$(git rev-list --count HEAD..origin/main)" = 0
+   ```
+   → exit 0. (This replaces the pre-PR gate on `.hai/state.yaml`: that file is
+   not on this branch, so a command naming it could not run, and the merge-state
+   check is what a reviewer actually needs to know before reading the diff.)
 2. Python activity/journal suite:
-   `cd /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity/refactory && /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity/.venv/bin/python -m pytest tests/test_live_activity.py tests/test_gui_loop.py tests/test_observe.py tests/test_console_projects.py -q`
-   → all pass (T-1…T-8, T-10, T-24, T-25, T-26).
+   ```sh
+   cd refactory && ../.venv/bin/python -m pytest tests/test_live_activity.py tests/test_gui_loop.py tests/test_observe.py tests/test_console_projects.py -q
+   ```
+   → all pass (T-1…T-8, T-10, T-24, T-25, T-26, T-27, T-28).
+   A shell that exports `DSH_HOME` (a developer's DSH session) must clear it
+   first — `env -u DSH_HOME -u DSH_PROFILE -u DSH_PROFILE_DIR -u DSH_SHELL -u DSH_SESSION_ID -u DSH_WEB_URL` —
+   because the suite's seal treats the operator's real DSH home as off-limits
+   and fails the run that reaches it. CI has none of these and needs nothing.
 3. Observer suite:
-   `cd /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity/refactory && node --test tests/worker_observer_test.mjs`
+   ```sh
+   cd refactory && node --test tests/worker_observer_test.mjs
+   ```
    → all pass (T-9).
 4. Boundary + service + panel unit suites (including the live service spec,
    which now has a `.venv` to run against):
-   `cd /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity && pnpm vitest run packages/refactory/refactory-console/tests packages/refactory/tool-refactory/tests packages/client/ui-refactory/tests packages/bundle/refactory-web/tests`
+   ```sh
+   pnpm vitest run packages/refactory/refactory-console/tests packages/refactory/tool-refactory/tests packages/client/ui-refactory/tests packages/bundle/refactory-web/tests
+   ```
    → all pass (T-11…T-23a and T-18b, plus the existing panel/bundle suites and both
    `service.spec.ts` and `service-live.spec.ts`).
-5. Typecheck: `cd /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity && pnpm typecheck` → exit 0.
+5. Typecheck: `pnpm typecheck` → exit 0.
 6. Generated discovery docs stay current: the checked-in generated output
    (whatever `gen_discovery` writes under `refactory_dsh/data/`) matches what
    the code generates now, so the diff the build leaves behind is intentional
@@ -1667,7 +1688,8 @@ gate uses this worktree's own `.venv`.
    regenerates it has done nothing wrong. The flags are a console contract
    (R-1.1), not a discovery-surface promise: this spec adds no new discovery
    guarantee.
-   `cd /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity && .venv/bin/python -m refactory_dsh.tools.gen_discovery --check` → exit 0. Regenerate with `pnpm run docs:generate` and review the diff.
+   `.venv/bin/python -m refactory_dsh.tools.gen_discovery --check` (from the
+   worktree root) → exit 0. Regenerate with `pnpm run docs:generate` and review the diff.
 7. **Bounded activity page, executable.** One pytest case in
    `refactory/tests/test_live_activity.py` named
    **`test_bounded_activity_page`**. It builds a
@@ -1695,8 +1717,8 @@ gate uses this worktree's own `.venv`.
    about `has_more` is R-1.4's identity, never a fixed `true`/`false` per
    `after`; revision 4's reading of the gap case — `has_more` "true at
    `after == 400`" — contradicted R-1.4 on that very page, which is the round 5
-   correction. Command:
-   `cd /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity/refactory && /Users/rawhad/3_Resources/external_libs/refactory-dsh/.hai-worktrees/INT-001-activity-verbosity/.venv/bin/python -m pytest tests/test_live_activity.py -q -k test_bounded_activity_page`
+   correction. Command (from the worktree root):
+   `cd refactory && ../.venv/bin/python -m pytest tests/test_live_activity.py -q -k test_bounded_activity_page`
    → 1 passed, exit 0. **This gate is red until built**: the baseline can never
    pass it (`console.py:552` calls `live.snapshot(run_root)` with no cursor, so
    `events` is the whole journal; `console.py:1380-1392` has no
@@ -2099,3 +2121,19 @@ change is required *by the amendment*; the one code observation these passes
 produced (S7's blank line at `live.py:393-394`) is a style nit recorded for the
 build loop, not a conformance gap. Every rule the amendment writes was verified by
 execution against the uncommitted `live.py` (see the `M1-4` row and §7.2 SD-3).
+
+**Round 7 — post-review corrections to shipped behaviour, and §12 made runnable
+anywhere.** An independent code review of head `7ce4e33d` returned
+`needs_changes` with eleven action items. Two of them were spec defects, and they
+are corrected here; the rest are code, and the code now conforms rather than the
+spec bending:
+
+| Item | What changed |
+|---|---|
+| **R-4.3 was violated by the code, not by the spec** | `status()` fed one `after` to both `--after` and `--activity-after`, and `watchStream` advanced that number from the *journal* cursor, so on an optimizer run the journal index drove the progress delta and the streamed `status.events` emptied once it exceeded the progress file's length. The spec was right and unchanged; §6 already shows `status(run, after, activityAfter)` with `--activity-after: afterActivity`. The service now carries the two cursors separately, and `status` takes the journal cursor as an explicit argument defaulting to `after` for a first reader — no new Remote method, so SD-9 still holds. |
+| **§12 gates 1–7 hardcoded absolute worktree paths, and gate 1 tested a file not on this branch** | the gate block is now worktree-relative (`cd "$(git rev-parse --show-toplevel)"`, `cd refactory && ../.venv/bin/python …`) so it runs verbatim in any checkout including a CI runner. Gate 1 no longer names `.hai/state.yaml` (absent from the branch, so unexecutable); it asserts what a reviewer needs — the branch carries these commits and is not behind `main`. Gates 2 and 7 also record the `DSH_HOME` clearing a developer shell needs, since the suite's seal fails a run that reaches the operator's real DSH home. |
+| Gate 2's test roster | now lists T-27 and T-28, the two cases this round added. |
+
+Nothing in R-1…R-7 changed: the contract this document states was already correct
+on every point the review raised, and the corrections are in the gates (§12) and
+in the code, not in the requirements.

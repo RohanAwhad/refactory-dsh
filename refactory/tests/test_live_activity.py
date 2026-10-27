@@ -1303,3 +1303,129 @@ def test_bounded_activity_page(tmp_path):
     with (tmp_path / live.EVENTS).open('ab') as handle:
         handle.write(b'{"half":')
     assert _status(tmp_path)['activity']['total'] == 402
+
+
+def test_builders_racing_a_live_writer_never_publish_a_torn_pair(tmp_path):
+    """T-27: builders racing a live writer publish whole pairs, and leave no temp.
+
+    §4.6 gives most of its text to concurrent builders, and T-26 races two of them
+    against a torn line already on disk. What it does not exercise is builders
+    running *while* a writer appends — the state the overview and provenance
+    publishes race in. Every reader is also a writer of those two derived files,
+    and one fixed temp name let two of them open the same inode: the loser's
+    truncate landed mid-flight, so a half-written `events.index.overview.json` (or
+    a pair from two different coverages) could be renamed into place.
+
+    Correctness survived that — the reader re-parses and rejects a torn pair — so
+    what a test has to catch is the torn write itself, which forces every racing
+    reader onto the full O(N) rebuild this index exists to remove. A per-writer
+    `O_EXCL` temp is what this asserts: a concurrent watcher never sees a derived
+    file that is not a complete JSON object, the answers still equal a full scan,
+    and no publish temp outlives its writer.
+    """
+    live.emit(tmp_path, 'seed')
+    directory = tmp_path / '.refactory'
+    script = tmp_path / 'race.py'
+    script.write_text(
+        'import json, sys\n'
+        'from pathlib import Path\n'
+        'from refactory_dsh import live\n'
+        'root = Path(sys.argv[1])\n'
+        'answers = []\n'
+        'for _ in range(1200):\n'
+        '    result = live.snapshot(root)\n'
+        '    answers.append({"total": result["total"], "last_event_at": result["last_event_at"],\n'
+        '                    "summary": live.summary(root)["total"]})\n'
+        'print(json.dumps(answers))\n'
+    )
+
+    def builder() -> subprocess.Popen[str]:
+        return subprocess.Popen([sys.executable, str(script), str(tmp_path)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    # Warm the index so the publishes are what the builders do from their first
+    # poll, not the initial rebuild from an empty run directory.
+    live.snapshot(tmp_path)
+    # Start the builders first, then append while they are still reading, so the
+    # publishes interleave with the writer instead of following it. Eight builders
+    # against 1500 appends is the pressure that makes the collision reproducible:
+    # the fixed-temp code publishes a torn file in roughly two runs out of three,
+    # the per-writer one never does (measured over three runs each).
+    builders = [builder() for _ in range(8)]
+    torn: list[str] = []
+    observed = 0
+    for n in range(1500):
+        live.emit(tmp_path, 'racing', n=n)
+        # Watch the two published files from here, between appends, the way a
+        # second reader would: each must always be one complete JSON object.
+        for name in (live.OVERVIEW, live.PROVENANCE):
+            try:
+                text = (tmp_path / name).read_text()
+            except FileNotFoundError:
+                continue
+            observed += 1
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                torn.append(f'{name.name}: {text[:60]!r}')
+                continue
+            if not isinstance(value, dict):
+                torn.append(f'{name.name}: not an object')
+    for process in builders:
+        out, err = process.communicate()
+        assert process.returncode == 0, err
+        answers = json.loads(out)
+        assert len(answers) == 1200
+        for answer in answers:
+            # A builder reads while the writer appends, so its two reads land on
+            # either side of a different number of appends and neither order is
+            # wrong: `summary()` runs after `snapshot()`, but both re-read the
+            # journal, so either count can be the larger. What must hold is that no
+            # answer invents a count outside the journal's range, and the settled
+            # answer below still matches the full scan.
+            assert 1 <= answer['total'] <= 1501, answer
+            assert 1 <= answer['summary'] <= 1501, answer
+    # The declaration above is only meaningful if the watcher really did overlap:
+    # with no reads there is nothing that could have seen a torn file.
+    assert observed > 0, 'the watcher never overlapped the builders; the race was not exercised'
+    assert torn == [], f'torn derived file published while racing: {torn[:3]}'
+    # The settled answer equals the full scan exactly.
+    expected = _full_scan(tmp_path)
+    settled = live.snapshot(tmp_path)
+    assert (settled['total'], settled['last_event_at']) == (expected['total'], expected['last_event_at'])
+    assert settled['total'] == 1501
+    # No publish temp outlives its writer, under any name.
+    leftovers = [path.name for path in directory.iterdir() if path.name.endswith('.tmp')]
+    assert leftovers == [], leftovers
+
+
+def test_a_cursor_past_the_end_answers_an_empty_page_clamped_to_total(tmp_path):
+    """T-28: `after` beyond the journal never hands back a cursor past `total`.
+
+    R-1.3 defines the cursor as `after + len(events)` and leaves `after > total`
+    open. Serving it literally returned `cursor: 5000` on a 1,100-record journal: a
+    caller trusting `cursor <= total` was surprised, and a page-until-`has_more`
+    loop still terminated but on a number that names no record. The page stays
+    empty and `has_more` stays false; only the cursor is clamped.
+    """
+    _journal(tmp_path, [_record(n=i) for i in range(60)])
+    assert live.summary(tmp_path)['total'] == 60
+
+    beyond = live.page(tmp_path, after=5000, limit=10)
+    assert beyond['events'] == []
+    assert (beyond['cursor'], beyond['total'], beyond['has_more']) == (60, 60, False)
+    # Exactly at the end is the settled case, and it agrees.
+    at_end = live.page(tmp_path, after=60, limit=10)
+    assert at_end['events'] == []
+    assert (at_end['cursor'], at_end['has_more']) == (60, False)
+    # Just short of the end still serves the last record and lands on `total`.
+    last = live.page(tmp_path, after=59, limit=10)
+    assert len(last['events']) == 1
+    assert (last['cursor'], last['has_more']) == (60, False)
+    # A page in the middle is unaffected by the clamp.
+    middle = live.page(tmp_path, after=10, limit=10)
+    assert (middle['cursor'], middle['has_more']) == (20, True)
+    # An empty run directory answers 0 rather than echoing the caller's cursor.
+    empty = tmp_path / 'nothing-here'
+    empty.mkdir()
+    assert live.page(empty, after=99)['cursor'] == 0
