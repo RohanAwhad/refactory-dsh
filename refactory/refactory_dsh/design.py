@@ -24,13 +24,16 @@ from refactory_dsh.design_ops import (CORRECTIONS_PICKED, EARLY_ASKS_JUDGE_MARK,
 
 OPS = "refactory_dsh.design_ops"
 
-#: The verifier's recovery (`Node.retry`): a session that times out is run once more,
+#: The timeout recovery rule (`Node.retry`): a session that times out is run once more,
 #: fresh, with twice its `timeout_s`. Remote-factory's CEO did this by judgment; here it
-#: is the graph's rule, on both runtimes. Only the verifier declares it: across about
-#: 1,900 lab sessions of design's other agents there were no timeouts, so a node is
-#: added when it is seen to time out. A node that declares it writes only its own report
-#: files (`outputs_only`); the builder (`emit`) never can until agent workspaces.
+#: is the graph's rule, on both runtimes. Both the verifier and the builder declare it.
+#: The verifier uses `outputs_only`; the builder uses its workspace, which provides the
+#: same isolation: each attempt gets a fresh workspace via `workspace.dispatched(fresh=True)`.
 TIMEOUT_RETRY = {"on": ["timeout"], "times": 1, "timeout_factor": 2}
+
+#: The builder session limit before its retry: the model default (1800 s), and the
+#: `builder_timeout_s` knob overrides it for a run.
+BUILDER_TIMEOUT_S = 1800
 
 #: Design mode's verifier runs beside the check, in the review fork.
 BESIDE_CHECK_VERIFIER_NOTE = (
@@ -296,6 +299,11 @@ def gate_self_check_iterations(knobs: dict[str, Any]) -> int:
     return (1 + int(knobs.get("judge_rereads", 1))) * prepare_check_iterations(knobs) + 1
 
 
+def builder_timeout(values: dict[str, Any]) -> int:
+    """The builder's session limit, from the knob a person may set."""
+    return int(values.get("builder_timeout_s") or BUILDER_TIMEOUT_S)
+
+
 class DesignMode(Mode):
     """Design, emit and check a software artifact.
 
@@ -364,6 +372,11 @@ class DesignMode(Mode):
                 description="how long the self-check's tests may run before the reviews; "
                             "never more than a third of check_timeout_s",
             ),
+            "builder_timeout_s": Knob(
+                1800, "int", lo=60, hi=7200, frozen=True,
+                description="how long the builder's model session may run before "
+                            "timeout; its retry doubles this",
+            ),
             "refine_design": Knob(
                 "light", "str", values=("light", "full"), frozen=True,
                 description="on a refine: light skips research and strategy; "
@@ -383,6 +396,9 @@ class DesignMode(Mode):
         for name, limit in self._LIMITS.items():
             if name in graph.nodes:
                 graph.nodes[name].max_iterations = limit(self.values())
+        builder = graph.nodes.get("emit")
+        if builder is not None and builder.retry is not None:
+            builder.timeout_s = builder_timeout(self.values())
         return graph
 
     def state_dict(self) -> dict[str, Any]:
@@ -393,6 +409,9 @@ class DesignMode(Mode):
             node = state["graph"].get("nodes", {}).get(name)
             if node is not None:
                 node["max_iterations"] = limit(self.values())
+        node = state["graph"].get("nodes", {}).get("emit")
+        if node is not None and node.get("retry") is not None:
+            node["timeout_s"] = builder_timeout(self.values())
         return state
 
     def build(self) -> Graph:
@@ -736,6 +755,13 @@ class DesignMode(Mode):
             produces=("emit",),
             feedback_keys=("validation", "qa_gate", "overwatch_review"),
             workspace=dict(BUILDER_WORKSPACE),
+            # Behaviour change: emit gains timeout_s and retry, which changes the
+            # candidate id; runs in flight at this commit cannot be resumed.  The
+            # spine reservation for the builder roughly doubles (1800 + 3600 plus
+            # overhead and preparation).
+            timeout_s=builder_timeout(self.values()),
+            retry=TIMEOUT_RETRY,
+            knobs=("builder_timeout_s",),
             notes="make the change in a clone of the last attempt; its diff is the emission",
         ))
         graph.add(repo_change.materialise_node(

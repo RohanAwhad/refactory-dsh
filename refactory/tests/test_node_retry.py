@@ -440,16 +440,39 @@ def test_a_node_that_may_change_shared_state_cannot_declare_a_retry():
     with pytest.raises(GraphError, match="may change shared state"):
         Node("emit", "agent", prompt_template="p", writes=("emit.txt",),
              timeout_s=60).with_field("retry", RULE)
+    # A node with a clone workspace is safe to retry: each attempt gets a fresh clone.
+    # A clone and a scratch folder both keep writes inside the workspace until collect,
+    # and collect runs only after the session returns, so a timed-out attempt contributes nothing.
+    Node("emit", "agent", prompt_template="Build it.", writes=("emit.txt",),
+         timeout_s=60, retry=RULE,
+         workspace={"kind": "clone", "of": "attempt", "collect": "diff"})
+    # A node with a scratch workspace is equally safe: the scratch folder is discarded
+    # on retry just as a clone is, and collect gates the writes the same way.
+    Node("scratch_node", "agent", prompt_template="Scratch it.", writes=("out.txt",),
+         timeout_s=60, retry=RULE,
+         workspace={"kind": "scratch", "collect": "files"})
 
 
-def test_design_mode_retries_only_its_verifier():
-    # Only the node seen to time out declares a retry; a node is added when it is seen to.
+@pytest.mark.parametrize("workspace", [{"kind": "none"}, {}, "none"])
+def test_a_workspace_that_means_none_is_not_isolation(workspace):
+    """The guard reads the workspace in canonical form: a declaration that means "no
+    workspace" is not a fresh attempt, so a retry on it is refused like any other node
+    that may change shared state. Canonicalising below the guard instead lets the raw
+    dict through and the retry is wrongly accepted."""
+    with pytest.raises(GraphError, match="may change shared state"):
+        Node("emit", "agent", prompt_template="Build it.", writes=("emit.txt",),
+             timeout_s=60, retry=RULE, workspace=workspace)
+
+
+def test_design_mode_retries_its_builder_and_verifier():
     from refactory_dsh.design import DesignMode, TIMEOUT_RETRY
 
     graph = DesignMode().build()
-    assert [node.id for node in graph.nodes.values() if node.retry is not None] == ["verifier"]
+    assert [node.id for node in graph.nodes.values() if node.retry is not None] == ["emit", "verifier"]
     assert [node.id for node in graph.nodes.values() if node.outputs_only] == ["verifier"]
     assert graph.nodes["verifier"].retry == TIMEOUT_RETRY == RULE
+    assert graph.nodes["emit"].retry == TIMEOUT_RETRY
+    assert graph.nodes["emit"].timeout_s == 1800
 
 
 def test_other_modes_declare_no_retry():
@@ -460,6 +483,157 @@ def test_other_modes_declare_no_retry():
             continue
         state = mode_cls().state_dict()
         assert all("retry" not in node for node in state["graph"]["nodes"].values()), key
+
+
+# ── builder retry (workspace-based isolation) ────────────────────────────────────
+
+EMIT_FILE = "emit.txt"
+BUILDER_WORKSPACE = {"kind": "clone", "of": "attempt", "collect": "diff"}
+
+
+def _builder_node(**overrides) -> Node:
+    defaults = dict(prompt_template="Build it.", writes=(EMIT_FILE,), timeout_s=2, retry=RULE,
+                    workspace=dict(BUILDER_WORKSPACE))
+    defaults.update(overrides)
+    return Node("emit", "agent", **defaults)
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_a_builder_that_times_out_once_is_retried_and_the_run_continues(tmp_path, runtime, monkeypatch):
+    monkeypatch.setenv("REFACTORY_WORKSPACE_SANDBOX", "unconfined")
+    dsh = Scripted(tmp_path / "dsh", [
+        {"sleep": 30, "write": {EMIT_FILE: "partial build"}},
+        {"write": {EMIT_FILE: "complete build"}, "answer": "done"},
+    ])
+    workdir = tmp_path / "run"
+    if runtime == "spine":
+        from refactory_dsh import worktree
+        from tests_support import git_repo
+        workdir.mkdir()
+        worktree.create(git_repo(tmp_path / "repo"), "HEAD", "0123456789ab", workdir)
+    ok, error = _run(runtime, workdir, _graph(_builder_node()), dsh.client())
+    assert ok, error
+    assert dsh.calls == 2
+    assert "complete build" in (workdir / EMIT_FILE).read_text()
+    [event] = _retried(workdir)
+    assert (event["node_id"], event["attempt"], event["attempts"], event["wall_s"]) == ("emit", 2, 2, 4)
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_a_builders_retry_workspace_holds_none_of_the_first_attempts_edits(tmp_path, runtime, monkeypatch):
+    monkeypatch.setenv("REFACTORY_WORKSPACE_SANDBOX", "unconfined")
+    dsh = Scripted(tmp_path / "dsh", [
+        {"sleep": 30, "write": {EMIT_FILE: "partial", "stale.txt": "first attempt"}},
+        {"fresh": True, "write": {EMIT_FILE: "clean build"}, "answer": "done"},
+    ])
+    workdir = tmp_path / "run"
+    if runtime == "spine":
+        from refactory_dsh import worktree
+        from tests_support import git_repo
+        workdir.mkdir()
+        worktree.create(git_repo(tmp_path / "repo"), "HEAD", "0123456789ab", workdir)
+    ok, error = _run(runtime, workdir, _graph(_builder_node()), dsh.client())
+    assert ok, error
+    assert dsh.calls == 2
+    assert not (workdir / "stale.txt").exists()
+    assert "clean build" in (workdir / EMIT_FILE).read_text()
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_a_builder_that_times_out_twice_stops_with_the_retry_spent_error_naming_both_walls(
+        tmp_path, runtime, monkeypatch):
+    monkeypatch.setenv("REFACTORY_WORKSPACE_SANDBOX", "unconfined")
+    dsh = Scripted(tmp_path / "dsh", [{"sleep": 30}])
+    workdir = tmp_path / "run"
+    if runtime == "spine":
+        from refactory_dsh import worktree
+        from tests_support import git_repo
+        workdir.mkdir()
+        worktree.create(git_repo(tmp_path / "repo"), "HEAD", "0123456789ab", workdir)
+    ok, error = _run(runtime, workdir, _graph(_builder_node(timeout_s=1)), dsh.client())
+    assert not ok
+    assert re.search(r"emit timed out twice \(after [12]s, then [23]s\)", error), error
+    assert dsh.calls == 2
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_a_scratch_declared_node_may_also_retry(tmp_path, runtime, monkeypatch):
+    monkeypatch.setenv("REFACTORY_WORKSPACE_SANDBOX", "unconfined")
+    dsh = Scripted(tmp_path / "dsh", [
+        {"sleep": 30, "write": {"out.txt": "partial"}},
+        {"write": {"out.txt": "scratch done"}, "answer": "done"},
+    ])
+    workdir = tmp_path / "run"
+    node = Node("scratch_node", "agent", prompt_template="Scratch it.", writes=("out.txt",),
+                timeout_s=2, retry=RULE,
+                workspace={"kind": "scratch", "collect": "files"})
+    ok, error = _run(runtime, workdir, _graph(node), dsh.client())
+    assert ok, error
+    assert dsh.calls == 2
+    assert (workdir / "out.txt").read_text().strip() == "scratch done"
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_retry_cannot_outrun_the_run_wall(tmp_path, runtime, monkeypatch):
+    from refactory_dsh.budgets import ResourceLimits, RunBudget
+
+    monkeypatch.setenv("REFACTORY_WORKSPACE_SANDBOX", "unconfined")
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    # Budget of 6 s: the first attempt's 4 s wall takes most of it; the retry wants 8 s
+    # but only ~2 s remain, which is below MIN_RETRY_WALL_S, so the retry is not started.
+    budget = RunBudget.create(workdir, ResourceLimits(max_elapsed_s=6))
+    budget.resume()
+    dsh = Scripted(tmp_path / "dsh", [{"sleep": 60}, {"answer": "never asked"}])
+    if runtime == "spine":
+        from refactory_dsh import worktree
+        from tests_support import git_repo
+        worktree.create(git_repo(tmp_path / "repo"), "HEAD", "0123456789ab", workdir)
+    ok, error = _run(runtime, workdir, _graph(_builder_node(timeout_s=4)), dsh.client(), budget=budget)
+    assert not ok
+    assert "its declared retry was not started" in error
+    assert dsh.calls == 1 and _retried(workdir) == []
+
+
+def test_the_builder_knob_sets_its_timeout_and_both_runtimes_use_it(tmp_path):
+    from refactory_dsh.design import DesignMode, TIMEOUT_RETRY
+    from refactory_dsh.workspace import preparation_budget_s
+
+    # A person's knob, exactly as the run path applies it: the graph is built from the
+    # defaults and the state dict carries the override into both runtimes.
+    from refactory_dsh.interactive import with_knobs
+    mode = DesignMode()
+    loaded = with_knobs(mode.state_dict(), ["builder_timeout_s=600"])
+    mode.load_state_dict(loaded)
+    assert mode.graph().nodes["emit"].timeout_s == 600
+    assert Graph.from_state(mode.state_dict()["graph"]).nodes["emit"].timeout_s == 600
+    graph = mode.graph()
+    state = mode.state_dict()
+    dsh = Scripted(tmp_path / "dsh", []).client()
+    lowered = workers.lower_workflow(lowering.to_workflow(state), tmp_path / "run", dsh.context(),
+                                     lowering.node_declarations(state))
+    check_timeout = state.get("knobs", {}).get("check_timeout_s", {}).get("value")
+    expected = (node_allowance_s(600, TIMEOUT_RETRY) + NODE_DISPATCH_OVERHEAD_S
+                + 2 * preparation_budget_s(graph.nodes["emit"].workspace, check_timeout))
+    assert lowered.nodes["emit"].command_timeout_s == expected
+
+
+def test_walker_and_spine_give_the_builder_the_same_walls(tmp_path):
+    from refactory_dsh.design import DesignMode, TIMEOUT_RETRY
+    from refactory_dsh.workspace import preparation_budget_s
+
+    state = DesignMode().state_dict()
+    graph = Graph.from_state(state["graph"])
+    assert graph.nodes["emit"].timeout_s == 1800
+    assert graph.nodes["emit"].retry == TIMEOUT_RETRY
+    assert attempt_walls(1800, TIMEOUT_RETRY) == [1800, 3600]
+    dsh = Scripted(tmp_path / "dsh", []).client()
+    lowered = workers.lower_workflow(lowering.to_workflow(state), tmp_path / "run", dsh.context(),
+                                     lowering.node_declarations(state))
+    check_timeout = state.get("knobs", {}).get("check_timeout_s", {}).get("value")
+    expected = (node_allowance_s(1800, TIMEOUT_RETRY) + NODE_DISPATCH_OVERHEAD_S
+                + 2 * preparation_budget_s(graph.nodes["emit"].workspace, check_timeout))
+    assert lowered.nodes["emit"].command_timeout_s == expected
 
 
 # ── the pieces both runtimes share ───────────────────────────────────────────────

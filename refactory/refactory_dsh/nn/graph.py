@@ -323,28 +323,6 @@ class Node:
             if rewritten:
                 raise GraphError(f"node {self.id!r} declares outputs_only but reads what it "
                                  f"writes ({rewritten}): its outputs are not its own reports")
-        if self.retry is not None:
-            if self.kind != "agent":
-                raise GraphError(f"node {self.id!r} is not an agent but declares a retry")
-            try:
-                self.retry = retry_declaration(self.retry)
-            except ValueError as exc:
-                raise GraphError(f"node {self.id!r}: {exc}") from exc
-            if self.timeout_s is None:
-                raise GraphError(
-                    f"node {self.id!r} declares a retry but no timeout_s: a retry's limit is "
-                    "its timeout_factor times the node's own bound, so the node needs one")
-            if not self.outputs_only:
-                # A node that may change the run's worktree or the target cannot simply
-                # run again: the second session would start from what the first left.
-                # Agent workspaces (#516) make such a node retryable by giving each
-                # attempt a fresh workspace; until then it declares no retry.
-                raise GraphError(
-                    f"node {self.id!r} declares a retry but may change shared state (the "
-                    "run's worktree or the target), so a second session would start from "
-                    "whatever the first one left. Only a node whose outputs are its own "
-                    "declared report files may retry: declare outputs_only=True if that is "
-                    "all it changes, or give it a workspace once agent workspaces land")
         if self.workspace is not None:
             try:
                 self.workspace = workspace_declaration(self.workspace)
@@ -356,6 +334,33 @@ class Node:
                 raise GraphError(f"node {self.id!r} collects its workspace's diff, which is written "
                                  "into its first declared write, and it declares none")
 
+        if self.retry is not None:
+            if self.kind != "agent":
+                raise GraphError(f"node {self.id!r} is not an agent but declares a retry")
+            try:
+                self.retry = retry_declaration(self.retry)
+            except ValueError as exc:
+                raise GraphError(f"node {self.id!r}: {exc}") from exc
+            if self.timeout_s is None:
+                raise GraphError(
+                    f"node {self.id!r} declares a retry but no timeout_s: a retry's limit is "
+                    "its timeout_factor times the node's own bound, so the node needs one")
+            if not self.outputs_only and self.workspace is None:
+                # A node that may change the run's worktree or the target cannot simply
+                # run again: the second session would start from what the first left.
+                # A node with a workspace is safe: each attempt gets a fresh workspace
+                # via workspace.dispatched(fresh=True), which discards the previous one.
+                # A clone and a scratch folder both keep an attempt's writes inside the
+                # workspace until collect, and collect runs only after the session
+                # returns, so a timed-out attempt contributes nothing. The declaration is
+                # canonical by here, so one that means "no workspace" is None and counts
+                # as none.
+                raise GraphError(
+                    f"node {self.id!r} declares a retry but may change shared state (the "
+                    "run's worktree or the target), so a second session would start from "
+                    "whatever the first one left. Only a node whose outputs are its own "
+                    "declared report files may retry: declare outputs_only=True or give "
+                    "it a workspace")
     @property
     def resource_phase(self) -> str | None:
         """Explicit resource scope, with the historical validator fallback."""
