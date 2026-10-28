@@ -1431,3 +1431,42 @@ def test_a_cursor_past_the_end_answers_an_empty_page_clamped_to_total(tmp_path):
     empty = tmp_path / 'nothing-here'
     empty.mkdir()
     assert live.page(empty, after=99)['cursor'] == 0
+
+
+def test_a_trailing_partial_write_costs_one_publish_then_nothing(tmp_path, monkeypatch):
+    """T-29: a poll tick does not re-index or re-publish a journal that is mid-write.
+
+    A writer appending record-by-record leaves unterminated bytes between its
+    writes. The walk stops at that line, so the covered prefix does not move — but
+    the journal's own size does, and a guard comparing the journal against the
+    *covered prefix* rather than against the size it was measured at rebuilt the
+    whole index on every tick. Every reader polls while a run is live, so that
+    rebuild is the O(N) scan the index exists to avoid, repeated per poll.
+
+    The contract this locks: settling on a trailing partial publishes at most once,
+    and every poll after that neither rebuilds nor rewrites.
+    """
+    live.emit(tmp_path, 'complete')
+    journal = tmp_path / live.EVENTS
+    with journal.open('ab') as handle:
+        handle.write(b'{"kind":"half"')
+    # Settle first: the read that observes the partial publishes once (the covered
+    # prefix is unchanged, but `size_at_write` catches up to what was examined), and
+    # everything after that must be silent.
+    live.summary(tmp_path)
+    live.summary(tmp_path)
+    rebuilds: list[int] = []
+    writes: list[int] = []
+    real_rebuild, real_write = live._rebuild, live._write
+    monkeypatch.setattr(live, '_rebuild', lambda *a, **k: (rebuilds.append(1), real_rebuild(*a, **k))[1])
+    monkeypatch.setattr(live, '_write', lambda *a, **k: (writes.append(1), real_write(*a, **k))[1])
+    for _ in range(10):
+        assert live.summary(tmp_path)['total'] == 1
+        live.page(tmp_path)
+    assert rebuilds == [], f'poll ticks rebuilt the index {len(rebuilds)} times'
+    assert writes == [], f'poll ticks republished the index {len(writes)} times'
+    # The partial is still not a record, and terminating it makes it a counted gap.
+    with journal.open('ab') as handle:
+        handle.write(b'"}\n')
+    assert live.summary(tmp_path)['total'] == 2
+    assert live.events(tmp_path)[1] == 2

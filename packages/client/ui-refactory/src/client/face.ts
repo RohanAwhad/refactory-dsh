@@ -137,6 +137,14 @@ export interface RefactoryControlAct {
 /** The console's default page of journal records: what one read may carry. */
 const ACTIVITY_PAGE = 200
 
+/**
+ * How long the live view waits for the first status read to name the stream's
+ * starting cursor before opening the stream from 0 instead. It matches the budget
+ * the previous fixed tick loop implied (200 × 5 ms), but it bounds only a read
+ * that never settles: a read that answers settles the anchor immediately.
+ */
+const ANCHOR_WAIT_MS = 1000
+
 /** One range of a run's journal to read, as the panel asks for it. */
 export interface RefactoryActivityWindow {
   /** Journal index the page starts at; `0` when `before` is given. */
@@ -595,9 +603,16 @@ export function refactoryFace(
       // below. The stream's cursor is the service's own and only advances, so
       // starting it at 0 would make every poll re-read the journal from the top
       // (F-2) — the read is therefore awaited before the stream opens.
-      const anchored: { through: number | null } = { through: null }
+      //
+      // The wait is a promise the answer settles, not a poll of a shared cell:
+      // a fixed 5 ms × 200 tick loop gave a slow Remote read a 1 s budget and then
+      // silently fell back to `from = 0`, which re-reads the whole journal. Here
+      // the first settled answer wins, and `ANCHOR_WAIT_MS` only bounds a read
+      // that never settles at all.
+      let settleAnchor: (through: number) => void = () => {}
+      const anchor = new Promise<number>((resolve) => { settleAnchor = resolve })
       readStatus(tabId, run.trim(), 0, {}, signal, (frame) => {
-        anchored.through = typeof frame.activity?.cursor === 'number' ? frame.activity.cursor : 0
+        settleAnchor(typeof frame.activity?.cursor === 'number' ? frame.activity.cursor : 0)
       })
       loadSteering(tabId, run.trim(), signal)
       if (console.watchStream !== undefined) {
@@ -606,12 +621,15 @@ export function refactoryFace(
         const abort = (): void => controller.abort()
         signal.addEventListener('abort', abort, { once: true })
         void (async () => {
-          // One turn of the microtask queue is not enough for a real Remote
-          // read; wait for the settlement that names the starting cursor.
-          for (let waited = 0; anchored.through === null && waited < 200 && !controller.signal.aborted; waited++) {
-            await new Promise(resolve => setTimeout(resolve, 5))
-          }
-          const from = anchored.through ?? 0
+          // The answer settles the anchor; the timeout only bounds a read that
+          // never settles. A refusal or an abort leaves this unresolved, and the
+          // `0` fallback below is the same one the tick loop used, reached in
+          // ANCHOR_WAIT_MS rather than after a fixed number of sleeps.
+          const from = await Promise.race([
+            anchor,
+            new Promise<number>((resolve) => { setTimeout(() => resolve(0), ANCHOR_WAIT_MS) }),
+          ])
+          if (controller.signal.aborted) return
           try {
             // The stream starts where this tab's held history ends, not at 0: the
             // service advances its own cursor from there, and a reset would ask
@@ -809,9 +827,22 @@ export function refactoryFace(
         // Only the whole-history level fetches; the other two draw what is
         // already held, so switching to them costs no read (R-2.7).
         if (level !== 'verbose') { exhausting.delete(tabId); return }
-        // Page 0 is the first request either way: from `after = 0`, so a verbose
-        // pass always *reaches* index 0 even when a poll already filled the tail
-        // (R-2.3, F-4). Its own answer then decides whether more is fetched.
+        // From 0, always — and this is a requirement, not an oversight.
+        //
+        // R-2.2 makes `verbose` mean the held history contains *every* complete
+        // record, accumulated page by page until an answer reports
+        // `has_more: false`. Starting from the held watermark would only fetch the
+        // tail, so the pass would stop as soon as it reached `total`, never reach
+        // index 0, and leave `activity.first` wherever the poll happened to leave
+        // it — a level that promises every record would quietly hold a suffix.
+        //
+        // The cost is real but paid once per gesture: a standard → verbose →
+        // standard → verbose round-trip re-fetches from 0 each time. Keeping that
+        // cheap belongs in the store, which already splices by each page's own
+        // `after` and would need to remember a completed pass per run to skip the
+        // walk; R-2.2's guarantee is the contract, and re-reading a journal the
+        // console pages in O(page_size) is bounded. Verified by T-18: choosing
+        // verbose asks [0, 200, 400] and ends with `first: 0`, `complete: true`.
         exhaust(tabId, run, 0, signal)
       },
       loadEarlierActivity(tabId, run, first, signal) {

@@ -21,7 +21,19 @@ import { ACTIVITY_LEVELS, RENDER_WINDOW } from './store.ts'
 
 const shown = (value: unknown): string => value == null ? 'unavailable' : typeof value === 'string' ? value : JSON.stringify(value)
 
-/** What each level adds to the summary every level draws (§2 R-2's table). */
+/**
+ * What each level adds to the summary every level draws (§2 R-2's table).
+ *
+ * `standard` and `verbose` are deliberately the same `true` here: a level decides
+ * only how much a row shows, and the two differ in *fetch* behaviour, not in
+ * rendering. `verbose` is the level whose gesture exhausts the journal back to
+ * its first record (`face.ts` `setActivityLevel` → `exhaust`), while `standard`
+ * draws the window a poll has already filled; once both hold the same records
+ * they render identically, which is the point — reaching further back must not
+ * change what a level looks like, only how far it reaches (R-2.2, R-2.7).
+ * A reader looking here for a difference will not find one; it lives in the
+ * fetch gesture.
+ */
 const DETAIL: Readonly<Record<RefactoryActivityLevel, boolean>> = { compact: false, standard: true, verbose: true }
 
 /** One record's row height in pixels, fixed so a row index is a scroll position. */

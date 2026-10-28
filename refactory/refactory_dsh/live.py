@@ -387,6 +387,13 @@ def _extend(root: Path, journal: Path, size: int) -> _Coverage:
 
     A journal whose identity and size are unchanged costs no journal read at all:
     the overview line already answers both the total and the newest `at`.
+
+    `size == coverage.size` is therefore tested before any read. That is also what
+    keeps a poll cheap while a write is in flight: the walk below stops at a line
+    with no newline and re-publishes the same coverage, so a journal that has
+    trailing unterminated bytes leaves `coverage.size` at the counted prefix and
+    never equals `size` — without the early return below, every poll tick would
+    re-read that suffix and rewrite two identical derived files.
     """
     coverage = _trusted(root, journal, size)
     if coverage is None:
@@ -394,12 +401,13 @@ def _extend(root: Path, journal: Path, size: int) -> _Coverage:
     if size == coverage.size:
         return coverage
     total, last_at = coverage.total, coverage.last_at
-    size = coverage.size
+    counted_end = coverage.size
+    measured = size          # the journal's own size, before `size` is the walk's cursor
     rows: list[tuple[int, int]] = []
     ats: list[str | None] = []
     fresh: list[bytes] = []
     with journal.open('rb') as handle:
-        if handle.seek(0, os.SEEK_END) != size:
+        if handle.seek(0, os.SEEK_END) != measured:
             # The journal moved after it was measured; re-index what is there now.
             return _rebuild(root, journal, handle.tell())
         handle.seek(coverage.size)
@@ -423,6 +431,12 @@ def _extend(root: Path, journal: Path, size: int) -> _Coverage:
                 rows, ats = [], []
     if rows:
         fresh.append(_stride(rows, ats))
+    if size == counted_end and not fresh:
+        # Nothing but unterminated trailing bytes since the last count: the walk
+        # consumed no record, so this coverage *is* the answer. Returning it
+        # without publishing is what stops a poll tick from rewriting identical
+        # derived files for as long as the writer stays mid-record.
+        return coverage
     # A suffix that held only blank lines counts nothing and keeps the old `at`.
     newest = last_at
     extended = _Coverage(total, newest, size, coverage.anchor, coverage.first_end,
@@ -504,6 +518,17 @@ def page(root: Path, *, after: int = 0, limit: int = PAGE_DEFAULT) -> dict[str, 
     if after < coverage.total:
         # A missing or unreadable index line is answered by the journal, never by
         # a guess: the rebuild writes the index again for the next reader.
+        #
+        # Expected performance cliff, bounded by the write window: while a writer
+        # is mid-stride the index can be torn between stride boundaries, so
+        # `_lines` rejects a short read and this rebuilds from the journal — a
+        # whole-journal scan. It happens only for a page whose stride is the one
+        # being appended to, only until that stride completes, and only while a
+        # writer holds the journal open mid-record; the next poll sees a whole
+        # stride and seeks again. It is self-healing by design (the index is
+        # derived and never authoritative, R-6.5), so a reader polling a live
+        # journal pays one full scan per stride boundary it happens to land on,
+        # not one per poll.
         lines = _lines(root, coverage, after, limit)
         if lines is None:
             coverage = _rebuild(root, journal, size)
